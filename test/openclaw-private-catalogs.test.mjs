@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire, stripTypeScriptTypes } from "node:module";
+import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
@@ -22,6 +23,53 @@ export const privateCases=privateProviders.flatMap(provider=>Object.entries(priv
   id:provider+"_"+group+"_"+scenario,provider,group,scenario,api:group==="stream"||scenario==="stream_abort"?"stream":"simple",
   workerOnly:["method","body","query"].includes(scenario)
 }))));
+export const privateNativeControls=privateProviders.flatMap(provider=>["stream","simple"].flatMap(api=>["eof","preabort","partial","provider_error"].map(control=>({
+ id:provider+"_native_"+api+"_"+control,provider,api,control,group:"native_control",workerOnly:false,
+ scenario:control==="partial"?(api==="stream"?"stream_abort":"simple_abort"):control==="preabort"?"control_preabort":control
+}))));
+
+// Extract the actual pure declarations, not a mirror of their implementation.
+// No SDK imports, module initialization, plugin loading or native client runs.
+export function privateNativeEvaluator(){
+ const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+ const names=["samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
+ const start="export function samePrivateDescriptor(",end="function emitNativeControl(";
+ assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
+ const declarations=source.slice(source.indexOf(start),source.indexOf(end));
+ assert.deepEqual([...declarations.matchAll(/^export function (\w+)\(/gm)].map(m=>m[1]),names);
+ assert.doesNotMatch(declarations,/\bimport\b|\brequire\s*\(/);
+ const code=stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"});
+ return runInNewContext(code+"\n({"+names.join(",")+"})",{}, {timeout:1000});
+}
+export function privateNativeDiagnosticRecords(error){
+ const records=new Map(),seen=new Set(),pending=[error];let bytes=0,nodes=0;
+ while(pending.length){const value=pending.pop();if(!value||(typeof value!=="object"&&typeof value!=="function")||seen.has(value))continue;
+  seen.add(value);if(++nodes>64)throw Error("native diagnostic error closure exceeded");
+  for(const field of ["stdout","stderr"]){const d=Object.getOwnPropertyDescriptor(value,field);if(!d||!("value" in d)||typeof d.value!=="string")continue;
+   if(Buffer.byteLength(d.value)>2*1024*1024)throw Error("native diagnostic source exceeded");
+   for(const line of d.value.split("\n")){if(!line.startsWith("PRIVATE_NATIVE_CONTROL "))continue;
+    if(Buffer.byteLength(line)>300)throw Error("native diagnostic record exceeded");
+    const record=JSON.parse(line.slice("PRIVATE_NATIVE_CONTROL ".length));
+    assert.deepEqual(Object.keys(record).sort(),["v","pin","p","a","r","q","vect","worker","restore","rejects","pending"].sort());
+    assert.equal(record.v,1);assert.equal(record.pin,privateCatalogPin);assert.ok(privateProviders.includes(record.p));assert.ok(["stream","simple"].includes(record.a));assert.ok(["eof","preabort","partial","provider_error"].includes(record.r));
+    for(const k of ["q","vect","worker","restore"])assert.equal(typeof record[k],"boolean");
+    for(const k of ["rejects","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
+    const id=record.p+":"+record.a+":"+record.r,encoded=JSON.stringify(record);
+    if(records.has(id)){assert.equal(records.get(id),encoded);continue;}
+    bytes+=Buffer.byteLength(encoded)+1;assert.ok(records.size<24&&bytes<=8000);records.set(id,encoded);
+   }
+  }
+  const cause=Object.getOwnPropertyDescriptor(value,"cause");if(cause&&"value" in cause)pending.push(cause.value);
+  const errors=Object.getOwnPropertyDescriptor(value,"errors");if(errors&&"value" in errors&&Array.isArray(errors.value)){
+   const length=Object.getOwnPropertyDescriptor(errors.value,"length")?.value;assert.ok(Number.isSafeInteger(length)&&length<=64);
+   for(let i=0;i<length;i++){const d=Object.getOwnPropertyDescriptor(errors.value,String(i));if(d&&"value" in d)pending.push(d.value);}
+  }
+ }
+ return [...records.values()].map(v=>JSON.parse(v));
+}
+export async function withPrivateNativeDiagnostics(run,emit){
+ try{return await run();}catch(error){try{for(const record of privateNativeDiagnosticRecords(error))emit(record);}catch(reportError){throw new AggregateError([error,reportError],"native child and diagnostic delivery failed");}throw error;}
+}
 export const privateKey=(id,kind="inference",secret="fixture-secret")=>`clawrouter-live-${id}_${kind}-${secret}`;
 export async function finishPrivateOwned(body,cleanups){const failures=[];let value;try{value=await body();}catch(e){failures.push(e);}for(const f of cleanups)try{await f();}catch(e){failures.push(e);}if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"private catalog body and owned cleanup failed");return value;}
 export async function joinPrivateOriginals(s){let at=0;while(at<s.roots.length){const batch=s.roots.slice(at);at=s.roots.length;for(const result of await Promise.allSettled(batch))if(result.status==='rejected')s.failures.push(result.reason);}for(const o of s.operations)if(o.failed)s.failures.push(o.error);if(s.failures.length)throw new AggregateError(s.failures,"private catalog original operations failed");}
@@ -150,6 +198,99 @@ export function assertPrivateReceipt(row,p){assert.equal(p.retired,true);assert.
  if(row.scenario==='shared_abort'){assert.equal(p.source.settled,1);assert.equal(p.source.canceled,0);}// Explicit completion of shared acquisition, not disconnect proof.
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ const evaluator=privateNativeEvaluator();
+ function nativeEvidence(){
+  const owner={},identity={guard:()=>{}},reason={name:"AbortError"},stored={name:"AbortError"};
+  const caller={owner,signal:{aborted:true},reason,abortCalled:true,abortedAfter:true,noEarlierFailure:true,delivered:7,abortInvoke:8,abortObserved:9,result:"aborted"};
+  const input={signal:caller.signal},body={locked:false},response={body},acquisition={owner,guard:identity.guard,input,inputSignal:input.signal,response,result:{}};
+  const transport={owner,method:"POST",signal:{aborted:true},acquisition,response,bodies:[body],readers:[],guardObserved:true,releases:1,releaseDone:true,fetch:{state:"fulfilled"}};acquisition.transport=transport;
+  const reader={owner,original:{},body,transport,closed:Promise.resolve(),acquired:2,unlocks:1,unlockFailed:false,unlockAt:14};reader.unlockReceiver=reader.original;transport.readers.push(reader);
+  const common={owner,reader,receiver:reader.original};
+  const read={...common,kind:"read",state:"rejected",reason:stored,invoke:6,settle:10,callerSignal:caller.signal,effectiveSignal:transport.signal,callerAbortedAtInvoke:false,callerAbortedAtSettle:true,effectiveAbortedAtSettle:true};
+  const closed={...common,kind:"closed",state:"rejected",reason:stored,pending:reader.closed,invoke:3,settle:11};
+  const cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],invoke:12,settle:13};
+  const prefix={...common,kind:"read",state:"fulfilled",value:{done:false,value:new Uint8Array([1])},settle:5};
+  const release={owner,kind:"guard_release",state:"fulfilled",acquisition,receiver:acquisition.result,invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
+  return {owner,identity,provider:"baseten",api:"stream",role:"partial",caller,transports:[transport],originals:[prefix,read,closed,cancel,release],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
+ }
+ function controlEvidence(role,identity){
+  const w=nativeEvidence();w.identity=identity;w.transports[0].acquisition.guard=identity.guard;w.role=role;
+  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":role==="preabort"?"aborted":"error";}
+  if(role==="preabort"){w.transports[0].method="GET";w.coldZeroDispatch=true;w.preabortPostDelta=0;}
+  return w;
+ }
+ function controls(identity){return ["eof","preabort","partial","provider_error"].map(role=>evaluator.evaluatePrivateNativeControl(controlEvidence(role,identity)));}
+ test('private native evaluator records the predefined rejection vector without C0 identity or product credit',()=>{
+  const w=nativeEvidence(),result=evaluator.evaluatePrivateNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);
+  assert.notEqual(w.caller.reason,w.originals[1].reason);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
+  assert.equal(evaluator.privateProductExpected(w,undefined).length,0);
+  const q=evaluator.privateQualification(controls(w.identity),w.identity,w.provider,w.api);assert.ok(q);
+  assert.equal(evaluator.privateProductExpected(w,q).length,3);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
+  assert.equal(evaluator.privateProductExpected({...w,api:'simple'},q).length,0);
+  assert.equal(evaluator.privateProductExpected({...w,identity:{}},q).length,0);
+  w.originals[3].args=[];assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);assert.equal(evaluator.privateProductExpected(w,q).length,0);
+ });
+ const nativeCounterfactuals={
+  'prior observed failure':w=>{w.caller.noEarlierFailure=false;},'different error with same name':w=>{w.originals[2].reason={name:'AbortError'};},
+  'undefined rejection':w=>{for(const o of w.originals.filter(o=>o.state==='rejected'))o.reason=undefined;},
+  'wrong caller':w=>{w.caller.owner={};},'wrong acquisition':w=>{w.transports[0].acquisition.owner={};},'wrong response':w=>{w.transports[0].response={};},
+  'wrong reader':w=>{w.originals[1].reader={};},'wrong receiver':w=>{w.originals[3].receiver={};},'wrong captured closed':w=>{w.originals[2].pending=Promise.resolve();},
+  'ambiguous reader':w=>{w.transports[0].readers.push(w.transports[0].readers[0]);},'ambiguous request':w=>{w.transports.push(w.transports[0]);},
+  'missing compiled guard':w=>{w.transports[0].guardObserved=false;},'foreign guard graph':w=>{w.transports[0].acquisition.guard=()=>{};},
+  'foreign original guard signal':w=>{w.transports[0].acquisition.inputSignal={};},'foreign caller signal':w=>{w.originals[1].callerSignal={};},
+  'late abort':w=>{w.caller.abortObserved=12;},'unobserved abort':w=>{w.caller.abortCalled=false;},'read began aborted':w=>{w.originals[1].callerAbortedAtInvoke=true;},
+  'not aborted at rejection':w=>{w.originals[1].callerAbortedAtSettle=false;},'no effective abort':w=>{w.originals[1].effectiveAbortedAtSettle=false;},
+  'no pending read':w=>{w.caller.pending=[];},'missing actual delivery':w=>{w.caller.delivered=0;},'missing nonempty read':w=>{w.originals[0].value.value=new Uint8Array();},
+  'cancel before stored error':w=>{w.originals[3].invoke=9;},'foreign cancel argument':w=>{w.originals[3].args=[{}];},
+  'pending release':w=>{w.transports[0].release.state='pending';},'failed release undefined':w=>{w.transports[0].release.state='rejected';w.transports[0].release.reason=undefined;},
+  'wrong release receiver':w=>{w.transports[0].release.receiver={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
+  'duplicate release':w=>{w.transports[0].releases=2;},'early unlock':w=>{w.transports[0].readers[0].unlockAt=10;},'duplicate unlock':w=>{w.transports[0].readers[0].unlocks=2;},
+  'releaseLock error':w=>{w.transports[0].readers[0].unlockFailed=true;w.syncFailures.push(new TypeError('synthetic'));},'locked body':w=>{w.transports[0].response.body.locked=true;},
+  'failed restoration':w=>{w.restored=false;},'observer undefined':w=>{w.observerFailures.push(undefined);},'sync undefined':w=>{w.syncFailures.push(undefined);},
+  'source expiry':w=>{w.sourceExpired=1;},'unknown source':w=>{w.sourceExpired=null;},'body and cleanup failures':w=>{w.failures.push({},undefined);},
+  'late independent join failure':w=>{w.originals.push({kind:'late',state:'rejected',reason:undefined});}
+ };
+ for(const [name,mutate] of Object.entries(nativeCounterfactuals))test('private native evaluator refuses '+name,()=>{const w=nativeEvidence();mutate(w);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);});
+ test('private native qualification needs four independent exact-runtime roles after restoration',()=>{
+  const identity={guard:()=>{}},reports=controls(identity);assert.ok(reports.every(r=>r.qualified));
+  const qualify=r=>evaluator.privateQualification(r,identity,'baseten','stream');assert.ok(qualify(reports));assert.equal(qualify(reports.slice(1)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,qualified:false}:r)),undefined);
+  assert.equal(qualify(reports.map(r=>({...r,owner:reports[0].owner}))),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,identity:{}}:r)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,provider:'novita'}:r)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,role:'eof'}:r)),undefined);
+ });
+ test('private native nonpartial controls cannot borrow the stored-error disposition',()=>{
+  const identity={guard:()=>{}};
+  for(const role of ['eof','preabort','provider_error']){const w=controlEvidence(role,identity);w.originals[1].state='rejected';assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);}
+  const cold=controlEvidence('preabort',identity);cold.coldZeroDispatch=false;assert.equal(evaluator.evaluatePrivateNativeControl(cold).qualified,false);
+  delete cold.coldZeroDispatch;assert.equal(evaluator.evaluatePrivateNativeControl(cold).qualified,false);
+  const dispatched=controlEvidence('preabort',identity);dispatched.preabortPostDelta=1;assert.equal(evaluator.evaluatePrivateNativeControl(dispatched).qualified,false);
+  const provider=controlEvidence('provider_error',identity);provider.caller.signal.aborted=true;assert.equal(evaluator.evaluatePrivateNativeControl(provider).qualified,false);
+  const eof=controlEvidence('eof',identity);eof.transports[0].readers=[];assert.equal(evaluator.evaluatePrivateNativeControl(eof).qualified,false);
+ });
+ test('private native descriptor restoration retains identity and every flag',()=>{
+  const d={value:()=>{},writable:true,enumerable:false,configurable:true};assert.equal(evaluator.samePrivateDescriptor(d,{...d}),true);
+  for(const k of ['value','writable','enumerable','configurable'])assert.equal(evaluator.samePrivateDescriptor(d,{...d,[k]:k==='value'?()=>{}:!d[k]}),false);
+ });
+ test('private native diagnostics preserve closed records through original aggregate errors without getters',async()=>{
+  const record={v:1,pin:privateCatalogPin,p:'baseten',a:'stream',r:'partial',q:false,vect:true,worker:false,restore:true,rejects:3,pending:0};
+  const child={stdout:'PRIVATE_NATIVE_CONTROL '+JSON.stringify(record)+'\n'},root=new AggregateError([child,undefined],'synthetic');root.cause=root;
+  Object.defineProperty(root,'stderr',{get(){throw Error('getter called');}});assert.deepEqual(privateNativeDiagnosticRecords(root),[record]);
+  const emitted=[];await assert.rejects(withPrivateNativeDiagnostics(async()=>{throw root;},r=>emitted.push(r)),e=>e===root);assert.deepEqual(emitted,[record]);
+  await assert.rejects(withPrivateNativeDiagnostics(async()=>{throw root;},()=>{throw undefined;}),e=>e instanceof AggregateError&&e.errors[0]===root&&e.errors[1]===undefined);
+  await assert.rejects(withPrivateNativeDiagnostics(async()=>{throw undefined;},()=>{}),e=>e===undefined);
+  for(const changed of [{...record,p:'other'},{...record,pin:'wrong'},{...record,extra:'secret'},{...record,rejects:-1},{...record,pending:1.5},{...record,r:'other'}])assert.throws(()=>privateNativeDiagnosticRecords({stdout:'PRIVATE_NATIVE_CONTROL '+JSON.stringify(changed)}));
+  assert.deepEqual(privateNativeDiagnosticRecords({stdout:' prefix PRIVATE_NATIVE_CONTROL '+JSON.stringify(record)}),[]);
+  assert.throws(()=>privateNativeDiagnosticRecords({stdout:'PRIVATE_NATIVE_CONTROL '+JSON.stringify(record)+' '.repeat(301)}));
+  const childProcess=createRequire(import.meta.url)('node:child_process').spawnSync(process.execPath,['-e','process.stdout.write('+JSON.stringify('PRIVATE_NATIVE_CONTROL '+JSON.stringify(record)+'\n')+')'],{encoding:'utf8'});
+  assert.equal(childProcess.status,0);assert.deepEqual(privateNativeDiagnosticRecords(childProcess),[record]);
+ });
+ test('private native controls are separate from the preserved product inventory',()=>{
+  assert.equal(privateNativeControls.length,24);assert.equal(privateCases.length,84);assert.equal(privateCases.filter(r=>!r.workerOnly).length,75);
+  assert.equal(new Set([...privateCases,...privateNativeControls].map(r=>r.id)).size,108);
+  for(const p of privateProviders)for(const api of ['stream','simple'])assert.deepEqual(privateNativeControls.filter(r=>r.provider===p&&r.api===api).map(r=>r.control),['eof','preabort','partial','provider_error']);
+ });
  test('private client inventory, real shipping compilation and additive row',()=>{const manifests=readdirSync('providers').filter(p=>p.endsWith('.provider.yaml')).sort().map(p=>parse(readFileSync('providers/'+p,'utf8')));assert.ok(manifests.length);assert.deepEqual(manifests.map(p=>p.id).sort(),snapshot.providers.map(p=>p.id).sort());assert.deepEqual(compileProviderSnapshot(manifests),snapshot);
   const rows=parse(readFileSync('.github/workflows/openclaw-contract.yml','utf8')).jobs.consumer.strategy.matrix.include;assert.equal(new Set(rows.map(r=>r.consumer)).size,rows.length);assert.deepEqual(rows.filter(r=>r.consumer==='private-catalogs'),[{consumer:'private-catalogs',ref:privateCatalogPin,test:'test/openclaw-private-catalogs.test.mjs'}]);assert.equal(Object.keys(privateGroups).length,14);assert.equal(new Set(privateCases.map(r=>r.id)).size,privateCases.length);
  });
@@ -164,6 +305,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  test('private cleanup preserves body, undefined and every original cleanup failure',async()=>{const first={},last={},order=[];await assert.rejects(finishPrivateOwned(()=>{throw first;},[()=>{order.push(1);throw undefined;},()=>{order.push(2);throw last;}]),e=>e instanceof AggregateError&&e.errors[0]===first&&e.errors[1]===undefined&&e.errors[2]===last);assert.deepEqual(order,[1,2]);});
  test('private dynamic original join never treats settled rejection as success',async()=>{const reason={},s={roots:[],operations:[],failures:[]};s.roots.push(Promise.resolve().then(()=>{s.roots.push(Promise.reject(undefined));s.operations.push({failed:true,error:reason});}));await assert.rejects(joinPrivateOriginals(s),e=>e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1]===reason);});
  test('registered private discovery and public inference through Worker SQLite',{skip:!process.env.CLAWROUTER_OPENCLAW_CHECKOUT,timeout:300000},async t=>{const f=await startPrivateCatalogFixture(),created=[];
-  await finishPrivateOwned(async()=>{for(const row of privateCases){await f.setup(row);created.push(row);}await runOpenClawConsumer(t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases)}});},[...privateCases.map(row=>async()=>{if(created.includes(row))assertPrivateReceipt(row,await f.join(row));}),()=>f.close()]);
+  const all=[...privateNativeControls,...privateCases];
+  await finishPrivateOwned(async()=>{for(const row of all){await f.setup(row);created.push(row);}await withPrivateNativeDiagnostics(()=>runOpenClawConsumer(t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}),record=>console.log("::notice title=Private native diagnostic::"+JSON.stringify(record)));},[...all.map(row=>async()=>{if(created.includes(row))assertPrivateReceipt(row,await f.join(row));}),()=>f.close()]);
  });
 }

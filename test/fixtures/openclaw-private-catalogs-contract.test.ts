@@ -14,8 +14,10 @@ import * as guard from "../../src/infra/net/fetch-guard.js";
 const pin="2d1a1c293537ed34fdbf0f496d364aec575e5ba9";
 const origin=process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 type Provider="baseten"|"arcee"|"novita";
-type Case={id:string;provider:Provider;group:string;scenario:string;api:"stream"|"simple";workerOnly:boolean};
+type Control="eof"|"preabort"|"partial"|"provider_error";
+type Case={id:string;provider:Provider;group:string;scenario:string;api:"stream"|"simple";workerOnly:boolean;control?:Control};
 const rows=JSON.parse(process.env.CLAWROUTER_PRIVATE_CATALOG_CASES!) as Case[];
+const controlRows=JSON.parse(process.env.CLAWROUTER_PRIVATE_NATIVE_CONTROLS!) as Case[];
 const providers:Provider[]=["baseten","arcee","novita"];
 const groups=["stream","simple","empty","opaque","foreign","environment","rotation","revocation","warm","held","request","invalid","preabort","partial"];
 const envNames={baseten:"BASETEN_API_KEY",arcee:"ARCEEAI_API_KEY",novita:"NOVITA_API_KEY"};
@@ -23,66 +25,196 @@ const nativeFetch=globalThis.fetch,undici=createRequire(import.meta.url)("undici
 const originalGuard=guard.fetchWithSsrFGuard;
 const key=(row:Case,kind="inference",secret="fixture-secret")=>`clawrouter-live-${row.id}_${kind}-${secret}`;
 const base=(row:Case,alias=false)=>origin+"/v1/native/"+(alias?"clawrouter-":"")+row.provider;
-type Original={kind:string;pending:Promise<unknown>;state:"pending"|"fulfilled"|"rejected";reason?:unknown};
-type Transport={method:string;path:string;credential:string|null;signal:AbortSignal|undefined;dispatcher:unknown;response?:Response;guardObserved:boolean;releases:number;releaseDone:boolean;
- bodies:ReadableStream[];readers:Array<{unlocks:number}>;closes:Promise<unknown>[]};
+type Original={kind:string;pending?:Promise<unknown>;returned:unknown;state:"pending"|"fulfilled"|"rejected"|"threw";reason?:unknown;value?:unknown;invoke:number;settle:number;returnAt:number;[key:string]:any};
+type Transport={method:string;path:string;credential:string|null;signal:AbortSignal|undefined;dispatcher:any;response?:Response;guardObserved:boolean;releases:number;releaseDone:boolean;[key:string]:any};
+// This identity is local to this exact child/module graph. It is never loaded
+// from an environment approval flag or carried between SDK/runtime revisions.
+const nativeIdentity=Object.freeze({pin,node:process.version,platform:process.platform,arch:process.arch,
+ undici:createRequire(import.meta.url)("undici/package.json").version,guard:originalGuard,fetch:originalUndiciFetch});
+const controlReports=new Map<string,Map<Control,any>>(),qualifications=new Map<string,any>();
+let diagnosticCount=0,diagnosticBytes=0;
+
+export function samePrivateDescriptor(a:any,b:any):boolean {
+ return !!a&&!!b&&["value","get","set","writable","enumerable","configurable"].every(k=>a[k]===b[k]);
+}
+export function privateCancelOperand(read:any,cancel:any,caller:any):string {
+ if(!Array.isArray(cancel?.args)||cancel.args.length>1)return "invalid";
+ if(cancel.args.length===0)return "absent";
+ if(cancel.args[0]===undefined)return "undefined";
+ if(cancel.args[0]===caller.reason)return "caller";
+ if(cancel.args[0]===read.reason)return "read";
+ return "invalid";
+}
+// Pure, predefined vector over the original graph. It does not consult a
+// product verdict, learn an allowlist, compare error names or infer C1's cause.
+export function privateStoredErrorVector(w:any):any[]|undefined {
+ const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;
+ const t=ts[0],a=t.acquisition,c=w.caller;
+ if(!c||c.owner!==w.owner||t.owner!==w.owner||!a||a.owner!==w.owner||a.transport!==t||a.response!==t.response||
+   a.guard!==w.identity.guard||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
+   !t.guardObserved||!t.response||t.bodies.length!==1||t.readers.length!==1||t.fetch.state!=="fulfilled")return;
+ const r=t.readers[0];if(r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||r.owner!==w.owner)return;
+ const reads=w.originals.filter((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="rejected"),read=reads[0];
+ const closes=w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r),closed=closes[0];
+ const cancels=w.originals.filter((o:any)=>o.kind==="cancel"&&o.reader===r),cancel=cancels[0];
+ const prefix=w.originals.find((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="fulfilled"&&o.value?.done===false&&o.value.value?.byteLength>0);
+ if(reads.length!==1||closes.length!==1||cancels.length!==1||!prefix||!read||!closed||!cancel||
+   read.reason===undefined||closed.state!=="rejected"||cancel.state!=="rejected"||closed.reason!==read.reason||cancel.reason!==read.reason||
+   ![read,closed,cancel,prefix].every(o=>o.owner===w.owner&&o.receiver===r.original)||
+   closed.pending!==r.closed||privateCancelOperand(read,cancel,c)==="invalid"||
+   !c.abortCalled||!c.abortedAfter||!c.noEarlierFailure||c.pending.length!==1||c.pending[0]!==read||
+   read.callerAbortedAtInvoke!==false||read.callerAbortedAtSettle!==true||read.effectiveAbortedAtSettle!==true||
+   c.signal!==read.callerSignal||t.signal!==read.effectiveSignal||!c.delivered||c.result!=="aborted")return;
+ const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,read.settle,closed.settle,cancel.invoke,cancel.settle,r.unlockAt];
+ if(!order.every(n=>Number.isSafeInteger(n)&&n>0)||!(r.acquired<closed.invoke&&closed.invoke<prefix.settle&&
+   prefix.settle<read.invoke&&read.invoke<c.abortInvoke&&c.delivered<c.abortInvoke&&c.abortInvoke<=c.abortObserved&&
+   c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(read.settle,closed.settle)<cancel.invoke&&cancel.invoke<cancel.settle&&
+   Math.max(read.settle,closed.settle,cancel.settle)<r.unlockAt))return;
+ if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
+   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==a.result||
+   !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;
+ const vector=[read,closed,cancel];
+ if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
+ return vector;
+}
+export function evaluatePrivateNativeControl(w:any):any {
+ const vector=privateStoredErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
+  !w.restored||w.sourceExpired!==0||w.originals.some((o:any)=>o.state==="pending"||o.state==="threw")||
+  w.transports.some((t:any)=>!t.guardObserved||t.owner!==w.owner||t.acquisition?.owner!==w.owner||t.acquisition?.response!==t.response||
+   t.acquisition?.transport!==t||t.acquisition?.guard!==w.identity.guard||t.readers.length!==1||t.bodies.length!==1||
+   t.releases!==1||!t.releaseDone||t.release?.state!=="fulfilled"||t.readers.some((r:any)=>r.owner!==w.owner||r.transport!==t||r.body!==t.response?.body||
+    r.body!==t.bodies[0]||r.unlocks!==1||r.unlockFailed||r.body.locked||r.unlockReceiver!==r.original||
+    w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r&&o.pending===r.closed&&o.invoke<r.unlockAt).length!==1));
+ const strict=w.originals.every((o:any)=>o.state==="fulfilled");
+ const posts=w.transports.filter((t:any)=>t.method==="POST").length;
+ const role=w.role;
+ const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.coldZeroDispatch&&w.preabortPostDelta===0&&w.caller?.abortCalled===true&&w.caller?.signal.aborted===true&&w.caller?.result==="aborted":
+  (role==="eof"||role==="provider_error")&&strict&&posts===1&&w.caller?.abortCalled===false&&w.caller?.signal.aborted===false&&
+   w.caller?.result===(role==="eof"?"stop":"error");
+ return {qualified:!hard&&matched===true,vector:vector?"stored_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],w.caller):null,
+  vectorObserved:!!vector,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
+}
+export function privateQualification(reports:any[],identity:any,provider:string,api:string):any {
+ const roles=["eof","preabort","partial","provider_error"];
+ if(reports.length!==4||new Set(reports.map(r=>r.owner)).size!==4||!roles.every(role=>reports.filter(r=>r.role===role).length===1)||
+  reports.some(r=>!r.qualified||r.identity!==identity||r.provider!==provider||r.api!==api))return;
+ const partial=reports.find(r=>r.role==="partial");if(partial.vector!=="stored_error")return;
+ return Object.freeze({identity,provider,api,roles:Object.freeze(roles),vector:partial.vector,operand:partial.operand});
+}
+export function privateProductExpected(w:any,q:any):any[] {
+ if(!q||q.identity!==w.identity||q.provider!==w.provider||q.api!==w.api||q.vector!=="stored_error"||
+   q.roles?.join(",")!=="eof,preabort,partial,provider_error")return [];
+ const raw=evaluatePrivateNativeControl({...w,role:"partial"});
+ return raw.qualified&&raw.operand===q.operand?privateStoredErrorVector(w)??[]:[];
+}
+function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
+ const record={v:1,pin,p:row.provider,a:row.api,r:row.control,q:result.qualified,vect:result.vectorObserved,worker,restore:w.restored,
+  rejects:w.originals.filter((o:Original)=>o.state==="rejected").length,pending:w.originals.filter((o:Original)=>o.state==="pending").length};
+ const line="PRIVATE_NATIVE_CONTROL "+JSON.stringify(record);
+ if(diagnosticCount>=24||Buffer.byteLength(line)>300||diagnosticBytes+Buffer.byteLength(line)+1>8000)throw Error("native diagnostic quota exceeded");
+ diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;console.log(line);
+}
 function throwFailures(failures:unknown[]):void{if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"private client body and original cleanup failed");}
 async function command(row:Case,kind:string,value:unknown={}){const r=await nativeFetch(origin+"/private-control/"+kind+"/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value)});const text=await r.text();expect(r.status).toBe(200);return JSON.parse(text);}
 
 async function fixture(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Promise<void>){
- const state=await createOpenClawTestState({label:"private-catalog-client"});const failures:unknown[]=[],originals:Original[]=[],observers:Promise<unknown>[]=[],restores:Array<()=>void>=[],transports:Transport[]=[];
- const track=<T>(kind:string,pending:Promise<T>):Promise<T>=>{const o:Original={kind,pending,state:"pending"};originals.push(o);observers.push(pending.then(()=>{o.state="fulfilled";},reason=>{o.state="rejected";o.reason=reason;}));return pending;};
- const invoke=<T>(kind:string,fn:()=>Promise<T>)=>{try{return track(kind,fn());}catch(e){failures.push(e);throw e;}};
- const observer=(p:Promise<unknown>)=>{observers.push(p.then(()=>{},e=>{failures.push(e);}));};
- const patch=(object:any,name:string,value:any)=>{const descriptor=Object.getOwnPropertyDescriptor(object,name);Object.defineProperty(object,name,{configurable:true,writable:true,value});restores.push(()=>{expect(Object.getOwnPropertyDescriptor(object,name)?.value).toBe(value);if(descriptor)Object.defineProperty(object,name,descriptor);else delete object[name];});};
+ const state=await createOpenClawTestState({label:"private-catalog-client"});
+ const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:row.provider,api:row.api,role:row.control,
+  originals:[],observers:[],transports:[],acquisitions:[],callers:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
+ const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
+ const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
+  if(signal){const observed=()=>{history.abort=++w.sequence;history.reason=signal.reason;};if(signal.aborted)observed();else{signal.addEventListener("abort",observed,{once:true});restores.push(()=>signal.removeEventListener("abort",observed));}}return history;};
+ const observer=(p:Promise<unknown>)=>{w.observers.push(p.then(()=>{},e=>{w.observerFailures.push(e);}));};
+ const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);return o;};
+ const returned=(o:Original,value:any)=>{o.returned=value;o.returnAt=++w.sequence;
+  const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
+   o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;};
+  if(value&&typeof value.then==="function"){o.pending=value;observer(value.then((v:any)=>settle("fulfilled",v),(e:unknown)=>settle("rejected",e)));}else settle("fulfilled",value);return value;};
+ const track=<T>(kind:string,pending:Promise<T>):Promise<T>=>returned(record(kind),pending);
+ const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}};
+ const patch=(object:any,name:string,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
+  restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});};
+ const caller=(signal:AbortSignal|undefined)=>{let c=w.callers.find((v:any)=>v.signal===signal);if(!c){c={owner:w.owner,signal,abortCalled:false,completed:false,result:null,pending:[],delivered:0};w.callers.push(c);
+   if(signal){const onAbort=()=>{c.abortObserved=++w.sequence;};signal.addEventListener("abort",onAbort,{once:true});restores.push(()=>signal.removeEventListener("abort",onAbort));}}return c;};
+ const begin=(signal:AbortSignal|undefined)=>{const c=caller(signal);c.inferenceInvoked=++w.sequence;c.completed=false;w.caller=c;return c;};
+ const finish=(c:any,p:Promise<any>)=>observer(p.then(v=>{c.result=v.stopReason;c.completed=true;},()=>{c.completed=true;}));
+ const abort=(controller:AbortController,reason:unknown)=>{const c=caller(controller.signal);c.abortCalled=true;c.noEarlierFailure=!controller.signal.aborted&&!originals.some(o=>o.state==="rejected"||o.state==="threw");
+  c.pending=originals.filter(o=>o.kind==="read"&&o.state==="pending"&&o.reader.transport.caller===c);c.abortInvoke=++w.sequence;c.reason=reason;
+  try{const result=Reflect.apply(controller.abort,controller,[reason]);c.abortReturn=++w.sequence;c.abortedAfter=controller.signal.aborted;return result;}catch(e){w.syncFailures.push(e);throw e;}};
+ const partial=async(controller:AbortController,reason:unknown)=>{const c=caller(controller.signal);c.delivered=++w.sequence;
+  if(!originals.some(o=>o.kind==="read"&&o.state==="pending"&&o.reader.transport.caller===c))await new Promise<void>(resolve=>{c.pendingReady=resolve;});abort(controller,reason);};
+ // Product calls retain their original immediate abort timing. Only a
+ // diagnostic control may wait for a native pending read before authoring it.
+ const partialNow=(controller:AbortController,reason:unknown)=>{caller(controller.signal).delivered=++w.sequence;return abort(controller,reason);};
  const observedBodies=new WeakSet<object>(),observedDispatchers=new WeakSet<object>();
  const observeBody=(response:Response,t:Transport)=>{const b=response.body;if(!b||observedBodies.has(b))return;observedBodies.add(b);t.bodies.push(b);
-  const cancel=b.cancel,get=b.getReader;patch(b,"cancel",function(this:ReadableStream,...args:Parameters<typeof cancel>){return invoke("body_cancel",()=>Reflect.apply(cancel,this,args));});
-  patch(b,"getReader",function(this:ReadableStream,...args:any[]){let reader;try{reader=Reflect.apply(get,this,args);}catch(e){failures.push(e);throw e;}const r={unlocks:0};t.readers.push(r);track("closed",reader.closed);
-   for(const kind of ["read","cancel"]){const original=reader[kind];patch(reader,kind,function(this:unknown,...args:unknown[]){return invoke(kind,()=>Reflect.apply(original,this,args));});}
-   const release=reader.releaseLock;patch(reader,"releaseLock",function(this:unknown,...args:unknown[]){try{const result=Reflect.apply(release,this,args);r.unlocks++;return result;}catch(e){failures.push(e);throw e;}});return reader;});
- };
+  const cancel=b.cancel,get=b.getReader;patch(b,"cancel",function(this:ReadableStream,...args:Parameters<typeof cancel>){return invoke("body_cancel",()=>Reflect.apply(cancel,this,args),{transport:t,receiver:this,args});});
+  patch(b,"getReader",function(this:ReadableStream,...args:any[]){let reader;try{reader=Reflect.apply(get,this,args);}catch(e){w.syncFailures.push(e);throw e;}
+   const r:any={owner:w.owner,original:reader,body:b,transport:t,acquired:++w.sequence,unlocks:0,unlockFailed:false};t.readers.push(r);if(this!==b)failures.push(Error("foreign body receiver"));
+   try{r.closed=reader.closed;returned(record("closed",{reader:r,receiver:reader,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null}),r.closed);}catch(e){w.syncFailures.push(e);throw e;}
+   for(const kind of ["read","cancel"]){const original=reader[kind];patch(reader,kind,function(this:unknown,...args:unknown[]){const c=t.caller;
+    const value=invoke(kind,()=>Reflect.apply(original,this,args),{reader:r,receiver:this,args,callerSignal:c?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c?.signal?.aborted??null});
+    if(kind==="read"&&c?.delivered&&c.pendingReady){const notify=c.pendingReady;c.pendingReady=undefined;notify();}return value;});}
+   const release=reader.releaseLock;patch(reader,"releaseLock",function(this:unknown,...args:unknown[]){try{const v=invoke("unlock",()=>Reflect.apply(release,this,args),{reader:r,receiver:this,args});r.unlocks++;r.unlockReceiver=this;r.unlockAt=++w.sequence;return v;}catch(e){r.unlockFailed=true;throw e;}});return reader;});};
  const observedFetch=(fetcher:Function,receiver:unknown)=>(input:RequestInfo|URL,init?:DispatcherAwareRequestInit):Promise<Response>=>{
   const u=new URL(typeof input==="string"?input:input instanceof URL?input.href:input.url);expect(u.origin).toBe(origin);expect(u.search).toBe("");
   expect([base(row)+"/models",base(row,true)+"/models",base(row)+"/chat/completions",base(row,true)+"/chat/completions"]).toContain(u.href);
-  const headers=new Headers(init?.headers??(input instanceof Request?input.headers:undefined)),t:Transport={path:u.pathname,method:init?.method??(input instanceof Request?input.method:"GET"),credential:headers.get("authorization"),signal:init?.signal??undefined,dispatcher:init?.dispatcher,guardObserved:false,releases:0,releaseDone:false,bodies:[],readers:[],closes:[]};
+  const headers=new Headers(init?.headers??(input instanceof Request?input.headers:undefined));
+  const t:Transport={owner:w.owner,input,init,path:u.pathname,method:init?.method??(input instanceof Request?input.method:"GET"),credential:headers.get("authorization"),
+   signal:init?.signal!==undefined?init.signal??undefined:input instanceof Request?input.signal:undefined,dispatcher:init?.dispatcher,guardObserved:false,releases:0,releaseDone:false,bodies:[],readers:[],closes:[]};
+  if(t.method==="POST"){const cs=w.callers.filter((c:any)=>c.inferenceInvoked&&!c.completed);expect(cs).toHaveLength(1);t.caller=cs[0];w.caller=cs[0];}
+  t.signalHistory=signalHistory(t.signal);
   expect(headers.has("x-api-key")).toBe(false);expect(headers.has("x-upstream-url")).toBe(false);expect(["inference","discovery","alternate"].flatMap(kind=>["fixture-secret","rotated-secret","invalid-secret"].map(secret=>"Bearer "+key(row,kind,secret)))).toContain(t.credential);expect(t.signal).toBeInstanceOf(AbortSignal);expect(t.dispatcher).toBeDefined();transports.push(t);
-  const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{const result=Reflect.apply(close,this,args);if(outer&&result&&typeof result.then==="function"){t.closes.push(result);track("dispatcher_close",result);}return result;}catch(e){failures.push(e);throw e;}finally{depth--;}});}
-  const pending=invoke("fetch",()=>Reflect.apply(fetcher,receiver,[input,init]) as Promise<Response>);observer(pending.then(response=>{t.response=response;observeBody(response,t);},()=>{}));return pending;
- };
- let f:Awaited<ReturnType<typeof session>>|undefined;
+  const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{return outer?invoke("dispatcher_close",()=>Reflect.apply(close,this,args),{dispatcher:d,receiver:this,args}):Reflect.apply(close,this,args);}finally{depth--;}});}
+  const o=record("fetch",{transport:t,receiver,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;let pending:Promise<Response>;
+  try{pending=returned(o,Reflect.apply(fetcher,receiver,[input,init]));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
+  observer(pending.then(response=>{t.response=response;observeBody(response,t);},()=>{}));return pending;};
+ const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
+ let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false;
  try{
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
-  // Ordinary function, not a mock: keep the guard's genuine dispatcher path.
-  patch(globalThis,"fetch",observedFetch(nativeFetch,globalThis));
-  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,undici)});
-  vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
-   const pending=Reflect.apply(originalGuard,this,args);observer(pending.then(result=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];t.guardObserved=true;
-    const release=result.release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const p=invoke("guard_release",()=>Reflect.apply(release,this,params));observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
+  patch(globalThis,"fetch",observedFetch(nativeFetch,globalThis));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,undici)});
+  spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
+   const input=args[0],a:any={owner:w.owner,guard:originalGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
+   const pending=invoke("guard",()=>Reflect.apply(originalGuard,this,args),{acquisition:a,receiver:this,args});a.pending=pending;
+   observer(pending.then((result:any)=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
+    expect(new URL(input.url).pathname).toBe(t.path);expect(input.init?.method??"GET").toBe(t.method);expect(new Headers(input.init?.headers).get("authorization")).toBe(t.credential);
+    t.guardObserved=true;t.acquisition=a;a.transport=t;a.response=result.response;a.result=result;
+    const release=result.release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const o=record("guard_release",{acquisition:a,receiver:this,args:params});t.release=o;
+     let p;try{p=returned(o,Reflect.apply(release,this,params));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
+     observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
    },()=>{}));return pending;
-  } as typeof originalGuard);
-  f=await session(row,state,track,transports);await body(f);
+  } as typeof originalGuard);spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
+  const f=await session(row,state,track,transports,{begin,finish,abort,partial,partialNow,caller,preabortProof:(cold:boolean,delta:number)=>{w.coldZeroDispatch=cold;w.preabortPostDelta=delta;}});await body(f);
  }catch(e){failures.push(e);}
- // Every original must finish before descriptor restoration or state disposal.
- // There is no cancellation disposition and no global dispatcher-pool close.
+ // Originals and late observers join before restoration. No outcome is rewritten.
  let at=0,seen=0;
- while(at<originals.length||seen<observers.length){
-  const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.map(o=>o.pending));
-  const observed=observers.slice(seen);seen=observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")failures.push(r.reason);
- }
- for(const o of originals)if(o.state==="rejected")failures.push(o.reason);else if(o.state!=="fulfilled")failures.push(new Error("original operation pending"));
- const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
+ while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
+  const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
  if(!row.workerOnly&&row.scenario!=="cold")await check(()=>expect(transports.some(t=>t.method==="GET")).toBe(true));
  if(["eof","provider_error","environment","rotation","caller_revoke","grant_revoke","unpriced","foreign_inference","stream_abort","simple_abort"].includes(row.scenario))await check(()=>expect(transports.some(t=>t.method==="POST")).toBe(true));
  for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(b.locked).toBe(false));}
- await check(()=>command(row,"join"));
+ const workerFailures:unknown[]=[];
+ try{const response=await nativeFetch(origin+"/private-control/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});const text=await response.text();const proof=JSON.parse(text);w.sourceExpired=proof.source?.expired??null;worker=response.status===200&&proof.retired===true;if(!worker)workerFailures.push(Error("independent Worker retirement failed"));}catch(e){workerFailures.push(e);}
+ const beforeRestore=failures.length;
  for(const restore of restores.toReversed())await check(restore);
- for(const cleanup of [()=>vi.restoreAllMocks(),()=>vi.unstubAllGlobals(),()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(cleanup);
- throwFailures(failures);
+ if(spy)await check(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard"),spyDescriptor))throw Error("foreign guard descriptor");spy!.mockRestore();});
+ for(const cleanup of [()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(cleanup);
+ w.restored=failures.length===beforeRestore;
+ let allowed:Original[]=[];
+ if(row.control){const evaluated=evaluatePrivateNativeControl(w);if(evaluated.qualified&&row.control==="partial")allowed=privateStoredErrorVector(w)??[];
+  const k=row.provider+":"+row.api,reports=controlReports.get(k)??new Map();
+  try{emitNativeControl(row,w,evaluated,worker);}catch(e){failures.push(e);evaluated.qualified=false;}
+  reports.set(row.control,evaluated);controlReports.set(k,reports);
+  const qualified=privateQualification([...reports.values()],nativeIdentity,row.provider,row.api);if(qualified)qualifications.set(k,qualified);
+  if(!evaluated.qualified)failures.push(Error("native control qualification incomplete"));
+ }else if(row.scenario==="stream_abort"||row.scenario==="simple_abort")allowed=privateProductExpected(w,qualifications.get(row.provider+":"+row.api));
+ for(const o of originals)if(o.state==="rejected"&&!allowed.includes(o))failures.push(o.reason);else if(o.state==="pending")failures.push(Error("original operation pending"));
+ failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);throwFailures(failures);
 }
 
-async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTestState>>,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,transports:Transport[]){
+async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTestState>>,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,transports:Transport[],witness:any){
  const {default:entry}=await loadBundledPluginFacade<{default:Parameters<typeof registerSingleProviderPlugin>[0]}>({pluginId:row.provider,artifactBasename:"index.js"});
  const plugin=await registerSingleProviderPlugin(entry);expect(plugin.id).toBe(row.provider);expect(plugin.catalog?.run).toBeTypeOf("function");
  const store:AuthProfileStore={version:1,profiles:{[row.provider+":selected"]:{type:"api_key",provider:row.provider,key:key(row,"discovery")},[row.provider+":other-label"]:{type:"api_key",provider:row.provider,key:key(row,"discovery")},"openai:poison":{type:"api_key",provider:"openai",key:"synthetic-foreign-profile"}}};await state.writeAuthProfiles(store);
@@ -105,9 +237,9 @@ async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTe
   const hook=which==="stream"?plugin.wrapStreamFn:plugin.wrapSimpleCompletionStreamFn;
   const fn=row.provider==="baseten"?(expect(hook).toBeTypeOf("function"),hook!({streamFn:plain,sourceApi:model.api,modelId:model.id,config:{},providerId:row.provider} as Parameters<NonNullable<typeof hook>>[0])):plain;
   if(row.provider!=="baseten")expect(hook).toBeUndefined();
-  const result=fn!(model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16});return {stream:result,result:track("inference_result",result.result())};
+  const caller=witness.begin(options.signal);const result=fn!(model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16});const pending=track("inference_result",result.result());witness.finish(caller,pending);return {stream:result,result:pending};
  };
- return {discover,infer,transports};
+ return {discover,infer,transports,...witness};
 }
 function ready(result:any){expect(result.provider).toBeDefined();expect(result.provider.models.map((m:{id:string})=>m.id)).toContain("tenant/opaque-a");return result.provider;}
 function failedCatalog(result:any,status:"auth-rejected"|"unavailable"){expect(result.provider).toBeUndefined();expect(Object.keys(result.providers??{})).toEqual([]);expect(result.outcomes).toContainEqual(expect.objectContaining({status}));}
@@ -137,12 +269,39 @@ async function exercise(row:Case){await fixture(row,async f=>{
  if(s==="rotation"){await command(row,"mutate",{kind:"rotation"});const before=(await command(row,"state")).calls;expect((await f.infer(provider).result).stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(before);const current=ready(await f.discover({secret:"rotated-secret"}));await completeInference(f,current,{credential:key(row,"inference","rotated-secret")});return;}
  if(s==="foreign_inference"){expect((await f.infer(provider,{credential:key(row,"inference","invalid-secret")}).result).stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(1);return;}
  if(s==="inference_abort"){const c=new AbortController();c.abort(new Error("synthetic inference preabort"));expect((await f.infer(provider,{signal:c.signal}).result).stopReason).toBe("aborted");expect((await command(row,"state")).calls).toBe(1);return;}
- if(s==="stream_abort"||s==="simple_abort"){const c=new AbortController(),pending=f.infer(provider,{signal:c.signal});let partial=false;for await(const event of pending.stream){if(event.type==="text_delta"){partial=true;c.abort(new Error("synthetic original caller abort"));break;}}expect(partial).toBe(true);expect((await pending.result).stopReason).toBe("aborted");return;}
+ if(s==="stream_abort"||s==="simple_abort"){const c=new AbortController(),pending=f.infer(provider,{signal:c.signal});let partial=false;for await(const event of pending.stream){if(event.type==="text_delta"){partial=true;f.partialNow(c,new Error("synthetic original caller abort"));break;}}expect(partial).toBe(true);expect((await pending.result).stopReason).toBe("aborted");return;}
  if(s==="provider_error"){const c=new AbortController();expect((await f.infer(provider,{signal:c.signal}).result).stopReason).toBe("error");expect(c.signal.aborted).toBe(false);return;}
  await completeInference(f,provider);
 });}
 
-describe("registered private catalogs with native Worker and SQLite",()=>{
+async function diagnosticControl(row:Case){await fixture(row,async f=>{
+ const controller=new AbortController();
+ if(row.control==="preabort"){
+  const cold=new AbortController();f.abort(cold,new Error("synthetic cold preabort"));
+  failedCatalog(await f.discover({signal:cold.signal}),"unavailable");expect(f.transports).toHaveLength(0);
+  const coldZero=(await command(row,"state")).calls===0;expect(coldZero).toBe(true);
+  const provider=ready(await f.discover()),before=f.transports.filter((t:Transport)=>t.method==="POST").length;
+  f.abort(controller,new Error("synthetic inference preabort"));
+  expect((await f.infer(provider,{signal:controller.signal}).result).stopReason).toBe("aborted");
+  const delta=f.transports.filter((t:Transport)=>t.method==="POST").length-before;expect(delta).toBe(0);f.preabortProof(coldZero,delta);return;
+ }
+ const provider=ready(await f.discover()),pending=f.infer(provider,{signal:controller.signal});
+ if(row.control==="partial"){
+  let delivered=false;for await(const event of pending.stream)if(event.type==="text_delta"){delivered=true;await f.partial(controller,new Error("synthetic diagnostic caller abort"));break;}
+  expect(delivered).toBe(true);expect((await pending.result).stopReason).toBe("aborted");return;
+ }
+ const result=await pending.result;expect(controller.signal.aborted).toBe(false);
+ expect(result.stopReason).toBe(row.control==="provider_error"?"error":"stop");
+ if(row.control==="eof"){expect(result.content).toContainEqual({type:"text",text:"private-prefix"});expect(result.usage).toMatchObject({input:4,output:3,totalTokens:7});}
+});}
+
+describe.sequential("registered private catalogs with native Worker and SQLite",()=>{
+ // These are diagnostic tests, not replacements for the 42 product groups.
+ // The registry cannot qualify an API until all four fresh controls restore.
+ for(const provider of providers)for(const api of ["stream","simple"] as const)for(const role of ["eof","preabort","partial","provider_error"] as const)
+  it("native diagnostic "+provider+" "+api+" "+role,async()=>{
+   const selected=controlRows.filter(r=>r.provider===provider&&r.api===api&&r.control===role);expect(selected).toHaveLength(1);await diagnosticControl(selected[0]);
+  });
  for(const provider of providers)for(const group of groups)it(provider+" "+group,async()=>{
   const selected=rows.filter(r=>r.provider===provider&&r.group===group);expect(selected.length).toBeGreaterThan(0);
   // Forty-two registrations retain every expanded scenario. They do not replace
