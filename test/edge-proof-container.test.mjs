@@ -12,7 +12,7 @@ import { containerContract, harnessInputs, installInputs, parseIdentity, validat
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
 import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf, parseReaperTerminal, requireReaperTerminal, createReaperTerminalRetention, hostedCensusMatrix } from "../scripts/edge-proof-container.mjs";
-import { bindCensusControls, classifyCensusControl, privateProcesses } from "../scripts/edge-proof.mjs";
+import { bindCensusControls, classifyCensusControl, privateProcesses, createCensusComparisonWitness } from "../scripts/edge-proof.mjs";
 import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptObservedWranglerDiagnostic, unpackReceiptObservedWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptObservedWranglerDiagnostic, packObservedWranglerCloseDiagnostic, validateObservedWranglerCloseDiagnostic, validateObservedWranglerGroup, packReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
@@ -3657,6 +3657,22 @@ function reaperSocket() {
 }
 const reaperBinding = {pid:2, nonce:"a".repeat(64),contextHash:"b".repeat(64)};
 const originalOutcome = promise => promise.then(value=>({failed:false,value}),reason=>({failed:true,reason}));
+async function censusWitnessFixture(ErrorConstructor = Error) {
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("const censusControls ="),source.indexOf("// Original operations remain authoritative;"));
+  const declarations=["refuse","ownedNote","ownedLeaf"].map(name=>{const match=source.match(new RegExp("^const "+name+" ?=.*$","m"));assert.ok(match,name);return match[0];}).join("\n");
+  const f={extra:[],names:null,readFailure:null,reads:[],lists:0};
+  const base=[{pid:1,parent:0,start:"10",state:"S"},{pid:2,parent:1,start:"20",state:"S"}];
+  const text=row=>`${row.pid} (inert) ${[row.state,String(row.parent),String(row.pid),...Array(16).fill("0"),row.start].join(" ")}`;
+  const read=async path=>{
+    f.reads.push(path);const pid=Number(path.split("/")[2]);
+    if(f.readFailure&&f.readFailure.pid===pid){const failure=f.readFailure;f.readFailure=null;throw failure.reason;}
+    return text([...base,...f.extra].find(row=>row.pid===pid));
+  };
+  const list=async path=>{assert.equal(path,"/proc");f.lists++;return f.names??[...base,...f.extra].map(row=>String(row.pid));};
+  f.api=new Function("process","readdir","readFile","Error",declarations+"\n"+body.replaceAll("export ","")+"\nreturn {bindCensusControls,classifyCensusControl,privateProcesses,createCensusComparisonWitness};")({platform:"linux",pid:2,ppid:1},list,read,ErrorConstructor);
+  f.controls=f.api.bindCensusControls({pid:1,parent:0,start:"10"},{pid:2,parent:1,start:"20"});return f;
+}
 const reaperTick = async () => { for(let i=0;i<8;i++)await Promise.resolve(); };
 function reaperReply(socket, index = socket.writes.length - 1, split = 80) {
   const reply=Buffer.from(socket.writes[index]);reply[4]|=128;
@@ -3752,7 +3768,7 @@ test("reaper inert ELF admission rejects foreign ABI and malformed interpreter",
 test("reaper inert source binds real hosted fixtures and original module imports", async () => {
   const [container,proof,c,docker]=await Promise.all(["scripts/edge-proof-container.mjs","scripts/edge-proof.mjs","config/edge-proof/reaper.c","config/edge-proof/Dockerfile"].map(path=>readFile(new URL("../"+path,import.meta.url),"utf8")));
   assert.ok(container.includes('import { Socket } from "node:net"'));
-  assert.ok(container.includes('import { bindCensusControls, privateProcesses } from "./edge-proof.mjs"'));
+  assert.ok(container.includes('import { bindCensusControls, privateProcesses, createCensusComparisonWitness } from "./edge-proof.mjs"'));
   assert.ok(proof.includes('"container-reaper-probe"'));
   assert.ok(container.includes('await hostedReaperFixtures(args, rpc, controls)'));
   for(const literal of ['waitpid(-1, &value, WNOHANG)','SCM_CREDENTIALS','MSG_CTRUNC | MSG_TRUNC','SO_PASSCRED','pselect(','orphan_fixture() || credential_fixture()','--fixture-hold','--check-fd'])assert.ok(c.includes(literal),literal);
@@ -3820,14 +3836,14 @@ test("reaper inert terminal rejects shared stdout foreign truncated conflicting 
   const g=terminalFixture();const failed=await originalOutcome(createReaperTerminalRetention(g.attached,()=>g.binding,()=>{throw undefined;})(g.result));assert.equal(failed.failed,true);assert.equal(failed.reason,undefined);
 });
 test("reaper inert actual hosted matrix uses real-bound operations in order and rejects both controls", async () => {
-  const pair={reaper:{pid:1,parent:0,start:"10"},coordinator:{pid:2,parent:1,start:"20"}}, args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  const census=await censusWitnessFixture(), pair=census.controls, args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
   const seen=[],snapshots=[];let spawned,rows=[],closeOriginal;
   const actualRequire= new Function((await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8")).match(/export function requireProcessSuccess\(result\) \{[\s\S]*?\n}/)[0].replace("export ","")+"return requireProcessSuccess;")();
   const ops={
     readControl:async pid=>{seen.push(["read",pid]);return{...pair[pid===1?"reaper":"coordinator"],exe:pid===1?containerContract.reaper:containerContract.node};},
     validateControlPair:(a,b)=>{seen.push(["pair",a.exe,b.exe]);assert.notEqual(a.exe,"/invalid-control");assert.notEqual(b.exe,"/invalid-control");return pair;},
-    bindCensusControls:(a,b)=>({reaper:a,coordinator:b}),
-    privateProcesses:async(_recorder,token)=>{seen.push(["sample",token.reaper.start,token.coordinator.start]);assert.equal(token.reaper.start,"10");assert.equal(token.coordinator.start,"20");return rows.map(row=>({...row}));},
+    bindCensusControls:census.api.bindCensusControls, createCensusComparisonWitness:census.api.createCensusComparisonWitness,
+    privateProcesses:async(recorder,token,witness)=>{seen.push(["sample",token.reaper.start,token.coordinator.start]);census.extra=rows;return census.api.privateProcesses(recorder,token,witness);},
     requireProcessSuccess:result=>{snapshots.push(result.remaining);return actualRequire(result);},
     spawn:(command,argv,options)=>{
       seen.push(["spawn",command,argv]);assert.deepEqual(options.stdio,["pipe","pipe","pipe"]);
@@ -3861,14 +3877,93 @@ test("reaper inert terminal source custody and real native fixture entry cannot 
   assert.ok(container.includes('flag:"wx",mode:0o600'));
 });
 test("reaper inert hosted matrix cannot accept bypassed control negatives or hide undefined reads", async () => {
-  const pair={reaper:{pid:1,parent:0,start:"10"},coordinator:{pid:2,parent:1,start:"20"}},args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  const census=await censusWitnessFixture(), pair=census.controls,args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
   for(const bypass of ["admission","census","read"]){
     let spawns=0;
     const ops={readControl:async pid=>{if(bypass==="read")throw undefined;return{...pair[pid===1?"reaper":"coordinator"],exe:pid===1?containerContract.reaper:containerContract.node};},
       validateControlPair:(a,b)=>{if(bypass!=="admission"&&(a.exe==="/invalid-control"||b.exe==="/invalid-control"))throw undefined;return pair;},
-      bindCensusControls:(a,b)=>({reaper:a,coordinator:b}),privateProcesses:async()=>[],runOwnedProcess:()=>{spawns++;throw new Error("must not launch");}};
+      bindCensusControls:census.api.bindCensusControls,createCensusComparisonWitness:census.api.createCensusComparisonWitness,privateProcesses:async()=>[],runOwnedProcess:()=>{spawns++;throw new Error("must not launch");}};
     const outcome=await originalOutcome(hostedCensusMatrix(args,{},pair,ops));assert.equal(outcome.failed,true);assert.equal(spawns,0);
     if(bypass==="read")assert.equal(outcome.reason,undefined);
+  }
+});
+test("reaper inert END event plus independent throw is retained through delayed CLOSE", async () => {
+  for(const eventUndefined of [false,true])for(const throwUndefined of [false,true])for(const destroyThrows of [false,true]){
+    const socket=reaperSocket(),event=eventUndefined?undefined:new Error("event"),thrown=throwUndefined?undefined:new AggregateError([undefined],"end");
+    let ends=0,destroys=0;socket.end=()=>{ends++;socket.emit("error",event);throw thrown;};socket.destroy=()=>{destroys++;if(destroyThrows)throw undefined;};
+    const rpc=createReaperClient(socket,reaperBinding),start=rpc.start();reaperReply(socket);await start;
+    const finish=rpc.finish();assert.equal(rpc.finish(),finish);const outcome=originalOutcome(finish);await reaperTick();reaperReply(socket);await reaperTick();
+    let settled=false;void outcome.then(()=>{settled=true;});await reaperTick();assert.equal(settled,false);assert.equal(ends,1);assert.equal(destroys,1);
+    socket.emit("close");const result=await outcome;assert.equal(result.failed,true);assert.equal(result.reason.errors[0],event);assert.equal(result.reason.errors[1],thrown);
+    assert.equal(result.reason.errors.length,destroyThrows?3:2);if(destroyThrows)assert.equal(result.reason.errors[2],undefined);
+  }
+});
+test("reaper inert census witness accepts only the actual intended start comparison and original failure", async () => {
+  for(const role of ["reaper","coordinator"]){
+    const f=await censusWitnessFixture(),wrong={...f.controls,[role]:{...f.controls[role],start:"99"}},token=f.api.bindCensusControls(wrong.reaper,wrong.coordinator);
+    let observed=0;const witness=f.api.createCensusComparisonWitness(token,role,()=>{observed++;});
+    const result=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));assert.equal(result.failed,true);assert.equal(observed,1);
+    witness.requireRejected(result.failed,result.reason);assert.equal(f.lists,1);assert.deepEqual(f.reads,role==="reaper"?["/proc/1/stat"]:["/proc/1/stat","/proc/2/stat"]);
+    const repeated=await originalOutcome(Promise.resolve().then(()=>witness.requireRejected(true,result.reason)));assert.equal(repeated.failed,true);assert.equal(repeated.reason,result.reason);
+  }
+  const f=await censusWitnessFixture(function(){throw undefined;}),token=f.api.bindCensusControls({...f.controls.reaper,start:"99"},f.controls.coordinator),witness=f.api.createCensusComparisonWitness(token,"reaper");
+  const result=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));assert.equal(result.failed,true);assert.equal(result.reason,undefined);witness.requireRejected(true,undefined);
+  const absent=f.api.createCensusComparisonWitness(token,"reaper"),unreached=await originalOutcome(Promise.resolve().then(()=>absent.requireRejected(true,undefined)));assert.equal(unreached.failed,true);assert.equal(unreached.reason,undefined);
+});
+test("reaper inert census witness propagates read undefined and missing-control faults despite later success", async () => {
+  for(const role of ["reaper","coordinator"])for(const kind of ["read","undefined","missing"]){
+    const f=await censusWitnessFixture(),wrong={...f.controls,[role]:{...f.controls[role],start:"99"}},token=f.api.bindCensusControls(wrong.reaper,wrong.coordinator),witness=f.api.createCensusComparisonWitness(token,role);
+    const original=kind==="undefined"?undefined:new Error("read");
+    if(kind==="missing")f.names=role==="reaper"?["2"]:["1"];else f.readFailure={pid:1,reason:original};
+    const result=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));assert.equal(result.failed,true);if(kind!=="missing")assert.equal(result.reason,original);
+    const rejected=await originalOutcome(Promise.resolve().then(()=>witness.requireRejected(true,result.reason)));assert.equal(rejected.failed,true);assert.equal(rejected.reason,result.reason);
+    f.names=null;assert.deepEqual(await f.api.privateProcesses(undefined,f.controls),[]);
+  }
+});
+test("reaper inert census witness rejects foreign invocation role source snapshot and forged presence", async () => {
+  for(const fault of ["role","control","direct","fake","parent","reason","reuse"]){
+    const f=await censusWitnessFixture(),token=f.api.bindCensusControls({...f.controls.reaper,start:"99"},f.controls.coordinator);
+    const selected=fault==="parent"?f.controls:token,witness=f.api.createCensusComparisonWitness(selected,fault==="role"?"coordinator":"reaper");
+    let result;
+    if(fault==="direct")result=await originalOutcome(Promise.resolve().then(()=>f.api.classifyCensusControl({pid:1,parent:0,start:"10",state:"S"},token,witness.recorder)));
+    else if(fault==="parent")result=await originalOutcome(Promise.resolve().then(()=>f.api.classifyCensusControl({pid:1,parent:99,start:"10",state:"S"},selected,witness.recorder)));
+    else result=await originalOutcome(f.api.privateProcesses(undefined,fault==="control"?f.api.bindCensusControls(token.reaper,token.coordinator):token,fault==="fake"?{present:true,failed:true,source:42}:witness.recorder));
+    assert.equal(result.failed,true);
+    if(fault==="reuse"){witness.requireRejected(true,result.reason);result=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));assert.equal(result.failed,true);}
+    const reason=fault==="reason"?new Error("foreign identity"):result.reason;
+    const denied=await originalOutcome(Promise.resolve().then(()=>witness.requireRejected(true,reason)));assert.equal(denied.failed,true);
+    if(!["control","reuse"].includes(fault))assert.equal(denied.reason,reason);
+  }
+});
+test("reaper inert comparison observer faults preserve the original failure and deny the negative", async () => {
+  for(const fault of [undefined,new Error("observer")]){
+    const f=await censusWitnessFixture(),token=f.api.bindCensusControls({...f.controls.reaper,start:"99"},f.controls.coordinator),witness=f.api.createCensusComparisonWitness(token,"reaper",()=>{throw fault;});
+    const original=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));assert.equal(original.failed,true);
+    const denied=await originalOutcome(Promise.resolve().then(()=>witness.requireRejected(true,original.reason)));assert.equal(denied.failed,true);assert.deepEqual(denied.reason.errors,[original.reason,fault]);
+  }
+  const f=await censusWitnessFixture(),calls=[],token=f.api.bindCensusControls({...f.controls.reaper,start:"99"},f.controls.coordinator);
+  const row={get pid(){calls.push("pid");return 1;},get start(){calls.push("start");return "10";},get parent(){throw new Error("unreached parent");},get state(){throw new Error("unreached state");}};
+  assert.throws(()=>f.api.classifyCensusControl(row,token));assert.deepEqual(calls,["pid","start"]);
+  const thrown=undefined,early={pid:1,get start(){throw thrown;}};const result=await originalOutcome(Promise.resolve().then(()=>f.api.classifyCensusControl(early,token)));assert.equal(result.failed,true);assert.equal(result.reason,thrown);
+  let reads=0;const original={get code(){reads++;throw undefined;}},g=await censusWitnessFixture(function(){return original;});
+  const other=g.api.bindCensusControls({...g.controls.reaper,start:"99"},g.controls.coordinator),witness=g.api.createCensusComparisonWitness(other,"reaper");
+  const access=await originalOutcome(g.api.privateProcesses(undefined,other,witness.recorder));assert.equal(access.failed,true);assert.equal(access.reason,undefined);assert.equal(reads,1);
+  const denied=await originalOutcome(Promise.resolve().then(()=>witness.requireRejected(true,access.reason)));assert.equal(denied.failed,true);assert.equal(denied.reason,undefined);
+});
+test("reaper inert actual hosted substitution aborts on unrelated census failures before any later launch", async () => {
+  const args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  for(const role of ["reaper","coordinator"])for(const kind of ["read","undefined","missing"]){
+    const f=await censusWitnessFixture(),pair=f.controls;let original,launches=0,failedCall=0;
+    const ops={readControl:async pid=>({...pair[pid===1?"reaper":"coordinator"],exe:pid===1?containerContract.reaper:containerContract.node}),
+      validateControlPair:(a,b)=>{if(a.exe==="/invalid-control"||b.exe==="/invalid-control")throw undefined;return pair;},
+      bindCensusControls:f.api.bindCensusControls,createCensusComparisonWitness:f.api.createCensusComparisonWitness,
+      privateProcesses:async(recorder,token,witness)=>{
+        const active=token[role].start!==pair[role].start;
+        if(active){failedCall++;if(kind==="missing")f.names=role==="reaper"?["2"]:["1"];else f.readFailure={pid:1,reason:kind==="undefined"?undefined:new Error("read")};}
+        try{return await f.api.privateProcesses(recorder,token,witness);}catch(error){if(active)original=error;throw error;}finally{f.names=null;}
+      },runOwnedProcess:()=>{launches++;throw new Error("unexpected launch");}};
+    const result=await originalOutcome(hostedCensusMatrix(args,{},pair,ops));assert.equal(result.failed,true);assert.equal(result.reason,original);assert.equal(failedCall,1);assert.equal(launches,0);
+    assert.deepEqual(await f.api.privateProcesses(undefined,pair),[]);
   }
 });
 // END explicit reaper inert tests.

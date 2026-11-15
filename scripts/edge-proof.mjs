@@ -438,20 +438,61 @@ const ownedArgument=(recorder,reason,signal,value)=>{ownedNote(recorder,"attempt
 // Each census must observe both exact PID:start controls; a missing/reused PID
 // cannot be omitted. The old private-init caller remains PID1-only.
 const censusControls = new WeakSet();
+const censusComparisons = new WeakMap();
+// Private fixture witness: only the original start comparison can mint evidence.
+// Neither a caller-supplied row/mask nor an equal undefined value is authority.
+export function createCensusComparisonWitness(controls, role, observe = () => {}) {
+  if (!censusControls.has(controls) || !["reaper","coordinator"].includes(role)) refuse("census-witness-identity");
+  const recorder = Object.freeze({}), state = {controls,role,expected:controls[role],observe,errors:[],started:false,completed:false,consumed:false,present:false};
+  censusComparisons.set(recorder,state);
+  return {recorder,requireRejected(failed,reason) {
+    const accepted = !state.consumed && failed === true && state.started && state.completed && state.present &&
+      state.record.invocation === state.invocation && state.record.controls === controls && state.record.expected === state.expected &&
+      state.record.role === role && state.record.failed === true && Object.is(state.record.reason,reason);
+    state.consumed = true;
+    if (state.errors.length) throw new AggregateError(failed ? [reason,...state.errors] : state.errors.slice(),"edge-proof: census witness failure");
+    if (!accepted) { if (failed) throw reason; refuse("census-witness-rejection-missing"); }
+  }};
+}
+function beginCensusComparison(recorder, controls) {
+  if (recorder === undefined) return undefined;
+  const state = censusComparisons.get(recorder);
+  if (!state || state.controls !== controls || state.started || state.consumed) {
+    const error = new Error("edge-proof: census witness invocation"); if (state) state.errors.push(error); throw error;
+  }
+  const invocation = Object.freeze({}); state.started = true; state.invocation = invocation;
+  censusComparisons.set(invocation,state); return invocation;
+}
+function recordCensusComparison(invocation, controls, role, expected, row, reason) {
+  if (invocation === undefined) return;
+  const state = censusComparisons.get(invocation);
+  if (!state || state.invocation !== invocation) return;
+  if (state.controls !== controls || state.role !== role || state.expected !== expected) return;
+  try {
+    if (state.completed || state.present) refuse("census-witness-comparison");
+    state.record = {invocation,controls,role,expected,row,failed:true,reason}; state.present = true;
+    state.observe();
+  } catch (error) { state.errors.push(error); }
+}
 export function bindCensusControls(reaper, coordinator) {
   if (reaper.pid !== 1 || coordinator.pid <= 1 || coordinator.parent !== 1 || !/^\d+$/.test(reaper.start) || !/^\d+$/.test(coordinator.start)) refuse("census-control-identity");
   const controls = Object.freeze({ reaper: Object.freeze({...reaper}), coordinator: Object.freeze({...coordinator}) });
   censusControls.add(controls); return controls;
 }
-export function classifyCensusControl(row, controls) {
+export function classifyCensusControl(row, controls, comparison) {
   if (!censusControls.has(controls)) refuse("census-control-authority");
   for (const [key, expected] of Object.entries(controls)) if (row.pid === expected.pid) {
-    if (row.start !== expected.start || row.parent !== expected.parent || !["R", "S", "D", "I"].includes(row.state)) refuse("census-control-drift");
+    const startMismatch = row.start !== expected.start;
+    if (startMismatch || row.parent !== expected.parent || !["R", "S", "D", "I"].includes(row.state)) {
+      try { refuse("census-control-drift"); }
+      catch (error) { if (startMismatch) recordCensusComparison(comparison,controls,key,expected,row,error); throw error; }
+    }
     return key;
   }
   return null;
 }
-export async function privateProcesses(recorder, controls) {
+export async function privateProcesses(recorder, controls, comparisonRecorder) {
+  const comparison = beginCensusComparison(comparisonRecorder,controls);
   const census=ownedNote(recorder,"censusBegin");
   ownedNote(recorder,"sampleBegin");
   try {
@@ -475,7 +516,7 @@ export async function privateProcesses(recorder, controls) {
       if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,![fields[1], fields[2]].every(value => /^\d+$/.test(value)),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
       ownedNote(recorder,"sampleStage",7);
       const row={ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] };
-      const control = controls ? classifyCensusControl(row, controls) : null;
+      const control = controls ? classifyCensusControl(row, controls, comparison) : null;
       if (control) { if (seenControls.has(control)) refuse("duplicate-census-control"); seenControls.add(control); continue; }
       rows.push(row);
       ownedNote(recorder,"censusRow",census,row.pid,row.parent,row.group,row.start,row.state);
@@ -493,7 +534,7 @@ export async function privateProcesses(recorder, controls) {
   if (controls && seenControls.size !== 2) refuse("missing-census-control");
   ownedNote(recorder,"censusSample",census,rows);
   return rows;
-  } finally { ownedNote(recorder,"sampleEnd"); }
+  } finally { ownedNote(recorder,"sampleEnd"); if (comparison !== undefined) censusComparisons.get(comparison).completed = true; }
 }
 
 // Original operations remain authoritative; observations never stop cleanup.

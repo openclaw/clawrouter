@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
 import { Socket } from "node:net";
-import { bindCensusControls, privateProcesses } from "./edge-proof.mjs";
+import { bindCensusControls, privateProcesses, createCensusComparisonWitness } from "./edge-proof.mjs";
 import { edgeProof } from "./edge-proof-profile.mjs";
 import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptObservedWranglerDiagnostic, validateObservedWranglerCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
@@ -202,9 +202,10 @@ export function createReaperClient(socket, binding) {
   const stop = finish => {
     if (!shutdown) shutdown = Promise.resolve().then(async () => {
       if (finish) {
-        const prior = errors.length;
-        try { await request(3); socket.end(); }
+        const prior = errors.length; let requested = false;
+        try { await request(3); requested = true; }
         catch (error) { if (errors.length === prior && prior === 0) errors.push(error); }
+        if (requested) try { socket.end(); } catch (error) { errors.push(error); }
       }
       if ((!finish || errors.length) && !closed && !destroyed) {
         destroyed = true; try { socket.destroy(); } catch (error) { errors.push(error); }
@@ -1812,7 +1813,7 @@ async function hostedReaperFixtures(args, rpc, controls) {
   let rejected = false; try { requireProcessSuccess(held); } catch { rejected = true; } check(rejected, "reaper-held-ack-qualified");
 }
 export async function hostedCensusMatrix(args, rpc, controls, supplied = {}) {
-  const ops = {readControl, validateControlPair, bindCensusControls, privateProcesses, runOwnedProcess, requireProcessSuccess, spawn, ...supplied};
+  const ops = {readControl, validateControlPair, bindCensusControls, privateProcesses, createCensusComparisonWitness, runOwnedProcess, requireProcessSuccess, spawn, ...supplied};
   const identity = {uid:Array(4).fill(number(args[2])),gid:Array(4).fill(number(args[3])),groups:[]};
   const reaper = await ops.readControl(1), coordinator = await ops.readControl(controls.coordinator.pid);
   const expected = {identity,nonce:args[0],contextHash:args[1]};
@@ -1826,9 +1827,10 @@ export async function hostedCensusMatrix(args, rpc, controls, supplied = {}) {
     try { ops.validateControlPair(role === "reaper" ? changed : reaper, role === "coordinator" ? changed : coordinator, expected); } catch { denied = true; }
     check(denied,"fixture-control-substitution");
     const wrong = {...pair,[role]:{...pair[role],start:String(BigInt(pair[role].start)+1n)}};
-    const token = ops.bindCensusControls(wrong.reaper,wrong.coordinator); denied = false;
-    try { await ops.privateProcesses(undefined,token); } catch { denied = true; }
-    check(denied,"fixture-control-census-substitution");
+    const token = ops.bindCensusControls(wrong.reaper,wrong.coordinator), witness = ops.createCensusComparisonWitness(token,role);
+    let rejected = false, reason;
+    try { await ops.privateProcesses(undefined,token,witness.recorder); } catch (error) { rejected = true; reason = error; }
+    witness.requireRejected(rejected,reason);
   }
   const failures = [], snapshots = []; let queued = Promise.resolve(), buffer = "", frames = 0, child;
   const result = await ops.runOwnedProcess(containerContract.reaper,["--fixture-census"],{
