@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
+import { execFile } from "node:child_process";
+import { types as nodeTypes, promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -21,6 +24,220 @@ const denied = ["grant", "foreign", "policy", "revoked", "stale_policy", "budget
 const scenarios = [...success, ...invalid, ...held, ...denied];
 const modelFor = name => /^model\d$/.test(name) ? models[Number(name.slice(5))] : /^cutoff\d$/.test(name) ? models[Number(name.slice(6))] : models[3];
 const text = "Synthetic speech 😀 café";
+
+// The SDK and outer process use this exact closed protocol, not parallel validators.
+const sdkText = readFileSync(new URL("./fixtures/openclaw-google-speech-contract.test.ts", import.meta.url), "utf8");
+const protocolStart = sdkText.indexOf("// BEGIN google diagnostic protocol."), protocolEnd = sdkText.indexOf("// END google diagnostic protocol.");
+assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
+const protocolSource = stripTypeScriptTypes(sdkText.slice(protocolStart, protocolEnd));
+const protocol = new Function(protocolSource + "; return googleDiagnosticProtocol;")()(nodeTypes.isProxy);
+assert.equal(protocol.pin, sourceHead);
+assert.deepEqual([...protocol.ids], scenarios);
+
+function diagnosticSession(write = line => process.stdout.write(line)) {
+  const emitter = protocol.emitter(write), failures = [];
+  let records = 0, invalid = 0, inputBytes = 0, finished = false;
+  function protect(run) { try { run(); } catch (error) { failures.push(error); } }
+  function mark(phase, caseId, role, outcome, failed = false, error, fields = {}, route = "none") {
+    protect(() => emitter.put(protocol.record({ source: "outer", caseId, route, phase, role, outcome, ...fields }, failed, error)));
+  }
+  function parse(text) {
+    if (typeof text === "string") inputBytes += Buffer.byteLength(text);
+    if (inputBytes > 4 * 1024 * 1024) { invalid++; return; }
+    const result = protocol.parse(text, row => { if (records >= 512) { invalid++; return; } emitter.put(row); records++; });
+    invalid += result.invalid;
+  }
+  function received(error) {
+    const own = key => protocol.own(error, key);
+    const code = own("code"), signal = own("signal"), killed = own("killed");
+    mark("helper", null, "primary", "rejected", true, error, {
+      exitCode: Number.isSafeInteger(code) && code >= 0 && code <= 65535 ? code : null,
+      signal: ["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT"].includes(signal) ? signal : null,
+      killed: typeof killed === "boolean" ? killed : null,
+      moduleCode: ["ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNKNOWN_FILE_EXTENSION"].includes(code) ? code : null,
+    });
+    const pending = [{ value: error, role: "primary" }], seen = new Set(); let nodes = 0;
+    while (pending.length) {
+      if (++nodes > 32) { invalid++; break; }
+      const { value, role } = pending.pop();
+      // Never inspect a proxy, getter, prototype error field, message, stack or cause.
+      if (value === undefined) mark("report", null, role, "rejected", true, undefined);
+      if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || !nodeTypes.isNativeError(value) || seen.has(value)) continue;
+      seen.add(value);
+      for (const key of ["stdout", "stderr"]) parse(protocol.own(value, key));
+      const children = protocol.own(value, "errors");
+      if (!children || nodeTypes.isProxy(children) || !Array.isArray(children)) continue;
+      const length = protocol.own(children, "length");
+      if (!Number.isSafeInteger(length) || length < 0 || length > 32) { invalid++; continue; }
+      for (let i = length - 1; i >= 0; i--) {
+        const entry = Object.getOwnPropertyDescriptor(children, String(i));
+        if (!entry || !("value" in entry)) { invalid++; continue; }
+        if (pending.length >= 32) { invalid++; break; }
+        pending.push({ value: entry.value, role: i === 0 ? role : "cleanup" });
+      }
+    }
+  }
+  function report() {
+    mark("report", null, "summary", invalid ? "rejected" : records ? "fulfilled" : "unknown", invalid > 0, undefined,
+      { records, invalid: Math.min(65535, invalid) });
+  }
+  return {
+    mark,
+    diagnostic(text) { protect(() => parse(text)); }, // The helper's successful stdout, never forwarded raw.
+    rejected(error) { protect(() => received(error)); report(); protect(() => emitter.checkpoint()); },
+    checkpoint() { protect(() => emitter.checkpoint()); },
+    finish() {
+      if (finished) return []; finished = true;
+      if (invalid) failures.push(new Error("invalid fresh Google diagnostics"));
+      report();
+      if (failures.length) mark("report", null, "primary", "rejected", true, failures[0]);
+      protect(() => emitter.flush()); return failures;
+    },
+  };
+}
+
+const diagnosticContext = (changes = {}) => ({ source: "sdk", caseId: "abort_headers", route: "manifest", phase: "body", role: "primary", outcome: "rejected", ...changes });
+test("Google diagnostic validator rejects unknown fields, getters, proxies and foreign pins", () => {
+  const row = protocol.record(diagnosticContext(), true, undefined);
+  assert.equal(row.failurePresent, true); assert.equal(row.reasonDefined, false); assert.equal(row.partialDelivery, null);
+  let touched = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["name", "message", "stack", "stdout", "stderr", "errors"].map(key => [key, { get() { touched++; throw undefined; } }])));
+  const proxy = new Proxy({}, { ownKeys() { touched++; throw undefined; }, getPrototypeOf() { touched++; throw undefined; }, getOwnPropertyDescriptor() { touched++; throw undefined; } });
+  for (const object of [hostile, proxy]) {
+    assert.equal(protocol.own(object, "stdout"), undefined);
+    assert.equal(protocol.validate(object), undefined);
+    assert.equal(protocol.record(diagnosticContext(), true, object).reasonType, "object");
+  }
+  for (const changed of [{ pin: "wrong" }, { caseId: "not_a_google_case" }, { route: "url" }, { phase: "foreign" }, { source: "worker" },
+    { message: "private" }, { partialDelivery: true }, { closed: true }, { reads: -1 }, { records: 65536 }, { killed: 1 },
+    { signal: "foreign" }, { moduleCode: "foreign" }, { reasonDefined: true }, { outcome: "fulfilled" }]) {
+    assert.equal(protocol.validate({ ...row, ...changed }), undefined);
+  }
+  assert.equal(protocol.validate(Object.defineProperty({ ...row }, "phase", { get() { touched++; throw undefined; } })), undefined);
+  assert.equal(touched, 0);
+  assert.ok(protocol.validate(protocol.record({ ...diagnosticContext(), reads: 65535, closed: null, callerAborted: false }, true, undefined)));
+});
+
+test("Google child parser accepts only exact fresh typed records, with bounded input", () => {
+  const row = protocol.record(diagnosticContext(), true, undefined), accepted = [], line = protocol.prefix + JSON.stringify(row);
+  assert.deepEqual(protocol.parse("unrelated prose\n# " + line + "\n" + line + "\n", value => accepted.push(value)), { records: 1, invalid: 0 });
+  assert.deepEqual(accepted, [row]);
+  for (const text of ["{", JSON.stringify({ ...row, pin: "wrong" }), JSON.stringify({ ...row, source: "outer" }), "x".repeat(641)]) {
+    assert.equal(protocol.parse(protocol.prefix + text, () => assert.fail()).invalid, 1);
+  }
+  assert.equal(protocol.parse("x".repeat(2 * 1024 * 1024 + 1), () => assert.fail()).invalid, 1);
+  assert.deepEqual(protocol.parse((line + "\n").repeat(513), () => {}), { records: 512, invalid: 1 });
+});
+
+test("Google own-DATA helper adapter preserves cycles, undefined and independent cleanup", () => {
+  const lines = [], session = diagnosticSession(line => lines.push(line));
+  const row = protocol.record(diagnosticContext(), true, undefined);
+  const child = Object.assign(new Error("synthetic"), { stdout: protocol.prefix + JSON.stringify(row) + "\n", stderr: "unrelated", code: 1, killed: false });
+  let touched = 0;
+  for (const key of ["message", "stack", "cause"]) Object.defineProperty(child, key, { get() { touched++; throw undefined; } });
+  const errors = [child, undefined], aggregate = new AggregateError(errors, "synthetic");
+  aggregate.errors.push(aggregate, child);
+  session.rejected(aggregate);
+  session.mark("worker_dispose", null, "cleanup", "rejected", true, undefined);
+  assert.deepEqual(session.finish(), []);
+  const rows = lines.map(line => JSON.parse(line.split("::").at(-1)));
+  assert.ok(rows.some(value => value.source === "sdk" && value.reasonDefined === false));
+  assert.ok(rows.some(value => value.phase === "worker_dispose" && value.reasonDefined === false));
+  assert.ok(rows.some(value => value.phase === "report" && value.role === "cleanup" && value.reasonDefined === false));
+  assert.equal(touched, 0); assert.equal(aggregate.errors[1], undefined); assert.equal(aggregate.errors[0], child);
+});
+
+test("Google primary and original cleanup are visible before outer teardown can stall", () => {
+  const lines = [], session = diagnosticSession(line => lines.push(line));
+  const primary = protocol.record(diagnosticContext(), true, undefined);
+  const cleanup = protocol.record(diagnosticContext({ phase: "original_join", role: "cleanup" }), true, null);
+  const child = Object.assign(new Error("synthetic"), { stdout: [primary, cleanup].map(row => protocol.prefix + JSON.stringify(row)).join("\n") });
+  session.rejected(child); // No finish: a later original cleanup may be pending.
+  const rows = lines.map(line => JSON.parse(line.split("::").at(-1)));
+  assert.equal(rows.length, 3);
+  assert.ok(rows.some(row => row.phase === "helper"));
+  assert.ok(rows.some(row => row.source === "sdk" && row.role === "primary" && row.reasonDefined === false));
+  assert.ok(rows.some(row => row.source === "sdk" && row.role === "cleanup" && row.reasonType === "null"));
+  assert.deepEqual(session.finish(), []);
+});
+
+test("Google malformed fresh diagnostics fail independently without replacing original errors", () => {
+  const lines = [], session = diagnosticSession(line => lines.push(line));
+  session.diagnostic(protocol.prefix + '{"pin":"foreign"}');
+  session.mark("helper", null, "progress", "fulfilled");
+  assert.equal(session.finish().length, 1);
+  assert.ok(lines.some(line => JSON.parse(line.split("::").at(-1)).invalid === 1));
+});
+
+test("Google helper zero records stays unknown; accessors and proxies are never read", () => {
+  let touched = 0;
+  const child = new Error("synthetic");
+  for (const key of ["stdout", "stderr", "errors", "code", "signal", "killed"]) Object.defineProperty(child, key, { get() { touched++; throw undefined; } });
+  const lines = [], session = diagnosticSession(line => lines.push(line));
+  session.rejected(child); assert.deepEqual(session.finish(), []);
+  assert.ok(lines.some(line => { const value = JSON.parse(line.split("::").at(-1)); return value.phase === "report" && value.records === 0 && value.outcome === "unknown"; }));
+  const proxied = diagnosticSession(() => {});
+  proxied.rejected(new Proxy(child, { getOwnPropertyDescriptor() { touched++; throw undefined; } }));
+  assert.deepEqual(proxied.finish(), []); assert.equal(touched, 0);
+});
+
+test("Google successful diagnostics and expected read rejection never emit errors", () => {
+  const lines = [], session = diagnosticSession(line => lines.push(line));
+  session.diagnostic(protocol.prefix + JSON.stringify(protocol.record(diagnosticContext({ phase: "acquisition", role: "progress" }), true, new Error("synthetic"))) + "\n");
+  session.mark("helper", null, "progress", "fulfilled");
+  assert.deepEqual(session.finish(), []); assert.deepEqual(lines, []);
+});
+
+test("Google annotations share nine essential slots plus overflow, route-aware dedup and exact byte caps", () => {
+  const lines = [], emitter = protocol.emitter(line => lines.push(line));
+  const first = protocol.record(diagnosticContext(), true, undefined);
+  emitter.put(first); emitter.put(first); emitter.checkpoint(); emitter.checkpoint();
+  emitter.put({ ...first, route: "native" });
+  for (const caseId of scenarios) emitter.put(protocol.record(diagnosticContext({ caseId, phase: "original_join", role: "cleanup" }), true, undefined));
+  emitter.flush(); const count = lines.length; emitter.flush(); emitter.checkpoint();
+  assert.equal(lines.length, count); assert.equal(count, 10);
+  assert.ok(lines.every(line => line.startsWith("::error ") && Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const rows = lines.map(line => JSON.parse(line.split("::").at(-1)));
+  assert.equal(rows.filter(row => row.caseId === "abort_headers" && row.phase === "body" && row.route === "manifest").length, 1);
+  assert.ok(rows.some(row => row.caseId === "abort_headers" && row.phase === "body" && row.route === "native"));
+  assert.equal(rows.at(-1).phase, "capacity"); assert.ok(rows.at(-1).suppressed > 0);
+});
+
+test("Google emitter writer failure cannot mask an original undefined failure or retry a command", () => {
+  let writes = 0;
+  const session = diagnosticSession(() => { writes++; throw undefined; });
+  const originalFailures = [undefined];
+  session.rejected(undefined);
+  originalFailures.push(...session.finish());
+  const atFinish = writes; session.finish(); assert.equal(writes, atFinish);
+  assert.equal(originalFailures[0], undefined); assert.ok(originalFailures.length >= 2);
+  const onlyUndefined = value => value === undefined || value instanceof AggregateError && value.errors.every(onlyUndefined);
+  assert.ok(originalFailures.every(onlyUndefined));
+});
+
+test("Google observes only existing joined counters and keeps reader.closed unknown", () => {
+  const value = protocol.record({ ...diagnosticContext({ phase: "original_join", role: "progress", outcome: "fulfilled" }),
+    reads: 65535, readRejected: 65535, cancels: 65535, cancelRejected: 65535, readers: 65535, unlocks: 65535,
+    externalCloses: 65535, closeRejected: 65535, releaseReturned: false, guardObserved: true, destroyed: false,
+    effectiveAborted: true, closed: null });
+  assert.ok(protocol.validate(value));
+  const pending = protocol.record(diagnosticContext({ phase: "original_join", role: "progress", outcome: "entered" }));
+  assert.equal(pending.outcome, "entered"); assert.equal(pending.closed, undefined);
+});
+
+test("Google synthetic reporter child", { skip: process.env.GOOGLE_DIAGNOSTIC_REPORTER_CHILD !== "1" }, () => {
+  const emitter = protocol.emitter(line => process.stdout.write(line));
+  emitter.put(protocol.record(diagnosticContext(), true, undefined)); emitter.checkpoint(); emitter.flush();
+});
+
+test("Google annotations reach column zero through the actual Node 24 default reporter", async () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const result = await promisify(execFile)(process.execPath,
+    ["--test", "--test-name-pattern=^Google synthetic reporter child$", fileURLToPath(import.meta.url)],
+    { timeout: 10_000, maxBuffer: 64 * 1024, env: { ...env, GOOGLE_DIAGNOSTIC_REPORTER_CHILD: "1" } });
+  assert.ok(result.stdout.split("\n").some(line => line.startsWith("::error title=Google contract diagnostic::")));
+});
 
 function compileCatalog() {
   // Same complete, sorted YAML -> compiler path as the 1098 variant helper.
@@ -46,7 +263,9 @@ test("Google speech fixture bundles the unchanged Worker and parses the client f
   const bundle = await build({ stdin: { contents: routerFixture(), resolveDir: process.cwd(), loader: "ts" }, write: false,
     bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   assert.ok(bundle.outputFiles[0].text.length > 0);
-  await transform(upstreamFixture("http://127.0.0.1:1"), { loader: "js", format: "esm" });
+  const upstream = await build({ stdin: { contents: upstreamFixture("http://127.0.0.1:1"), resolveDir: process.cwd(), loader: "js" }, write: false,
+    bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  assert.ok(upstream.outputFiles[0].text.length > 0);
   await transform(readFileSync(new URL("./fixtures/openclaw-google-speech-contract.test.ts", import.meta.url), "utf8"), { loader: "ts", format: "esm" });
 });
 
@@ -71,24 +290,37 @@ async function barriers() {
 }
 
 test("published Google TTS and Talk client through real Worker catalog and SQLite", { skip: !source, timeout: 300_000 }, async t => {
-  compileCatalog(); // Before Worker module evaluation, never patch the snapshot.
-  const failures = []; let barrier, temporary, mf;
+  const diagnostics = diagnosticSession(), failures = []; let barrier, temporary, mf, phase = "compile", caseId = null;
   try {
+    diagnostics.mark(phase, caseId, "progress", "entered");
+    compileCatalog(); // Before Worker module evaluation, never patch the snapshot.
+    phase = "barrier"; diagnostics.mark(phase, caseId, "progress", "entered");
     barrier = await barriers();
+    diagnostics.mark(phase, caseId, "progress", "fulfilled");
+    phase = "temporary"; diagnostics.mark(phase, caseId, "progress", "entered");
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-speech-"));
+    diagnostics.mark(phase, caseId, "progress", "fulfilled");
+    phase = "worker_start"; diagnostics.mark(phase, caseId, "progress", "entered");
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(barrier.origin), { directRouter: true, preventEviction: true });
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    diagnostics.mark(phase, caseId, "progress", "fulfilled");
+    phase = "initialize"; diagnostics.mark(phase, caseId, "progress", "entered");
     const initialized = await fetch(origin + "/__google/init", { method: "POST" });
     assert.equal(initialized.status, 200, await initialized.text());
-    await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-google-speech-contract.test.ts", import.meta.url),
+    diagnostics.mark(phase, caseId, "progress", "fulfilled");
+    phase = "helper"; diagnostics.mark(phase, caseId, "progress", "entered");
+    await runOpenClawConsumer({ diagnostic: text => diagnostics.diagnostic(text) }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-google-speech-contract.test.ts", import.meta.url),
       testPath: "src/agents/tools/worker-clawrouter-google-speech.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CONTROL: barrier.origin, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead } });
+    diagnostics.mark(phase, caseId, "progress", "fulfilled");
+    phase = "upstream"; diagnostics.mark(phase, caseId, "progress", "entered");
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
     assert.deepEqual(await (await fetch(origin + "/__google/audit")).json(), []);
     assert.equal(calls.length, success.length + invalid.length + held.length);
     for (const name of scenarios) {
+      caseId = name; phase = "upstream"; diagnostics.mark(phase, caseId, "progress", "entered");
       const id = `gs_${name}`, paid = !denied.includes(name), model = modelFor(name), interactions = model.startsWith("gemini-3.8-");
       const selected = calls.filter(call => call.id === id);
       assert.equal(selected.length, paid ? 1 : 0, name);
@@ -100,6 +332,8 @@ test("published Google TTS and Talk client through real Worker catalog and SQLit
             : { contents: [{ role: "user", parts: [{ text }] }], generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } } } } } });
         assert.equal(selected[0].finished, true, name);
       }
+      diagnostics.mark(phase, caseId, "progress", "fulfilled");
+      phase = "worker_retirement"; diagnostics.mark(phase, caseId, "progress", "entered");
       const joined = await (await fetch(`${origin}/__google/join/${id}`)).json();
       assert.equal(joined.calls, paid ? 1 : 0, name); assert.equal(joined.retired, true); assert.equal(joined.charged, 0);
       if (joined.hasBody) {
@@ -110,6 +344,9 @@ test("published Google TTS and Talk client through real Worker catalog and SQLit
         assert.equal(joined.cancelResults.length, joined.cancelCalls);
         assert.ok(joined.cancelResults.every(status => status === "fulfilled"), "join the original cancel promises, not unlock flags");
       }
+      diagnostics.mark(phase, caseId, "progress", "fulfilled", false, undefined, { retired: joined.retired,
+        activeReads: joined.hasBody ? joined.activeReads : null, unlocked: joined.hasBody ? joined.unlocked : null, closed: null });
+      phase = "accounting"; diagnostics.mark(phase, caseId, "progress", "entered");
       const usage = await (await fetch(`${origin}/__google/usage/${id}`)).json();
       if (success.includes(name)) {
         assert.equal(usage.usage.events.length, 1, name);
@@ -140,13 +377,27 @@ test("published Google TTS and Talk client through real Worker catalog and SQLit
         assert.equal(usage.budget.spentMicros, 0);
       }
       assert.doesNotMatch(JSON.stringify(usage.usage.events), /fixture-secret|managed-gs_|must-not-fallback|Synthetic speech/);
+      diagnostics.mark(phase, caseId, "progress", "fulfilled", false, undefined, { events: usage.usage.events.length, spentMicros: usage.budget.spentMicros });
     }
-  } catch (error) { failures.push(error); }
-  finally {
-    try { await barrier?.close(); } catch (error) { failures.push(error); }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  } catch (error) {
+    failures.push(error);
+    if (phase === "helper") diagnostics.rejected(error);
+    else { diagnostics.mark(phase, caseId, "primary", "rejected", true, error); diagnostics.checkpoint(); }
   }
+  finally {
+    diagnostics.mark("barrier_close", null, "progress", "entered");
+    try { await barrier?.close(); diagnostics.mark("barrier_close", null, "progress", barrier ? "fulfilled" : "unknown"); }
+    catch (error) { failures.push(error); diagnostics.mark("barrier_close", null, "cleanup", "rejected", true, error); diagnostics.checkpoint(); }
+    diagnostics.mark("worker_dispose", null, "progress", "entered");
+    try { await mf?.dispose(); diagnostics.mark("worker_dispose", null, "progress", mf ? "fulfilled" : "unknown"); }
+    catch (error) { failures.push(error); diagnostics.mark("worker_dispose", null, "cleanup", "rejected", true, error); diagnostics.checkpoint(); }
+    if (temporary !== undefined) {
+      diagnostics.mark("scratch_cleanup", null, "progress", "entered");
+      try { await rm(temporary, { recursive: true, force: true }); diagnostics.mark("scratch_cleanup", null, "progress", "fulfilled"); }
+      catch (error) { failures.push(error); diagnostics.mark("scratch_cleanup", null, "cleanup", "rejected", true, error); }
+    }
+  }
+  failures.push(...diagnostics.finish());
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Google client proof or owned cleanup failed");
 });
