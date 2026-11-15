@@ -16,8 +16,17 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   const pin = "6de028c4e960db91bdf87882989cb6756a6429c3", prefix = "AUDIO813_SDK_V1 ";
   const scenarios = ["success", "unpriced", "denied", "stale", "malformed", "partial", "error", "redirect", "truncated", "rotation", "missing_key", "unsafe_headers", "preabort", "abort", "invalid_input"];
   const ids = new Set(["groq", "mistral"].flatMap(provider => scenarios.map(scenario => provider + "_" + scenario)));
-  const phases = ["module", "setup", "execute", "body", "original_join", "worker_join", "state_scope", "runtime_restore", "case_outcome", "helper", "worker_abort", "worker_retirement", "upstream_sqlite", "worker_dispose", "scratch_cleanup", "report", "capacity"];
-  const keys = ["v", "pin", "source", "caseId", "phase", "role", "outcome", "failurePresent", "reasonDefined", "reasonType", "partialDelivery", "records", "invalid", "suppressed"];
+  const phases = ["module", "setup", "execute", "body", "original_join", "worker_join", "state_scope", "runtime_restore", "case_outcome", "helper", "worker_abort", "worker_retirement", "upstream_sqlite", "worker_dispose", "scratch_cleanup", "report", "capacity", "checkpoint", "state_cleanup", "state_restore"];
+  const checkpointIds = ["groq_success", "groq_rotation", "mistral_success"];
+  const checkpoints = ["start", "proxy_profile", "native_profile", "native_rejection", "zero_transport", "proxy_select", "rotate", "old_rejection", "zero_upload", "old_status", "rotated_select", "selected_call", "result", "uploads"];
+  const checkpointFor = (caseId: string, checkpoint: string) => checkpoints.includes(checkpoint)
+    && (caseId === "groq_rotation" ? !["proxy_profile", "native_profile", "native_rejection", "zero_transport", "proxy_select"].includes(checkpoint)
+      : !["rotate", "old_rejection", "zero_upload", "old_status", "rotated_select"].includes(checkpoint));
+  const callOutcomes = ["unseen", "pending", "fulfilled", "rejected", "sync_throw"];
+  const detailKeys = ["checkpoint", "callOutcome", "callReasonDefined", "bodyReasonSameAsCallReason"];
+  const stateKeys = ["bodyFailurePresent", "callbackFailurePresent", "scopeSameAsCallback", "cleanupOutcome", "restoreEnvOutcome"];
+  const summaryKeys = ["gs", "gr", "ms"].flatMap(key => [key + "Step", key + "Call", key + "Defined", key + "Same"]);
+  const keys = [...detailKeys, ...stateKeys, ...summaryKeys,"v", "pin", "source", "caseId", "phase", "role", "outcome", "failurePresent", "reasonDefined", "reasonType", "partialDelivery", "records", "invalid", "suppressed"];
   function own(value: unknown, key: string): unknown {
     if (!value || typeof value !== "object" || isProxy(value)) return;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -42,6 +51,34 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
       if (!["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"].includes(data.reasonType as string)
         || data.reasonDefined !== (data.reasonType !== "undefined") || data.outcome !== "rejected") return;
     } else if (data.reasonDefined !== null || data.reasonType !== "none" || data.outcome === "rejected") return;
+    const has = (key: string) => Object.hasOwn(data, key);
+    if (detailKeys.some(has) || stateKeys.some(has)) {
+      if (data.source !== "sdk" || !checkpointIds.includes(data.caseId as string)
+        || !["body", "checkpoint"].includes(data.phase as string) || !detailKeys.every(has)
+        || !checkpointFor(data.caseId as string, data.checkpoint as string) || !callOutcomes.includes(data.callOutcome as string)
+        || ![true, false, null].includes(data.bodyReasonSameAsCallReason as boolean | null)
+        || (["rejected", "sync_throw"].includes(data.callOutcome as string) ? typeof data.callReasonDefined !== "boolean" : data.callReasonDefined !== null)
+        || (data.bodyReasonSameAsCallReason !== null && !["rejected", "sync_throw"].includes(data.callOutcome as string))) return;
+      if (data.phase === "checkpoint") {
+        if (data.role !== "summary" || data.outcome !== "fulfilled" || !stateKeys.every(has)
+          || typeof data.bodyFailurePresent !== "boolean" || typeof data.callbackFailurePresent !== "boolean"
+          || ![true, false, null].includes(data.scopeSameAsCallback as boolean | null)
+          || (!data.callbackFailurePresent && data.scopeSameAsCallback !== null)
+          || (!data.bodyFailurePresent && data.bodyReasonSameAsCallReason !== null)
+          || !callOutcomes.includes(data.cleanupOutcome as string) || !callOutcomes.includes(data.restoreEnvOutcome as string)) return;
+      } else if (stateKeys.some(has) || data.role !== "primary" || !data.failurePresent) return;
+    } else if (data.phase === "checkpoint") return;
+    if (summaryKeys.some(has)) {
+      if (data.source !== "outer" || data.caseId !== null || data.phase !== "report" || data.role !== "summary" || !summaryKeys.every(has)) return;
+      for (const [index, key] of ["gs", "gr", "ms"].entries()) {
+        if (!(data[key + "Step"] === null || checkpointFor(checkpointIds[index]!, data[key + "Step"] as string))
+          || (data[key + "Step"] === null && data[key + "Call"] !== "unseen")
+          || !callOutcomes.includes(data[key + "Call"] as string)
+          || (["rejected", "sync_throw"].includes(data[key + "Call"] as string) ? typeof data[key + "Defined"] !== "boolean" : data[key + "Defined"] !== null)
+          || ![true, false, null].includes(data[key + "Same"] as boolean | null)
+          || (data[key + "Same"] !== null && !["rejected", "sync_throw"].includes(data[key + "Call"] as string))) return;
+      }
+    }
     for (const key of ["records", "invalid", "suppressed"]) if (Object.hasOwn(data, key)
       && !(Number.isSafeInteger(data[key]) && Number(data[key]) >= 0 && Number(data[key]) <= 65535)) return;
     if (new TextEncoder().encode(JSON.stringify(data)).length > 640) return;
@@ -126,17 +163,17 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
       if (failures.length) throw new AggregateError(failures, "audio annotation delivery failed");
     } };
   }
-  return { prefix, pin, ids, own, validate, record, parse, emitter };
+  return { prefix, pin, ids, checkpointIds, own, validate, record, parse, emitter };
 }
 // END audio diagnostic protocol.
 const audioProtocol = audioDiagnosticProtocol(nodeTypes.isProxy);
 let audioRecordCount = 0;
 function audioCaseDiagnostics(caseId: string) {
   const failures: unknown[] = [], observers: Promise<unknown>[] = [];
-  function mark(phase: string, role: string, outcome: string, failed = false, error?: unknown) {
+  function mark(phase: string, role: string, outcome: string, failed = false, error?: unknown, detail = {}) {
     try {
       if (++audioRecordCount > 512) throw new Error("audio child diagnostic capacity");
-      const value = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome }, failed, error);
+      const value = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome, ...detail }, failed, error);
       process.stdout.write("\n" + audioProtocol.prefix + JSON.stringify(value) + "\n");
     } catch (failure) { failures.push(failure); }
   }
@@ -149,6 +186,88 @@ function audioCaseDiagnostics(caseId: string) {
   }
   return { mark, track, async join() { await Promise.all(observers); await finishOwned(failures, []); } };
 }
+
+// BEGIN passive assertion checkpoints. The outer tests execute this exact helper.
+function audioAssertionCheckpoints(caseId: string, diagnostic: ReturnType<typeof audioCaseDiagnostics>) {
+  type Outcome = { outcome: string; failure?: { error: unknown } };
+  const active = audioProtocol.checkpointIds.includes(caseId);
+  const observers: Promise<unknown>[] = [], failures: unknown[] = [], restorers: Array<() => void> = [];
+  const then = Promise.prototype.then;
+  let checkpoint = "start", call: Outcome = { outcome: "unseen" };
+  const methods: Record<string, Outcome> = { cleanup: { outcome: "unseen" }, restoreEnv: { outcome: "unseen" } };
+  let body: { error: unknown } | undefined, callback: { error: unknown } | undefined, scope: { error: unknown } | undefined;
+  function safely(action: () => void) { try { action(); } catch (error) { failures.push(error); } }
+  function observe<T>(start: () => T, target: Outcome, phase?: string): T {
+    const settle = (outcome: string, failed = false, error?: unknown) => {
+      target.outcome = outcome;
+      if (target === call && outcome === "fulfilled" && checkpoint === "selected_call") checkpoint = "result";
+      if (failed) target.failure = { error };
+      if (phase) diagnostic.mark(phase, "cleanup", failed ? "rejected" : "fulfilled", failed, error);
+    };
+    let original: T;
+    target.outcome = "pending";
+    try { original = start(); }
+    catch (error) { safely(() => settle("sync_throw", true, error)); throw error; }
+    if (nodeTypes.isPromise(original)) {
+      safely(() => { observers.push(Reflect.apply(then, original, [
+        () => safely(() => settle("fulfilled")), (error: unknown) => safely(() => settle("rejected", true, error)),
+      ])); });
+    } else safely(() => settle("fulfilled"));
+    return original;
+  }
+  function details() {
+    return { checkpoint, callOutcome: call.outcome, callReasonDefined: call.failure ? call.failure.error !== undefined : null,
+      bodyReasonSameAsCallReason: body && call.failure ? body.error === call.failure.error : null };
+  }
+  return {
+    before(value: string) { if (active) checkpoint = value; },
+    call<T extends (...args: never[]) => unknown>(original: T): T {
+      if (!active) return original;
+      return function(this: unknown, ...args: never[]) {
+        const current: Outcome = { outcome: "unseen" }; call = current;
+        return observe(() => Reflect.apply(original, this, args), current);
+      } as T;
+    },
+    attach(state: object) {
+      if (!active) return;
+      for (const key of ["cleanup", "restoreEnv"]) safely(() => {
+        if (nodeTypes.isProxy(state)) throw new Error("unobservable state owner");
+        const descriptor = Object.getOwnPropertyDescriptor(state, key);
+        if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function" || !descriptor.configurable) throw new Error("unobservable state method");
+        const original = descriptor.value;
+        const replacement = function(this: unknown, ...args: unknown[]) {
+          const current: Outcome = { outcome: "unseen" }; methods[key] = current;
+          return observe(() => Reflect.apply(original, this, args), current, key === "cleanup" ? "state_cleanup" : "state_restore");
+        };
+        Object.defineProperty(state, key, { ...descriptor, value: replacement });
+        restorers.push(() => {
+          const current = Object.getOwnPropertyDescriptor(state, key);
+          if (!current || !("value" in current) || current.value !== replacement || current.writable !== descriptor.writable
+            || current.enumerable !== descriptor.enumerable || current.configurable !== descriptor.configurable) throw new Error("state observer ownership changed");
+          Object.defineProperty(state, key, descriptor);
+          const restored = Object.getOwnPropertyDescriptor(state, key)!;
+          if (restored.value !== original || restored.writable !== descriptor.writable || restored.enumerable !== descriptor.enumerable
+            || restored.configurable !== descriptor.configurable) throw new Error("state observer restoration failed");
+        });
+      });
+    },
+    body(error: unknown) { if (active) body = { error }; },
+    callback(error: unknown) { if (active) callback = { error }; },
+    scope(error: unknown) { if (active) scope = { error }; },
+    scopeRole() { return Object.values(methods).some(value => value.failure) ? "cleanup" : "progress"; },
+    details() { return active ? details() : {}; },
+    async join() {
+      const outcomes = await Promise.allSettled(observers);
+      for (const outcome of outcomes) if (outcome.status === "rejected") failures.push(outcome.reason);
+      for (const restore of restorers) safely(restore);
+      if (active) safely(() => diagnostic.mark("checkpoint", "summary", "fulfilled", false, undefined, { ...details(),
+        bodyFailurePresent: !!body, callbackFailurePresent: !!callback, scopeSameAsCallback: callback && scope ? callback.error === scope.error : null,
+        cleanupOutcome: methods.cleanup!.outcome, restoreEnvOutcome: methods.restoreEnv!.outcome }));
+      await finishOwned(failures, []);
+    },
+  };
+}
+// END passive assertion checkpoints.
 
 type Case = { id: string; provider: "groq" | "mistral"; model: string; route: string; scenario: string };
 const sourceHead = "6de028c4e960db91bdf87882989cb6756a6429c3";
@@ -209,11 +328,13 @@ function wav(): Buffer {
 
 async function runCase(row: Case): Promise<void> {
   const diagnostic = audioCaseDiagnostics(row.id);
+  const checkpoint = audioAssertionCheckpoints(row.id, diagnostic); // passive checkpoint
   diagnostic.mark("setup", "progress", "entered");
   const failures: unknown[] = [], transports: Transport[] = [], unexpected: unknown[] = [];
   let callbackFailure: { error: unknown } | undefined;
   try {
     await withOpenClawTestState({ prefix: "openclaw-native-transcription-", env: { CLAWROUTER_API_KEY: undefined, GROQ_API_KEY: "must-not-fallback", MISTRAL_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" } }, async state => {
+      checkpoint.attach(state); // passive checkpoint
       const bodyFailures: unknown[] = [];
       let pending: Promise<{ value: unknown } | { error: unknown }> | undefined;
       const caller = new AbortController(), callerReason = new Error("original transcription caller abort");
@@ -284,18 +405,24 @@ async function runCase(row: Case): Promise<void> {
         const agentDir = state.agentDir();
         const provider = cfg.models!.providers!.clawrouter!, model = cfg.tools!.media!.models![0]!;
         const params = { cfg, filePath, agentDir, mime: "audio/wav", language: "en", ...(row.provider === "groq" ? { prompt: "Synthetic café 東京" } : {}) };
-        const call = () => transcribeAudioFile(params, { signal: caller.signal, assertCurrent: () => caller.signal.throwIfAborted() });
+        const call = checkpoint.call(() => transcribeAudioFile(params, { signal: caller.signal, assertCurrent: () => caller.signal.throwIfAborted() })); // passive call wrapper
         diagnostic.mark("execute", "progress", "entered");
         if (row.scenario === "success") {
+          checkpoint.before("proxy_profile"); // passive checkpoint
           await upsertAuthProfileAsync({ agentDir, profileId: "clawrouter:audio", credential: { type: "api_key", provider: "clawrouter", key: token(row) } });
+          checkpoint.before("native_profile"); // passive checkpoint
           await upsertAuthProfileAsync({ agentDir, profileId: `${row.provider}:audio`, credential: { type: "api_key", provider: row.provider, key: "must-not-fallback" } });
-          model.profile = `${row.provider}:audio`; await expect(call()).rejects.toThrow(/unavailable for ClawRouter/);
-          expect(transports).toHaveLength(0); model.profile = "clawrouter:audio";
+          model.profile = `${row.provider}:audio`; /* checkpoint:native_rejection */ checkpoint.before("native_rejection"); await expect(call()).rejects.toThrow(/unavailable for ClawRouter/);
+          checkpoint.before("zero_transport"); // passive checkpoint
+          expect(transports).toHaveLength(0); /* checkpoint:proxy_select */ checkpoint.before("proxy_select"); model.profile = "clawrouter:audio";
         }
         if (row.scenario === "rotation") {
-          await control("rotate", row); await expect(call()).rejects.toThrow();
+          checkpoint.before("rotate"); // passive checkpoint
+          await control("rotate", row); /* checkpoint:old_rejection */ checkpoint.before("old_rejection"); await expect(call()).rejects.toThrow();
+          checkpoint.before("zero_upload"); // passive checkpoint
           expect(transports.filter(value => value.path === row.route)).toHaveLength(0);
-          expect(transports.at(-1)?.status).toBe(401); provider.apiKey = token(row, true);
+          checkpoint.before("old_status"); // passive checkpoint
+          expect(transports.at(-1)?.status).toBe(401); /* checkpoint:rotated_select */ checkpoint.before("rotated_select"); provider.apiKey = token(row, true);
         }
         if (row.scenario === "missing_key") delete provider.apiKey;
         if (row.scenario === "unsafe_headers") provider.headers = { "x-api-key": "must-not-replace" };
@@ -315,12 +442,14 @@ async function runCase(row: Case): Promise<void> {
           // Caller failure is separate from this controlled original Worker abort.
           // No claim that the client disconnect propagated across the service binding.
         } else if (["success", "rotation"].includes(row.scenario)) {
+          checkpoint.before("selected_call"); // passive checkpoint
           expect(await call()).toMatchObject({ text: "café 東京 🦊", provider: "clawrouter", model: row.model });
         } else await expect(call()).rejects.toThrow();
         const uploads = transports.filter(value => value.path === row.route);
+        checkpoint.before("uploads"); // passive checkpoint
         expect(uploads).toHaveLength(["success", "rotation", "stale", "malformed", "partial", "error", "redirect", "truncated", "abort"].includes(row.scenario) ? 1 : 0);
         if (row.scenario === "stale") expect(uploads[0]?.status).toBe(403);
-      } catch (error) { bodyFailures.push(error); diagnostic.mark("body", "primary", "rejected", true, error); }
+      } catch (error) { checkpoint.body(error); /* passive body */ bodyFailures.push(error); diagnostic.mark("body", "primary", "rejected", true, error, checkpoint.details()); }
       try {
         await finishOwned(bodyFailures, [
           () => { if (!caller.signal.aborted) caller.abort(callerReason); },
@@ -330,12 +459,13 @@ async function runCase(row: Case): Promise<void> {
           () => diagnostic.track("worker_join", () => control("join", row)),
           () => { if (unexpected.length) throw new AggregateError(unexpected, "unexpected transport"); },
         ]);
-      } catch (error) { callbackFailure = { error }; throw error; }
+      } catch (error) { checkpoint.callback(error); /* passive callback */ callbackFailure = { error }; throw error; }
     });
   } catch (error) {
     if (callbackFailure && error !== callbackFailure.error) failures.push(callbackFailure.error);
     failures.push(error);
-    diagnostic.mark("state_scope", "cleanup", "rejected", true, error);
+    checkpoint.scope(error); // passive checkpoint
+    diagnostic.mark("state_scope", checkpoint.scopeRole(), "rejected", true, error);
   }
   let finalFailure: { error: unknown } | undefined;
   try {
@@ -343,7 +473,7 @@ async function runCase(row: Case): Promise<void> {
       () => diagnostic.track("runtime_restore", () => vi.unstubAllGlobals()), () => diagnostic.track("runtime_restore", () => vi.unstubAllEnvs())]);
     diagnostic.mark("case_outcome", "summary", "fulfilled");
   } catch (error) { finalFailure = { error }; diagnostic.mark("case_outcome", "summary", "rejected", true, error); }
-  await finishOwned(finalFailure ? [finalFailure.error] : [], [() => diagnostic.join()]);
+  await finishOwned(finalFailure ? [finalFailure.error] : [], [() => checkpoint.join(), () => diagnostic.join()]);
 }
 
 describe("registered native Groq/Mistral transcription against shipping Worker", () => {

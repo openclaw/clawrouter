@@ -48,7 +48,7 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
   }
   function rejected(error) {
     mark("helper", null, "primary", "rejected", true, error);
-    const visited = new Set(), pending = [error]; let records = 0, invalid = 0, inputBytes = 0;
+    const visited = new Set(), pending = [error], checkpoints = new Map(); let records = 0, invalid = 0, inputBytes = 0;
     // The helper's AggregateError owns an errors array. Do not walk prototypes,
     // getters, arbitrary messages or a speculative cause/serialization graph.
     while (pending.length) {
@@ -63,6 +63,10 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
         const parsed = audioProtocol.parse(text, row => {
           if (records >= 512) { invalid++; return; }
           emitter.put(row); records++;
+          if (audioProtocol.checkpointIds.includes(row.caseId) && ["body", "checkpoint"].includes(row.phase) && Object.hasOwn(row, "checkpoint")) {
+            const previous = checkpoints.get(row.caseId);
+            if (!previous || row.phase === "checkpoint" || previous.phase !== "checkpoint") checkpoints.set(row.caseId, row);
+          }
         });
         invalid += parsed.invalid;
       }
@@ -78,8 +82,14 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
       }
     }
     if (invalid) failures.push(new Error("incomplete audio child diagnostics"));
+    const summary = {};
+    for (const [index, key] of ["gs", "gr", "ms"].entries()) {
+      const value = checkpoints.get(audioProtocol.checkpointIds[index]);
+      Object.assign(summary, { [key + "Step"]: value?.checkpoint ?? null, [key + "Call"]: value?.callOutcome ?? "unseen",
+        [key + "Defined"]: value?.callReasonDefined ?? null, [key + "Same"]: value?.bodyReasonSameAsCallReason ?? null });
+    }
     mark("report", null, "summary", invalid ? "rejected" : records ? "fulfilled" : "unknown", invalid > 0, undefined,
-      { records, invalid: Math.min(65535, invalid) });
+      { records, invalid: Math.min(65535, invalid), ...summary });
     emitter.checkpoint();
   }
   function observe(phase, caseId, start) {
@@ -243,6 +253,193 @@ test("audio closed diagnostics survive the real Node24 reporter at column zero",
   assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix) && Buffer.byteLength(line) <= 768));
   assert.ok(lines.every(line => audioProtocol.validate(JSON.parse(line.slice(prefix.length)))));
   assert.ok(Buffer.byteLength(lines.join("\n")) <= 8192);
+});
+
+
+function createAssertionCheckpoints(caseId = "groq_success", write = () => {}) {
+  const start = audioSdkText.indexOf("// BEGIN passive assertion checkpoints."), end = audioSdkText.indexOf("// END passive assertion checkpoints.");
+  assert.ok(start >= 0 && end > start);
+  const rows = [];
+  const diagnostic = { mark(phase, role, outcome, failed = false, error, detail = {}) {
+    const row = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome, ...detail }, failed, error);
+    rows.push(row); write(row);
+  } };
+  const factory = new Function("audioProtocol", "nodeTypes", "finishOwned",
+    stripTypeScriptTypes(audioSdkText.slice(start, end)) + ";return audioAssertionCheckpoints;")(audioProtocol, nodeTypes, finishOwned);
+  return { observer: factory(caseId, diagnostic), rows };
+}
+const checkpointRow = (caseId, changes = {}) => audioProtocol.record({ source: "sdk", caseId, phase: "checkpoint", role: "summary", outcome: "fulfilled",
+  checkpoint: caseId === "groq_rotation" ? "old_rejection" : "native_rejection", callOutcome: "rejected", callReasonDefined: false, bodyReasonSameAsCallReason: true,
+  bodyFailurePresent: true, callbackFailurePresent: true, scopeSameAsCallback: true, cleanupOutcome: "fulfilled", restoreEnvOutcome: "fulfilled", ...changes });
+
+test("audio checkpoints preserve original calls, receiver, arguments and promise identity", async () => {
+  const { observer, rows } = createAssertionCheckpoints(), receiver = {}, arg = {};
+  let resolve, calls = 0;
+  const original = new Promise(done => { resolve = done; });
+  const wrapped = observer.call(function(value) { calls++; assert.equal(this, receiver); assert.equal(value, arg); return original; });
+  observer.before("selected_call");
+  assert.equal(Reflect.apply(wrapped, receiver, [arg]), original); assert.equal(calls, 1);
+  assert.equal(observer.details().callOutcome, "pending");
+  resolve({}); await original;
+  assert.equal(observer.details().checkpoint, "result");
+  observer.body(undefined); await observer.join();
+  assert.equal(rows.at(-1).callOutcome, "fulfilled"); assert.equal(rows.at(-1).bodyReasonSameAsCallReason, null);
+  const inactive = createAssertionCheckpoints("mistral_rotation");
+  assert.equal(inactive.observer.call(wrapped), wrapped); await inactive.observer.join(); assert.deepEqual(inactive.rows, []);
+  assert.equal(inactive.observer.scopeRole(), "progress");
+});
+
+test("audio checkpoints retain defined and undefined call rejection without changing assertions", async t => {
+  for (const reason of [undefined, {}, null]) for (const synchronous of [true, false]) await t.test(`${typeof reason}/${synchronous}`, async () => {
+    const { observer, rows } = createAssertionCheckpoints(); observer.before("native_rejection");
+    let original;
+    const call = observer.call(() => { if (synchronous) throw reason; return original = Promise.reject(reason); });
+    let present = false;
+    try { const result = call(); assert.equal(result, original); await result; } catch (error) { present = true; assert.equal(error, reason); observer.body(error); }
+    assert.equal(present, true); await observer.join();
+    const row = rows.at(-1); assert.equal(row.bodyReasonSameAsCallReason, true); assert.equal(row.callReasonDefined, reason !== undefined);
+    assert.equal(row.callOutcome, synchronous ? "sync_throw" : "rejected");
+  });
+  const { observer } = createAssertionCheckpoints();
+  await assert.rejects(observer.call(() => Promise.reject({}))()); observer.body({});
+  assert.equal(observer.details().bodyReasonSameAsCallReason, false); await observer.join();
+});
+
+test("audio checkpoints preserve actual state methods and distinguish callback rethrow from cleanup", async () => {
+  const { observer, rows } = createAssertionCheckpoints(); let state, cleanup, release, receiver;
+  const args = [{}]; const descriptors = {
+    restoreEnv: { configurable: true, enumerable: false, writable: true, value: function(...seen) { receiver = this; assert.deepEqual(seen, args); return release ??= Promise.resolve(); } },
+    cleanup: { configurable: true, enumerable: true, writable: false, value: function(...seen) { assert.equal(this, state); assert.deepEqual(seen, args); return cleanup ??= Promise.resolve().then(() => Reflect.apply(state.restoreEnv, this, seen)); } },
+  };
+  state = Object.defineProperties({}, descriptors); observer.attach(state);
+  const result = Reflect.apply(state.cleanup, state, args); assert.equal(result, cleanup);
+  await result; assert.equal(receiver, state); assert.equal(Reflect.apply(state.restoreEnv, state, args), release);
+  observer.body(undefined); observer.callback(undefined); observer.scope(undefined);
+  assert.equal(observer.scopeRole(), "progress"); await observer.join();
+  for (const key of ["cleanup", "restoreEnv"]) assert.deepEqual(Object.getOwnPropertyDescriptor(state, key), descriptors[key]);
+  const summary = rows.at(-1); assert.equal(summary.scopeSameAsCallback, true); assert.equal(summary.callbackFailurePresent, true);
+  assert.equal(summary.cleanupOutcome, "fulfilled"); assert.equal(summary.restoreEnvOutcome, "fulfilled");
+  assert.ok(!rows.some(row => row.failurePresent));
+});
+
+test("audio checkpoints preserve simultaneous body and state failures including undefined", async t => {
+  for (const reason of [undefined, {}]) await t.test(typeof reason, async () => {
+    const body = {}, cleanup = Promise.reject(reason), release = Promise.reject(undefined), { observer, rows } = createAssertionCheckpoints();
+    const state = { cleanup() { return cleanup; }, restoreEnv() { return release; } };
+    const originals = Object.getOwnPropertyDescriptors(state); observer.attach(state); observer.body(body); observer.callback(body);
+    assert.equal(state.cleanup(), cleanup); assert.equal(state.restoreEnv(), release);
+    await Promise.allSettled([cleanup, release]); observer.scope(reason);
+    assert.equal(observer.scopeRole(), "cleanup"); await observer.join();
+    const faults = rows.filter(row => row.failurePresent); assert.equal(faults.length, 2);
+    assert.equal(faults.find(row => row.phase === "state_restore").reasonDefined, false);
+    const summary = rows.at(-1); assert.equal(summary.scopeSameAsCallback, false); assert.equal(summary.cleanupOutcome, "rejected");
+    assert.deepEqual(Object.getOwnPropertyDescriptors(state), originals);
+    let caught; try { await finishOwned([body, reason], []); } catch (error) { caught = error; }
+    assert.deepEqual(caught.errors, [body, reason]);
+  });
+});
+
+test("audio checkpoints keep synchronous state returns and throw undefined exact", async () => {
+  const { observer, rows } = createAssertionCheckpoints(); const state = { cleanup() { return undefined; }, restoreEnv() { throw undefined; } };
+  observer.attach(state); assert.equal(state.cleanup(), undefined);
+  let failed = false; try { state.restoreEnv(); } catch (error) { failed = true; assert.equal(error, undefined); }
+  assert.equal(failed, true); await observer.join();
+  assert.equal(rows.at(-1).cleanupOutcome, "fulfilled"); assert.equal(rows.at(-1).restoreEnvOutcome, "sync_throw");
+});
+
+test("audio checkpoints preserve observer faults and independently restore owned descriptors", async () => {
+  let writes = 0; const { observer } = createAssertionCheckpoints("groq_success", () => { writes++; throw undefined; });
+  const state = { cleanup() { return Promise.resolve(); }, restoreEnv() { return undefined; } }, originals = Object.getOwnPropertyDescriptors(state);
+  observer.attach(state); await state.cleanup(); state.restoreEnv();
+  let caught; try { await finishOwned([undefined], [() => observer.join()]); } catch (error) { caught = error; }
+  assert.ok(caught instanceof AggregateError); assert.equal(caught.errors[0], undefined); assert.ok(writes >= 3);
+  assert.deepEqual(Object.getOwnPropertyDescriptors(state), originals);
+  const foreign = createAssertionCheckpoints(), original = { cleanup() {}, restoreEnv() {} }, before = Object.getOwnPropertyDescriptors(original);
+  foreign.observer.attach(original); const replacement = () => {}; original.cleanup = replacement;
+  await assert.rejects(foreign.observer.join()); assert.equal(original.cleanup, replacement);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(original, "restoreEnv"), before.restoreEnv);
+  let getters = 0; const hostile = Object.defineProperty({ restoreEnv() {} }, "cleanup", { configurable: true, get() { getters++; throw undefined; } });
+  const guarded = createAssertionCheckpoints(); guarded.observer.attach(hostile); await assert.rejects(guarded.observer.join()); assert.equal(getters, 0);
+  const proxied = createAssertionCheckpoints(); proxied.observer.attach(new Proxy({}, { getOwnPropertyDescriptor() { getters++; throw undefined; } }));
+  await assert.rejects(proxied.observer.join()); assert.equal(getters, 0);
+});
+
+test("audio checkpoints validate strict case, phase, failure flags and summary applicability", () => {
+  const good = checkpointRow("groq_success"); assert.ok(audioProtocol.validate(good));
+  for (const changes of [{ caseId: "mistral_abort" }, { caseId: "groq_rotation" }, { source: "outer" }, { checkpoint: "unknown" }, { callOutcome: "value" },
+    { callOutcome: "fulfilled" }, { callReasonDefined: null }, { bodyFailurePresent: false }, { callbackFailurePresent: false },
+    { cleanupOutcome: "false" }, { scopeSameAsCallback: "yes" }, { bodyReasonSameAsCallReason: 1 }, { extra: false }]) {
+    assert.equal(audioProtocol.validate({ ...good, ...changes }), undefined);
+  }
+  for (const key of ["checkpoint", "callOutcome", "scopeSameAsCallback", "restoreEnvOutcome"]) {
+    const missing = { ...good }; delete missing[key]; assert.equal(audioProtocol.validate(missing), undefined);
+  }
+  assert.equal(audioProtocol.validate({ ...good, gsCall: "fulfilled" }), undefined);
+  const lines = [], session = audioDiagnosticSession(line => lines.push(line));
+  const records = audioProtocol.checkpointIds.map((id, index) => checkpointRow(id, { checkpoint: ["native_rejection", "old_status", "result"][index] }));
+  session.rejected(Object.assign(new Error(), { stdout: records.map(row => audioProtocol.prefix + JSON.stringify(row)).join("\n") }));
+  return session.finish().then(() => {
+    const report = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length))).find(row => row.phase === "report");
+    for (const [index, key] of ["gs", "gr", "ms"].entries()) {
+      assert.equal(report[key + "Step"], records[index].checkpoint); assert.equal(report[key + "Call"], "rejected");
+      assert.equal(report[key + "Defined"], false); assert.equal(report[key + "Same"], true);
+    }
+    for (const changes of [{ gsStep: "foreign" }, { gsStep: "rotate" }, { gsStep: null }, { gsCall: "unknown" }, { gsCall: "fulfilled" }, { gsSame: "yes" }, { phase: "helper" }]) assert.equal(audioProtocol.validate({ ...report, ...changes }), undefined);
+    const missing = { ...report }; delete missing.msSame; assert.equal(audioProtocol.validate(missing), undefined);
+  });
+});
+
+function checkpointBudgetChild() {
+  const rows = [...audioProtocol.checkpointIds.map(caseId => checkpointRow(caseId, { checkpoint: caseId === "groq_rotation" ? "rotated_select" : "native_rejection", callOutcome: "sync_throw", callReasonDefined: true }))];
+  for (let i = 0; i < 5; i++) for (const caseId of audioProtocol.ids) {
+    rows.push(audioProtocol.record(audioDiagnosticContext({ caseId }), true, undefined));
+    rows.push(audioProtocol.record(audioDiagnosticContext({ caseId, phase: "original_join", role: "cleanup" }), true, {}));
+  }
+  return Object.assign(new Error("not forwarded"), { stdout: rows.map(row => audioProtocol.prefix + JSON.stringify(row)).join("\n"), stderr: "" });
+}
+function checkCheckpointSummary(lines) {
+  assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => line.startsWith("::error title=Audio contract diagnostic::") && Buffer.byteLength(line) <= 768));
+  const rows = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length)));
+  assert.ok(rows.every(row => audioProtocol.validate(row))); const summary = rows.find(row => row.phase === "report"); assert.ok(summary);
+  for (const key of ["gs", "gr", "ms"]) { assert.equal(summary[key + "Step"], key === "gr" ? "rotated_select" : "native_rejection"); assert.equal(summary[key + "Call"], "sync_throw"); assert.equal(summary[key + "Defined"], true); assert.equal(summary[key + "Same"], true); }
+  for (const caseId of ["groq_abort", "mistral_abort"]) assert.ok(rows.some(row => row.phase === "worker_retirement" && row.caseId === caseId));
+  assert.ok(rows.some(row => row.role === "primary" && row.source === "sdk")); assert.ok(rows.some(row => row.phase === "original_join"));
+  assert.ok(rows.some(row => row.failurePresent && row.reasonDefined === false)); assert.equal(rows.at(-1).phase, "capacity");
+}
+test("audio checkpoints retain all three summaries alongside essential failures at quota", async () => {
+  const lines = [], session = audioDiagnosticSession(line => lines.push(line)); session.rejected(checkpointBudgetChild());
+  for (const caseId of ["groq_abort", "mistral_abort"]) await session.observe("worker_retirement", caseId, () => Promise.resolve());
+  await session.finish(); checkCheckpointSummary(lines);
+});
+test("audio checkpoint subprocess", { skip: process.env.AUDIO813_CHECKPOINT_TEST !== "1" }, async () => {
+  const session = audioDiagnosticSession(); session.rejected(checkpointBudgetChild());
+  for (const caseId of ["groq_abort", "mistral_abort"]) await session.observe("worker_retirement", caseId, () => Promise.resolve());
+  await session.finish();
+});
+test("audio checkpoints retain column-zero summaries through real Node24 child output", { skip: process.env.AUDIO813_CHECKPOINT_TEST === "1", timeout: 20000 }, async () => {
+  assert.equal(process.version, "v24.22.1"); const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const stdout = await new Promise((resolve, reject) => execFile(process.execPath,
+    ["--test", "--test-name-pattern=^audio checkpoint subprocess$", fileURLToPath(import.meta.url)],
+    { env: { ...env, AUDIO813_CHECKPOINT_TEST: "1" }, timeout: 15000, maxBuffer: 64 * 1024 },
+    (error, value) => error ? reject(new Error("audio checkpoint child failed")) : resolve(value)));
+  const prefix = "::error title=Audio contract diagnostic::";
+  checkCheckpointSummary(stdout.split(/\r?\n/).filter(line => line.includes(prefix)));
+});
+
+test("audio checkpoints inverse preserves every original runCase operand and all thirty IDs", () => {
+  const start = audioSdkText.indexOf("async function runCase("), end = audioSdkText.indexOf("\ndescribe(", start);
+  let restored = audioSdkText.slice(start, end)
+    .replace(/^.*\/\/ passive checkpoint\n/gm, "")
+    .replace(/ \/\* checkpoint:[a-z_]+ \*\/ checkpoint\.before\("[a-z_]+"\);/g, "")
+    .replace("const call = checkpoint.call(", "const call = ").replace("})); // passive call wrapper", "});")
+    .replace("checkpoint.body(error); /* passive body */ ", "")
+    .replace(", error, checkpoint.details());", ", error);")
+    .replace("checkpoint.callback(error); /* passive callback */ ", "")
+    .replace('checkpoint.scopeRole()', '"cleanup"')
+    .replace("[() => checkpoint.join(), () => diagnostic.join()]", "[() => diagnostic.join()]");
+  assert.equal(hash(restored), "9b1b0db04b9c69711f42a2a2c5bf07ba1059df10d3734b5cd40dc66184db6f54");
+  assert.deepEqual([...audioProtocol.ids], cases.map(row => row.id)); assert.equal(cases.length, 30);
 });
 
 function wav() {
