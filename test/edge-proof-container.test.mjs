@@ -826,7 +826,7 @@ async function extractedContextTraversal() {
     ${faultable}\ncontextFiles;`, bindings);
 }
 function traversalBindings(options = {}) {
-  const { fault, nodes, excluded = [], hugeBytes, noObservation = false, reporterFailure = false, traceLimit = 10000 } = options;
+  const { fault, nodes, excluded = [], hugeBytes, sizes, manifest, noObservation = false, reporterFailure = false, traceLimit = 10000 } = options;
   const reason = Object.hasOwn(options, "reason") ? options.reason : new Error("inert traversal failure");
   const tree = nodes ?? { "": ["z", "dir", "a", "node_modules", ".edge-context.json"], dir: ["nested", "b"], "dir/nested": ["c"], node_modules: ["ignored"] };
   const trace = [], frames = []; let traceCount = 0, active, failed = false, writes = 0;
@@ -839,6 +839,7 @@ function traversalBindings(options = {}) {
   });
   if (!noObservation) {
     nativePrepareStages.slice(0, 8).forEach(stage => diagnostics.enter(stage));
+    if (Object.hasOwn(options, "manifest")) diagnostics.enumerationManifest(manifest);
     const point = diagnostics.enumerationPoint;
     diagnostics.enumerationPoint = (...args) => { active = args[0]; point(...args); };
   }
@@ -867,6 +868,7 @@ function traversalBindings(options = {}) {
     },
     async readFile(path) {
       record("readFile", path); reject("file_read");
+      if (sizes && Object.hasOwn(sizes, path)) return { get length() { record("length", path); reject("byte_count"); return sizes[path]; } };
       if (fault === "byte_count" || hugeBytes !== undefined) return { get length() { record("length", path); reject("byte_count"); return hugeBytes ?? 1; } };
       return Buffer.from(path.endsWith("/a") ? "unicode-音" : path);
     },
@@ -962,4 +964,101 @@ test("enumeration diagnostics terminal schema quotas capture binding and private
   assert.deepEqual(bounds.errors, []); assert.equal(oversized.length, 9); assert.ok(oversized.every(frame => Buffer.byteLength(frame) <= 512));
   const maximum = parseNativePrepareStages(nativePrepareCapture(oversized.join("")), stageIdentity); assert.equal(maximum.enumeration.overflow, true); validateContainerDiagnostic(maximum);
   let touched = false; const hostile = { ...summary.enumeration }; Object.defineProperty(hostile, "op", { get() { touched = true; throw undefined; } }); assert.throws(() => validateEnumerationDetail(hostile)); assert.equal(touched, false);
+});
+test("enumeration membership actual depth-four introduced files retain capacity rejection in each closed class", async () => {
+  const factory = await extractedContextTraversal(), limit = 268435456, admitted = 200 * 1024 * 1024, added = 80 * 1024 * 1024;
+  for (const [area, kind] of [[".git", 2], ["scripts", 3], ["extra", 4]]) {
+    const path = `${area}/x/y/z/added`, nodes = { "": ["a", area], [area]: ["x"], [`${area}/x`]: ["y"], [`${area}/x/y`]: ["z"], [`${area}/x/y/z`]: ["added"] };
+    // .git sorts before a, so put the admitted bytes in the first .git member.
+    const member = area === ".git" ? ".git/a" : "a";
+    if (area === ".git") { nodes[""] = [area]; nodes[area].push("a"); }
+    const fixture = traversalBindings({ nodes, manifest: [{ path: member }, { path: "scripts/start.mjs" }], sizes: { ["/fixture/" + member]: admitted, ["/fixture/" + path]: added } });
+    let failed = false, reason;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (error) { failed = true; reason = error; }
+    assert.equal(failed, true); assert.equal(reason, fixture.reason); fixture.diagnostics.finish(true, reason);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+    const totals = [admitted, 0, 0, 0]; totals[kind - 1] = added;
+    assert.deepEqual(row.enumeration, { op: "capacity", type: "file", depth: 4, files: 1, bytes: limit, overflow: true, failed: true, defined: true, m: [kind, ...totals, 0] });
+    assert.equal(fixture.trace.filter(r => r[0] === "readFile").length, 2);
+    assert.equal(fixture.trace.filter(r => r[0] === "hash").length, 1); assert.equal(fixture.trace.filter(r => r[0] === "file_record").length, 1);
+    assert.deepEqual(fixture.diagnostics.errors, []);
+  }
+});
+test("enumeration membership exact member and component boundaries do not infer cache producers", async () => {
+  const factory = await extractedContextTraversal(), limit = 268435456;
+  for (const [path, manifest, kind] of [[".git/x/y/z/leaf", [{ path: ".git/x/y/z/leaf" }], 1], [".gitx/leaf", [{ path: ".git/old" }], 4], ["scriptsevil/leaf", [{ path: "scripts/old" }], 4], ["newfile", [{ path: "existing" }], 4]]) {
+    const parts = path.split("/"), nodes = {}; let prefix = "";
+    for (const part of parts) { nodes[prefix] = [part]; prefix = prefix ? prefix + "/" + part : part; }
+    const fixture = traversalBindings({ nodes, manifest, sizes: { ["/fixture/" + path]: limit + 1 }, reason: undefined });
+    let failed = false;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (error) { failed = true; assert.equal(error, undefined); }
+    assert.equal(failed, true); fixture.diagnostics.finish(true, undefined);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity), counts = [0, 0, 0, 0]; counts[kind - 1] = limit;
+    assert.deepEqual(row.enumeration.m, [kind, ...counts, 1 << (kind - 1)]); assert.equal(row.enumeration.defined, false);
+    assert.equal(row.enumeration.depth, parts.length - 1); assert.equal(row.enumeration.overflow, true);
+  }
+});
+test("enumeration membership observer-off bytes and original member byte-closure remain unchanged", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8"), factory = await extractedContextTraversal();
+  const same = source.match(/^const same = .*;$/m)[0], check = source.match(/  check\(same\(actual, inputPlan\.files\), "context-byte-closure"\);/)[0];
+  const closure = new Function("actual", "inputPlan", "check", same + check);
+  const options = { nodes: { "": ["a", "dir"], dir: ["b"] }, manifest: [{ path: "a" }, { path: "dir/b" }] };
+  const on = traversalBindings(options), off = traversalBindings({ ...options, noObservation: true });
+  const actual = await factory(on.bindings)("/fixture", on.controls, on.observation), original = await factory(off.bindings)("/fixture", off.controls);
+  assert.equal(JSON.stringify(actual), JSON.stringify(original)); assert.deepEqual(on.trace, off.trace); assert.equal(off.frames.length, 0);
+  const require = (ok, code) => { assert.equal(code, "context-byte-closure"); assert.ok(ok); };
+  closure(actual, { files: original }, require);
+  const changed = JSON.parse(JSON.stringify(original)); changed[0].bytes++;
+  assert.throws(() => closure(actual, { files: changed }, require));
+  assert.ok(on.frames.every(frame => !frame.includes('"enumeration"')));
+});
+test("enumeration membership unavailable manifest and independent reporter errors never invent zero totals", async () => {
+  const factory = await extractedContextTraversal(); let getters = 0;
+  const hostile = Object.defineProperty({}, "path", { get() { getters++; throw undefined; } });
+  for (const manifest of [[hostile], [{ path: "../foreign" }], [{ path: "a" }, { path: "a" }], undefined]) {
+    const fixture = traversalBindings({ nodes: { "": ["a"] }, manifest, fault: "file_read", reason: undefined, reporterFailure: true });
+    let failed = false;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (error) { failed = true; assert.equal(error, undefined); }
+    assert.equal(failed, true); fixture.diagnostics.finish(true, undefined);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+    assert.equal(row.reason, "original_failure"); assert.equal(row.enumeration.m, null); assert.equal(row.enumeration.defined, false);
+    assert.equal(fixture.diagnostics.errors.length, 2); assert.equal(fixture.diagnostics.errors.at(-1), undefined);
+  }
+  assert.equal(getters, 0);
+});
+test("enumeration membership strict counters private framing and public budgets reject inconsistent evidence", async () => {
+  const factory = await extractedContextTraversal(), fixture = traversalBindings({ nodes: { "": ["a"] }, manifest: [{ path: "a" }], sizes: { "/fixture/a": 268435457 } });
+  await assert.rejects(factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation), error => error === fixture.reason); fixture.diagnostics.finish(true, fixture.reason);
+  const rows = fixture.frames.map(frame => JSON.parse(frame.slice(frame.indexOf(" {") + 1))), summary = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+  assert.deepEqual(summary.enumeration.m, [1, 268435456, 0, 0, 0, 1]);
+  for (const enumeration of [null, true, 17, "private", []]) {
+    const copy = structuredClone(rows); copy.at(-1).enumeration = enumeration;
+    const parsed = parseNativePrepareStages(nativePrepareCapture(copy.map(row => "\nEDGE_NATIVE_PREPARE_V1 " + JSON.stringify(row) + "\n").join("")), stageIdentity);
+    assert.equal(parsed.reason, "invalid"); assert.equal(Object.hasOwn(parsed, "enumeration"), false);
+  }
+  for (const change of [m => m[0] = 0, m => m[0] = 5, m => m[1]--, m => m[2] = -1, m => m[3] = 268435457, m => m[5] = 16, m => m[5] = 2, m => m[5] = 0, m => m.push(0), m => m[1] = null]) {
+    const copy = structuredClone(rows); change(copy.at(-1).enumeration.m);
+    const parsed = parseNativePrepareStages(nativePrepareCapture(copy.map(row => "\nEDGE_NATIVE_PREPARE_V1 " + JSON.stringify(row) + "\n").join("")), stageIdentity);
+    assert.equal(parsed.reason, "invalid"); assert.equal(Object.hasOwn(parsed, "enumeration"), false);
+  }
+  let getters = 0; const hostile = [...summary.enumeration.m]; Object.defineProperty(hostile, "1", { get() { getters++; throw undefined; } });
+  assert.throws(() => validateEnumerationDetail({ ...summary.enumeration, m: hostile })); assert.equal(getters, 0);
+  const maximum = { ...summary, enumeration: { ...summary.enumeration, depth: 65535, files: 50000, m: [1, 268435456, 268435456, 268435456, 268435456, 15] } };
+  validateContainerDiagnostic(maximum);
+  const output = [], phases = ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket"].map(phase => ({ v: 2, phase, state: "rejected", defined: true, exit: null, signal: null }));
+  emitContainerFailure([...phases, maximum], line => output.push(line));
+  assert.equal(output.length, 10); assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  assert.ok(fixture.frames.every(frame => Buffer.byteLength(frame) <= 512));
+  const worstFrames = [], worst = createNativePrepareDiagnostics(stageIdentity, (bytes, offset, length) => { worstFrames.push(bytes.subarray(offset, offset + length).toString()); return length; });
+  nativePrepareStages.slice(0, 8).forEach(stage => worst.enter(stage)); worst.enumerationManifest([{ path: "member" }, { path: "dir/member" }]);
+  ["member", ".git/added", "dir/added", "other/added"].forEach((path, i) => { worst.enumerationPath(path); worst.enumerationBytes((i + 1) * 268435457); });
+  worst.enumerationPoint("file_type", "not_directory", 65536, 50001, 4 * 268435457); worst.enumerationFailure(undefined);
+  worst.errors.push(...Array(32).fill(undefined)); worst.finish(true, undefined);
+  assert.equal(worst.errors.length, 32); assert.equal(worstFrames.length, 9); assert.ok(worstFrames.every(frame => Buffer.byteLength(frame) <= 512));
+  const worstSummary = parseNativePrepareStages(nativePrepareCapture(worstFrames.join("")), stageIdentity); assert.equal(worstSummary.reason, "original_failure"); assert.deepEqual(worstSummary.enumeration.m, [0, 268435456, 268435456, 268435456, 268435456, 15]);
+  const wrongDepth = createNativePrepareDiagnostics(stageIdentity, (_bytes, _offset, length) => length);
+  nativePrepareStages.slice(0, 8).forEach(stage => wrongDepth.enter(stage)); wrongDepth.enumerationManifest([{ path: "a/b" }]); wrongDepth.enumerationPath("a/b"); wrongDepth.enumerationPoint("file_read", "file", 0, 0, 0);
+  assert.equal(wrongDepth.errors.length, 1);
+  for (const text of [hex, other, "/fixture", "sha256", "pnpm", "a/b", "inert traversal"]) assert.ok(!output.join("").includes(text));
+  const incomplete = parseNativePrepareStages(nativePrepareCapture(fixture.frames.slice(0, -1).join("")), stageIdentity); assert.equal(incomplete.reason, "incomplete");
 });

@@ -160,6 +160,7 @@ async function qualifyImageInputs(contextHash, prepare) {
   prepare?.enter("context_identity");
   check(hash(JSON.stringify(inputPlan.files)) === contextHash && inputPlan.sourceSha === edgeProof.sourceSha && inputPlan.sourceTree === edgeProof.sourceTree, "context-identity");
   prepare?.enter("context_enumeration");
+  prepare?.enumerationManifest(inputPlan.files);
   const actual = await contextFiles(root, new Set(["node_modules", "admin/node_modules", ".edge-context.json", ".edge-native.json"]), prepare);
   prepare?.enter("context_byte_closure");
   check(same(actual, inputPlan.files), "context-byte-closure");
@@ -224,10 +225,12 @@ async function contextFiles(root, excluded = new Set(), prepare) {
           const file = entry.isFile();
           prepare?.enumerationPoint("file_type_check", file ? "file" : "other", depth, files.length, size);
           check(file, "context-link-or-special");
+          prepare?.enumerationPath(path);
           prepare?.enumerationPoint("file_read", "file", depth, files.length, size);
           const bytes = await readFile(join(root, path));
           prepare?.enumerationPoint("byte_count", "file", depth, files.length, size);
           size += bytes.length;
+          prepare?.enumerationBytes(size);
           prepare?.enumerationPoint("capacity", "file", depth, files.length, size);
           check(files.length < 50000 && size <= 256 * 1024 * 1024, "context-capacity");
           prepare?.enumerationPoint("hash", "file", depth, files.length, size);
@@ -580,6 +583,12 @@ export function parseNativePrepareStages(result, identity) {
       if (row.outcome === "original_failure" ? typeof row.defined !== "boolean" : row.defined !== null || entered !== nativePrepareStages.length || (row.outcome === "complete" ? row.reportFailures !== 0 : row.reportFailures < 1)) return unknown("invalid");
       if (Object.hasOwn(row, "enumeration")) {
         if (row.outcome !== "original_failure" || row.stage !== "context_enumeration") return unknown("invalid");
+        if (!row.enumeration || typeof row.enumeration !== "object") return unknown("invalid");
+        if (Object.hasOwn(row.enumeration, "m")) {
+          if (Object.keys(row.enumeration).join() !== "op,type,depth,files,bytes,overflow,m") return unknown("invalid");
+          const { m, ...detail } = row.enumeration;
+          row.enumeration = { ...detail, failed: true, defined: row.defined, m };
+        }
         try { row.enumeration = validateEnumerationDetail(row.enumeration); } catch { return unknown("invalid"); }
         if (row.enumeration.defined !== row.defined) return unknown("invalid");
       }

@@ -531,6 +531,7 @@ export const nativePrepareStages = Object.freeze([
 export const enumerationOperations = Object.freeze(["directory_read", "directory_sort", "entry_path", "exclusion", "path_check", "directory_type", "recursion", "file_type", "file_type_check", "file_read", "byte_count", "capacity", "hash", "file_record", "final_sort"]);
 export function validateEnumerationDetail(value) {
   const fields = ["op", "type", "depth", "files", "bytes", "overflow", "failed", "defined"];
+  if (value && Object.hasOwn(value, "m")) fields.push("m");
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).join() !== fields.join()) refuse("enumeration-detail-keys");
   const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
   if (!enumerationOperations.includes(row.op) || !["unknown", "directory", "not_directory", "file", "other"].includes(row.type) || row.failed !== true || typeof row.defined !== "boolean" || typeof row.overflow !== "boolean") refuse("enumeration-detail-enum");
@@ -538,6 +539,22 @@ export function validateEnumerationDetail(value) {
   if (!types.includes(row.type)) refuse("enumeration-detail-type");
   for (const [key, limit] of [["depth", 65535], ["files", 50000], ["bytes", 268435456]]) if (!Number.isInteger(row[key]) || row[key] < 0 || row[key] > limit) refuse("enumeration-detail-count");
   if (row.overflow && row.depth !== 65535 && row.files !== 50000 && row.bytes !== 268435456) refuse("enumeration-detail-overflow");
+  // m = [class, member bytes, unlisted .git bytes, unlisted manifest-directory
+  // bytes, other-root bytes, per-class overflow bitmask]. Class 0 is unknown;
+  // 1..4 follow the byte-counter order. null means unavailable, never zero.
+  if (Object.hasOwn(row, "m") && row.m !== null) {
+    const m = row.m, limit = 268435456;
+    if (!Array.isArray(m) || Object.getOwnPropertyNames(m).join() !== "0,1,2,3,4,5,length" || ownData(m, "length") !== 6) refuse("enumeration-membership-keys");
+    row.m = Array.from({ length: 6 }, (_, i) => ownData(m, String(i)));
+    const [kind, ...counts] = row.m, mask = counts.pop();
+    if (!Number.isInteger(kind) || kind < 0 || kind > 4 || !Number.isInteger(mask) || mask < 0 || mask > 15 || counts.some(n => !Number.isInteger(n) || n < 0 || n > limit)) refuse("enumeration-membership-counts");
+    const fileOperation = ["file_read", "byte_count", "capacity", "hash", "file_record"].includes(row.op);
+    if (fileOperation ? kind === 0 : kind !== 0) refuse("enumeration-membership-type");
+    for (let i = 0; i < 4; i++) if ((mask & (1 << i)) && counts[i] !== limit) refuse("enumeration-membership-overflow");
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    if (row.bytes !== Math.min(total, limit) || ((mask || total > limit) && !row.overflow) || (row.bytes < limit && mask)) refuse("enumeration-membership-total");
+    if (row.overflow && !mask && total <= limit && row.depth !== 65535 && row.files !== 50000) refuse("enumeration-membership-saturation");
+  }
   return row;
 }
 // Private preparation frames never become GitHub commands. A synchronous writer
@@ -545,6 +562,7 @@ export function validateEnumerationDetail(value) {
 export function createNativePrepareDiagnostics(identity, write = (bytes, offset, length) => writeSync(1, bytes, offset, length)) {
   const errors = []; let context, nonce, sequence = 0, index = -1, finished = false, admitted = false;
   let enumerationPoint = null, enumerationFailure = null;
+  let membership = null;
   try {
     context = ownData(identity, "contextHash"); nonce = ownData(identity, "nonce");
     if (![context, nonce].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) refuse("prepare-diagnostic-identity");
@@ -554,7 +572,13 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     if (!admitted) return;
     const row = { v: 1, context, nonce, seq: ++sequence, stage: nativePrepareStages[index], event, outcome, defined,
       reportFailures: event === "terminal" ? errors.length : null, undefinedReportFailures: event === "terminal" ? errors.filter(error => error === undefined).length : null };
-    if (event === "terminal" && outcome === "original_failure" && row.stage === "context_enumeration" && enumerationFailure) row.enumeration = enumerationFailure;
+    if (event === "terminal" && outcome === "original_failure" && row.stage === "context_enumeration" && enumerationFailure) {
+      if (Object.hasOwn(enumerationFailure, "m")) {
+        // These two values already belong to the original-failure envelope.
+        const { failed: _failed, defined: _defined, ...detail } = enumerationFailure;
+        row.enumeration = detail;
+      } else row.enumeration = enumerationFailure;
+    }
     const bytes = Buffer.from("\n" + "EDGE_NATIVE_" + "PREPARE_V1 " + JSON.stringify(row) + "\n");
     if (sequence > 32 || bytes.length > 512) refuse("prepare-diagnostic-capacity");
     for (let offset = 0; offset < bytes.length;) {
@@ -564,12 +588,51 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     }
   };
   return { errors,
+    enumerationManifest(manifest) {
+      try {
+        if (nativePrepareStages[index] !== "context_enumeration" || finished || membership !== null) refuse("enumeration-manifest-stage");
+        const count = ownData(manifest, "length");
+        if (!Array.isArray(manifest) || !Number.isInteger(count) || count < 0 || count > 50000) refuse("enumeration-manifest-count");
+        const members = new Set(), directories = new Set();
+        for (let i = 0; i < count; i++) {
+          const path = ownData(ownData(manifest, String(i)), "path");
+          if (typeof path !== "string" || !/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(path) || path.split("/").some(part => part === "." || part === "..") || members.has(path)) refuse("enumeration-manifest-path");
+          members.add(path);
+          const parts = path.split("/"); parts.pop();
+          while (parts.length) { directories.add(parts.join("/")); parts.pop(); }
+        }
+        membership = { members, directories, counts: [0, 0, 0, 0], size: 0, kind: 0, depth: null };
+      } catch (error) { membership = false; errors.push(error); }
+    },
+    enumerationPath(path) {
+      if (!membership) return;
+      try {
+        if (typeof path !== "string" || !/^[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*$/.test(path) || path.split("/").some(part => part === "." || part === "..")) refuse("enumeration-observed-path");
+        const parts = path.split("/"), depth = parts.length - 1; parts.pop();
+        let directory = false;
+        while (parts.length) { if (membership.directories.has(parts.join("/"))) directory = true; parts.pop(); }
+        membership.kind = membership.members.has(path) ? 1 : path.startsWith(".git/") ? 2 : directory ? 3 : 4;
+        membership.depth = depth;
+      } catch (error) { membership = false; errors.push(error); }
+    },
+    enumerationBytes(size) {
+      if (!membership) return;
+      try {
+        if (!Number.isSafeInteger(size) || size < membership.size || membership.kind < 1) refuse("enumeration-observed-bytes");
+        membership.counts[membership.kind - 1] += size - membership.size;
+        membership.size = size;
+      } catch (error) { membership = false; errors.push(error); }
+    },
     enumerationPoint(op, type, depth, files, bytes) {
       try {
         if (nativePrepareStages[index] !== "context_enumeration" || finished) refuse("enumeration-observer-stage");
         const values = [depth, files, bytes], limits = [65535, 50000, 268435456];
         if (values.some(value => !Number.isSafeInteger(value) || value < 0)) refuse("enumeration-observer-count");
-        enumerationPoint = validateEnumerationDetail({ op, type, depth: Math.min(depth, limits[0]), files: Math.min(files, limits[1]), bytes: Math.min(bytes, limits[2]), overflow: values.some((value, i) => value > limits[i]), failed: true, defined: false });
+        const fileOperation = ["file_read", "byte_count", "capacity", "hash", "file_record"].includes(op);
+        if (membership && !fileOperation) { membership.kind = 0; membership.depth = null; }
+        if (membership && (membership.size !== bytes || (fileOperation && membership.depth !== depth))) refuse("enumeration-membership-observation");
+        const m = membership ? [membership.kind, ...membership.counts.map(n => Math.min(n, limits[2])), membership.counts.reduce((mask, n, i) => mask | (n > limits[2] ? 1 << i : 0), 0)] : null;
+        enumerationPoint = validateEnumerationDetail({ op, type, depth: Math.min(depth, limits[0]), files: Math.min(files, limits[1]), bytes: Math.min(bytes, limits[2]), overflow: values.some((value, i) => value > limits[i]), failed: true, defined: false, ...(membership !== null ? { m } : {}) });
       } catch (error) { enumerationPoint = null; errors.push(error); }
     },
     enumerationFailure(reason) {
