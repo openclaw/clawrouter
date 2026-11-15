@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
+import { Socket } from "node:net";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -596,7 +598,7 @@ export default {async fetch(request){
   if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[],observers:[],observerFailures:[],producers:[]});return Response.json({ready:true});}
   const m=/^\/(release|state|started|proof)\/([a-z0-9_]+)$/.exec(u.pathname);if(!m||!rows.has(m[2]))return new Response(null,{status:404});const r=rows.get(m[2]);
   if(m[1]==='release')r.release=true;
-  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({owners:r.mode==='partial_abort'?litellmProducerOwners(r):null,released:r.release,calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
+  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({owners:r.mode==='partial_abort'||r.id==='native_abort'?litellmProducerOwners(r):null,released:r.release,calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
   if(m[1]==='started'){const deadline=Date.now()+5000;while(r.calls.length===0){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}}
   return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,producer:[r.operations.length,...['pending','fulfilled','rejected','threw'].map(state=>r.operations.filter(op=>op.state===state).length)]});
  }
@@ -635,6 +637,150 @@ export default {async fetch(request){
  const stream=new ReadableStream(source,{highWaterMark:0});
  return new Response(stream,{headers:{'content-type':chat?'text/event-stream':'application/json'}});
 }};`;
+}
+
+// Node-side owner only: never copied into either Worker and never used by f.call.
+export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorization, signal) {
+  const failures = [], listeners = [], joins = [], responses = [], requestErrors = [];
+  let delivered = 0, request, socket, resetMethod, started = false, resetAttempts = 0, resetReturned;
+  let connected = false, finished = false, ended = false, requestClosed = false, socketClosed = false, requestDestroyed = false, destroyRequest;
+  const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+  const faulted = deferred(), connectedGate = deferred(), finishGate = deferred(), endGate = deferred();
+  const fail = error => { failures.push(error); faulted.resolve(); };
+  const attempt = fn => { try { return fn(); } catch (error) { fail(error); } };
+  const throwFailures = () => {
+    const fresh = failures.slice(delivered); delivered = failures.length;
+    if (fresh.length === 1) throw fresh[0];
+    if (fresh.length) throw new AggregateError(fresh, "owned HTTP/1 caller failed");
+  };
+  const watch = (target, name, fn) => {
+    const listener = (...args) => { attempt(() => fn(...args)); };
+    // Retain even a partially installed listener; never remove anyone else's.
+    listeners.push([target, name, listener]);
+    attempt(() => target.on(name, listener));
+  };
+  const requireSocket = () => {
+    assert.ok(request && socket && isSocket(socket));
+    assert.equal(request.socket, socket); assert.equal(request.reusedSocket, false);
+    assert.equal(socket.resetAndDestroy, resetMethod);
+  };
+  const destroyResponse = row => {
+    if (row.closed || row.destroyAttempted) return;
+    row.destroyAttempted = true;
+    attempt(() => Reflect.apply(row.original.destroy, row.value, []));
+  };
+  const stop = () => {
+    for (const response of responses) destroyResponse(response);
+    if (request && !requestClosed && !requestDestroyed) {
+      requestDestroyed = true; attempt(() => Reflect.apply(destroyRequest, request, []));
+    }
+  };
+  const aborted = () => { fail(signal.reason); stop(); };
+  return {
+    start() {
+      assert.equal(started, false); started = true;
+      request = Reflect.apply(requestOriginal, undefined, [url, { method: "GET", agent: false, headers: { authorization } }]);
+      destroyRequest = request.destroy;
+      const closed = deferred(); joins.push(closed.promise);
+      watch(request, "error", error => { requestErrors.push(error); if (requestErrors.length > 1 || resetAttempts !== 1) fail(error); });
+      watch(request, "close", () => { if (requestClosed) fail(new Error("duplicate request close")); requestClosed = true; closed.resolve(); });
+      watch(request, "finish", () => { if (finished) fail(new Error("duplicate request finish")); finished = true; finishGate.resolve(); });
+      watch(request, "response", value => {
+        fail(new Error("response arrived before owned pre-header retirement"));
+        if (responses.some(row => row.value === value)) { fail(new Error("duplicate response")); return; }
+        const done = deferred(), row = { value, closed: false, original: { resume: value.resume, destroy: value.destroy } };
+        responses.push(row); joins.push(done.promise);
+        watch(value, "error", error => { fail(error); destroyResponse(row); });
+        watch(value, "aborted", () => fail(new Error("response body aborted")));
+        watch(value, "end", () => { row.ended = true; });
+        watch(value, "close", () => { if (row.closed) fail(new Error("duplicate response close")); row.closed = true; done.resolve(); });
+        try { Reflect.apply(row.original.resume, value, []); }
+        catch (error) { fail(error); destroyResponse(row); }
+      });
+      watch(request, "socket", value => {
+        if (socket) { fail(new Error("duplicate caller socket")); return; }
+        socket = value; resetMethod = value.resetAndDestroy;
+        const closed = deferred(); joins.push(closed.promise);
+        watch(socket, "error", fail);
+        watch(socket, "close", () => { if (socketClosed) fail(new Error("duplicate socket close")); socketClosed = true; closed.resolve(); });
+        watch(socket, "connect", () => { if (connected) fail(new Error("duplicate socket connect")); connected = true; requireSocket(); connectedGate.resolve(); });
+        requireSocket();
+      });
+      if (signal) {
+        attempt(() => signal.addEventListener("abort", aborted, { once: true }));
+        if (signal.aborted) aborted();
+      }
+      throwFailures();
+      try {
+        const returned = request.end(error => {
+          if (ended) fail(new Error("duplicate request end callback"));
+          ended = true; if (error !== undefined && error !== null) fail(error); endGate.resolve();
+        });
+        joins.push(endGate.promise); assert.equal(returned, request);
+      } catch (error) { fail(error); throwFailures(); }
+      return request;
+    },
+    async ready() {
+      await Promise.race([Promise.all([connectedGate.promise, finishGate.promise, endGate.promise]), faulted.promise]);
+      throwFailures(); requireSocket();
+      assert.ok(connected && finished && ended && !requestClosed && !socketClosed && responses.length === 0);
+    },
+    reset() {
+      if (++resetAttempts !== 1) { const error = new Error("replayed socket reset"); fail(error); throwFailures(); }
+      try {
+        requireSocket(); assert.ok(connected && finished && ended && !requestClosed && !socketClosed && responses.length === 0);
+        assert.equal(socket.connecting, false); assert.equal(socket.destroyed, false);
+        resetReturned = Reflect.apply(resetMethod, socket, []);
+        assert.equal(resetReturned, socket);
+        return resetReturned;
+      } catch (error) { fail(error); throwFailures(); }
+    },
+    async join() {
+      let cursor = 0;
+      while (cursor < joins.length) {
+        const batch = joins.slice(cursor); cursor = joins.length;
+        for (const outcome of await Promise.allSettled(batch)) if (outcome.status === "rejected") fail(outcome.reason);
+      }
+      throwFailures(); requireSocket();
+      assert.ok(resetAttempts === 1 && resetReturned === socket && connected && finished && ended && requestClosed && socketClosed && responses.length === 0);
+    },
+    async close() {
+      stop();
+      let cursor = 0;
+      while (cursor < joins.length) {
+        const batch = joins.slice(cursor); cursor = joins.length;
+        for (const outcome of await Promise.allSettled(batch)) if (outcome.status === "rejected") fail(outcome.reason);
+      }
+      if (signal) attempt(() => signal.removeEventListener("abort", aborted));
+      for (const [target, name, listener] of listeners) attempt(() => target.removeListener(name, listener));
+      const fresh = failures.slice(delivered); delivered = failures.length; return fresh;
+    },
+  };
+}
+
+export function assertLiteLLMResetRetirement(proof, observed, source, usage) {
+  assert.equal(proof.retired, true); assert.equal(proof.unlocked, true);
+  assert.ok(proof.operations.every(op => op.state === "fulfilled"));
+  assert.equal(observed.syncFailures, 0); assert.deepEqual(observed.ingress, [true]);
+  assert.deepEqual(observed.inputs, [{ signalAborted: true }]);
+  assert.equal(observed.readers.length, 1); assert.deepEqual(observed.readers[0], { unlocks: 1, locked: false });
+  assert.equal(source.released, false); assert.equal(source.active, 0); assert.equal(source.expired, 0);
+  assert.equal(source.canceled, 1); assert.equal(source.finished, 1);
+  assert.equal(source.calls.length, 1); assert.equal(proof.calls.length, 1);
+  const call = source.calls[0];
+  assert.equal(call.method, "GET"); assert.equal(call.url, "https://gateway.example/team/v1/models");
+  assert.equal(call.authorization, "Bearer fixture-upstream-native_abort"); assert.equal(call.body, null);
+  assert.equal(proof.calls[0].method, call.method); assert.equal(proof.calls[0].url, call.url); assert.equal(proof.calls[0].authorization, call.authorization);
+  assert.equal(proof.calls[0].query, ""); assert.equal(proof.calls[0].body, false); assert.equal(proof.calls[0].extra, false); assert.equal(proof.calls[0].redirect, "manual");
+  assert.equal(source.owners.length, 1);
+  const owner = source.owners[0];
+  assert.deepEqual(owner, { call: 0, held: true, chat: false, finished: true, eof: false, cancels: 1, fulfilledCancels: 1, operations: source.operations.length, observers: source.operations.length * 2 });
+  assert.deepEqual(source.joined, [1, source.operations.length, source.operations.length * 2, 0]);
+  assert.ok(source.operations.length >= 2 && source.operations.every(op => op.state === "fulfilled"));
+  assert.equal(source.operations.filter(op => op.kind === "cancel").length, 1);
+  assert.equal(usage.events.length, 1);
+  const event = usage.events[0];
+  for (const [key, value] of Object.entries({ provider: "litellm", policy_id: "native_abort", credential_id: "native_abort", capability: "models.list", model: null, actual_cost_micros: 0, reserved_cost_micros: 0, input_tokens: null, output_tokens: null, total_tokens: null })) assert.equal(event[key], value);
 }
 
 export async function withGateway(rows, body, { basePath = "/team/v1", hotCache = false, evidence } = {}) {
@@ -812,19 +958,19 @@ function registerTests() {
       }, { basePath });
     });
   });
-  test("original metadata caller abort retains strict acquisition and retirement outcomes", { timeout: 15000 }, async t => {
+  test("owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement", { timeout: 15000 }, async t => {
     const evidence = workerAbortEvidence(); let failed = false, primary;
     try { await withGateway([{ id: "native_abort", mode: "held" }], async f => {
-      const controller = new AbortController();
-      evidence.stage(9);
-      const pending = f.call("native_abort", undefined, { signal: controller.signal });
-      evidence.stage(9, 1);
-      const result = pending.then(value => ({ value }), error => ({ error }));
+      const caller = litellmOwnedH1Reset(httpRequest, value => value instanceof Socket, f.origin + "/v1/native/litellm/models", "Bearer " + key("native_abort"), t.signal);
+      const failures = [];
+      try {
+      evidence.stage(9); caller.start();
+      evidence.stage(9, 1); await caller.ready();
       evidence.stage(10); await f.started("native_abort");
-      evidence.stage(11); controller.abort();
-      evidence.stage(12); const outcome = await result;
-      assert.ok("error" in outcome);
-      evidence.stage(13); assert.equal(controller.signal.aborted, true);
+      // Arrival alone is not readiness: require the original live Worker owner.
+      evidence.stage(13); assert.deepEqual(await f.control("started", "native_abort"), { started: true });
+      evidence.stage(11); caller.reset();
+      evidence.stage(12); await caller.join();
       let proof;
       evidence.stage(14);
       try { proof = await f.control("retire", "native_abort"); }
@@ -847,6 +993,15 @@ function registerTests() {
       evidence.stage(20); assert.equal(state.canceled, 1);
       evidence.stage(21); assert.equal(state.active, 0);
       evidence.stage(22); assert.equal(state.expired, 0);
+      const observed = await f.control("observation", "native_abort");
+      const source = await f.proof("native_abort");
+      // The usage barrier performs another strict original-operation drain.
+      const usage = await f.control("usage", "native_abort");
+      assertLiteLLMResetRetirement(proof, observed, source, usage);
+      } catch (error) { evidence.failed(error); failures.push(error); }
+      try { failures.push(...await caller.close()); } catch (error) { evidence.failed(error); failures.push(error); }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length) throw new AggregateError(failures, "reset caller and remote retirement failed");
     }, { evidence }); } catch (error) { failed = true; primary = error; }
     const reporting = evidence.report(t);
     if (failed && reporting.length === 0) throw primary;

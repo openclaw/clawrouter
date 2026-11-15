@@ -17,7 +17,7 @@ const marker = "synthetic-private-marker-do-not-report";
 function abortDiagnosticSource() {
   const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
   const gateway = source.slice(source.indexOf("export async function withGateway("), source.indexOf("\nfunction registerTests()"));
-  const start = source.indexOf('  test("original metadata caller abort retains strict acquisition and retirement outcomes"');
+  const start = source.indexOf('  test("owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement"');
   const body = source.slice(start, source.indexOf('  test("shipping 30000ms', start));
   const control = source.slice(source.indexOf("export async function litellmControlResponse("), source.indexOf("// END request-owned fixture functions."));
   return { gateway: gateway.replace("export async function", "async function"), body, control: control.replace("export async function", "async function") };
@@ -39,9 +39,9 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
     if (url.endsWith("/__litellm/setup")) { check("router_setup"); const r = response("router_setup_body", {}); if (fault === "router_status") r.status = 500; return Promise.resolve(r); }
     if (url.includes("/__litellm/retire/")) { try { check("retire"); } catch (error) { retireFailed = true; return Promise.reject(error); } return Promise.resolve(response("retire_body", { retired: fault !== "retired_assertion" })); }
     if (url.includes("/__litellm/observation/")) { check("observation"); return Promise.resolve(response("observation_body", observation)); }
-    check("caller");
-    if (fault === "caller_observer") return { then() { check("caller_observer"); } };
-    return fault === "caller_outcome" ? Promise.resolve({}) : Promise.reject(undefined);
+    if (url.includes("/__litellm/started/")) { check("owner_ready"); return Promise.resolve(response("owner_ready_body", { started: true })); }
+    if (url.includes("/__litellm/usage/")) return Promise.resolve(response("usage_body", {}));
+    throw new Error("unexpected inert control");
   };
   const runtime = { async unsafeGetDirectURL() { check("direct_url"); return "https://fixture.test"; }, async getWorker() { check("upstream_handle"); return upstream; }, async dispose() { check("dispose"); } };
   const controlResponse = new Function("assert", control + ";return litellmControlResponse;")(assert);
@@ -50,8 +50,8 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
     litellmControlResponse: controlResponse, key: () => "inert", rm: async () => { check("remove"); } };
   const withGateway = new Function(...Object.keys(context), gateway + ";return withGateway;")(...Object.values(context));
   let callback;
-  const Controller = function() { this.signal = { aborted: false }; this.abort = () => { check("authored_abort"); this.signal.aborted = fault !== "caller_signal"; }; };
-  new Function("test", "withGateway", "workerAbortEvidence", "AbortController", "assert", body)((name, options, fn) => { callback = fn; }, withGateway, workerAbortEvidence, Controller, assert);
+  const owner = () => ({ start() { check("caller"); }, async ready() { check("caller_observer"); }, reset() { check("authored_abort"); }, async join() { check("caller_outcome"); }, async close() { try { check("caller_cleanup"); return []; } catch (error) { return [error]; } } });
+  new Function("test", "withGateway", "workerAbortEvidence", "litellmOwnedH1Reset", "httpRequest", "Socket", "key", "assertLiteLLMResetRetirement", "assert", body)((name, options, fn) => { callback = fn; }, withGateway, workerAbortEvidence, owner, {}, class {}, () => "inert", () => check("remote_assertions"), assert);
   let failed = false, error;
   try { await callback({ diagnostic(value) { if (reportingFault) throw undefined; diagnostics.push(value); } }); }
   catch (reason) { failed = true; error = reason; }
@@ -61,7 +61,7 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
 test("worker abort diagnostic pure: actual fixture stages preserve first failure and both cleanup attempts", async () => {
   const stages = { directory: [1, 0], runtime: [2, 0], direct_url: [3, 0], upstream_handle: [4, 0], upstream_setup: [5, 0], upstream_status: [5, 1],
     router_setup: [6, 0], router_status: [7, 0], router_setup_body: [8, 0], caller: [9, 0], caller_observer: [9, 1], started: [10, 0],
-    authored_abort: [11, 0], caller_outcome: [12, 0], caller_signal: [13, 0], retire: [14, 0], retired_assertion: [17, 0], final_state: [18, 0], calls_assertion: [19, 0], canceled_assertion: [20, 0], active_assertion: [21, 0], expired_assertion: [22, 0], dispose: [23, 0], remove: [24, 0] };
+    owner_ready: [13, 0], authored_abort: [11, 0], caller_outcome: [12, 0], retire: [14, 0], retired_assertion: [17, 0], final_state: [18, 0], calls_assertion: [19, 0], canceled_assertion: [20, 0], active_assertion: [21, 0], expired_assertion: [22, 0], dispose: [23, 0], remove: [24, 0] };
   for (const [fault, expected] of Object.entries(stages)) {
     const result = await abortDiagnosticCase({ fault });
     assert.equal(result.failed, true, fault); assert.deepEqual(result.record.first.slice(0, 2), expected, fault);
@@ -119,7 +119,7 @@ function pureWorkerReporter(runtime = workerAbortRuntime()) {
   return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep);
 }
 function workerAbortNativeEvents(frame) {
-  const native = { testId: 7, parentId: undefined, name: "original metadata caller abort retains strict acquisition and retirement outcomes",
+  const native = { testId: 7, parentId: undefined, name: "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement",
     file: "worker/test/litellm-model-discovery.test.mjs", entryFile: "worker/test/litellm-model-discovery.test.mjs", line: 704, column: 3, nesting: 0 };
   return [
     { type: "test:enqueue", data: { ...native, type: "test" } },
@@ -784,6 +784,199 @@ test("worker abort relational repair pure: exact operation owners and complete c
       assert.equal(result.rows[0].kind,"failure",c.name);
     }
   }
+});
+
+function resetSourceFunctions() {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("export function litellmOwnedH1Reset("), source.indexOf("export async function withGateway("));
+  return new Function("assert", code.replace(/^export /gm, "") + ";return {litellmOwnedH1Reset,assertLiteLLMResetRetirement};")(assert);
+}
+function inertResetCaller(options = {}) {
+  const calls = [], faults = [], responseRows = [], reason = {}, callbackReason = {};
+  let endCallback, lateClose, installedFault = false;
+  const emitter = label => {
+    const listeners = new Map();
+    return {
+      on(name, fn) { if (!installedFault && options.install === label + ":" + name) { installedFault = true; throw undefined; } const rows = listeners.get(name) ?? []; rows.push(fn); listeners.set(name, rows); return this; },
+      removeListener(name, fn) { const rows = listeners.get(name) ?? []; listeners.set(name, rows.filter(row => row !== fn)); if (options.removeFault && !faults.includes("remove")) { faults.push("remove"); throw undefined; } },
+      emit(name, ...args) { for (const fn of [...(listeners.get(name) ?? [])]) fn(...args); },
+      listenerCount() { return [...listeners.values()].reduce((n, rows) => n + rows.length, 0); },
+    };
+  };
+  const socket = Object.assign(emitter("socket"), { connecting: true, destroyed: false });
+  const request = Object.assign(emitter("request"), { socket, reusedSocket: options.reused === true });
+  const response = () => {
+    const value = emitter("response"); responseRows.push(value);
+    value.resume = function() { calls.push(["resume", this, arguments.length]); if (options.bodyFault) throw undefined; if (!options.holdBody) { value.emit("end"); value.emit("close"); } return value; };
+    value.destroy = function() { calls.push(["body_destroy", this, arguments.length]); value.emit("close"); return value; };
+    return value;
+  };
+  const close = () => {
+    if (options.socketError) socket.emit("error", undefined);
+    if (!options.noRequestError) request.emit("error", reason);
+    if (options.responseAtReset) request.emit("response", response());
+    socket.destroyed = true;
+    if (options.reverseClose) { socket.emit("close"); request.emit("close"); } else { request.emit("close"); socket.emit("close"); }
+  };
+  socket.resetAndDestroy = function(...args) {
+    calls.push(["reset", this, args]);
+    if (options.resetThrow) throw undefined;
+    if (options.holdClose) lateClose = close; else close();
+    return options.wrongReturn ? {} : socket;
+  };
+  request.destroy = function(...args) {
+    calls.push(["destroy", this, args]); socket.destroyed = true;
+    request.emit("close"); socket.emit("close");
+    if (options.destroyThrow) throw undefined;
+    return request;
+  };
+  request.end = function(callback) {
+    calls.push(["end", this, arguments.length]); endCallback = callback;
+    request.emit("socket", socket);
+    if (options.foreignSocket) request.socket = {};
+    socket.connecting = false; socket.emit("connect");
+    request.emit("finish");
+    if (!options.holdEnd) callback(options.callbackError ? callbackReason : undefined);
+    if (options.earlyError) request.emit("error", undefined);
+    if (options.earlyResponse) request.emit("response", response());
+    return request;
+  };
+  const requestOriginal = function(url, init) { "use strict"; calls.push(["request", this, url, init]); if (options.createThrow) throw undefined; return request; };
+  const { litellmOwnedH1Reset } = resetSourceFunctions();
+  const caller = litellmOwnedH1Reset(requestOriginal, value => value === socket, "http://fixture.example/v1/native/litellm/models", "Bearer synthetic-key");
+  return { caller, socket, request, calls, reason, callbackReason, responses: responseRows, end: () => endCallback(), close: () => lateClose(), response };
+}
+async function captureReset(fn) { try { return { fulfilled: true, value: await fn() }; } catch (error) { return { fulfilled: false, error }; } }
+
+test("owned HTTP/1 reset pure: exact original identities and close order", async () => {
+  for (const reverseClose of [false, true]) {
+    const c = inertResetCaller({ reverseClose }); assert.equal(c.caller.start(), c.request); await c.caller.ready();
+    assert.equal(c.caller.reset(), c.socket); await c.caller.join(); assert.deepEqual(await c.caller.close(), []);
+    assert.deepEqual(c.calls.map(row => row[0]), ["request", "end", "reset"]);
+    assert.equal(c.calls[0][1], undefined); assert.deepEqual(c.calls[0][3], { method: "GET", agent: false, headers: { authorization: "Bearer synthetic-key" } });
+    assert.equal(c.calls[1][1], c.request); assert.equal(c.calls[1][2], 1);
+    assert.equal(c.calls[2][1], c.socket); assert.deepEqual(c.calls[2][2], []);
+    assert.equal(c.request.listenerCount(), 0); assert.equal(c.socket.listenerCount(), 0);
+  }
+});
+test("owned HTTP/1 reset pure: held callbacks and original close remain joined", async () => {
+  const c = inertResetCaller({ holdEnd: true, holdClose: true }); c.caller.start();
+  let ready = false, joined = false; const before = c.caller.ready().then(() => { ready = true; });
+  await Promise.resolve(); assert.equal(ready, false); c.end(); await before;
+  c.caller.reset(); const after = c.caller.join().then(() => { joined = true; });
+  await Promise.resolve(); assert.equal(joined, false); c.close(); await after;
+  assert.deepEqual(await c.caller.close(), []);
+});
+test("owned HTTP/1 reset pure: original undefined failures never retry reset", async () => {
+  for (const options of [{ createThrow: true }, { resetThrow: true }, { resetThrow: true, destroyThrow: true }, { earlyError: true }, { callbackError: true }, { socketError: true }, { reused: true }, { foreignSocket: true }, { wrongReturn: true }, { install: "request:finish" }, { removeFault: true }]) {
+    const c = inertResetCaller(options);
+    const result = await captureReset(async () => { c.caller.start(); await c.caller.ready(); c.caller.reset(); await c.caller.join(); });
+    const cleanup = await c.caller.close();
+    assert.ok(!result.fulfilled || cleanup.length > 0, JSON.stringify(options));
+    assert.ok(c.calls.filter(row => row[0] === "reset").length <= 1);
+    assert.ok(c.calls.filter(row => row[0] === "destroy").length <= 1);
+    if (options.resetThrow || options.createThrow || options.earlyError) assert.equal(result.error, undefined);
+    if (options.callbackError) assert.equal(result.error, c.callbackReason);
+    if (options.destroyThrow || options.removeFault) assert.ok(cleanup.includes(undefined));
+  }
+});
+test("owned HTTP/1 reset pure: duplicate methods and premature or late responses fail with body cleanup", async () => {
+  for (const options of [{ earlyResponse: true }, { responseAtReset: true }, { responseAtReset: true, bodyFault: true }, { earlyResponse: true, holdBody: true }]) {
+    const c = inertResetCaller(options);
+    const result = await captureReset(async () => { c.caller.start(); await c.caller.ready(); c.caller.reset(); await c.caller.join(); });
+    await c.caller.close(); assert.equal(result.fulfilled, false);
+    assert.equal(c.responses.length, 1); assert.equal(c.responses[0].listenerCount(), 0);
+    assert.equal(c.calls.filter(row => row[0] === "resume").length, 1);
+    assert.ok(c.calls.filter(row => row[0] === "body_destroy").length <= 1);
+  }
+  const c = inertResetCaller(); c.caller.start(); await c.caller.ready(); c.caller.reset();
+  assert.equal((await captureReset(() => c.caller.reset())).fulfilled, false);
+  assert.equal(c.calls.filter(row => row[0] === "reset").length, 1); await c.caller.close();
+});
+function resetReadiness() {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("export function litellmRequestScope("), source.indexOf("export function litellmWorkerResource("));
+  const { litellmRequestScope, litellmHeldReady } = new Function(code.replace(/^export /gm, "") + ";return {litellmRequestScope,litellmHeldReady};")();
+  let current; const scope = litellmRequestScope({ getStore: () => current, run(token, fn) { const before = current; current = token; try { return fn(); } finally { current = before; } } }, 1);
+  const r = { mode: "held", failures: [], observerFailures: [], operations: [], requests: [], inputs: [], readers: [] }, request = { signal: { aborted: false } };
+  const token = scope.register(request, r), body = { locked: true }, response = { body }, handle = {};
+  const input = scope.invoke(token, () => scope.transport(r, { aborted: false }), undefined, [request]);
+  scope.response(input, response); scope.reader(input, body, handle);
+  const reader = { transport: input, body, reader: handle, eof: false, unlocks: 0 }, pending = {};
+  r.requests.push({ request, token }); r.inputs.push(input); r.readers.push(reader);
+  r.operations.push({ kind: "handler", token, state: "pending" }, { kind: "fetch", transport: input, state: "fulfilled", pending, value: response },
+    { kind: "acquisition_observer", input, state: "fulfilled", originalFetch: pending },
+    { kind: "read", reader, input, receiverIdentity: true, state: "fulfilled", value: { done: false, value: { byteLength: 1 } }, settle: 4 },
+    { kind: "read", reader, input, receiverIdentity: true, state: "pending", invoke: 5 });
+  return { r, request, input, reader, ready: () => litellmHeldReady(r, scope) };
+}
+test("owned HTTP/1 reset pure: arrival alone cannot satisfy original Worker readiness", () => {
+  assert.equal(resetReadiness().ready(), true);
+  const mutations = [c => { c.r.operations[4].state = "fulfilled"; }, c => { c.r.operations[0].state = "fulfilled"; }, c => { c.request.signal.aborted = true; }, c => { c.input.signal.aborted = true; },
+    c => { c.r.requests.push({ ...c.r.requests[0] }); }, c => { c.r.operations[2].originalFetch = {}; }, c => { c.r.operations[3].value.value.byteLength = 0; },
+    c => { c.r.operations[3].settle = 6; }, c => { c.reader.eof = true; }, c => { c.reader.unlocks = 1; }, c => { c.r.failures.push(undefined); },
+    c => { c.r.observerFailures.push(undefined); }, c => { c.r.requests[0].retired = true; }, c => { c.reader.reader = {}; }, c => { c.r.inputs.push(c.input); }];
+  for (const mutate of mutations) { const c = resetReadiness(); mutate(c); assert.equal(c.ready(), false); }
+});
+function resetRemoteFacts() {
+  const call = { method: "GET", url: "https://gateway.example/team/v1/models", authorization: "Bearer fixture-upstream-native_abort", body: null };
+  const proof = { retired: true, unlocked: true, operations: [{ state: "fulfilled" }], calls: [{ ...call, body: false, query: "", extra: false, redirect: "manual" }] };
+  const observed = { syncFailures: 0, ingress: [true], inputs: [{ signalAborted: true }], readers: [{ unlocks: 1, locked: false }] };
+  const source = { released: false, active: 0, expired: 0, canceled: 1, finished: 1, calls: [call], operations: [{ kind: "pull", state: "fulfilled" }, { kind: "cancel", state: "fulfilled" }],
+    owners: [{ call: 0, held: true, chat: false, finished: true, eof: false, cancels: 1, fulfilledCancels: 1, operations: 2, observers: 4 }], joined: [1, 2, 4, 0] };
+  const usage = { events: [{ provider: "litellm", policy_id: "native_abort", credential_id: "native_abort", capability: "models.list", model: null, actual_cost_micros: 0, reserved_cost_micros: 0, input_tokens: null, output_tokens: null, total_tokens: null }] };
+  return { proof, observed, source, usage };
+}
+test("owned HTTP/1 reset pure: local close cannot replace remote signal producer joins or accounting", () => {
+  const { assertLiteLLMResetRetirement: check } = resetSourceFunctions(); const invoke = c => check(c.proof, c.observed, c.source, c.usage);
+  invoke(resetRemoteFacts());
+  const mutations = [c => { c.observed.ingress[0] = false; }, c => { c.observed.inputs[0].signalAborted = false; }, c => { c.observed.ingress.push(true); },
+    c => { c.proof.operations[0].state = "rejected"; }, c => { c.proof.unlocked = false; }, c => { c.observed.readers[0].unlocks = 2; }, c => { c.observed.readers[0].locked = true; },
+    c => { c.source.expired = 1; }, c => { c.source.active = 1; }, c => { c.source.released = true; }, c => { c.source.owners[0].call = 1; }, c => { c.source.owners[0].eof = true; },
+    c => { c.source.owners[0].fulfilledCancels = 0; }, c => { c.source.joined[2] = 3; }, c => { c.source.joined[3] = 1; }, c => { c.source.operations[1].state = "pending"; },
+    c => { c.source.operations[1].state = "rejected"; }, c => { c.source.calls.push({ ...c.source.calls[0] }); }, c => { c.proof.calls[0].authorization = "foreign"; },
+    c => { c.usage.events[0].actual_cost_micros = 7; }, c => { c.usage.events[0].policy_id = "foreign"; }, c => { c.usage.events[0].total_tokens = undefined; }];
+  for (const mutate of mutations) { const c = resetRemoteFacts(); mutate(c); assert.throws(() => invoke(c)); }
+});
+
+test("owned HTTP/1 reset pure: producer proof joins original and attached observer tails with exact owners", async () => {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("export function litellmObserveProducer("), source.indexOf("export function upstreamFixture("));
+  const { litellmObserveProducer, litellmProducerOwners, joinLiteLLMProducer } = new Function(code.replace(/^export /gm, "") + ";return {litellmObserveProducer,litellmProducerOwners,joinLiteLLMProducer};")();
+  const call = {}, producer = { call, held: true, chat: false, finished: true, eof: false };
+  const r = { calls: [call], producers: [producer], operations: [], observers: [], observerFailures: [] };
+  let finish; const held = new Promise(resolve => { finish = resolve; }), receiver = {};
+  assert.equal(litellmObserveProducer(r, producer, "pull", function() { assert.equal(this, receiver); return held; }, receiver, []), held);
+  const cancel = Promise.resolve(); assert.equal(litellmObserveProducer(r, producer, "cancel", () => cancel, receiver, []), cancel);
+  let completed = false; const joined = joinLiteLLMProducer(r).then(value => { completed = true; return value; });
+  await Promise.resolve(); assert.equal(completed, false); finish(); assert.deepEqual(await joined, [1, 2, 4, 0]);
+  assert.deepEqual(litellmProducerOwners(r), [{ call: 0, held: true, chat: false, finished: true, eof: false, cancels: 1, fulfilledCancels: 1, operations: 2, observers: 4 }]);
+  r.operations[1].producer = { ...producer }; assert.throws(() => litellmProducerOwners(r));
+});
+test("owned HTTP/1 reset pure: restoration late failures and primary undefined stay independent", async () => {
+  const c = inertResetCaller({ holdClose: true, removeFault: true }); c.caller.start(); await c.caller.ready(); c.caller.reset();
+  const original = {}; c.socket.emit("error", original); c.close();
+  const failed = await captureReset(() => c.caller.join()); assert.equal(failed.error, original);
+  assert.deepEqual(await c.caller.close(), [undefined]);
+  const r = await abortDiagnosticCase({ fault: "retire", undefinedFault: true, secondary: ["caller_cleanup", "dispose", "remove"], reportingFault: true });
+  assert.equal(r.failed, true);
+  const leaves = value => { const own = Object.getOwnPropertyDescriptor(value ?? {}, "errors"); return own && Array.isArray(own.value) ? own.value.flatMap(leaves) : [value]; };
+  assert.ok(leaves(r.error).filter(value => value === undefined).length >= 5);
+  assert.ok(r.calls.includes("caller_cleanup") && r.calls.includes("dispose") && r.calls.includes("remove"));
+});
+test("owned HTTP/1 reset pure: actual module bindings target name and unchanged shared caller are present", () => {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8"), reporter = readFileSync("scripts/worker-test-failure-reporter.mjs", "utf8");
+  assert.ok(source.includes('import { request as httpRequest } from "node:http";'));
+  assert.ok(source.includes('import { Socket } from "node:net";'));
+  const name = "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement";
+  assert.equal(source.split('test("' + name + '"').length - 1, 1); assert.ok(reporter.includes('const targetName = "' + name + '"'));
+  for (const binding of ["litellmOwnedH1Reset", "assertLiteLLMResetRetirement"]) assert.ok(source.includes("export function " + binding + "("));
+  assert.ok(source.includes('call: (id, path = "/v1/native/litellm/models", init = {}) => fetch(origin + path, { ...init, headers: { authorization: "Bearer " + key(id), ...init.headers } })'));
+  const target = source.slice(source.indexOf('test("' + name), source.indexOf('test("shipping 30000ms'));
+  assert.ok(target.indexOf('await f.started("native_abort")') < target.indexOf('f.control("started", "native_abort")'));
+  assert.ok(target.indexOf('f.control("started", "native_abort")') < target.indexOf('caller.reset()'));
+  assert.ok(target.indexOf('f.proof("native_abort")') < target.indexOf('f.control("usage", "native_abort")'));
+  assert.ok(!target.includes("controller.abort") && !target.includes("f.release("));
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.

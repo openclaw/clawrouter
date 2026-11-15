@@ -73,3 +73,16 @@ qualify SDK cancellation.
 Hosted SDK execution, its actual compiled observer attachment and complete
 physical retirement remain unqualified until that candidate's consumer passes.
 No deployment or native OpenClaw readiness is implied.
+
+The standalone metadata disconnect fixture uses one owned, nonpooled HTTP/1
+`ClientRequest` and its original socket's `resetAndDestroy()`. After upstream
+arrival, the existing router readiness control must observe one live request,
+transport and reader with a pending read and un-aborted ingress/effective
+signals. Only then does the caller request a reset before response headers.
+Local reset return and close events are not remote cancellation proof: the
+original Worker ingress signal, strict operation drain, unlocked reader,
+nonexpired canceled producer with joined originals and observers, and zero-cost
+SQLite receipt must independently pass. This contract does not qualify generic
+Undici fetch abort; the earlier failures remain recorded above. The SDK consumer
+uses its unchanged caller and assertions. New native execution remains required
+for each candidate; source and inert tests alone do not qualify disconnection.

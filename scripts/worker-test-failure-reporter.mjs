@@ -319,7 +319,7 @@ export const workerAbortAdmissionSites = Object.freeze([
 // admission also requires the qualified invocation and one completed wrapper.
 export function workerAbortAdmission(tracked, invocation) {
   const targetFile = "worker/test/litellm-model-discovery.test.mjs";
-  const targetName = "original metadata caller abort retains strict acquisition and retirement outcomes";
+  const targetName = "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement";
   const wrappers = new Map(), parentIds = new Map(), ids = new Map(), coordinates = new Map(), diagnostics = [];
   const expected = new Set(invocation?.files ?? []);
   let census = 0, childEvents = 0, overflow = false, recognized = 0, rejected = 0, targetFailure = null;
