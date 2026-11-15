@@ -471,6 +471,7 @@
 - Expose scalar-only native music response construction and the existing bounded PNG/JPEG/WebP container checks for internal integration, without granting input, credential or capacity authority.
 - Route explicitly selected OpenRouter music through complete native SSE validation, original credentials and conservative policy-fixed accounting; keep unknown dollar prices and reference images closed.
 - Restore original OpenRouter music output bounds through scalar inspection and bounded BYOB quarantine/replay, preserving original SSE and response capacity through delivery; reference-image intake remains closed.
+- Declare the two frozen OpenRouter Lyria cards as text-only music operations on the qualified runtime, preserving existing inference cards and keeping unknown dollar fees closed.
 - Admit bounded inline OpenRouter music images with original caller/key binding, immutable streamed input and atomic input/response capacity; preserve ordinary Chat admission and keep HTTPS references closed.
 - Add scoped OpenRouter music image publication, delegated immutable-byte delivery and single-attempt forwarding under the original caller/key and explicit publication policy; keep declaration activation separate from runtime qualification.
 - Add closed, expiring policy permissions for publishing and forwarding the two frozen OpenRouter music inputs, independently of retention and credentials; keep publication runtime and declaration activation separate.

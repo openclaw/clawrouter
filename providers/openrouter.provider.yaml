@@ -35,6 +35,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: music.generate
+    endpoint: music_generate
+    methods: [POST]
 endpoints:
   responses:
     modelPassthrough: {}
@@ -50,12 +53,43 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  music_generate:
+    path: /v1/chat/completions
+    method: POST
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
 models:
   entries:
     - id: openrouter/auto
       upstream: openrouter/auto
       capabilities: [llm.chat]
       pricingRef: openrouter-auto
+    - id: openrouter/google/lyria-3-pro-preview
+      upstream: google/lyria-3-pro-preview
+      capabilities: [music.generate]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          music_generate:
+            sources:
+              - https://github.com/openclaw/clawrouter/blob/b8b33d5bdd771bfa0904ac493b2fc6129b2768db/docs/openrouter-music-runtime.md
+              - https://openrouter.ai/google/lyria-3-pro-preview
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: openrouter/google/lyria-3-clip-preview
+      upstream: google/lyria-3-clip-preview
+      capabilities: [music.generate]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          music_generate:
+            sources:
+              - https://github.com/openclaw/clawrouter/blob/b8b33d5bdd771bfa0904ac493b2fc6129b2768db/docs/openrouter-music-runtime.md
+              - https://openrouter.ai/google/lyria-3-clip-preview
+            checkedAt: "2026-11-04"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
