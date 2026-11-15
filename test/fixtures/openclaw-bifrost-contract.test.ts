@@ -180,15 +180,19 @@ function emitControl(row:Case,w:any,result:any,worker:boolean):void {
  diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;console.log(line);
 }
 // Closed diagnostics only. They report boundaries, never classify an error.
+export function bifrostSetupPhase(phase:unknown):boolean {
+ return typeof phase==="string"&&["caller_install","progress_subscribe","source_env_pin","source_git_pin","poison_env","fetch_hook","undici_hook","guard_hook","guard_descriptor","profile_write","discovery_env","api_key_resolver","auth_resolver","discovery_auth_check","inference_auth_check","facade_load","plugin_register","plugin_id_check","catalog_check"].includes(phase);
+}
 export function validateBifrostCheckpoint(record:any):void {
  const keys=["v","pin","lane","case","phase","state","defined","acq","op","count"];
  if(!record||Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.v!==1||
   record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||!["outer","sdk"].includes(record.lane)||
-  !["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow"].includes(record.phase)||
+  (!["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow"].includes(record.phase)&&!bifrostSetupPhase(record.phase))||
   !["enter","fulfilled","rejected","threw","summary"].includes(record.state)||
   !(record.defined===null||typeof record.defined==="boolean")||
   ![record.case,record.acq,record.op].every((n:any)=>n===null||Number.isSafeInteger(n)&&n>=0&&n<4096)||
   !(record.case===null||record.case<32)||!Number.isSafeInteger(record.count)||record.count<0||record.count>65535||
+  (bifrostSetupPhase(record.phase)&&(record.lane!=="sdk"||record.case===null||record.state!=="rejected"||record.acq!==null||record.op!==null||record.count!==0))||
   (["rejected","threw"].includes(record.state)?typeof record.defined!=="boolean":record.defined!==null))throw Error("invalid Bifrost checkpoint");
 }
 export function createBifrostCheckpointReporter(lane:string,emit:Function) {
@@ -233,6 +237,19 @@ export function createBifrostCheckpointReporter(lane:string,emit:Function) {
 export function finishBifrostCheckpointCase(report:any,index:number,failures:unknown[]):void {
  report.mark(index,"assertions",failures.length?"rejected":"fulfilled",failures[0]);
  if(failures.length)report.flush(index);
+}
+export function createBifrostSetupBoundary(report:any,index:number) {
+ let phase:string|null=null;
+ return {
+  enter(next:string){
+   if(!bifrostSetupPhase(next)){phase=null;report.failures.push(Error("invalid setup boundary"));return;}
+   phase=next;
+  },
+  reject(reason:unknown){
+   if(phase===null){report.failures.push(Error("missing setup boundary"));return;}
+   report.mark(index,phase,"rejected",reason);
+  },
+ };
 }
 const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"));
 checkpoints.mark(null,"module","fulfilled");checkpoints.flush(null);
@@ -311,6 +328,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let bodyEntered=false;
+ const setupBoundary=createBifrostSetupBoundary(checkpoints,caseIndex);
  let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false,proof:any;
  // Undici 8.12.3 publishes the original request/socket pair synchronously.
  // Subscribers never throw or print request headers; they only retain identity.
@@ -324,11 +342,21 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   const t=ts[0];t.socketRequest=request;t.socket=socket;t.socketClosed=new Promise<void>(resolve=>{const closed=()=>{t.socketClosedAt=++w.sequence;resolve();};socket.once("close",closed);restores.push(()=>socket.removeListener("close",closed));});
  }catch(e){w.observerFailures.push(e);}};
  try{
+  setupBoundary.enter("caller_install");
   setupCaller();
+  setupBoundary.enter("progress_subscribe");
   if(row.mode==="progress"){sent.subscribe(onSent);restores.push(()=>sent.unsubscribe(onSent));}
-  expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
+  setupBoundary.enter("source_env_pin");
+  expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);
+  setupBoundary.enter("source_git_pin");
+  expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
+  setupBoundary.enter("poison_env");
   for(const name of ["OPENAI_API_KEY","ANTHROPIC_API_KEY","BIFROST_API_KEY","BIFROST_VIRTUAL_KEY","LITELLM_API_KEY"])vi.stubEnv(name,"synthetic-poison-other-provider");
-  patch(globalThis,"fetch",observingFetch(nativeFetch));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observingFetch(nativeUndiciFetch)});
+  setupBoundary.enter("fetch_hook");
+  patch(globalThis,"fetch",observingFetch(nativeFetch));
+  setupBoundary.enter("undici_hook");
+  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observingFetch(nativeUndiciFetch)});
+  setupBoundary.enter("guard_hook");
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof nativeGuard>){
    const input=args[0],a:any={guard:nativeGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof nativeGuard>;
@@ -340,24 +368,39 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
      let p;try{p=returned(o,Reflect.apply(release,this,params));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
      observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
    },()=>{}));return pending;
-  } as typeof nativeGuard);spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
+  } as typeof nativeGuard);
+  setupBoundary.enter("guard_descriptor");
+  spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
     const store:AuthProfileStore={version:1,profiles:{"bifrost:selected":{type:"api_key",provider:"bifrost",key:row.mode==='profile'?key(row.id):"synthetic-poison-unselected-profile"},"openai:poison":{type:"api_key",provider:"openai",key:"synthetic-unrelated-profile"}}};
+    setupBoundary.enter("profile_write");
     await state.writeAuthProfiles(store);
     const config:OpenClawConfig={models:{providers:{bifrost:{baseUrl:origin+"/v1/native/bifrost/v1",api:"openai-completions",apiKey:row.mode==='profile'?"bifrost:selected":key(row.id),models:[]}}}};
     // This frozen discovery resolver prefers the environment key. Inference
     // retains the independently configured credential. The profile arm has
     // no discovery environment key and resolves its explicit profile reference.
     const env=row.mode==='profile'?{}:{BIFROST_VIRTUAL_KEY:discoveryKey(row)};
+    setupBoundary.enter("discovery_env");
     vi.stubEnv('BIFROST_VIRTUAL_KEY',row.mode==='profile'?undefined:discoveryKey(row));
-    const resolveProviderApiKey=createProviderApiKeyResolver(env,store,config),resolveProviderAuth=createProviderAuthResolver(env,store,config);
+    setupBoundary.enter("api_key_resolver");
+    const resolveProviderApiKey=createProviderApiKeyResolver(env,store,config);
+    setupBoundary.enter("auth_resolver");
+    const resolveProviderAuth=createProviderAuthResolver(env,store,config);
+    setupBoundary.enter("discovery_auth_check");
     expect(resolveProviderApiKey('bifrost').discoveryApiKey).toBe(discoveryKey(row));
+    setupBoundary.enter("inference_auth_check");
     expect(resolveProviderAuth('bifrost').apiKey).toBe(key(row.id));
+    setupBoundary.enter("facade_load");
     const {default:entry}=await loadBundledPluginFacade<{default:Parameters<typeof registerSingleProviderPlugin>[0]}>({pluginId:"bifrost",artifactBasename:"index.js"});
-    const plugin=await registerSingleProviderPlugin(entry);expect(plugin.id).toBe("bifrost");expect(plugin.catalog?.run).toBeTypeOf("function");
+    setupBoundary.enter("plugin_register");
+    const plugin=await registerSingleProviderPlugin(entry);
+    setupBoundary.enter("plugin_id_check");
+    expect(plugin.id).toBe("bifrost");
+    setupBoundary.enter("catalog_check");
+    expect(plugin.catalog?.run).toBeTypeOf("function");
     const discover=()=>track("catalog_result",ownership.invoke(c,"discovery",plugin.catalog!.run,plugin.catalog,[{config,env,agentDir:state.agentDir(),workspaceDir:state.workspaceDir,signal:control.signal,
       resolveProviderApiKey,resolveProviderAuth}]));
     bodyEntered=true;await checkpoints.observe(caseIndex,"body",body,undefined,[discover,control,track,resolveProviderAuth("bifrost").apiKey!]);
- }catch(e){if(!bodyEntered)checkpoints.mark(caseIndex,"case_setup","rejected",e);failures.push(e);}
+ }catch(e){if(!bodyEntered){setupBoundary.reject(e);checkpoints.mark(caseIndex,"case_setup","rejected",e);}failures.push(e);}
  checkpoints.mark(caseIndex,"original_join","enter");
  let at=0,seen=0;
  while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));

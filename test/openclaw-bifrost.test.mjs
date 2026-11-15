@@ -83,10 +83,10 @@ export function bifrostNativeDiagnosticRecords(error){
 }
 export function bifrostCheckpointFunctions(){
  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
- const start="export function validateBifrostCheckpoint(",end="const checkpoints=createBifrostCheckpointReporter(";
+ const start="export function bifrostSetupPhase(",end="const checkpoints=createBifrostCheckpointReporter(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase})",{},{timeout:1000});
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{},{timeout:1000});
 }
 export function bifrostCheckpointRecords(error){
  const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
@@ -452,8 +452,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   assert.deepEqual(bifrostCheckpointRecords({stdout:"untrusted text\n# BIFROST_CHECKPOINT {}"}),[]);
  });
  test("Bifrost checkpoint observes real child import rejection with column-zero protocol",async()=>{
-  const {createBifrostCheckpointReporter,validateBifrostCheckpoint}=bifrostCheckpointFunctions();
-  const code=validateBifrostCheckpoint.toString()+"\n"+createBifrostCheckpointReporter.toString()+`
+  const {bifrostSetupPhase,createBifrostCheckpointReporter,validateBifrostCheckpoint}=bifrostCheckpointFunctions();
+  const code=bifrostSetupPhase.toString()+"\n"+validateBifrostCheckpoint.toString()+"\n"+createBifrostCheckpointReporter.toString()+`
 const r=createBifrostCheckpointReporter("sdk",v=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(v)+"\\n"));
 try{await r.observe(null,"setup",()=>import("node:missing_bifrost_diagnostic_module"),undefined,[]);}
 catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
@@ -469,6 +469,61 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   await assert.rejects(runBifrostReported(report=>withBifrostNativeDiagnostics(()=>report.observe(null,"child",()=>Promise.reject(reason),undefined,[]),v=>emitted.push(v)),[],v=>emitted.push(v)),e=>e===reason);
   assert.ok(emitted.some(v=>v.lane==="outer"&&v.phase==="child"&&v.state==="rejected"));
   assert.equal(emitted.some(v=>v.lane==="sdk"),false);assert.equal(emitted.at(-1).phase,"final");
+ });
+ test("Bifrost setup boundary reports each fixed stage without inspecting the reason",()=>{
+  const {createBifrostCheckpointReporter,createBifrostSetupBoundary,validateBifrostCheckpoint}=bifrostCheckpointFunctions();
+  const stages=["caller_install","progress_subscribe","source_env_pin","source_git_pin","poison_env","fetch_hook","undici_hook","guard_hook","guard_descriptor","profile_write","discovery_env","api_key_resolver","auth_resolver","discovery_auth_check","inference_auth_check","facade_load","plugin_register","plugin_id_check","catalog_check"];
+  let getters=0;const reason=Object.create(null);
+  for(const key of ["name","message","stack","then"])Object.defineProperty(reason,key,{get(){getters++;throw undefined;}});
+  for(const [index,phase] of stages.entries())for(const error of [reason,undefined]){
+   const records=[],report=createBifrostCheckpointReporter("sdk",r=>records.push(r));
+   const boundary=createBifrostSetupBoundary(report,index);boundary.enter(phase);assert.equal(records.length,0);
+   boundary.reject(error);report.flush(index);report.finish();
+   assert.equal(records[0].case,index);assert.equal(records[0].phase,phase);assert.equal(records[0].state,"rejected");
+   assert.equal(records[0].defined,error!==undefined);assert.equal(report.failures.length,0);
+   for(const invalid of [{lane:"outer"},{case:null},{state:"fulfilled",defined:null},{acq:0},{op:0},{count:1}])
+    assert.throws(()=>validateBifrostCheckpoint({...records[0],...invalid}));
+  }
+  assert.equal(getters,0);
+ });
+ test("Bifrost setup boundary preserves case ownership and rejects absent or unknown phases",()=>{
+  const {createBifrostCheckpointReporter,createBifrostSetupBoundary}=bifrostCheckpointFunctions(),records=[];
+  const report=createBifrostCheckpointReporter("sdk",r=>records.push(r));
+  const a=createBifrostSetupBoundary(report,0),b=createBifrostSetupBoundary(report,1);
+  a.enter("profile_write");b.enter("guard_hook");b.reject(undefined);a.reject({});report.flush(0);report.flush(1);
+  assert.deepEqual(records.map(r=>[r.case,r.phase,r.defined]),[[0,"profile_write",true],[1,"guard_hook",false]]);
+  const c=createBifrostSetupBoundary(report,2);c.reject({});c.enter("profile_write");c.enter("untrusted_phase");c.reject({});
+  report.flush(2);assert.equal(report.failures.length,3);assert.equal(records.length,2);
+ });
+ test("Bifrost setup boundary retains first failure phase within the existing child and step quotas",()=>{
+  const {createBifrostCheckpointReporter,createBifrostSetupBoundary,finishBifrostCheckpointCase}=bifrostCheckpointFunctions(),records=[];
+  const report=createBifrostCheckpointReporter("sdk",r=>records.push(r));
+  report.mark(null,"module","fulfilled");report.flush(null);
+  report.mark(0,"setup","fulfilled");report.mark(0,"case_result","enter");
+  const boundary=createBifrostSetupBoundary(report,0);boundary.enter("facade_load");boundary.reject(undefined);
+  report.mark(0,"case_setup","rejected",undefined);report.mark(0,"original_join","fulfilled");
+  report.mark(0,"worker_retirement","rejected",{});report.mark(0,"restoration","rejected",undefined);report.mark(0,"cleanup","rejected",{});
+  finishBifrostCheckpointCase(report,0,[undefined]);report.mark(0,"case_result","rejected",undefined);report.flush(0);report.finish();
+  assert.ok(records.some(r=>r.case===0&&r.phase==="facade_load"&&r.state==="rejected"&&!r.defined));
+  assert.equal(records.length,9);assert.equal(records.at(-2).phase,"overflow");assert.ok(records.at(-2).count>0);assert.equal(records.at(-1).phase,"final");
+  const decoded=bifrostCheckpointRecords({stdout:records.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")});
+  const lines=[],emit=bifrostAnnotationEmitter(line=>lines.push(line));for(const record of decoded)emit(record);
+  assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+ });
+ test("Bifrost setup boundary never replaces primary or independent cleanup and reporting failures",async()=>{
+  const {createBifrostCheckpointReporter,createBifrostSetupBoundary}=bifrostCheckpointFunctions();
+  const primary={},cleanup={},reporting={};let caught=false,cleanupRan=false;
+  const report=createBifrostCheckpointReporter("sdk",()=>{throw reporting;});
+  const boundary=createBifrostSetupBoundary(report,0);boundary.enter("profile_write");
+  try{await finishBifrostOwned(()=>{try{throw primary;}catch(reason){boundary.reject(reason);throw reason;}},[
+   ()=>{cleanupRan=true;throw cleanup;},
+   ()=>{report.flush(0);report.finish();if(report.failures.length)throw new AggregateError(report.failures,"reporting failed");}
+  ]);}catch(error){caught=true;assert.equal(error.errors[0],primary);assert.equal(error.errors[1],cleanup);assert.ok(error.errors[2].errors.every(e=>e===reporting));}
+  assert.equal(caught,true);assert.equal(cleanupRan,true);
+  let undefinedCaught=false;
+  try{await finishBifrostOwned(()=>{boundary.reject(undefined);throw undefined;},[()=>{throw undefined;}]);}
+  catch(error){undefinedCaught=true;assert.deepEqual(error.errors,[undefined,undefined]);}
+  assert.equal(undefinedCaught,true);
  });
  const evaluator=bifrostNativeEvaluator();
  function nativeEvidence(){
