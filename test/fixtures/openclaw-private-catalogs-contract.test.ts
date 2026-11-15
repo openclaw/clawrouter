@@ -175,53 +175,86 @@ function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
  diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;console.log(line);
 }
 // Closed diagnostics only. They report boundaries, never classify an error.
+// V2 keeps the first unexpected failure and an independently case-bound receipt.
+// Stage 0 is UNKNOWN, 1 entered, 2 fulfilled, 3 failed; none identifies a runner
+// or collection failure. Owner counts exist only after that private owner's join.
+// Each reporter reserves one of its seven ordinary slots until finalization;
+// incomplete delivery does not imply an uninvoked test or a successful case.
 export function validatePrivateCheckpoint(record:any):void {
+ const phases=["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow","callback","selection","owner","postlude"];
+ const integer=(n:any,max:number)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
+ const nullable=(n:any,max:number)=>n===null||integer(n,max);
+ const tuple=(a:any,length:number,valid:(x:any)=>boolean)=>Array.isArray(a)&&a.length===length&&a.every(valid);
+ if(record?.v===2){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt"];
+  if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
+   !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
+   !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
+  if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
+  if(record.receipt!==null){const r=record.receipt;
+   if(record.lane!=="outer"||!Array.isArray(r)||r.length!==6||!integer(r[0],107)||!(r[1]===null||Array.isArray(r[1])&&r[1].length===4&&integer(r[1][0],33)&&nullable(r[1][1],65535)&&integer(r[1][2],1)&&typeof r[1][3]==="boolean")||
+    !tuple(r[2],2,x=>integer(x,131071))||!tuple(r[3],2,x=>integer(x,131071))||r[3].some((v:number,i:number)=>(v&r[2][i])!==v)||
+    !(r[4]===null||Array.isArray(r[4])&&r[4].length===14&&integer(r[4][0],3)&&r[4][1]===(r[4][0]===3)&&(r[4][1]?typeof r[4][2]==="boolean":r[4][2]===null)&&
+     (r[4][3]===null||typeof r[4][3]==="boolean")&&r[4].slice(4,13).every((x:any)=>nullable(x,65535))&&typeof r[4][13]==="boolean")||
+    !(r[5]===null||Array.isArray(r[5])&&r[5].length===6&&integer(r[5][0],3)&&r[5][1]===(r[5][0]===3)&&(r[5][1]?typeof r[5][2]==="boolean":r[5][2]===null)&&
+     typeof r[5][3]==="boolean"&&(r[5][3]?r[5][0]===2&&integer(r[5][4],65535):r[5][4]===null)&&typeof r[5][5]==="boolean"))throw Error("invalid Private receipt capsule");
+   if(r[1]===null){if(r[2].some((n:number)=>n!==0)||r[3].some((n:number)=>n!==0)||(r[4]===null&&r[5]===null))throw Error("unobserved Private receipt predicate");}
+   else{const id=r[1][0],band=Math.floor(id/17),bit=2**(id%17);
+    if(!(r[2][band]&bit)||(r[3][band]&bit)||!([1,2,3,...Array.from({length:14},(_,i)=>i+11)].includes(id)?nullable(r[1][1],65535):r[1][1]===null))throw Error("inconsistent Private receipt predicate");}
+  }return;
+ }
  const keys=["v","pin","lane","case","phase","state","defined","acq","op","count"];
  if(!record||Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.v!==1||
-  record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||!["outer","sdk"].includes(record.lane)||
-  !["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow"].includes(record.phase)||
-  !["enter","fulfilled","rejected","threw","summary"].includes(record.state)||
-  !(record.defined===null||typeof record.defined==="boolean")||
-  ![record.case,record.acq,record.op].every((n:any)=>n===null||Number.isSafeInteger(n)&&n>=0&&n<4096)||
-  !(record.case===null||record.case<108)||!Number.isSafeInteger(record.count)||record.count<0||record.count>65535||
+  record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||!["outer","sdk"].includes(record.lane)||!phases.includes(record.phase)||
+  !["enter","fulfilled","rejected","threw","summary"].includes(record.state)||!(record.defined===null||typeof record.defined==="boolean")||
+  ![record.case,record.acq,record.op].every((n:any)=>nullable(n,4095))||!(record.case===null||record.case<108)||!integer(record.count,65535)||
   (["rejected","threw"].includes(record.state)?typeof record.defined!=="boolean":record.defined!==null))throw Error("invalid Private checkpoint");
 }
 export function createPrivateCheckpointReporter(lane:string,emit:Function) {
  const records=new Map<string,any>(),sent=new Set<string>(),observers:Promise<unknown>[]=[],failures:unknown[]=[];
- let emitted=0,suppressed=0,finished=false,failed=0;
+ const declarations=new Map<number,number>(),scopes=new Map<string,number[]>(),owners=new Map<number,number[]>();
+ let emitted=0,suppressed=0,finished=false,failed=0,first:any=null,receipt:any=null;
+ const stageNames=["callback","selection","setup","owner","body","original_join","postlude"];
+ const scope=(index:number|null,decl:number|null)=>{const key=index===null?"declaration:"+decl:"case:"+index;let value=scopes.get(key);if(!value){value=Array(7).fill(0);scopes.set(key,value);}return value;};
  const make=(index:number|null,phase:string,state:string,reason:unknown,acq:number|null=null,op:number|null=null,count=0)=>({v:1,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,case:index,phase,state,
   defined:state==="rejected"||state==="threw"?reason!==undefined:null,acq,op,count});
  const send=(record:any)=>{try{validatePrivateCheckpoint(record);emit(record);}catch(error){failures.push(error);}};
- const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null)=>{
-  try{const record=make(index,phase,state,reason,acq,op);validatePrivateCheckpoint(record);
-   if(finished)throw Error("checkpoint after final flush");
-   const key=String(index)+":"+phase;
-   // Keep the first failure even when a later cleanup of the same kind succeeds.
-   if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
-   if(state==="rejected"||state==="threw")failed++;
+ const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null,decl:number|null=null)=>{
+  try{const record=make(index,phase,state,reason,acq,op);validatePrivateCheckpoint(record);if(finished)throw Error("checkpoint after final flush");
+   decl=decl??(index===null?null:declarations.get(index)??null);const at=stageNames.indexOf(phase);
+   if(at>=0){const stages=scope(index,decl);if(stages[at]!==3)stages[at]=state==="enter"?1:state==="fulfilled"?2:3;}
+   const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
+   if(state==="rejected"||state==="threw"){failed++;
+    // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
+    if(!first&&!["read","closed","cancel","release"].includes(phase))first={...record,decl};}
   }catch(error){failures.push(error);}
  };
  const flush=(index:number|null)=>{
-  const selected=[...records.values()].filter(r=>r.case===index);
-  selected.sort((a,b)=>Number(["rejected","threw"].includes(b.state))-Number(["rejected","threw"].includes(a.state)));
+  const selected=[...records.values()].filter(r=>r.case===index);selected.sort((a,b)=>Number(["rejected","threw"].includes(b.state))-Number(["rejected","threw"].includes(a.state)));
   for(const record of selected){const key=JSON.stringify(record);if(sent.has(key))continue;sent.add(key);
-   if(emitted<7){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
+   // Six ordinary slots, plus one reserved first-primary/receipt capsule.
+   if(emitted<6){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
  };
  return {failures,mark,flush,
-  observe(index:number|null,phase:string,fn:Function,receiver:unknown,args:any[]){
-   mark(index,phase,"enter");let original;
-   try{original=Reflect.apply(fn,receiver,args);}catch(reason){mark(index,phase,"threw",reason);flush(index);throw reason;}
+  bindCase(index:number,decl:number){try{if(!Number.isSafeInteger(index)||index<0||index>=108||!Number.isSafeInteger(decl)||decl<0||decl>65||declarations.has(index)&&declarations.get(index)!==decl)throw Error("foreign Private declaration");
+   declarations.set(index,decl);const inherited=scope(null,decl),target=scope(index,decl);target[0]=inherited[0];target[1]=inherited[1];}catch(error){failures.push(error);}},
+  joinedOwner(index:number,counts:number[]){try{if(!Array.isArray(counts)||counts.length!==6||counts.some(n=>!Number.isSafeInteger(n)||n<0||n>65535)||scope(index,declarations.get(index)??null)[5]!==2)throw Error("unjoined Private diagnostic owner");owners.set(index,[...counts]);}catch(error){failures.push(error);}},
+  receipt(index:number,witness:any,facts:any){try{if(receipt!==null)return;const candidate=[index,witness.first,witness.evaluated,witness.passed,facts?.producer??null,facts?.accounting??null];
+   validatePrivateCheckpoint({v:2,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,case:index,phase:"assertions",state:"rejected",defined:true,decl:null,stages:Array(7).fill(0),owner:null,receipt:candidate});receipt=candidate;
+  }catch(error){failures.push(error);}},
+  observe(index:number|null,phase:string,fn:Function,receiver:unknown,args:any[],decl:number|null=null){
+   mark(index,phase,"enter",undefined,null,null,decl);let original;
+   try{original=Reflect.apply(fn,receiver,args);}catch(reason){mark(index,phase,"threw",reason,null,null,decl);flush(index);throw reason;}
    try{if(original&&typeof original.then==="function"){
-    const observed=original.then(()=>mark(index,phase,"fulfilled"),(reason:unknown)=>{mark(index,phase,"rejected",reason);flush(index);});
+    const observed=original.then(()=>mark(index,phase,"fulfilled",undefined,null,null,decl),(reason:unknown)=>{mark(index,phase,"rejected",reason,null,null,decl);flush(index);});
     observers.push(observed.then(()=>{},(error:unknown)=>{failures.push(error);}));
-   }else mark(index,phase,"fulfilled");}catch(error){failures.push(error);}
-   return original;
+   }else mark(index,phase,"fulfilled",undefined,null,null,decl);}catch(error){failures.push(error);}return original;
   },
-  async drain(){let at=0;while(at<observers.length){const batch=observers.slice(at);at=observers.length;
-   for(const result of await Promise.allSettled(batch))if(result.status==="rejected")failures.push(result.reason);}},
+  async drain(){let at=0;while(at<observers.length){const batch=observers.slice(at);at=observers.length;for(const result of await Promise.allSettled(batch))if(result.status==="rejected")failures.push(result.reason);}},
   finish(){if(finished){failures.push(Error("duplicate checkpoint final flush"));return;}finished=true;
-   if(suppressed)send(make(null,"overflow","summary",undefined,null,null,suppressed));
-   send(make(null,"final","summary",undefined,null,null,Math.min(65535,failed)));},
+   if(first)send({v:2,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+    stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt});
+   if(suppressed)send(make(null,"overflow","summary",undefined,null,null,suppressed));send(make(null,"final","summary",undefined,null,null,Math.min(65535,failed)));},
  };
 }
 // The enclosing case_result observer is joined by afterAll, never by its own case.
@@ -233,6 +266,7 @@ export function privateCheckpointCaseIndex(inventory:any[],id:string):number {
  const matches=inventory.map((r:any,i:number)=>r.id===id?i:-1).filter((i:number)=>i>=0);
  if(matches.length!==1||matches[0]>=108)throw Error("ambiguous diagnostic case");return matches[0];
 }
+const callbackDeclarations=new WeakMap<Case,number>();
 const checkpoints=createPrivateCheckpointReporter("sdk",(record:any)=>process.stdout.write("PRIVATE_CHECKPOINT "+JSON.stringify(record)+"\n"));
 checkpoints.mark(null,"module","fulfilled");checkpoints.flush(null);
 afterAll(async()=>{await checkpoints.drain();checkpoints.finish();throwFailures(checkpoints.failures);});
@@ -243,13 +277,15 @@ function throwFailures(failures:unknown[]):void{if(failures.length===1)throw fai
 async function command(row:Case,kind:string,value:unknown={}){const r=await nativeFetch(origin+"/private-control/"+kind+"/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(value)});const text=await r.text();expect(r.status).toBe(200);return JSON.parse(text);}
 
 function fixture(row:Case,body:Parameters<typeof fixtureOwned>[1]){
- return checkpoints.observe(checkpointCase(row),"case_result",fixtureOwned,undefined,[row,body]);
+ const index=checkpointCase(row),decl=callbackDeclarations.get(row);if(decl!==undefined)checkpoints.bindCase(index,decl);
+ return checkpoints.observe(index,"case_result",fixtureOwned,undefined,[row,body]);
 }
 async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Promise<void>){
  const caseIndex=checkpointCase(row);
  const state=await checkpoints.observe(caseIndex,"setup",createOpenClawTestState,undefined,[{label:"private-catalog-client"}]);
  const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:row.provider,api:row.api,role:row.control,
   originals:[],observers:[],transports:[],acquisitions:[],callers:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
+ checkpoints.mark(caseIndex,"owner","fulfilled");
  const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage());
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
@@ -341,6 +377,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
   const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
  checkpoints.mark(caseIndex,"original_join","fulfilled");
+ checkpoints.joinedOwner(caseIndex,[originals.length,originals.filter(o=>o.state==="rejected").length,originals.filter(o=>o.state==="pending").length,transports.length,w.acquisitions.length,w.observerFailures.length]);
+ checkpoints.mark(caseIndex,"postlude","enter");
  if(w.observerFailures.length)checkpoints.mark(caseIndex,"observer","rejected",w.observerFailures[0]);
  if(!row.workerOnly&&row.scenario!=="cold")await check(()=>expect(transports.some(t=>t.method==="GET")).toBe(true));
  if(["eof","provider_error","environment","rotation","caller_revoke","grant_revoke","unpriced","foreign_inference","stream_abort","simple_abort"].includes(row.scenario))await check(()=>expect(transports.some(t=>t.method==="POST")).toBe(true));
@@ -364,6 +402,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  }else if(row.scenario==="stream_abort"||row.scenario==="simple_abort")allowed=privateProductExpected(w,qualifications.get(row.provider+":"+row.api));
  for(const o of originals)if(o.state==="rejected"&&!allowed.includes(o))failures.push(o.reason);else if(o.state==="pending")failures.push(Error("original operation pending"));
  failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);
+ checkpoints.mark(caseIndex,"postlude",failures.length?"rejected":"fulfilled",failures[0]);
  finishPrivateCheckpointCase(checkpoints,caseIndex,failures);throwFailures(failures);
 }
 
@@ -453,12 +492,16 @@ describe.sequential("registered private catalogs with native Worker and SQLite",
  // The registry cannot qualify an API until all four fresh controls restore.
  for(const provider of providers)for(const api of ["stream","simple"] as const)for(const role of ["eof","preabort","partial","provider_error"] as const)
   it("native diagnostic "+provider+" "+api+" "+role,async()=>{
-   const selected=controlRows.filter(r=>r.provider===provider&&r.api===api&&r.control===role);expect(selected).toHaveLength(1);await diagnosticControl(selected[0]);
+   const decl=providers.indexOf(provider)*8+["stream","simple"].indexOf(api)*4+["eof","preabort","partial","provider_error"].indexOf(role);
+   checkpoints.mark(null,"callback","enter",undefined,null,null,decl);
+   const selected=checkpoints.observe(null,"selection",()=>{const selected=controlRows.filter(r=>r.provider===provider&&r.api===api&&r.control===role);expect(selected).toHaveLength(1);return selected;},undefined,[],decl);
+   callbackDeclarations.set(selected[0],decl);await diagnosticControl(selected[0]);
   });
  for(const provider of providers)for(const group of groups)it(provider+" "+group,async()=>{
-  const selected=rows.filter(r=>r.provider===provider&&r.group===group);expect(selected.length).toBeGreaterThan(0);
+  const decl=24+providers.indexOf(provider)*groups.length+groups.indexOf(group);checkpoints.mark(null,"callback","enter",undefined,null,null,decl);
+  const selected=checkpoints.observe(null,"selection",()=>{const selected=rows.filter(r=>r.provider===provider&&r.group===group);expect(selected.length).toBeGreaterThan(0);return selected;},undefined,[],decl);
   // Forty-two registrations retain every expanded scenario. They do not replace
   // individual request assertions or enlarge native runner/child time limits.
-  for(const row of selected)await exercise(row);
+  for(const row of selected){callbackDeclarations.set(row,decl);await exercise(row);}
  });
 });

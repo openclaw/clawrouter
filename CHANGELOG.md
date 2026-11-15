@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve the first observed Private SDK failure boundary and exact receipt-assertion evidence with bounded producer/accounting availability, without changing original rejection or financial acceptance.
+
 - Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.
 
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
