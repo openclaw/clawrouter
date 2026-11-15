@@ -8,6 +8,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import NativeRunnerReporter, { parseRunnerReport, projectRunnerError, readPrivateFile, reportByteLimit, runnerContract, sha256 } from "./helpers/openclaw-runner-reporter.mjs";
 import { settleRunnerReport, validateRunnerRequest, withCopiedConsumerFixture, withNativeRunnerReport } from "./helpers/openclaw-consumer.mjs";
 
@@ -240,6 +241,31 @@ test("default-off launch retains the exact S9 command, options and diagnostic by
   const end = source.indexOf("\n  }, () => rm(clientTest));", start);
   assert.ok(start > 0 && end > start);
   assert.equal(sha256(source.slice(start, end)), "ebdbbf3622f59fc0423ee500e227607316f9309b4e60d4cea7896f43c15fc3b6");
+});
+
+test("opt-in launch forces plain rendering after caller env without changing the child contract", async () => {
+  const sourceText = readFileSync(new URL("./helpers/openclaw-consumer.mjs", import.meta.url), "utf8");
+  const start = sourceText.indexOf("async extraArgs => {");
+  const end = sourceText.indexOf("\n      });", start);
+  assert.ok(start > 0 && end > start);
+  const execFile = {}, result = {}, env = { NO_COLOR: "0", FORCE_COLOR: "1", CLAWROUTER_CONTRACT_ORIGIN: "https://fixture.invalid" };
+  const process = { env: { PATH: "fixture-bin", HOME: "fixture-home", TMPDIR: "fixture-tmp" } };
+  let calls = 0;
+  const launch = runInNewContext("(" + sourceText.slice(start, end) + "\n})", {
+    source: "fixture-source", testPath: runnerContract.target, env, process, execFile,
+    promisify(original) {
+      assert.equal(original, execFile);
+      return (command, args, options) => {
+        calls++; assert.equal(command, "pnpm");
+        assert.deepEqual(Array.from(args), ["test", runnerContract.target, "--maxWorkers=1", "--reporter=default", "--reporter=fixture-reporter"]);
+        assert.deepEqual(JSON.parse(JSON.stringify(options)), { cwd: "fixture-source", timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
+          env: { ...process.env, CI: "true", ...env, NO_COLOR: "1" } });
+        return Promise.resolve(result);
+      };
+    },
+  });
+  assert.equal(await launch(["--reporter=default", "--reporter=fixture-reporter"]), result);
+  assert.equal(calls, 1); assert.equal(env.NO_COLOR, "0");
 });
 
 test("unqualified fixture bytes reject before child or report-directory acquisition", async t => {

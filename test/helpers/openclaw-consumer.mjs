@@ -24,7 +24,7 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
       const result = await withNativeRunnerReport({ source, sourceHead, fixture, testPath, env, runnerReport }, async extraArgs => {
         return promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1", ...extraArgs], {
           cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
+          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env, NO_COLOR: "1" },
         });
       });
       t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
