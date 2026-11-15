@@ -2266,23 +2266,28 @@ test("wrapper delivery annotation and helper fit existing quota and retain repor
 // BEGIN replay Worker resource pure tests.
 function replayWorkerFunctions() {
   const text=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8");
-  return new Function(text.slice(text.indexOf("export function litellmWorkerResource"),text.indexOf("export async function litellmControlResponse")).replaceAll("export ","")+";return {litellmWorkerResource,litellmWorkerLedger};")();
+  return new Function(text.slice(text.indexOf("export function litellmRequestScope"),text.indexOf("export async function litellmControlResponse")).replaceAll("export ","")+";return {litellmRequestScope,litellmWorkerResource,litellmWorkerLedger};")();
 }
 function replayWorkerRow() {
-  const body={locked:false},response={body},input={id:5,token:{id:5,generation:1},response},reader={id:5,body,response,transport:input,bound:true,unlocks:1,unlockInvoke:47,unlockSequence:49,eof:false},error={};
+  let current;
+  const scope=replayWorkerFunctions().litellmRequestScope({getStore:()=>current,run(token,fn){current=token;try{return fn();}finally{current=undefined;}}},1);
+  const request={},scenario={},token=scope.register(request,scenario);let input;
+  scope.invoke(token,()=>{input=scope.transport(scenario,{});},undefined,[request]);
+  const body={locked:false},response={body},originalReader={};scope.response(input,response);input.response=response;
+  const reader={id:scope.reader(input,body,originalReader),reader:originalReader,body,response,transport:input,bound:scope.owns(input,response,body,originalReader),unlocks:1,unlockInvoke:47,unlockSequence:49,eof:false},error={};
   const read={ordinal:1,kind:"read",state:"rejected",error,pending:{},invoke:41,settle:48,input,reader,receiverIdentity:true};
   const observer={...read,ordinal:2,kind:"read_observer",pending:{},originalRead:read.pending,invoke:42,settle:50};
   const closed={ordinal:0,kind:"closed",state:"fulfilled",pending:{},invoke:20,settle:46,input,reader};
   const cancel={ordinal:3,kind:"cancel",state:"fulfilled",pending:{},invoke:44,settle:45,input,reader,argc:1,operandPresent:true,reason:error,signalAborted:true};
-  return {operations:[closed,read,observer,cancel],readers:[reader],failures:[],observerFailures:[],read,observer,closed,cancel,reader,input};
+  return {operations:[closed,read,observer,cancel],readers:[reader],failures:[],observerFailures:[],read,observer,closed,cancel,reader,input,scope};
 }
 test("replay Worker exact original read observer relation rejects foreign bindings",()=>{
   const {litellmWorkerResource,litellmWorkerLedger}=replayWorkerFunctions(),r=replayWorkerRow();
-  let d=litellmWorkerResource(r);assert.equal(d[1],63);assert.equal(d[3][0],true);assert.equal(d[3][4],true);assert.equal(litellmWorkerLedger(r)[7].length,2);
-  r.observer.originalRead={};d=litellmWorkerResource(r);assert.equal(d[2][1],null);assert.equal(d[3][0],null);
-  r.observer.originalRead=r.read.pending;r.observer.error={};assert.equal(litellmWorkerResource(r)[3][0],false);
-  r.read.error=undefined;r.observer.error=undefined;d=litellmWorkerResource(r);assert.equal(d[2][0][2],1);assert.equal(d[3][0],true);
-  r.reader.response={body:r.reader.body};assert.equal(litellmWorkerResource(r)[1]&2,0);
+  let d=litellmWorkerResource(r,r.scope);assert.equal(d[1],63);assert.equal(d[3][0],true);assert.equal(d[3][4],true);assert.equal(litellmWorkerLedger(r,r.scope)[7].length,2);
+  r.observer.originalRead={};d=litellmWorkerResource(r,r.scope);assert.equal(d[2][1],null);assert.equal(d[3][0],null);
+  r.observer.originalRead=r.read.pending;r.observer.error={};assert.equal(litellmWorkerResource(r,r.scope)[3][0],false);
+  r.read.error=undefined;r.observer.error=undefined;d=litellmWorkerResource(r,r.scope);assert.equal(d[2][0][2],1);assert.equal(d[3][0],true);
+  r.reader.response={body:r.reader.body};assert.equal(litellmWorkerResource(r,r.scope)[1]&2,0);
 });
 test("replay Worker complete maximum envelope retains both originals and resource facts",()=>{
   const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),lines=[];
@@ -2305,7 +2310,7 @@ test("replay producer joins original observer cross tails and retains undefined"
   tailRelease();assert.deepEqual(await joining,[1,2,2,1]);assert.ok(Object.hasOwn(r.operations[1],"error"));assert.equal(r.operations[1].error,undefined);
 });
 test("replay Worker schema rejects foreign identities malformed wire and shadow getters",()=>{
-  const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),r=replayWorkerRow(),ledger=replayWorkerFunctions().litellmWorkerLedger(r);
+  const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),r=replayWorkerRow(),ledger=replayWorkerFunctions().litellmWorkerLedger(r,r.scope);
   const good=proof.workerFailure("sdk_partial_abort",[0,1,0,1,true],[4,127,111,16,null],ledger,Array(15).fill(null));assert.ok(good);
   for(const mutate of [d=>d[0][1]++,d=>d[2][0][0]=99,d=>d[2][1][0]=d[2][0][0],d=>d[2][0][3]++,d=>d[2][0][1]=1]){
     const bad=structuredClone(good);mutate(bad.retire[3][8]);assert.equal(proof.validate(bad),null);
@@ -2313,5 +2318,66 @@ test("replay Worker schema rejects foreign identities malformed wire and shadow 
   const encoded=JSON.parse(proof.json(good));assert.equal(typeof encoded.retire,"string");assert.deepEqual(proof.validate(encoded).retire,good.retire);
   for(const wire of ["w1:[~]","w1:[T]","w1:[00]","w1:[{}]","w1:[1e999]","w2:[1]"])assert.equal(proof.validate({...encoded,retire:wire}),null);
   let touched=0;const hostile={...good};Object.defineProperty(hostile,"retire",{get(){touched++;throw undefined;},enumerable:true});assert.equal(proof.validate(hostile),null);assert.equal(touched,0);
+});
+
+test("replay Worker pending reason nulls survive actual emitter and decoder",()=>{
+  for(const state of ["pending","undefined","defined"]){
+    const proof=litellmDiagnostics(cases.map(row=>row.id),nodeTypes.isProxy),r=replayWorkerRow(),lines=[];
+    for(const op of [r.read,r.observer]){
+      if(state==="pending"){op.state="pending";delete op.error;delete op.settle;}
+      else op.error=state==="undefined"?undefined:r.read.error;
+    }
+    const ledger=replayWorkerFunctions().litellmWorkerLedger(r,r.scope);
+    const first=proof.workerFailure("sdk_partial_abort",[0,1,0,1,true],[4,127,111,16,null],ledger,Array(15).fill(null));
+    assert.ok(first);proof.emit([proof.child({code:1}).envelope,first],line=>lines.push(line));proof.flush(line=>lines.push(line));
+    const retained=reportingDecode(proof,lines).find(row=>row.phase==="child_result").retire[3];
+    assert.deepEqual(retained,ledger);
+    for(const op of retained[7]){assert.equal(op[6],state!=="pending");assert.equal(op[7],state==="pending"?null:state==="defined");}
+  }
+});
+test("replay Worker rejects malformed pending and reason presence without inventing failures",()=>{
+  const proof=litellmDiagnostics(cases.map(row=>row.id),nodeTypes.isProxy),r=replayWorkerRow();
+  for(const op of [r.read,r.observer]){op.state="pending";delete op.error;delete op.settle;}
+  const ledger=replayWorkerFunctions().litellmWorkerLedger(r,r.scope);
+  const good=proof.workerFailure("sdk_partial_abort",[0,1,0,1,true],[4,127,111,16,null],ledger,Array(15).fill(null));assert.ok(good);
+  for(const change of [d=>d[7][0][7]=false,d=>d[7][1][7]=false,d=>d[7][0][6]=true,d=>d[8][2][1][2]=1,d=>d[8][2][0][4]=48,d=>d[8][2][1][0]=d[8][2][0][0],d=>delete d[7][0][7]]){
+    const bad=structuredClone(good);change(bad.retire[3]);assert.equal(proof.validate(bad),null);
+  }
+});
+function replayBodyRegistration(scope) {
+  const text=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8");
+  const original=text.slice(text.indexOf("export function observeLiteLLMOperation"),text.indexOf("// BEGIN request-owned fixture functions.")).replaceAll("export ","");
+  const observers=text.slice(text.indexOf("const invoke=(r,kind,start,details)"),text.indexOf("function observation(r)"));
+  const register=text.slice(text.indexOf("function observeBody(r,response,input)"),text.indexOf("globalThis.fetch=function(input,init)"));
+  return new Function("requestScope",original+observers+register+";return {observeBody,collectLiteLLMOperations};")(scope);
+}
+function replayFreshScope() {
+  let current;const storage={getStore:()=>current,run(token,fn){const prior=current;current=token;try{return fn();}finally{current=prior;}}};
+  const scope=replayWorkerFunctions().litellmRequestScope(storage,1),request={},r={operations:[],roots:[],readers:[],bodies:[],failures:[],observerFailures:[],sequence:0};
+  const token=scope.register(request,r);let input;scope.invoke(token,()=>{input=scope.transport(r,{});},undefined,[request]);return {scope,input,r,token,storage};
+}
+test("replay Worker original registration captures body once and projection adds zero getters",async()=>{
+  const {scope,input,r,token,storage}=replayFreshScope(),{observeBody,collectLiteLLMOperations}=replayBodyRegistration(scope);
+  let bodyGets=0,releaseRead;const originalP=new Promise(resolve=>releaseRead=resolve),args=[{}];
+  const originalReader={closed:Promise.resolve(),read(...a){assert.equal(this,originalReader);assert.deepEqual(a,args);return originalP;},cancel(){assert.fail("no cancel probe");},releaseLock(){assert.fail("no unlock probe");}};
+  const body={locked:true,getReader(...a){assert.equal(this,body);assert.deepEqual(a,args);return originalReader;},cancel(){assert.fail("no body cancel");}};
+  const response={get body(){bodyGets++;if(bodyGets>1)throw undefined;return body;}};
+  observeBody(r,response,input);const reader=Reflect.apply(body.getReader,body,args);
+  assert.equal(reader,originalReader);assert.equal(Reflect.apply(reader.read,reader,args),originalP);assert.equal(bodyGets,1);
+  assert.equal(scope.owns(input,response,body,reader),true);
+  const {litellmWorkerResource,litellmWorkerLedger}=replayWorkerFunctions();
+  assert.equal(litellmWorkerResource(r,scope)[1],63);assert.equal(litellmWorkerLedger(r,scope)[8][1],63);assert.equal(bodyGets,1);
+  assert.equal(scope.owns(input,{},body,reader),false);assert.equal(scope.owns(input,response,{},reader),false);assert.equal(scope.owns(input,response,body,{}),false);
+  const foreign=replayFreshScope();assert.equal(foreign.scope.owns(input,response,body,reader),false);assert.equal(scope.owns(foreign.input,response,body,reader),false);
+  assert.throws(()=>storage.run(foreign.token,()=>scope.operation(input,reader)));
+  scope.retire(token);assert.equal(scope.owns(input,response,body,reader),false);assert.equal(bodyGets,1);
+  releaseRead({done:true});await collectLiteLLMOperations(r);assert.equal(bodyGets,1);assert.equal(r.observerFailures.length,0);
+});
+test("replay Worker original body getter undefined remains a failure without retry or binding",()=>{
+  const {scope,input,r}=replayFreshScope(),{observeBody}=replayBodyRegistration(scope);let calls=0,caught=false;
+  const response={get body(){calls++;throw undefined;}};
+  try{observeBody(r,response,input);}catch(error){caught=true;assert.equal(error,undefined);}
+  assert.equal(caught,true);assert.equal(calls,1);assert.equal(r.readers.length,0);assert.equal(r.bodies.length,0);
+  assert.equal(scope.matchesResponse(input,response,{}),false);
 });
 // END replay Worker resource pure tests.

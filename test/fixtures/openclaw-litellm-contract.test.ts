@@ -883,11 +883,11 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (a.length === 9 && a[8] !== null && !detail) return null;
     if (detail) {
       const raw = detail[2][0], op = raw && ops.find(op => op[0] === raw[0]);
-      if (!op || op[1] !== 4 || op[2] !== raw[1] || op[6] !== !!(raw[2]&1) || op[7] !== !!(raw[2]&2) || op[8] !== raw[3] || op[9] !== raw[4]
+      if (!op || op[1] !== 4 || op[2] !== raw[1] || op[6] !== !!(raw[2]&1) || op[7] !== (raw[2]&1 ? !!(raw[2]&2) : null) || op[8] !== raw[3] || op[9] !== raw[4]
         || JSON.stringify(op.slice(3,6)) !== JSON.stringify(detail[0].slice(1))) return null;
       for (const row of detail[2]) if (row && row[0] >= a[0]) return null;
       const derivative = detail[2][1], retained = derivative && ops.find(op=>op[0]===derivative[0]);
-      if (retained && (retained[1]!==5 || retained[2]!==derivative[1] || retained[6]!==!!(derivative[2]&1) || retained[7]!==!!(derivative[2]&2) || retained[8]!==derivative[3] || retained[9]!==derivative[4]
+      if (retained && (retained[1]!==5 || retained[2]!==derivative[1] || retained[6]!==!!(derivative[2]&1) || retained[7]!==(derivative[2]&1 ? !!(derivative[2]&2) : null) || retained[8]!==derivative[3] || retained[9]!==derivative[4]
         || JSON.stringify(retained.slice(3,6))!==JSON.stringify(detail[0].slice(1)))) return null;
     }
     return [...a.slice(0, 7), ops.map(op => [...op]), ...(a.length === 9 ? [detail] : [])];

@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve pending Worker reason unknowns and project retained response/body bindings without additional native body getter calls.
+
 - Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.
 
 - Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.

@@ -64,7 +64,7 @@ export function litellmPredicateFacts() {
   };
 }
 export function litellmRequestScope(storage, generation) {
-  const requests = new WeakMap(), states = new WeakMap(), resources = new WeakMap(), transports = new WeakSet(), cleanup = new WeakMap();
+  const requests = new WeakMap(), states = new WeakMap(), resources = new WeakMap(), responseBodies = new WeakMap(), transports = new WeakSet(), cleanup = new WeakMap();
   let next = 0, nextTransport = 0, nextReader = 0;
   const state = token => {
     const s = token && states.get(token);
@@ -78,7 +78,10 @@ export function litellmRequestScope(storage, generation) {
     const current = storage.getStore();
     if (current !== undefined && current !== owner.token) throw new Error("foreign ingress context");
   };
+  const matchesResponse = (owner, response, body) => transports.has(owner) && resources.get(response) === owner
+    && responseBodies.get(response) === body && resources.get(body) === owner;
   return {
+    matchesResponse,
     register(request, scenario) {
       if (!request || requests.has(request)) throw new Error("replayed ingress");
       const token = Object.freeze({ request, scenario, generation, id: ++next });
@@ -99,8 +102,12 @@ export function litellmRequestScope(storage, generation) {
     response(owner, response) {
       state(owner.token);
       if (!transports.has(owner)) throw new Error("foreign ingress transport");
-      if (resources.has(response) || response.body && resources.has(response.body)) throw new Error("ambiguous ingress response");
-      resources.set(response, owner); if (response.body) { resources.set(response.body, owner); cleanup.set(response.body, new Set()); }
+      if (resources.has(response)) throw new Error("ambiguous ingress response");
+      const body = response.body;
+      if (body && resources.has(body)) throw new Error("ambiguous ingress response");
+      resources.set(response, owner); responseBodies.set(response, body);
+      if (body) { resources.set(body, owner); cleanup.set(body, new Set()); }
+      return body;
     },
     body(owner, body, expected = body, method = "getReader") {
       if (body !== expected) throw new Error("foreign body receiver"); bound(body, owner);
@@ -119,8 +126,7 @@ export function litellmRequestScope(storage, generation) {
     },
     owns(owner, response, body, reader) {
       try { state(owner.token); } catch { return false; }
-      return transports.has(owner) && resources.get(response) === owner && !!response && response.body === body
-        && resources.get(body) === owner && resources.get(reader) === owner;
+      return matchesResponse(owner, response, body) && resources.get(reader) === owner;
     },
     retire(token) { const s = state(token); s.live = false; },
   };
@@ -148,7 +154,7 @@ export function litellmHeldReady(r, scope) {
   return pending.length === 1 && reads.some(op => op.state === "fulfilled" && op.value?.done === false
     && op.value.value?.byteLength > 0 && Number.isSafeInteger(op.settle) && Number.isSafeInteger(pending[0].invoke) && op.settle < pending[0].invoke);
 }
-export function litellmWorkerResource(r) {
+export function litellmWorkerResource(r, scope) {
   const read = r.operations.find(op => op.kind === "read" && op.state !== "fulfilled"), reader = read?.reader, input = read?.input;
   if (!read || !reader || !input) return null;
   const matches = kind => r.operations.filter(op => op.kind === kind && op.reader === reader && op.input === input);
@@ -159,19 +165,19 @@ export function litellmWorkerResource(r) {
   const same = (a,b) => error(a) && error(b) ? Object.is(a.error,b.error) : null;
   const c = rows[3], reasonPresent = !!c && c.operandPresent;
   return [[input.token.generation,input.token.id,input.id,reader.id ?? null],
-    mask([reader.bound,reader.response === input.response,reader.body === reader.response?.body,reader.transport === input,read.receiverIdentity,rows[1]?.originalRead === read.pending]),
+    mask([reader.bound,reader.response === input.response,scope?.matchesResponse(input,reader.response,reader.body) === true,reader.transport === input,read.receiverIdentity,rows[1]?.originalRead === read.pending]),
     rows.map(op => op ? [op.ordinal,["pending","fulfilled","rejected","threw"].indexOf(op.state),mask([error(op),error(op)&&op.error!==undefined,error(op)&&op.error!==null&&typeof op.error==="object"]),op.invoke,op.settle ?? null] : null),
     [same(rows[0],rows[1]),same(rows[0],rows[2]),same(rows[0],rows[3]),same(rows[2],rows[3]),reasonPresent&&error(read)?Object.is(c.reason,read.error):null,c?.signalAborted??null,c?.sameSignalReasonAtSettle??null,read.signalAborted??null,read.abortedAtSettle??null,read.sameSignalReasonAtSettle??null,c?.abortedAtSettle??null],
     c?.argc ?? null,[reader.unlockInvoke??null,reader.unlockSequence??null,reader.unlocks],reader.eof];
 }
-export function litellmWorkerLedger(r) {
+export function litellmWorkerLedger(r, scope) {
   const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
   const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, 2);
   return [cap(r.operations.length), cap(r.operations.filter(op => op.state === "pending").length), cap(r.failures.length), cap(r.observerFailures.length),
     cap(r.readers.filter(reader => reader.body.locked).length), cap(r.readers.filter(reader => reader.unlocks !== 1).length), cap(Math.max(0, bad.length - selected.length)),
     selected.map(op => [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
       op.input?.token?.id ?? op.transport?.token?.id ?? op.token?.id ?? null, op.input?.id ?? op.transport?.id ?? null, op.reader?.id ?? null,
-      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r)];
+      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r,scope)];
 }
 export async function litellmControlResponse(response, action) {
   const errors = []; let result;
@@ -260,7 +266,7 @@ const invoke=(r,kind,start,details)=>observeLiteLLMOperation(r,kind,start,detail
 const observe=(r,p,kind,input,reader,details={})=>invoke(r,kind,()=>p,{input,reader,signal:input?.signal,...details});
 function observation(r){
  const counts={};for(const op of r.operations){const key=op.kind+'_'+op.state;counts[key]=(counts[key]??0)+1;}
- return {checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
+ return {checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r,requestScope),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
   readers:r.readers.map(reader=>({unlocks:reader.unlocks,locked:reader.body.locked})),
   inputs:r.inputs.map(input=>({signalAborted:signalState(input.signal)})),
   rejections:r.operations.filter(op=>op.state==='rejected').slice(0,8).map(op=>({kind:op.kind,invoke:op.invoke,settle:op.settle,defined:op.error!==undefined,signalAtInvoke:op.signalAborted??null,signalAtSettlement:op.abortedAtSettle??null,sameSignalReason:op.sameSignalReasonAtSettle??false,
@@ -269,9 +275,9 @@ function observation(r){
   syncFailures:r.failures.length};
 }
 function observeBody(r,response,input){
- requestScope.response(input,response);input.response=response;
- if(!response.body)return;
- const body=response.body;r.bodies.push(body);const get=body.getReader,cancel=body.cancel;
+ const body=requestScope.response(input,response);input.response=response;
+ if(!body)return;
+ r.bodies.push(body);const get=body.getReader,cancel=body.cancel;
  const check=fn=>{try{fn();}catch(error){r.observerFailures.push(error);}};
  body.cancel=function(...args){check(()=>requestScope.body(input,this,body,'cancel'));return invoke(r,'body_cancel',()=>Reflect.apply(cancel,this,args),{input});};
  body.getReader=function(...args){
