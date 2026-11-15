@@ -374,9 +374,9 @@ export function validateBifrostEvidence(record:any):void {
   control:(v:any)=>Array.isArray(v)&&v.length===6&&v.every((r:any)=>r===null||Array.isArray(r)&&r.length===5&&[1,2,3,4].includes(r[0])&&
    ([3,4].includes(r[0])?typeof r[1]==="boolean":r[1]===null)&&r.slice(2).every(number)),
   validated:(v:any)=>typeof v==="boolean",
-  producer:(v:any)=>v===null||Array.isArray(v)&&v.length===9&&typeof v[0]==="boolean"&&Array.isArray(v[1])&&v[1].length<=4&&v[1].every((r:any,i:number)=>
+  producer:(v:any)=>v===null||Array.isArray(v)&&[9,10].includes(v.length)&&(v.length===9||[2,6,12,13].includes(record.case)&&validateBifrostProducerSite(v[9]))&&typeof v[0]==="boolean"&&Array.isArray(v[1])&&v[1].length<=4&&v[1].every((r:any,i:number)=>
    Array.isArray(r)&&r.length===3&&Number.isInteger(r[0])&&r[0]>=0&&r[0]<4&&(i===0||r[0]>v[1][i-1][0])&&[1,2,3].includes(r[1])&&
-   (r[1]===3?typeof r[2]==="boolean":r[2]===null)&&(!v[0]||r[1]!==1))&&v.slice(2).every((n:any)=>n!==null&&number(n)),
+   (r[1]===3?typeof r[2]==="boolean":r[2]===null)&&(!v[0]||r[1]!==1))&&v.slice(2,9).every((n:any)=>n!==null&&number(n)),
   router:(v:any)=>v===null||Array.isArray(v)&&v.length===4&&v.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null)),
   usage:(v:any)=>v===null||Array.isArray(v)&&v.length===3&&typeof v[0]==="boolean"&&(v[0]?v.slice(1).every((n:any)=>n!==null&&number(n)):v[1]===null&&v[2]===null),
  };
@@ -422,6 +422,14 @@ export function validateBifrostCheckpoint(record:any):void {
   (bifrostSetupPhase(record.phase)&&(record.lane!=="sdk"||record.case===null||record.state!=="rejected"||record.acq!==null||record.op!==null||record.count!==0))||
   (["rejected","threw"].includes(record.state)?typeof record.defined!=="boolean":record.defined!==null))throw Error("invalid Bifrost checkpoint");
 }
+export function validateBifrostProducerSite(v:any):boolean {
+ return Array.isArray(v)&&v.length===6&&v.every((n:any)=>Number.isSafeInteger(n)&&n>=0)&&
+  v[0]<=6&&v[1]<=64&&v[2]===v[1]*1024&&v[3]<=15&&v[4]<=7&&v[5]<=15&&
+  [v[4],v[5]].every((mask:number)=>(mask&6)===0||(mask&1)===1)&&
+  (!(v[5]&8)||!!(v[4]&v[5]&1))&&
+  (v[0]===0?v[4]===0&&v[5]===0:v[0]===6?v[4]===0&&!!(v[5]&1):!!(v[4]&1));
+}
+
 export function createBifrostCheckpointReporter(lane:string,emit:Function,withEvidence=false) {
  const records=new Map<string,any>(),sent=new Set<string>(),observers:Promise<unknown>[]=[],failures:unknown[]=[];
  let emitted=0,suppressed=0,finished=false,failed=0,evidenceCase:number|null=null;
@@ -544,7 +552,7 @@ export function createBifrostRetirementReader() {
 }
 
 export function validateBifrostProducerObservation(value:any):boolean {
- if(!value||value.v!==1||typeof value.joined!=="boolean"||!Array.isArray(value.roles)||value.roles.length>4||
+ if(!value||value.v!==1||(Object.hasOwn(value,"site")&&!validateBifrostProducerSite(value.site))||typeof value.joined!=="boolean"||!Array.isArray(value.roles)||value.roles.length>4||
   ![value.faults,value.failures,value.undefinedFailures].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=1000000)||value.undefinedFailures>value.failures)return false;
  const roles=["producer","progressTask","progressObserved","progressCommand"];
  let prior=-1;
@@ -569,7 +577,7 @@ export function bifrostPostludeEvidence(c:any,proof:any):any {
  const observation=proof?.observation,source=observation?.producer,p=source?.producer;
  return {control:[0,1,2,3,4,5].map(step),validated:c?.validated===true,
   producer:p?[p.joined,p.roles.map((r:any)=>[["producer","progressTask","progressObserved","progressCommand"].indexOf(r[0]),["pending","fulfilled","rejected"].indexOf(r[1])+1,r[2]]),p.faults,p.failures,p.undefinedFailures,
-   source.held,source.canceled,source.expired,source.settled]:null,
+   source.held,source.canceled,source.expired,source.settled,...(Object.hasOwn(p,"site")?[p.site]:[])]:null,
   router:observation?.phases??null,usage:observation?[observation.usageObserved,observation.usageObserved?proof.events.length:null,observation.usageObserved?proof.charged:null]:null};
 }
 
