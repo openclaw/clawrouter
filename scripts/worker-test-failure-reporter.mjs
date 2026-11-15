@@ -122,84 +122,157 @@ export function decodeWorkerAbortDiagnostic(record) {
 }
 export function validateWorkerAbortDiagnostic(record) { return decodeWorkerAbortDiagnostic(record) !== null; }
 
-// Node 24.22.1 forwards the owner's loc on diagnostics, but no testId/name.
-// IDs are compared only inside a validated native file context. Payloads never
-// supply identity. Full-stream collisions invalidate earlier candidate matches.
-export function workerAbortAdmission(tracked) {
+// The frozen Worker CI command expands multiple files, once each. Qualification
+// is deliberately narrower than Node's CLI: unknown modes/options stay unbound.
+export function workerAbortInvocation(runtime, cwd) {
+  const values = own(runtime, "versions").value, env = own(runtime, "env").value;
+  const exec = own(runtime, "execArgv").value, argv = own(runtime, "argv").value, options = own(env, "NODE_OPTIONS");
+  if (own(values, "node").value !== "24.22.1" || !env || types.isProxy(env)
+    || own(env, "NODE_TEST_CONTEXT").present || options.present && options.value !== "") return null;
+  const list = value => Array.isArray(value) && !types.isProxy(value) && value.length <= 4097
+    ? closedDiagnosticTuple(value, value.length, x => typeof x === "string") : null;
+  const flags = list(exec), args = list(argv);
+  if (!flags || !args || !sameStrings(flags, ["--test", "--test-reporter=./scripts/worker-test-failure-reporter.mjs", "--test-reporter-destination=stdout"])
+    || args.length < 2 || args[0] !== own(runtime, "execPath").value) return null;
+  const file = value => typeof value === "string" ? relative(cwd, resolve(cwd, value)).split(sep).join("/") : null;
+  const files = args.slice(1).map(file);
+  if (files.some(value => !/^worker\/test\/[A-Za-z0-9][A-Za-z0-9._-]*\.test\.mjs$/.test(value))
+    || new Set(files).size !== files.length || !files.includes("worker/test/litellm-model-discovery.test.mjs")) return null;
+  return { files, file };
+}
+function sameStrings(a, b) { return a.length === b.length && a.every((value, i) => value === b[i]); }
+
+export const workerAbortAdmissionSites = Object.freeze([
+  "invocation", "watch", "census", "scope_field", "scope_entry", "location", "name", "parent", "id",
+  "wrapper_shape", "wrapper_generation", "wrapper_id", "wrapper_match", "wrapper_terminal",
+  "child_id", "child_match", "child_terminal", "contradictory_terminal", "frame", "diagnostic_scope",
+  "wrapper_completion", "target_unique", "target_valid", "target_coordinates", "target_failure", "diagnostic_match", "wire_size",
+]);
+// Node's FileTest forwards own entryFile on child events, but not on its parent
+// wrapper. Child IDs are root-local. A file name alone never establishes a root:
+// admission also requires the qualified invocation and one completed wrapper.
+export function workerAbortAdmission(tracked, invocation) {
   const targetFile = "worker/test/litellm-model-discovery.test.mjs";
   const targetName = "original metadata caller abort retains strict acquisition and retirement outcomes";
-  const contexts = new Map(), diagnostics = [];
-  let census = 0, overflow = false, recognized = 0, rejected = 0, targetFailure = null;
-  const integer = n => Number.isSafeInteger(n) && n >= 0 && n <= limit;
-  const location = data => {
-    const file = tracked(own(data, "file").value), entry = own(data, "entryFile");
-    const values = ["line", "column", "nesting"].map(key => own(data, key).value);
-    if (!file || entry.present && tracked(entry.value) !== file || !values.every(integer) || values[0] === 0 || values[1] === 0) return null;
-    return [file, ...values];
+  const wrappers = new Map(), parentIds = new Map(), ids = new Map(), coordinates = new Map(), diagnostics = [];
+  const expected = new Set(invocation?.files ?? []);
+  let census = 0, childEvents = 0, overflow = false, recognized = 0, rejected = 0, targetFailure = null;
+  let parentInvalid = false, childInvalid = false, diagnosticInvalid = false, first = null, evaluated = 0, failed = 0, phase = 0;
+  let fields = [0, 0, 0];
+  const gate = (site, ok) => {
+    const bit = 2 ** site; evaluated |= bit; if (!ok) failed |= bit;
+    if (!ok && first === null) first = { reason: [site + 1, phase], gates: [evaluated, evaluated & ~failed], fields: [...fields] };
+    return ok;
   };
-  const context = file => {
-    if (!contexts.has(file)) contexts.set(file, { ids: new Map(), coordinates: new Map(), unknown: false });
-    return contexts.get(file);
-  };
-  const parent = data => {
-    const field = own(data, "parentId");
-    if (!field.present) return null;
-    return field.value === undefined || field.value === null || Number.isSafeInteger(field.value) && field.value >= 0 ? [true, field.value] : null;
-  };
+  gate(0, invocation !== null && invocation !== undefined);
+  const keys = ["entryFile", "file", "line", "column", "nesting", "testId", "parentId", "name"];
+  const count = n => Number.isSafeInteger(n) && n >= 0 && n <= limit;
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
+  const mismatch = (a, b) => a.reduce((mask, value, i) => mask | (Object.is(value, b[i]) ? 0 : 2 ** i), 0);
   return {
     observe(event) {
       const type = own(event, "type").value, data = own(event, "data").value;
+      if (typeof type === "string" && type.startsWith("test:watch:")) { phase = 6; fields = [0, 0, 0]; gate(1, false); parentInvalid = true; return; }
+      const eventIndex = ["test:enqueue", "test:fail", "test:pass", "test:complete", "test:diagnostic"].indexOf(type);
+      if (eventIndex < 0) return;
+      const message = type === "test:diagnostic" ? own(data, "message").value : null;
+      if (type === "test:diagnostic" && (typeof message !== "string" || !message.startsWith(workerAbortPrefix))) return;
+      phase = eventIndex + 1;
+      const f = keys.map(key => own(data, key));
+      const [entry, sourceFile, line, column, nesting, id, parent, name] = f;
+      fields = [f.reduce((mask, value, i) => mask | (value.present ? 2 ** i : 0), 0), 0, 0];
+      const validity = [typeof entry.value === "string", typeof sourceFile.value === "string", count(line.value) && line.value > 0,
+        count(column.value) && column.value > 0, count(nesting.value), Number.isSafeInteger(id.value) && id.value > 0,
+        parent.present && (parent.value === undefined || parent.value === null || Number.isSafeInteger(parent.value) && parent.value >= 0),
+        typeof name.value === "string" && Buffer.byteLength(name.value) <= 512];
+      fields[1] = validity.reduce((mask, value, i) => mask | (value ? 2 ** i : 0), 0);
+      const file = tracked(sourceFile.value), entryFile = entry.present ? tracked(entry.value) : null;
+      const at = file && validity[2] && validity[3] && validity[4] ? [file, line.value, column.value, nesting.value] : null;
       if (type === "test:diagnostic") {
-        const message = own(data, "message").value;
-        if (typeof message !== "string" || !message.startsWith(workerAbortPrefix)) return;
         recognized = Math.min(limit, recognized + 1);
         const record = parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
-        if (!record) { rejected = Math.min(limit, rejected + 1); return; }
-        if (diagnostics.length >= 32) { overflow = true; return; }
-        diagnostics.push({ at: location(data), record }); return;
+        if (!gate(18, record !== null)) { rejected = Math.min(limit, rejected + 1); return; }
+        if (diagnostics.length >= 32) { overflow = true; gate(2, false); return; }
+        if (!gate(19, entry.present && entryFile === targetFile && at !== null && file === targetFile)) {
+          diagnosticInvalid = true; diagnostics.push({ at: null, record }); return;
+        }
+        diagnostics.push({ at, record }); return;
       }
-      if (!["test:enqueue", "test:fail", "test:pass", "test:complete"].includes(type)) return;
-      const file = tracked(own(data, "file").value);
-      if (file !== targetFile) return;
-      if (++census > 4096) { overflow = true; return; }
-      const c = context(file), at = location(data), id = own(data, "testId"), p = parent(data), name = own(data, "name").value;
-      if (!at || typeof name !== "string" || Buffer.byteLength(name) > 512) { c.unknown = true; return; }
-      const key = JSON.stringify(at), identity = [id.value, p?.[0], p?.[1], name, ...at];
+      if (type === "test:fail" && file === targetFile && name.value === targetName) targetFailure ??= failureRecord(data, tracked);
+      if (++census > limit) { overflow = true; gate(2, false); return; }
+      // Missing entryFile is a parent event, never a forwarded child event.
+      // An accessor is neither an absent field nor a valid parent/child marker.
+      if (!gate(3, entry.present || data !== null && typeof data === "object" && !types.isProxy(data) && !Object.hasOwn(data, "entryFile"))) { parentInvalid = true; return; }
+      if (entry.present) {
+        if (!gate(4, validity[0] && entryFile !== null && expected.has(entryFile))) { parentInvalid = true; return; }
+        if (entryFile !== targetFile) return;
+        if (++childEvents > 4096) { overflow = true; gate(2, false); return; }
+      } else if (!gate(4, file !== null && expected.has(file))) { parentInvalid = true; return; }
+      let valid = true;
+      valid = gate(5, at !== null) && valid; valid = gate(6, validity[7]) && valid;
+      valid = gate(7, validity[6]) && valid; valid = gate(8, id.present && validity[5]) && valid;
+      if (!valid) { if (entry.present) childInvalid = true; else parentInvalid = true; return; }
+      const identity = [id.value, parent.value, name.value, ...at], key = JSON.stringify(at);
+      if (!entry.present) {
+        if (!gate(9, invocation?.file(name.value) === file && line.value === 1 && column.value === 1 && nesting.value === 0 && parent.value === 0)) { parentInvalid = true; return; }
+        if (type === "test:enqueue") {
+          const uniqueFile = gate(10, !wrappers.has(file)), uniqueId = gate(11, !parentIds.has(id.value));
+          if (!uniqueFile || !uniqueId) { parentInvalid = true; return; }
+          const row = { identity, events: new Set() }; wrappers.set(file, row); parentIds.set(id.value, row);
+        } else {
+          const row = parentIds.get(id.value); fields[2] = row ? mismatch(row.identity, identity) : 0;
+          if (!gate(12, row !== undefined && same(row.identity, identity))) { parentInvalid = true; return; }
+          if (!gate(13, !row.events.has(type))) parentInvalid = true;
+          row.events.add(type);
+          if (!gate(17, !(row.events.has("test:fail") && row.events.has("test:pass")))) parentInvalid = true;
+        }
+        return;
+      }
       if (type === "test:enqueue") {
-        const row = { at, id: id.value, parent: p, identity, name, events: new Set(), invalid: false, failure: null };
-        const siblings = c.coordinates.get(key) ?? [];
-        if (siblings.length) c.unknown = true;
-        siblings.push(row); c.coordinates.set(key, siblings);
-        if (!id.present || !Number.isSafeInteger(id.value) || !p) { row.invalid = true; c.unknown = true; }
-        if (c.ids.has(id.value)) { c.ids.get(id.value).invalid = true; row.invalid = true; c.unknown = true; }
-        else c.ids.set(id.value, row);
+        const row = { at, id: id.value, identity, name: name.value, events: new Set(), failure: null };
+        const siblings = coordinates.get(key) ?? []; siblings.push(row); coordinates.set(key, siblings);
+        // Shared unrelated call sites are legitimate; ID reuse within this
+        // child execution is not. Target-coordinate uniqueness is checked last.
+        if (!gate(14, !ids.has(id.value))) childInvalid = true;
+        else ids.set(id.value, row);
       } else {
-        const row = c.ids.get(id.value);
-        if (!row || !id.present || !same(row.identity, identity) || !p) { c.unknown = true; return; }
-        if (row.events.has(type)) { row.invalid = true; c.unknown = true; }
+        const row = ids.get(id.value); fields[2] = row ? mismatch(row.identity, identity) : 0;
+        if (!gate(15, row !== undefined && same(row.identity, identity))) { childInvalid = true; return; }
+        if (!gate(16, !row.events.has(type))) childInvalid = true;
         row.events.add(type);
-        if (row.events.has("test:fail") && row.events.has("test:pass")) { row.invalid = true; c.unknown = true; }
-        if (type === "test:fail" && file === targetFile && name === targetName) {
+        if (!gate(17, !(row.events.has("test:fail") && row.events.has("test:pass")))) childInvalid = true;
+        if (type === "test:fail" && file === targetFile && name.value === targetName) {
           row.failure = failureRecord(data, tracked); targetFailure ??= row.failure;
         }
       }
     },
     finish() {
-      const c = contexts.get(targetFile), rows = c ? [...c.coordinates.values()].flat().filter(row => row.name === targetName) : [];
+      phase = 7; fields = [0, 0, 0];
+      const rows = [...coordinates.values()].flat().filter(row => row.name === targetName && row.at[0] === targetFile);
       const row = rows.length === 1 ? rows[0] : null;
       const matches = row ? diagnostics.filter(value => same(value.at, row.at)) : [];
-      const bound = !overflow && c && !c.unknown && row && !row.invalid && row.id > 0 && row.failure
-        && c.coordinates.get(JSON.stringify(row.at)).length === 1 && matches.length === 1 && rejected === 0;
+      const complete = invocation && wrappers.size === expected.size && [...expected].every(file => wrappers.get(file)?.events.has("test:complete"));
+      let bound = gate(20, Boolean(complete) && !parentInvalid && !overflow);
+      bound = gate(21, rows.length === 1) && bound;
+      bound = gate(22, row !== null && !childInvalid) && bound;
+      bound = gate(23, row !== null && coordinates.get(JSON.stringify(row.at)).length === 1) && bound;
+      bound = gate(24, row !== null && row.failure !== null) && bound;
+      bound = gate(25, matches.length === 1 && diagnostics.length === 1 && rejected === 0 && !diagnosticInvalid) && bound;
       let record = null;
       if (bound) {
         const data = matches[0].record;
         record = { v: 1, kind: "worker_abort", at: row.at, stage: data.first,
           counts: [data.failures, data.undefinedFailures, data.reportingFailures], worker: data.worker, upstream: data.upstream };
-        if (Buffer.byteLength(JSON.stringify(record)) > 512) record = null;
+        if (!gate(26, Buffer.byteLength(JSON.stringify(record)) <= 512)) record = null;
       }
-      return { failure: recognized ? record ? row.failure : targetFailure : null, record,
-        diagnostics: recognized ? [recognized, record ? 1 : 0, rejected, recognized - rejected - (record ? 1 : 0), overflow] : null };
+      const admitted = record !== null;
+      if (!admitted && recognized) {
+        record = { v: 1, kind: "worker_abort_unbound", reason: first?.reason ?? null, gates: first?.gates ?? [0, 0], fields: first?.fields ?? [0, 0, 0],
+          census: [expected.size, wrappers.size, childEvents, ids.size, rows.length, matches.length],
+          scope: [Boolean(invocation), !parentInvalid, Boolean(complete), !childInvalid, true] };
+      }
+      return { failure: recognized ? row?.failure ?? targetFailure : null, record,
+        diagnostics: recognized ? [recognized, admitted ? 1 : 0, rejected, recognized - rejected - (admitted ? 1 : 0), overflow] : null };
     },
   };
 }
@@ -229,6 +302,16 @@ export function decodeWorkerReporterRecord(value) {
       reportingFailures: counts[2], worker: get("worker"), upstream: get("upstream") });
     if (!data) return null;
     result = { v: 1, kind: "worker_abort", at, stage: data.first, counts, worker: data.worker, upstream: data.upstream };
+  } else if (get("kind") === "worker_abort_unbound") {
+    if (!exact(["v", "kind", "reason", "gates", "fields", "census", "scope"])) return null;
+    const reason = closedDiagnosticTuple(get("reason"), 2, (x, i) => Number.isInteger(x) && (i === 0 ? x >= 1 && x <= workerAbortAdmissionSites.length : x >= 0 && x <= 7));
+    const gates = closedDiagnosticTuple(get("gates"), 2, x => Number.isInteger(x) && x >= 0 && x < 2 ** workerAbortAdmissionSites.length);
+    const fields = closedDiagnosticTuple(get("fields"), 3, x => Number.isInteger(x) && x >= 0 && x <= 255);
+    const census = closedDiagnosticTuple(get("census"), 6, count);
+    const scope = closedDiagnosticTuple(get("scope"), 5, x => typeof x === "boolean");
+    if (!reason || !gates || (gates[1] & ~gates[0]) !== 0 || !fields || !census || !scope
+      || (gates[0] & 2 ** (reason[0] - 1)) === 0 || (gates[1] & 2 ** (reason[0] - 1)) !== 0) return null;
+    result = { v: 1, kind: "worker_abort_unbound", reason, gates, fields, census, scope };
   } else if (get("kind") === "summary") {
     const keys = ["v", "kind", "failureEvents", "reported", "omittedEvents", "unknownFiles", "countsSaturated"];
     const extra = own(value, "diagnostics");
@@ -302,7 +385,7 @@ function annotation(record, level) {
 // crowd out later leaf failures, and presentation never changes runner verdicts.
 export async function* workerFailureReport(source, { cwd = process.cwd() } = {}) {
   const tracked = trackedTestFiles(cwd), leaves = new Map(), parents = new Map();
-  const admission = workerAbortAdmission(tracked);
+  const admission = workerAbortAdmission(tracked, workerAbortInvocation(process, cwd));
   let failures = 0, unknownFiles = 0;
   for await (const event of source) {
     admission.observe(event);
@@ -315,7 +398,7 @@ export async function* workerFailureReport(source, { cwd = process.cwd() } = {})
     if (bucket.has(key) || bucket.size < 9) bucket.set(key, record);
   }
   const evidence = admission.finish();
-  const prioritized = evidence.failure ? [evidence.failure, ...(evidence.record ? [evidence.record] : [])] : [];
+  const prioritized = [...(evidence.failure ? [evidence.failure] : []), ...(evidence.record ? [evidence.record] : [])];
   const selected = [...prioritized, ...[...leaves.values(), ...parents.values()].filter(record => !evidence.failure || JSON.stringify(record) !== JSON.stringify(evidence.failure))].slice(0, 9);
   for (const record of selected) yield annotation(record, "error");
   const identities = selected.filter(record => record.kind === "failure").length;

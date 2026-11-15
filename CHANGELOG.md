@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
+
 - Retain bounded metadata caller-abort failure stages alongside native Worker test identities, preserving strict retirement checks and independent cleanup failures.
 
 - Distinguish joined partial-delivery read outcomes from Worker retirement failures only after exact producer cancellation and observer joins; retain raw rejections and independent SDK, SQLite and cleanup checks.

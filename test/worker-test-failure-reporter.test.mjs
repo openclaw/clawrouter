@@ -3,12 +3,12 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -104,27 +104,40 @@ test("worker abort diagnostic pure: schema preserves nulls and rejects hostile f
   assert.equal(JSON.parse(frame.slice(workerAbortPrefix.length)).upstream[0], null); assert.equal(reads, 0);
   for (const change of [{ first: null }, { undefinedFailures: 2 }, { extra: true }, { first: [14, 1, false] }]) assert.equal(decodeWorkerAbortDiagnostic({ ...record, ...change }), null);
 });
-function pureWorkerReporter() {
+function workerAbortRuntime() {
+  return { versions: { node: "24.22.1" }, env: {}, execPath: "/fixture/node",
+    argv: ["/fixture/node", "worker/test/litellm-model-discovery.test.mjs", "worker/test/other.test.mjs"],
+    execArgv: ["--test", "--test-reporter=./scripts/worker-test-failure-reporter.mjs", "--test-reporter-destination=stdout"], cwd: () => "/fixture" };
+}
+function pureWorkerReporter(runtime = workerAbortRuntime()) {
   const source = readFileSync("scripts/worker-test-failure-reporter.mjs", "utf8");
   const definitions = source.slice(source.indexOf("const failureTypes"), source.indexOf("function trackedTestFiles"))
     + source.slice(source.indexOf("function failureRecord"), source.indexOf("export default workerFailureReport"));
   // Only the unchanged filesystem resolver is inert here; the producer, native
   // event admission, selection and escaped serializer are the actual source.
   const tracked = file => typeof file === "string" && /^(?:worker\/)?test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(file) ? file : null;
-  return new Function("types", "trackedTestFiles", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked);
+  return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep);
 }
 function workerAbortNativeEvents(frame) {
   const native = { testId: 7, parentId: undefined, name: "original metadata caller abort retains strict acquisition and retirement outcomes",
-    file: "worker/test/litellm-model-discovery.test.mjs", line: 704, column: 3, nesting: 0 };
+    file: "worker/test/litellm-model-discovery.test.mjs", entryFile: "worker/test/litellm-model-discovery.test.mjs", line: 704, column: 3, nesting: 0 };
   return [
     { type: "test:enqueue", data: { ...native, type: "test" } },
     { type: "test:fail", data: { ...native, testNumber: 9, details: { error: { failureType: "testCodeFailure", code: "ERR_TEST_FAILURE" } } } },
-    { type: "test:diagnostic", data: { file: native.file, line: native.line, column: native.column, nesting: native.nesting, message: frame, level: "info" } },
+    { type: "test:diagnostic", data: { entryFile: native.entryFile, file: native.file, line: native.line, column: native.column, nesting: native.nesting, message: frame, level: "info" } },
   ];
 }
-async function workerAbortPipeline(events) {
+function workerAbortWrappers() {
+  return workerAbortRuntime().argv.slice(1).map((file, i) => ({ testId: i + 1, parentId: 0, name: file, file, line: 1, column: 1, nesting: 0 }));
+}
+async function workerAbortPipeline(events, { runtime = workerAbortRuntime(), wrappers = workerAbortWrappers(), complete = true } = {}) {
+  async function* scoped() {
+    for (const data of wrappers) yield { type: "test:enqueue", data };
+    yield* events;
+    if (complete) for (const data of wrappers) yield { type: "test:complete", data: { ...data, testNumber: 1 } };
+  }
   const lines = [];
-  for await (const line of pureWorkerReporter()(events)) lines.push(line);
+  for await (const line of pureWorkerReporter(runtime)(scoped())) lines.push(line);
   assert.ok(lines.length <= 10); assert.ok(lines.reduce((n, line) => n + Buffer.byteLength(line), 0) <= 8192);
   const rows = lines.map(line => {
     assert.ok(Buffer.byteLength(line) <= 768);
@@ -154,7 +167,6 @@ test("worker abort diagnostic pure: native identities reject late collisions and
     e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: 8, name: "foreign" } }),
     e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: undefined, name: "foreign", line: 900 } }),
     e => e.push(...[900, 901].map(line => ({ type: "test:enqueue", data: { ...e[0].data, testId: 20, name: "foreign", line } }))),
-    e => e.push(...[20, 21].map(testId => ({ type: "test:enqueue", data: { ...e[0].data, testId, name: "foreign", line: 900 } }))),
     e => e.push(e[0]), e => e.push(e[1]), e => e.push(e[2]),
     e => { e[2].data.message = workerAbortPrefix + '{"v":1}'; },
     e => { e[2].data.message = workerAbortPrefix + "x".repeat(513); },
@@ -167,12 +179,147 @@ test("worker abort diagnostic pure: native identities reject late collisions and
     assert.ok(result.rows.some(row => row.kind === "failure"));
   }
 });
+test("worker abort diagnostic pure: unrelated parameterized coordinates preserve unique target and scoped IDs", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  const events = workerAbortNativeEvents(fixture.frames[0]);
+  const parameterized = [20, 21].map(testId => ({ type: "test:enqueue", data: { ...events[0].data, testId, name: "parameterized", line: 900 } }));
+  const result = await workerAbortPipeline([...events, ...parameterized]);
+  assert.equal(result.rows.some(row => row.kind === "worker_abort"), true);
+  for (const conflict of [
+    { ...parameterized[0], data: { ...parameterized[0].data, testId: 22, line: events[0].data.line } },
+    { ...parameterized[0], data: { ...parameterized[0].data, line: 901 } },
+  ]) {
+    const denied = await workerAbortPipeline([...events, ...parameterized, conflict]);
+    assert.equal(denied.rows.some(row => row.kind === "worker_abort"), false);
+    assert.ok(denied.rows.some(row => row.kind === "worker_abort_unbound"));
+  }
+});
+test("worker abort diagnostic pure: wrapper and child IDs are separate but wrapper failures stay visible", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  const events = workerAbortNativeEvents(fixture.frames[0]), wrappers = workerAbortWrappers(); wrappers[0].testId = 7;
+  const wrapperFailure = { type: "test:fail", data: { ...wrappers[0], testNumber: 2, details: { error: { failureType: "subtestsFailed", code: "ERR_TEST_FAILURE" } } } };
+  const otherChild = { type: "test:enqueue", data: { ...events[0].data, entryFile: wrappers[1].file, file: wrappers[1].file } };
+  const result = await workerAbortPipeline([...events, otherChild, wrapperFailure], { wrappers });
+  assert.equal(result.rows.some(row => row.kind === "worker_abort"), true);
+  assert.equal(result.rows.filter(row => row.kind === "failure").length, 2);
+  assert.ok(result.rows.some(row => row.kind === "failure" && row.failureType === "subtestsFailed"));
+  for (const late of [
+    { type: "test:enqueue", data: { ...wrappers[0], testId: 30 } },
+    { type: "test:enqueue", data: { ...wrappers[1], testId: 7 } },
+    { type: "test:pass", data: { ...wrapperFailure.data } },
+  ]) assert.equal((await workerAbortPipeline([...events, wrapperFailure, late], { wrappers })).rows.some(row => row.kind === "worker_abort"), false);
+});
+test("worker abort diagnostic pure: exact multi file invocation and complete wrapper census are required", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" }), events = workerAbortNativeEvents(fixture.frames[0]);
+  const runtime = workerAbortRuntime(); assert.equal(workerAbortInvocation(runtime, "/fixture").files.length, 2);
+  for (const mutate of [
+    r => r.versions.node = "26.13.0", r => r.env.NODE_TEST_CONTEXT = "child-v8", r => r.env.NODE_OPTIONS = "--watch",
+    r => r.execArgv.push("--watch"), r => r.execArgv.push("--test-isolation=none"), r => r.argv.push(r.argv[1]),
+    r => r.argv.push("worker/test/../foreign.test.mjs"), r => r.argv = [r.argv[0], r.argv[2]], r => r.argv[0] = "/foreign/node",
+  ]) {
+    const changed = workerAbortRuntime(); mutate(changed);
+    assert.equal(workerAbortInvocation(changed, "/fixture"), null);
+    const result = await workerAbortPipeline(events, { runtime: changed });
+    assert.deepEqual(result.rows.find(row => row.kind === "worker_abort_unbound").reason, [1, 0]);
+    assert.ok(result.rows.some(row => row.kind === "failure"));
+  }
+  for (const options of [{ wrappers: [] }, { wrappers: workerAbortWrappers().slice(0, 1) }, { complete: false }]) {
+    const result = await workerAbortPipeline(events, options);
+    assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+    assert.deepEqual(result.rows.find(row => row.kind === "worker_abort_unbound").reason, [21, 7]);
+  }
+  const result = await workerAbortPipeline([...events, { type: "test:watch:restarted", data: {} }]);
+  assert.deepEqual(result.rows.find(row => row.kind === "worker_abort_unbound").reason, [2, 6]);
+});
+test("worker abort diagnostic pure: first admission gate and field masks survive later failures and quotas", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  const faults = [
+    ["scope_field", e => Object.defineProperty(e[0].data, "entryFile", { get() { throw undefined; } })],
+    ["scope_entry", e => e[0].data.entryFile = "worker/test/foreign.test.mjs"],
+    ["location", e => delete e[0].data.column], ["name", e => delete e[0].data.name],
+    ["parent", e => delete e[0].data.parentId], ["id", e => e[0].data.testId = 0],
+    ["child_match", e => e[1].data.parentId = 9], ["frame", e => e[2].data.message += " "],
+    ["diagnostic_scope", e => delete e[2].data.entryFile],
+    ["target_unique", e => { e[0].data.name = "other"; e[1].data.name = "other"; }],
+    ["diagnostic_match", e => e[2].data.line++],
+  ];
+  for (const [site, mutate] of faults) {
+    const events = workerAbortNativeEvents(fixture.frames[0]); mutate(events);
+    const result = await workerAbortPipeline(events), row = result.rows.find(row => row.kind === "worker_abort_unbound");
+    const bit = 2 ** workerAbortAdmissionSites.indexOf(site);
+    assert.equal(row.reason[0], workerAbortAdmissionSites.indexOf(site) + 1, site);
+    assert.equal(row.gates[0] & bit, bit, site); assert.equal(row.gates[1] & bit, 0, site);
+    if (site === "parent") assert.equal(row.fields[0] & 64, 0);
+    if (site === "child_match") assert.equal(row.fields[2] & 2, 2);
+    assert.ok(result.rows.some(row => row.kind === "failure"));
+  }
+  const events = workerAbortNativeEvents(fixture.frames[0]); delete events[0].data.parentId;
+  const unrelated = Array.from({ length: 15 }, (_, i) => ({ type: "test:fail", data: { entryFile: "worker/test/other.test.mjs", file: "worker/test/other.test.mjs", line: i + 1, details: {} } }));
+  const result = await workerAbortPipeline([...unrelated, ...events]);
+  assert.deepEqual(result.rows.slice(0, 2).map(row => row.kind), ["failure", "worker_abort_unbound"]);
+  assert.equal(result.rows.length, 10); assert.equal(result.rows.at(-1).reported, 8);
+  assert.deepEqual(result.rows[1].reason, [8, 1]);
+});
+test("worker abort diagnostic pure: unbound schema remains closed bounded and never promotes fixture stage", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire", undefinedFault: true });
+  const events = workerAbortNativeEvents(fixture.frames[0]); delete events[2].data.entryFile;
+  const result = await workerAbortPipeline(events), row = result.rows.find(value => value.kind === "worker_abort_unbound");
+  assert.equal(Object.hasOwn(row, "stage"), false); assert.equal(result.rows.some(value => value.kind === "worker_abort"), false);
+  const maximal = { ...row, reason: [27, 7], gates: [2 ** 27 - 1, 0], fields: [255, 255, 255], census: Array(6).fill(1000000), scope: Array(5).fill(false) };
+  assert.ok(Buffer.byteLength(JSON.stringify(maximal)) <= 512); assert.deepEqual(decodeWorkerReporterRecord(maximal), maximal);
+  for (const change of [{ reason: null }, { reason: [28, 0] }, { gates: [0, 1] }, { gates: [0, 0] }, { gates: [2 ** 27 - 1, 2 ** 27 - 1] }, { fields: [256, 0, 0] }, { census: [-1, 0, 0, 0, 0, 0] }, { scope: [false] }, { stage: [14, 0, false] }]) assert.equal(decodeWorkerReporterRecord({ ...row, ...change }), null);
+  for (const payload of [JSON.stringify(row).replace('{"v":1,', '{"v":1,"v":1,'), JSON.stringify(row) + " "]) assert.equal(parseWorkerReporterRecord(payload), null);
+  const overflowing = Array.from({ length: 34 }, () => events[2]);
+  const bounded = await workerAbortPipeline([...events.slice(0, 2), ...overflowing]);
+  assert.equal(bounded.rows.at(-1).diagnostics[4], true);
+  assert.equal(bounded.rows.some(value => value.kind === "worker_abort"), false);
+});
+test("worker abort diagnostic pure: wrapper and terminal admission failures retain exact first sites", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  for (const [site, mutate] of [
+    ["wrapper_shape", w => w[0].column = 2],
+    ["wrapper_generation", w => w.push({ ...w[0], testId: 40 })],
+    ["wrapper_id", w => w[1].testId = w[0].testId],
+  ]) {
+    const wrappers = workerAbortWrappers(); mutate(wrappers);
+    const result = await workerAbortPipeline(workerAbortNativeEvents(fixture.frames[0]), { wrappers });
+    assert.equal(result.rows.find(row => row.kind === "worker_abort_unbound").reason[0], workerAbortAdmissionSites.indexOf(site) + 1);
+  }
+  for (const [site, append] of [
+    ["wrapper_match", () => ({ type: "test:pass", data: { ...workerAbortWrappers()[0], testId: 404 } })],
+    ["wrapper_terminal", () => ({ type: "test:complete", data: { ...workerAbortWrappers()[0] } })],
+    ["contradictory_terminal", e => ({ type: "test:pass", data: { ...e[1].data } })],
+    ["child_terminal", e => e[1]],
+  ]) {
+    const events = workerAbortNativeEvents(fixture.frames[0]); events.push(append(events));
+    const result = await workerAbortPipeline(events);
+    assert.equal(result.rows.find(row => row.kind === "worker_abort_unbound").reason[0], workerAbortAdmissionSites.indexOf(site) + 1);
+  }
+  const missing = workerAbortNativeEvents(fixture.frames[0]); missing.splice(1, 1);
+  const result = await workerAbortPipeline(missing);
+  assert.equal(result.rows.find(row => row.kind === "worker_abort_unbound").reason[0], workerAbortAdmissionSites.indexOf("target_failure") + 1);
+  assert.equal(result.rows.some(row => row.kind === "failure"), false);
+});
+test("worker abort diagnostic pure: valid frame cannot hide foreign missing or conflicting diagnostic scope", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  for (const mutate of [d => delete d.entryFile, d => d.entryFile = "worker/test/foreign.test.mjs", d => d.line++]) {
+    for (const early of [false, true]) {
+      const events = workerAbortNativeEvents(fixture.frames[0]), extra = { type: "test:diagnostic", data: { ...events[2].data } };
+      mutate(extra.data); if (early) events.unshift(extra); else events.push(extra);
+      const result = await workerAbortPipeline(events);
+      assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+      assert.equal(result.rows.some(row => row.kind === "worker_abort_unbound"), true);
+      assert.equal(result.rows.some(row => row.kind === "failure"), true);
+      assert.deepEqual(result.rows.at(-1).diagnostics, [2, 0, 0, 2, false]);
+    }
+  }
+});
 test("worker abort diagnostic pure: file scoped IDs and parent presence stay distinct", async () => {
   const fixture = await abortDiagnosticCase({ fault: "retire" });
   for (const parent of [undefined, null, 0, 5, Number.MAX_SAFE_INTEGER]) for (const order of [[0, 1, 2], [0, 2, 1]]) {
     const events = workerAbortNativeEvents(fixture.frames[0]); events[0].data.parentId = parent; events[1].data.parentId = parent;
     const ordered = order.map(index => events[index]);
-    ordered.push({ type: "test:enqueue", data: { ...events[0].data, file: "worker/test/other.test.mjs" } });
+    ordered.push({ type: "test:enqueue", data: { ...events[0].data, file: "worker/test/other.test.mjs", entryFile: "worker/test/other.test.mjs" } });
     assert.equal((await workerAbortPipeline(ordered)).rows.filter(row => row.kind === "worker_abort").length, 1);
   }
   for (const parent of [-1, NaN, "0", Number.MAX_SAFE_INTEGER + 1]) {
@@ -239,7 +386,7 @@ test("worker abort diagnostic pure: combined quota reserves identity and stage b
   evidence.observation(15, { status: "fulfilled", value: { operations: 1000000, syncFailures: 1000000, checks: [1000000, 1000000, 1000000, 1000000, false] } });
   evidence.observation(16, { status: "fulfilled", value: { calls: [], active: 1000000, canceled: 1000000, aborted: 1000000, expired: 1000000, finished: 1000000 } });
   evidence.report({ diagnostic(value) { frame = value; } });
-  const events = workerAbortNativeEvents(frame), unrelated = Array.from({ length: 12 }, (_, i) => ({ type: "test:fail", data: { file: "worker/test/other.test.mjs", line: i + 1, details: {} } }));
+  const events = workerAbortNativeEvents(frame), unrelated = Array.from({ length: 12 }, (_, i) => ({ type: "test:fail", data: { entryFile: "worker/test/other.test.mjs", file: "worker/test/other.test.mjs", line: i + 1, details: {} } }));
   const result = await workerAbortPipeline([...unrelated, ...events]);
   assert.equal(result.rows.length, 10); assert.deepEqual(result.rows.slice(0, 2).map(row => row.kind), ["failure", "worker_abort"]);
   assert.equal(result.rows.at(-1).reported, 8); assert.equal(result.rows.at(-1).omittedEvents, 5);
