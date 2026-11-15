@@ -74,8 +74,15 @@ function litellmOwnership(storage: any) {
     fetch(fn: Function, receiver: unknown, args: any[], facts: any) {
       const c = current(), a = c?.acquisition;
       const t: any = { context: c, acquisition: a, fn, receiver, args, state: "invoke", unique: false, input: signal(facts.signal) }; transports.push(t);
-      if (!a || !guards.has(a) || a.context !== c || a.transport || c.token.owner.url !== facts.url || c.token.owner.credential !== facts.credential
-        || (c.token.owner.role === "catalog" ? "GET" : "POST") !== facts.method) invalid("fetch", [!!c, !!a, a ? guards.has(a) : null, a ? a.context === c : null]);
+      // Context, acquisition, registration, context identity, first fetch, URL,
+      // credential, method. Null means the original short circuit did not read it.
+      const checks: Array<boolean | null> = [!!c, null, null, null, null, null, null, null];
+      let predicate = "fetch_acquisition";
+      const rejects = (index: number, id: string, valid: boolean) => { checks[index] = valid; if (!valid) predicate = id; return !valid; };
+      if (rejects(1, "fetch_acquisition", !!a) || rejects(2, "fetch_registered", guards.has(a))
+        || rejects(3, "fetch_context", a.context === c) || rejects(4, "fetch_duplicate", !a.transport)
+        || rejects(5, "fetch_url", c.token.owner.url === facts.url) || rejects(6, "fetch_credential", c.token.owner.credential === facts.credential)
+        || rejects(7, "fetch_method", (c.token.owner.role === "catalog" ? "GET" : "POST") === facts.method)) invalid(predicate, checks);
       else a.transport = t;
       let pending;
       try { pending = Reflect.apply(fn, receiver, args); t.pending = pending; }
@@ -123,6 +130,11 @@ function litellmOwnership(storage: any) {
     },
   };
 }
+function litellmCatalogTarget(baseUrl: string): string {
+  // D8 extensions/litellm/index.ts selects the suffix before the shared join.
+  const suffix = /\/v1\/*$/.test(baseUrl.trim()) ? "models" : "v1/models";
+  return `${baseUrl.trim().replace(/\/+$/, "")}/${suffix}`;
+}
 function litellmJoinFacts(at: string, body: string, operations: Operation[], acquisitions: Array<{ releases: number }>, readers: Array<{ unlocks: number }>, bodies: Set<ReadableStream>, failures: unknown[], owner: { diagnostic: () => { first: string; relation: Array<boolean | null>; faults: number; transports: number[]; defined: boolean | null } }) {
   const cap = (n: number) => Math.min(n, 1_000_000), first = operations.find(row => row.state === "rejected");
   return {
@@ -153,9 +165,10 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       || !["unknown", "fulfilled", "rejected"].includes(j.body)) return null;
     const number = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000;
     const ops = array(j.ops, 4, number), resources = array(j.resources, 6, number), owner = fields(j.ownership, ["first", "relation", "faults", "transports", "defined"]);
-    const relation = owner && array(owner.relation, 4, v => v === null || typeof v === "boolean");
+    const fetchPredicates = ["fetch_acquisition", "fetch_registered", "fetch_context", "fetch_duplicate", "fetch_url", "fetch_credential", "fetch_method"];
+    const relation = owner && array(owner.relation, fetchPredicates.includes(owner.first) ? 8 : 4, v => v === null || typeof v === "boolean");
     const transports = owner && array(owner.transports, 5, number);
-    if (!ops || !resources || !owner || !relation || !transports || !(owner.defined === null || typeof owner.defined === "boolean") || !number(owner.faults) || !["none", "observer", "invoke", "guard", "fetch", "response_unique", "attach_duplicate", "attach_bound", "reader", "reader_operation", "body_cancel"].includes(owner.first)) return null;
+    if (!ops || !resources || !owner || !relation || !transports || !(owner.defined === null || typeof owner.defined === "boolean") || !number(owner.faults) || !["none", "observer", "invoke", "guard", ...fetchPredicates, "response_unique", "attach_duplicate", "attach_bound", "reader", "reader_operation", "body_cancel"].includes(owner.first)) return null;
     const first = j.first === null ? null : array(j.first, 2, v => typeof v === "string" || typeof v === "boolean");
     if (j.first !== null && (!first || !["body_cancel", "closed", "read", "cancel", "dispatcher", "native_acquisition", "response_observer", "guard_acquisition", "lease_observer", "release"].includes(first[0]) || typeof first[1] !== "boolean")) return null;
     return { at: j.at, body: j.body, ops, first, resources, ownership: { first: owner.first, relation, faults: owner.faults, transports, defined: owner.defined } };
@@ -420,7 +433,7 @@ async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?
       const baseUrl = origin + "/v1/native/litellm" + (row.versioned ? "/v1" : ""); let resolutions = 0;
       const auth = { apiKey: key(authId), discoveryApiKey: key(row.id), profileId: row.id, mode: "api_key" as const, source: "profile" as const };
       diagnosticId = row.id; diagnosticRole = "catalog";
-      const result = await ownership.invoke({ id: row.id, role: "catalog", signal, url: baseUrl + "/models", credential: "Bearer " + key(row.id) }, provider.catalog!.run, provider.catalog, [{ config: { models: { providers: { litellm: { baseUrl, models: [] } } } }, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
+      const result = await ownership.invoke({ id: row.id, role: "catalog", signal, url: litellmCatalogTarget(baseUrl), credential: "Bearer " + key(row.id) }, provider.catalog!.run, provider.catalog, [{ config: { models: { providers: { litellm: { baseUrl, models: [] } } } }, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
         resolveProviderAuth: () => { throw new Error("unexpected second auth resolver"); }, resolveProviderApiKey: () => { resolutions++; return auth; } }]);
       expect(resolutions).toBe(1);
       if (!result || !("provider" in result)) return undefined;
