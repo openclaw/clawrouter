@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -883,7 +883,7 @@ export function parseInitPrerequisites(result, binding) {
 }
 // This validates the source-defined record lifecycle, not native success or
 // operation-vs-bookkeeping causality. Report errors can follow FINAL fulfilled.
-export function projectBuilderCloseGroup(rows, childLifecycle, first) {
+export function projectBuilderCloseGroup(rows, childLifecycle, first, recordTrace) {
   // Only a source-selected builder validation failure can implicate this group.
   // All rows have already passed canonical validation; the child wrapper order
   // has passed separately. The builder lifecycle itself remains unqualified.
@@ -913,15 +913,16 @@ export function projectBuilderCloseGroup(rows, childLifecycle, first) {
   if (!["fulfilled","rejected"].includes(close.outcome) || (close.outcome === "rejected" ? typeof close.defined !== "boolean" : close.defined !== null)) return null;
   if (![close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].every(value=>typeof value==="boolean")) return null;
   const flags = [close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].reduce((mask,value,i)=>mask+(value?2**i:0),0);
-  try { return validateReportedBuilderProcess([1,first[2]-3,close.outcome==="fulfilled"?1:close.defined?3:2,close.exit,receiptBuilderSignals.indexOf(close.signal),flags,close.errors,close.remaining,out.bytes,out.sha256,err.bytes,err.sha256]); } catch { return null; }
+  try { const projected=validateReportedBuilderProcess([1,first[2]-3,close.outcome==="fulfilled"?1:close.defined?3:2,close.exit,receiptBuilderSignals.indexOf(close.signal),flags,close.errors,close.remaining,out.bytes,out.sha256,err.bytes,err.sha256]); if(recordTrace)recordTrace(close.v===2?close.trace:null);return projected; } catch { return null; }
 }
 export function createProjectionLedger() {
-  const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, canonicalRows = null, childLifecycle = null, broken = false;
+  const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, canonicalRows = null, childLifecycle = null, firstOwnedTrace = null, broken = false;
   const note = operation => { try { return operation(); } catch (error) { broken = true; errors.push(error); } };
   return { errors,
     canonical(rows) { note(() => { canonicalRows = rows; }); },
     childLifecycle(value) { note(() => { childLifecycle = value; }); },
-    builder() { return broken || errors.length || stack.length ? null : projectBuilderCloseGroup(canonicalRows, childLifecycle, first); },
+    builder() { firstOwnedTrace=null;return broken || errors.length || stack.length ? null : projectBuilderCloseGroup(canonicalRows, childLifecycle, first,trace=>{firstOwnedTrace=trace;}); },
+    owned() { return broken || errors.length || stack.length ? null : firstOwnedTrace; },
     start(boundary, context) { return note(() => { const frame = { boundary, context, seen: 0, passed: 0 }; stack.push(frame); return frame; }); },
     leaf(id, value, negative) { note(() => { const frame = stack.at(-1); if (!frame) return; const bit = 2 ** (id - 1); frame.seen |= bit; if (negative ? !value : value) frame.passed |= bit; }); },
     admit(rows, count, context) { note(() => admitted.set(rows, { count, context })); },
@@ -1276,8 +1277,8 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
     try { child = childSummary(projector); } catch (error) { reporting.push(error); failures.push(error); child = [1,"invalid",null,0,0,0,0,null,"UNKNOWN"]; }
     failures.push(...projector.errors);
     const diagnostics = [...reporting, ...recorder.errors, ...projector.errors];
-    try { report.internal(validateReceiptBuilderDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
-      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder: projector.builder() })); }
+    try { const builder=projector.builder();report.internal(packReceiptOwnedDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder },projector.owned())); }
     catch (error) { failures.push(error); }
     raiseContainerFailures(failures);
   }
@@ -1297,6 +1298,7 @@ async function containerInit(args, sharedReport) {
   report.mark("entry", "fulfilled");
   try {
     built = await runPackagingPipeline(containerContract.input, "/task", report, {
+      builderDiagnostics: true,
       checkBoundary: async () => { await validateContainerRuntime(identity); await nativeReceipt(contextHash); },
       buildArguments: (capsule, role) => ["/opt/edge-input/scripts/edge-proof.mjs", "container-build", capsule, role, contextHash, uid, gid],
     });

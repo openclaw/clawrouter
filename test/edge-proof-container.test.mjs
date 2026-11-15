@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
+import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1858,12 +1858,13 @@ test("parent target ambiguity actual diagnostics retain first failure undefined 
 });
 // Receipt diagnostics exercise extracted production helpers with inert values.
 const receiptPackets = [];
+const receiptView = row=>row.v===13?unpackReceiptOwnedDiagnostic(row):row;
 async function receiptParserFactory(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const helpers = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("export function raiseContainerFailures("));
   const parser = source.slice(source.indexOf("export function createReceiptLedger("), source.indexOf("async function containerInit(")).replaceAll("export ", "");
   const masks = source.slice(source.indexOf("export function validateMaskCompletion("), source.indexOf("export async function validateEmptyMasks(")).replaceAll("export ", "");
-  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, createProjectionLedger, raiseContainerFailures,
+  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, createProjectionLedger, raiseContainerFailures,
     edgeProof: { sourceSha: "c".repeat(40), sourceTree: "d".repeat(40) }, containerContract, ...overrides };
   const api = new Function(...Object.keys(bindings), helpers + masks + parser + "return {parseContainerReceipt,createReceiptLedger,observeContainerReceipt};")(...Object.values(bindings));
   const plan = { nonce: hex, contextHash: other, nativeHash: imageId.slice(7) };
@@ -1909,7 +1910,7 @@ test("receipt child actual producer repeated reports and complete role failures 
     if(phase) {assert.equal(summary[6],receiptChildPhases.indexOf(phase)+1);assert.equal(summary[7],false);} else {report.errors.push(undefined);assert.equal(capture.summary()[8],"UNKNOWN");}
     const api=await receiptParserFactory(), diagnostics=createContainerDiagnostics();
     await assert.rejects(api.observeContainerReceipt(diagnostics,"",api.plan,capture.summary));
-    const detail=diagnostics.records.find(row=>row.v===12);assert.equal(detail.parser[3],3);assert.deepEqual(detail.child,summary);
+    const detail=receiptView(diagnostics.records.find(row=>row.phase==="receipt"&&row.v>=9));assert.equal(detail.parser[3],3);assert.deepEqual(detail.child,summary);
     const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...diagnostics.records];
     const project=createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:row=>full.push(row)});project(capture.h.attached.result);
     full.push({v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null});
@@ -1956,14 +1957,14 @@ test("receipt child original undefined and reporter failures remain independent 
   for(const phase of ["entered","rejected","fulfilled"]){const report=createContainerDiagnostics(),push=report.records.push.bind(report.records);report.records.push=(row)=>{if(row.phase==="receipt"&&row.state===phase&&row.v===2)throw undefined;return push(row);};
     let reason,failed=false;try{await api.observeContainerReceipt(report,phase==="fulfilled"?api.text(api.value):{split(){throw undefined;}},api.plan,unknown);}catch(error){reason=error;failed=true;}assert.equal(failed,true);
     if(phase==="rejected"){assert.ok(reason instanceof AggregateError);assert.deepEqual(reason.errors,[undefined,undefined]);}else assert.equal(reason,undefined);
-    const detail=report.records.find(row=>row.v===12);assert.ok(detail);assert.equal(detail.parser[1],phase==="entered"?0:phase==="fulfilled"?1:2);assert.deepEqual(detail.reports,[1,1]);
+    const detail=receiptView(report.records.find(row=>row.phase==="receipt"&&row.v>=9));assert.ok(detail);assert.equal(detail.parser[1],phase==="entered"?0:phase==="fulfilled"?1:2);assert.deepEqual(detail.reports,[1,1]);
     assert.throws(()=>raiseContainerFailures([reason,undefined]),error=>error instanceof AggregateError&&error.errors.length===2&&error.errors[1]===undefined);
   }
-  const ledger=api.createReceiptLedger();ledger.enter=()=>{throw undefined;};const report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,api.text(api.value),api.plan,unknown,ledger));assert.equal(report.records.find(row=>row.v===12).parser,null);
+  const ledger=api.createReceiptLedger();ledger.enter=()=>{throw undefined;};const report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,api.text(api.value),api.plan,unknown,ledger));assert.equal(receiptView(report.records.find(row=>row.phase==="receipt"&&row.v>=9)).parser,null);
 });
 test("receipt child schema closed relationships priority and quotas reject invalid tuples", async () => {
   const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,()=>[1,"reported_rejection",256,7,2,3,33,false,"UNKNOWN"]));
-  const detail=report.records.find(row=>row.v===12);validateContainerDiagnostic(detail);
+  const detail=receiptView(report.records.find(row=>row.phase==="receipt"&&row.v>=9));validateContainerDiagnostic(detail);
   for(const mutate of [v=>v.child[7]=null,v=>v.child[8]="CLEAN",v=>v.child[3]=0,v=>v.parser[7]=3,v=>v.parser[8]=1,v=>v.parser[2]=false,v=>v.reports=[0,1]]){const bad=structuredClone(detail);mutate(bad);assert.throws(()=>validateContainerDiagnostic(bad));}
   const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8"), containerDiagnosticPhases=JSON.parse(/const containerDiagnosticPhases = (\[[^\n]+\]);/.exec(source)[1]);
   const many=[...Array.from({length:30},(_,i)=>({v:2,phase:containerDiagnosticPhases.filter(phase=>!["image_build_process","image_build_internal","native_prepare_internal","attach_process","init_prerequisite","overflow"].includes(phase))[i],state:"fulfilled",defined:null,exit:null,signal:null})),detail,{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null}];const lines=[];emitContainerFailure(many,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,12);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
@@ -2035,7 +2036,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
   const capsule={...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const unreachable=name=>(..._args)=>{calls.push(["unreached",name]);throw denied;};
-  const bindings={Buffer,JSON,createHash,join,relative,dirname,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
+  const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,validateOwnedCloseDiagnostic,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
     privateProcesses:async()=>{calls.push(["inventory"]);return [];},prepareEnvironment:async path=>{calls.push(["environment",path]);return {};},
     createRequire:(...args)=>{calls.push(["require",...args]);throw denied;},resolveModule:specifier=>{calls.push(["resolve",specifier]);throw undefined;},
     realpath:unreachable("realpath"),lstat:unreachable("lstat"),writeFile:unreachable("writeFile"),renderEdgeConfig:unreachable("renderEdgeConfig"),offlineProjection:unreachable("offlineProjection"),verifyDryRun:unreachable("verifyDryRun"),
@@ -2058,7 +2059,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   const report=api.createPackagingDiagnostics("child",line=>{if(writerFailure)throw undefined;frames.push(line);}), mark=report.mark;
   report.mark=(...args)=>{if(args[1]==="rejected")rejections.push({phase:args[0],reason:args[2]});return Reflect.apply(mark,report,args);};
   report.mark("entry","fulfilled");let failed=false,reason;
-  try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
+  try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{builderDiagnostics:builderOptions.diagnostics===true,checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
   report.mark("final",failed?"rejected":"fulfilled",reason);
   return {frames,calls,report,failed,reason,rejections,builderFailures,builders,processResults,summarizePackagingOutput:api.summarizePackagingOutput};
 }
@@ -2088,7 +2089,7 @@ test("receipt boundary actual pipeline forwarding admits repeated reports and pr
     assert.equal(produced.calls.filter(row=>row[0]==="read").length,failure==="wrangler_input"?2:failure==="receipt_read"||failure.startsWith("build_b:")?1:0);
     const capture=await receiptCapture(produced.frames),ledger=createProjectionLedger(),child=capture.summary(ledger);
     assert.equal(child[1],"reported_rejection",failure);assert.equal(ledger.detail(),null);assert.equal(child[8],"UNKNOWN");
-    const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,capture.summary));const detail=report.records.find(r=>r.v===12);assert.equal(detail.count,"ZERO");assert.equal(detail.projection,null);
+    const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,capture.summary));const detail=receiptView(report.records.find(r=>r.phase==="receipt"&&r.v>=9));assert.equal(detail.count,"ZERO");assert.equal(detail.projection,null);
     const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...report.records,{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>full.push(r)})(capture.h.attached.result);
     const lines=[];emitContainerFailure(full,line=>lines.push(line));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
     const builds=produced.calls.filter(row=>row[0]==="build");assert.equal(new Set(builds.map(row=>row[2][3])).size,builds.length);assert.ok(builds.every(row=>row[1]==="/immutable/node"&&row[3]==="/task"));
@@ -2150,7 +2151,7 @@ test("receipt boundary schema rejects contradictory count masks contexts and pre
   const child=[1,"invalid",null,0,0,0,0,null,"UNKNOWN"],base=receiptBoundaryRecord(child,[1,10,0,1,2,3,1,null]);validateReceiptBoundaryDiagnostic(base);
   const historical={...base,v:9};delete historical.count;delete historical.projection;assert.deepEqual(validateContainerDiagnostic(historical),historical);
   for(const mutate of [r=>r.count="ONE",r=>r.projection[0]=2,r=>r.projection[1]=99,r=>r.projection[2]=5,r=>r.projection[3]=0,r=>r.projection[4]=1,r=>r.projection[5]=7,r=>r.projection[6]=3,r=>r.projection[7]=false,r=>r.child=[1,"reported_complete",100,7,1,0,0,null,"UNKNOWN"],r=>r.child[1]="capture_mismatch"]){const bad=structuredClone(base);mutate(bad);assert.throws(()=>validateReceiptBoundaryDiagnostic(bad));}
-  const parser=await receiptParserFactory(),report=createContainerDiagnostics(),ledger=createProjectionLedger();ledger.start=()=>{throw undefined;};await assert.rejects(parser.observeContainerReceipt(report,"",parser.plan,()=>{throw undefined;}));assert.ok(report.records.find(r=>r.v===12).reports[0]>0);
+  const parser=await receiptParserFactory(),report=createContainerDiagnostics(),ledger=createProjectionLedger();ledger.start=()=>{throw undefined;};await assert.rejects(parser.observeContainerReceipt(report,"",parser.plan,()=>{throw undefined;}));assert.ok(receiptView(report.records.find(r=>r.phase==="receipt"&&r.v>=9)).reports[0]>0);
   const lines=[];emitContainerFailure([{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},base],line=>lines.push(line));assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
 });
 test("receipt boundary actual parser getter order is identical with optional observation",async()=>{
@@ -2178,16 +2179,16 @@ test("receipt lifecycle actual builder preserves every original failure and oper
   const report=await receiptActualBuilder(args,"build",{writeFailure:["build","rejected"]});assert.ok(report.reason instanceof AggregateError);assert.deepEqual(report.reason.errors,[undefined,undefined]);assert.deepEqual(report.report.errors,[undefined]);
   const onlyReport=await receiptActualBuilder(args,undefined,{writeFailure:["final","fulfilled"]});assert.equal(onlyReport.failed,true);assert.equal(onlyReport.reason,undefined);assert.equal(onlyReport.report.records.at(-1).outcome,"fulfilled");assert.deepEqual(onlyReport.report.errors,[undefined]);
 });
-async function lifecyclePacket(produced, mutate=frames=>frames) {
+async function lifecyclePacket(produced, mutate=frames=>frames,wire=false) {
   const capture=await receiptCapture(mutate(produced.frames)),api=await receiptParserFactory(),report=createContainerDiagnostics();
   let failed=false,reason;try{await api.observeContainerReceipt(report,"",api.plan,capture.summary);}catch(error){failed=true;reason=error;}
   assert.equal(failed,true);assert.ok(reason instanceof Error);
-  const row=report.records.find(r=>r.v===12);assert.ok(row);validateReceiptBuilderDiagnostic(row);
+  const raw=report.records.find(r=>r.phase==="receipt"&&r.v>=9),row=receiptView(raw);assert.ok(row);validateReceiptOwnedDiagnostic(raw);
   const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...report.records,{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];
   createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>full.push(r)})(capture.h.attached.result);
   const lines=[];emitContainerFailure(full,line=>lines.push(line));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
   assert.ok(Buffer.byteLength(JSON.stringify(row))<=512);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
-  return row;
+  return wire?raw:row;
 }
 test("receipt lifecycle actual builder output reaches acceptor projector and closed formatter",async()=>{
   for(const phase of ["namespace_read","native_receipt","builder_import","resolve","createRequire","require","build","receipt_write","build_service_stop"]){
@@ -2244,10 +2245,10 @@ function truncateActualBuilder(result) {
 }
 async function receiptOwnedResult(command,args,options,stdout,scenario) {
   const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
-  const body=source.slice(source.indexOf("export async function runOwnedProcess("),source.indexOf("export function requireProcessSuccess(")).replace("export ","");
+  const body=source.slice(source.indexOf("// Optional, invocation-local observations."),source.indexOf("export async function privateProcesses(")).replaceAll("export ","")+source.slice(source.indexOf("export async function runOwnedProcess("),source.indexOf("export function requireProcessSuccess(")).replace("export ","");
   const child=new EventEmitter(),signals=new EventEmitter(),timers=[],cleared=[],kills=[];child.pid=123;child.stdout=new EventEmitter();child.stderr=new EventEmitter();
   let spawns=0,samples=0;
-  const bindings={createHash,Map,Promise,Object,Error,process:{kill:(...values)=>kills.push(values)},refuse:code=>{throw new Error(code);},
+  const bindings={createHash,Map,Promise,Object,Error,receiptBuilderSignals,process:{kill:(...values)=>kills.push(values)},refuse:code=>{throw new Error(code);},
     spawn:()=>{throw new Error("native spawn forbidden");},
     setTimeout:(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;},setInterval:(fn,ms)=>({fn,ms}),clearTimeout:t=>cleared.push(t),clearInterval:t=>cleared.push(t)};
   const run=new Function(...Object.keys(bindings),body+"return runOwnedProcess;")(...Object.values(bindings));
@@ -2360,5 +2361,203 @@ test("receipt builder schema preserves historical decoders exact fields and maxi
   createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:row=>records.push(row)})(capture.h.attached.result);
   emitContainerFailure(records,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(Buffer.byteLength(JSON.stringify(wide))<=512);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
   receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
+});
+async function ownedLedgerFactory(overrides={},supplied) {
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("// Optional, invocation-local observations."),source.indexOf("export function requireProcessSuccess(")).replaceAll("export ","");
+  const fields=Array(20).fill("0");fields[0]="S";fields[1]="1";fields[2]="12";fields[19]="123";
+  const calls=[],timers=[],intervals=[],signals=new EventEmitter(),child=new EventEmitter();child.pid=12;child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+  const environment=supplied?.options.env??Object.freeze({inert:true}),command=supplied?.command??"/immutable/node",args=supplied?.args??Object.freeze(["inert"]);
+  const processInert={platform:"linux",pid:1,kill(...values){assert.equal(this,processInert);calls.push(["kill",...values]);}};
+  const bindings={receiptBuilderSignals,createHash,Buffer,Map,Promise,Object,Array,Number,Error,
+    process:processInert,refuse:code=>{throw new Error(code);},
+    readdir:async path=>{calls.push(["directory",path]);assert.equal(path,"/proc");return["1","self","12"];},
+    readFile:async(...values)=>{calls.push(["stat",...values]);assert.deepEqual(values,["/proc/12/stat","utf8"]);return"12 (synthetic) "+fields.join(" ");},
+    spawn:(...values)=>{calls.push(["spawn",...values]);assert.deepEqual(values,[command,args,{cwd:"/task",env:environment,detached:true,stdio:["ignore","pipe","pipe"]}]);return child;},
+    setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},setInterval:(fn,ms)=>{const t={fn,ms};intervals.push(t);return t;},
+    clearTimeout:t=>calls.push(["clearTimeout",t]),clearInterval:t=>calls.push(["clearInterval",t]),...overrides};
+  for(const name of ["readdir","readFile","spawn","setTimeout","setInterval","clearTimeout","clearInterval","refuse","createHash"])assert.equal(typeof bindings[name],"function",name);
+  const api=new Function(...Object.keys(bindings),body+"return {privateProcesses,runOwnedProcess,createOwnedProcessLedger};")(...Object.values(bindings));
+  return {...api,bindings,fields,calls,timers,intervals,signals,child,environment,command,args};
+}
+test("owned ledger actual sampler preserves each original phase predicate and undefined failure",async()=>{
+  const vectors=[
+    [{process:{platform:"darwin",get pid(){throw new Error("unreached");}}},1,1,1,0],
+    [{process:{platform:"linux",pid:2}},1,2,3,1],
+    [{readdir:async()=>{throw undefined;}},2,0,0,0],
+    [{readdir:async()=>({[Symbol.iterator](){throw undefined;}})},2,0,0,0],
+    [{readdir:async()=>[{toString(){throw undefined;}}]},3,0,0,0],
+    [{readFile:async()=>{throw undefined;}},4,0,0,0],
+    [{readFile:async()=>({lastIndexOf(){throw undefined;}})},5,0,0,0],
+    [{Number:()=>{throw undefined;}},7,0,0,0],
+    [{readFile:async()=>{throw{get code(){throw undefined;}};}},8,0,0,0],
+  ];
+  for(const [overrides,stage,leaf,seen,passed] of vectors){
+    const f=await ownedLedgerFactory(overrides),rec=f.createOwnedProcessLedger();let failure,failed=false;
+    try{await f.privateProcesses(rec);}catch(error){failed=true;failure=error;}
+    assert.equal(failed,true);if(!leaf)assert.equal(failure,undefined);else assert.ok(failure instanceof Error);
+    rec.error(2,failure);const trace=rec.finish();assert.deepEqual(trace[1],[2,stage,leaf?1:0,leaf,seen,passed,failure!==undefined]);validateOwnedTrace(trace,1);
+  }
+  for(const [index,value,leaf,seen,passed] of [[0,"?",1,1,0],[19,"?",2,3,1],[1,"?",3,7,3],[2,"?",3,7,3]]){
+    const f=await ownedLedgerFactory();f.fields[index]=value;const rec=f.createOwnedProcessLedger();let failure;try{await f.privateProcesses(rec);}catch(e){failure=e;}assert.ok(failure instanceof Error);rec.error(2,failure);assert.deepEqual(rec.finish()[1],[2,6,1,leaf,seen,passed,true]);
+  }
+  let reads=0;const gone={get code(){reads++;return"ENOENT";}};const f=await ownedLedgerFactory({readFile:async()=>{throw gone;}}),rec=f.createOwnedProcessLedger();assert.deepEqual(await f.privateProcesses(rec),[]);assert.equal(reads,1);assert.equal(rec.finish()[1],null);
+  const original={get code(){reads++;return"OTHER";}};const g=await ownedLedgerFactory({readFile:async()=>{throw original;}});let reason;try{await g.privateProcesses();}catch(e){reason=e;}assert.equal(reason,original);assert.equal(reads,2);
+});
+test("owned ledger actual sampler getter order and observer faults do not change original reads",async()=>{
+  const orders=[];
+  for(const enabled of [false,true]){
+    const order=[],fields=Array(20).fill("0");fields[0]="S";fields[1]="1";fields[2]="12";fields[19]="123";
+    const observed=new Proxy(fields,{get(target,key){if(["0","1","2","19"].includes(key))order.push(key);return Reflect.get(target,key);}});
+    const f=await ownedLedgerFactory({readFile:async()=>({lastIndexOf(){order.push("last");return 0;},slice(n){assert.equal(n,2);order.push("slice");return{split(value){assert.equal(value," ");order.push("split");return observed;}};}})});
+    const rec=enabled?f.createOwnedProcessLedger():undefined;assert.equal((await f.privateProcesses(rec)).length,1);orders.push(order);if(rec)validateOwnedTrace(rec.finish(),0);
+  }
+  assert.deepEqual(orders[0],orders[1]);assert.deepEqual(orders[0],["last","slice","split","0","19","1","2","1","2","19","0"]);
+  const f=await ownedLedgerFactory(),rec=f.createOwnedProcessLedger();rec.sampleLeaf=()=>{throw undefined;};assert.equal((await f.privateProcesses(rec)).length,1);const trace=rec.finish();assert.equal(trace[1],null);assert.equal(trace[2],null);assert.ok(trace[3][0]>0);assert.equal(trace[3][0],trace[3][1]);
+});
+async function ownedProcessScenario(scenario,stdout="",override={},supplied) {
+  const f=await ownedLedgerFactory(override,supplied),rec=supplied?.options.recorder??f.createOwnedProcessLedger(),samples=[];let heldResolve,heldReject;
+  const held=new Promise((resolve,reject)=>{heldResolve=resolve;heldReject=reject;});
+  const sample=()=>{const ordinal=samples.length;let p;
+    if(scenario==="held"&&ordinal===0)p=held;
+    else if(scenario==="monitor_undefined"&&ordinal===0)p=Promise.reject(undefined);
+    else if(scenario==="iterator"&&ordinal===0)p=Promise.resolve({[Symbol.iterator](){throw undefined;}});
+    else if(scenario==="row_key"&&ordinal===0)p=Promise.resolve([{get pid(){throw undefined;}}]);
+    else if(scenario==="capacity"&&ordinal===0)p=Promise.resolve(Array.from({length:513},(_,pid)=>({pid,start:1})));
+    else if(scenario==="final_undefined")p=Promise.reject(undefined);
+    else p=f.privateProcesses(rec);
+    samples.push(p);return p;
+  };
+  if(scenario==="report_fault")rec.request=()=>{throw undefined;};
+  const promise=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,recorder:rec,signalSource:f.signals,sample,...(supplied?{timeoutMs:supplied.options.timeoutMs}:{})});
+  let settled=false;promise.then(()=>{settled=true;});
+  if(f.intervals.length){
+    if(["monitor_undefined","iterator","row_key","capacity","held","monitor_proc"].includes(scenario)){f.intervals[0].fn();if(scenario!=="held")await samples[0].catch(()=>{});}
+    if(scenario==="timeout"||scenario==="report_fault")f.timers[0].fn();
+    if(scenario==="interrupt")f.signals.emit("SIGINT");
+    if(scenario==="child_error")f.child.emit("error",undefined);
+    if(scenario==="capture")f.child.stdout.emit("data",Buffer.alloc(1024*1024+1));else if(stdout)f.child.stdout.emit("data",Buffer.from(stdout));
+    f.child.emit("close",null,"SIGTERM");
+    if(scenario==="held"){
+      await Promise.resolve();assert.equal(settled,false);heldReject(undefined);await samples[0].catch(()=>{});
+      const join=f.timers.find(t=>t.ms===1);assert.ok(join);join.fn();
+    }
+  }
+  const result=await promise;return{...f,result,rec,samples};
+}
+test("owned ledger actual process monitor external-compatible close and dispatch remain distinct",async()=>{
+  for(const [scenario,site,stage] of [["child_error",8,0],["monitor_undefined",2,0],["iterator",3,1],["row_key",3,2],["capacity",4,1],["capture",5,1],["final_undefined",9,0],["timeout",0,0],["interrupt",0,0]]){
+    const f=await ownedProcessScenario(scenario),trace=f.result.ownedTrace;validateOwnedTrace(trace,f.result.errors.length);
+    assert.equal(f.result.closed,true);assert.equal(f.result.signal,"SIGTERM");assert.equal(trace[1]?.[0]??0,site);assert.equal(trace[1]?.[1]??0,stage);
+    const own=["monitor_undefined","iterator","row_key","capacity","capture","timeout","interrupt"].includes(scenario);
+    assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),own?[["kill",-12,scenario==="interrupt"?"SIGINT":"SIGTERM"]]:[]);
+    assert.equal(trace[2][1],own?1:0);assert.equal(trace[2][2],own?1:0);assert.equal(trace[2][3],0);
+    assert.equal(f.calls.filter(r=>r[0]==="clearTimeout").length,2);assert.equal(f.calls.filter(r=>r[0]==="clearInterval").length,1);assert.equal(f.signals.listenerCount("SIGINT"),0);
+    if(["child_error","monitor_undefined","iterator","row_key","final_undefined"].includes(scenario))assert.equal(f.result.errors[0],undefined);
+  }
+  const held=await ownedProcessScenario("held");assert.equal(held.samples.length,2);assert.equal(held.result.errors[0],undefined);assert.deepEqual(held.calls.filter(r=>r[0]==="kill"),[]);assert.equal(held.result.ownedTrace[2][4],1);validateOwnedTrace(held.result.ownedTrace,1);
+});
+test("owned ledger ignored ESRCH recorded kill throws and report faults preserve cleanup",async()=>{
+  for(const [code,recorded] of [["ESRCH",false],["OTHER",true],[undefined,true]]){
+    let reads=0,kills=0;const reason=code===undefined?undefined:{get code(){reads++;return code;}};
+    const process={platform:"linux",pid:1,kill(pid,signal){assert.equal(this,process);assert.equal(pid,-12);assert.equal(signal,"SIGTERM");kills++;throw reason;}};
+    const f=await ownedProcessScenario("timeout","",{process});assert.equal(kills,1);assert.equal(reads,code===undefined?0:1);assert.equal(f.result.errors.length,recorded?1:0);if(recorded)assert.equal(f.result.errors[0],reason);
+    const trace=f.result.ownedTrace;validateOwnedTrace(trace,f.result.errors.length);assert.equal(trace[2][12],recorded?0:1);assert.equal(trace[2][3],1);assert.equal(trace[2][9],reason===undefined?2:3);assert.equal(trace[2][10],reason===undefined?1:2);
+  }
+  for(const first of [undefined,new Error("synthetic")]){
+    let index=0,reads=0;const ignored={get code(){reads++;return"ESRCH";}},values=[first,ignored];
+    const inertProcess={platform:"linux",pid:1,kill(pid,signal){assert.equal(this,inertProcess);assert.equal(pid,-12);assert.equal(signal,index?"SIGKILL":"SIGTERM");throw values[index++];}};
+    const f=await ownedLedgerFactory({process:inertProcess}),rec=f.createOwnedProcessLedger();const pending=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,signalSource:f.signals,sample:async()=>[],recorder:rec});
+    f.timers[0].fn();f.timers[1].fn();f.child.emit("close",null,"SIGKILL");const result=await pending;
+    assert.equal(index,2);assert.equal(reads,1);assert.deepEqual(result.errors,[first]);validateOwnedTrace(result.ownedTrace,1);assert.equal(result.ownedTrace[1][6],first!==undefined);
+    if(first===undefined){const bad=structuredClone(result.ownedTrace);bad[1][6]=true;assert.throws(()=>validateOwnedTrace(bad,1));}
+  }
+  const failed=await ownedProcessScenario("report_fault");assert.deepEqual(failed.result.observerErrors,[undefined]);assert.deepEqual(failed.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);assert.equal(failed.result.ownedTrace[1],null);assert.equal(failed.result.ownedTrace[2],null);validateOwnedTrace(failed.result.ownedTrace,0);
+});
+test("owned ledger startup and monitor operands retain original failures without false predicate claims",async()=>{
+  for(const stage of [1,2,3,4,5,6]){
+    const f=await ownedLedgerFactory(),rec=f.createOwnedProcessLedger();let spawn=f.bindings.spawn;
+    if(stage===1)spawn=()=>{throw undefined;};
+    if(stage===2)f.child.stdout.on=()=>{throw undefined;};
+    if(stage===3)f.signals.on=()=>{throw undefined;};
+    if(stage===6)f.child.on=()=>{throw undefined;};
+    const g=stage===4?await ownedLedgerFactory({setTimeout:()=>{throw undefined;}}):stage===5?await ownedLedgerFactory({setInterval:()=>{throw undefined;}}):f;
+    const result=await g.runOwnedProcess(g.command,g.args,{cwd:"/task",env:g.environment,recorder:rec,signalSource:g.signals,spawnProcess:stage===4||stage===5?g.bindings.spawn:spawn,sample:async()=>[]});
+    assert.equal(result.errors[0],undefined);assert.equal(result.closed,false);assert.deepEqual(result.ownedTrace[1],[stage===1?6:7,stage,0,0,0,0,false]);validateOwnedTrace(result.ownedTrace,1);
+  }
+  for(const operation of ["set","size"]){
+    let calls=0;class ObservedMap extends Map{set(...args){if(operation==="set"){calls++;throw undefined;}return super.set(...args);}get size(){calls++;throw undefined;}}
+    const f=await ownedProcessScenario("monitor_proc","",{Map:ObservedMap});assert.equal(calls,1);assert.equal(f.result.errors[0],undefined);assert.equal(f.result.ownedTrace[1][0],operation==="set"?3:4);assert.equal(f.result.ownedTrace[1][2],0);validateOwnedTrace(f.result.ownedTrace,1);
+  }
+  const f=await ownedLedgerFactory({readFile:async()=>({lastIndexOf:()=>0,slice:()=>({split:()=>({0:"S",get 19(){throw undefined;}})})})}),rec=f.createOwnedProcessLedger();let error;try{await f.privateProcesses(rec);}catch(e){error=e;}assert.equal(error,undefined);rec.error(2,error);assert.deepEqual(rec.finish()[1],[2,6,2,0,1,1,false]);
+});
+test("owned ledger original sampler errors still dispatch and settle when the recorder fails",async()=>{
+  const f=await ownedLedgerFactory(),rec=f.createOwnedProcessLedger();rec.error=()=>{throw undefined;};let count=0;
+  const resultPromise=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,recorder:rec,signalSource:f.signals,sample:()=>{count++;return count===1?Promise.reject(undefined):Promise.resolve([]);}});
+  f.intervals[0].fn();await Promise.resolve();await Promise.resolve();assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);
+  f.child.emit("close",null,"SIGTERM");const result=await resultPromise;
+  assert.equal(count,2);assert.deepEqual(result.errors,[undefined]);assert.deepEqual(result.observerErrors,[undefined]);assert.equal(result.closed,true);assert.equal(result.ownedTrace[1],null);validateOwnedTrace(result.ownedTrace,1);
+  assert.equal(f.calls.filter(r=>r[0]==="clearTimeout").length,2);
+});
+test("owned ledger actual original pipeline keeps source-bound trace and lossless capture hashes",async()=>{
+  for(const scenario of ["child_error","monitor_undefined","capacity","report_fault","held"]){
+    let original;
+    const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
+      assert.ok(options.recorder);assert.equal(options.timeoutMs,120000);
+      const f=await ownedProcessScenario(scenario,stdout.split("\n").slice(0,6).join("\n")+"\n",{}, {command,args,options});original=f.result;return original;
+    }});
+    assert.equal(produced.processResults.length,1);assert.equal(produced.processResults[0],original);
+    assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build").length,1);
+    const wire=await lifecyclePacket(produced,frames=>frames,true);assert.equal(wire.v,13);const prior=unpackReceiptOwnedDiagnostic(wire);validateReceiptBuilderDiagnostic(prior);
+    assert.equal(prior.child[1],"invalid");assert.deepEqual(wire.detail[7],original.ownedTrace);assert.deepEqual(prior.builder.slice(8),[original.outputSummary.stdout.bytes,original.outputSummary.stdout.sha256,original.outputSummary.stderr.bytes,original.outputSummary.stderr.sha256]);
+    assert.equal(wire.detail[6][9].length,43);assert.equal(wire.detail[6][11].length,43);
+    if(scenario==="child_error"){assert.equal(wire.detail[7][1][0],8);assert.equal(wire.detail[7][2][1],0);assert.equal(prior.builder[4],2);}
+    if(scenario==="monitor_undefined"){assert.equal(wire.detail[7][1][0],2);assert.equal(wire.detail[7][2][1],1);}
+    if(scenario==="report_fault"){assert.ok(original.observerErrors.includes(undefined));assert.ok(produced.reason.errors.includes(undefined));}
+  }
+});
+test("owned ledger original escalation and default-off process preserve arguments reads and settlement",async()=>{
+  for(const enabled of [false,true])for(const observerFault of enabled?[false,true]:[false]){
+    const f=await ownedLedgerFactory();let pidReads=0;Object.defineProperty(f.child,"pid",{get(){pidReads++;return 12;}});
+    const rec=enabled?f.createOwnedProcessLedger():undefined;if(observerFault)rec.returned=()=>{throw undefined;};
+    const resultPromise=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,signalSource:f.signals,sample:async()=>[],...(rec?{recorder:rec}:{})});
+    f.timers[0].fn();assert.equal(f.timers[1].ms,1000);f.timers[1].fn();
+    assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"],["kill",-12,"SIGKILL"]]);assert.equal(pidReads,4);
+    f.child.emit("close",null,"SIGKILL");const result=await resultPromise;assert.equal(result.closed,true);assert.equal(result.timedOut,true);assert.deepEqual(result.errors,[]);assert.equal(f.signals.listenerCount("SIGTERM"),0);
+    if(!enabled){assert.equal(Object.hasOwn(result,"ownedTrace"),false);assert.equal(Object.hasOwn(result,"observerErrors"),false);}
+    else if(observerFault){assert.deepEqual(result.observerErrors,[undefined,undefined]);assert.deepEqual(result.ownedTrace,[1,null,null,[2,2,0]]);}
+    else {assert.deepEqual(result.ownedTrace[2],[2,2,2,0,0,36,6,3,2,1,0,0,0]);validateOwnedTrace(result.ownedTrace,0);}
+  }
+});
+test("owned ledger rejects undisposed requests and contradictory saturated or ignored outcomes",()=>{
+  const zero=[0,0,0,0,0,0,0,0,0,0,0,0,0];
+  assert.throws(()=>validateOwnedTrace([1,null,[1,0,0,0,0,4,2,0,0,0,0,0,0],[0,0,0]],0));
+  const valid=[255,255,255,0,0,1,2,1,2,1,0,7,0];validateOwnedTrace([1,[2,0,0,0,0,0,false],valid,[0,0,0]],1);
+  for(const bad of [[...valid.slice(0,11),6,0],[...valid.slice(0,11),1,0],[1,1,0,1,0,4,2,3,2,2,1,0,1],[1,1,1,0,1,4,2,3,2,1,0,0,0]])assert.throws(()=>validateOwnedTrace([1,null,bad,[0,0,0]],0));
+  assert.throws(()=>validateOwnedTrace([1,[2,6,1,3,7,3,false],zero,[0,0,0]],1));
+  validateOwnedTrace([1,[2,6,2,0,3,3,false],zero,[0,0,0]],1);
+  for(const trace of [[1,null,[1,1,1,0,0,63,7,1,2,1,0,0,0],[0,0,0]],[1,null,[255,255,0,255,0,1,2,1,2,3,2,32,255],[0,0,0]],[1,null,null,[65535,65535,2]],[1,[1,0,0,0,0,0,true],[1,1,0,1,0,4,2,3,2,3,2,0,1],[0,0,0]]])assert.throws(()=>validateOwnedTrace(trace,trace[1]?1:0));
+  assert.throws(()=>validateOwnedTrace([1,null,zero,[0,0,0]],null));
+  for(const defined of [false,true]){
+    const stop=[1,1,0,1,0,4,2,3,2,defined?3:2,defined?2:1,0,0];
+    assert.throws(()=>validateOwnedTrace([1,null,stop,[0,0,0]],0));
+    validateOwnedTrace([1,[1,0,0,0,0,0,defined],stop,[0,0,0]],1);
+    assert.throws(()=>validateOwnedTrace([1,[1,0,0,0,0,0,!defined],stop,[0,0,0]],1));
+    assert.throws(()=>validateOwnedTrace([1,[8,0,0,0,0,0,false],stop,[0,0,0]],1));
+    validateOwnedTrace([1,[8,0,0,0,0,0,false],stop,[0,0,0]],2);
+  }
+  assert.throws(()=>validateOwnedTrace([1,null,[1,1,1,0,0,1,2,1,2,1,0,0,0],[0,0,0]],0));
+});
+test("owned ledger saturation first error isolation and maximum lossless versioned schema",async()=>{
+  const rec=createOwnedProcessLedger();for(let i=0;i<300;i++){rec.request(1,"SIGTERM");rec.attempt(1,"SIGTERM");rec.returned();}
+  rec.sampleStage(4);rec.error(2,undefined);rec.error(8,new Error("later"));const trace=rec.finish();assert.deepEqual(trace[1],[2,4,0,0,0,0,false]);assert.equal(trace[2][11],7);validateOwnedTrace(trace,2);
+  rec.error(8,new Error("late"));assert.deepEqual(rec.finish(),trace);const independent=createOwnedProcessLedger();independent.error(8,undefined);assert.equal(independent.finish()[1][0],8);
+  for(const change of [t=>t[1][0]=10,t=>t[1][1]=10,t=>t[1][2]=1,t=>t[1][6]=null,t=>t[2][1]=254,t=>t[2][11]=64,t=>t[2][6]=0,t=>t[2][7]=6,t=>t[2][8]=3,t=>t[2][9]=2,t=>t[3][1]=1]){const bad=structuredClone(trace);change(bad);assert.throws(()=>validateOwnedTrace(bad,2));}
+  const produced=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder}),prior=await lifecyclePacket(produced);prior.defined=false;prior.parser=[1,2,false,6,1,14,0,16383,8191];prior.count="ONE";prior.lifecycle=[1,256,256,14,0,2,0];prior.reports=[65535,65535];prior.builder=[1,1,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,hex,Number.MAX_SAFE_INTEGER,other];
+  const wideTrace=[1,[2,6,1,3,7,3,true],[255,255,255,255,255,63,7,6,3,3,2,63,255],[0,0,0]];
+  const wire=packReceiptOwnedDiagnostic(prior,wideTrace);assert.deepEqual(unpackReceiptOwnedDiagnostic(wire),prior);assert.ok(Buffer.byteLength(JSON.stringify(wire))<=512);
+  for(const change of [r=>r.detail[6][9]+="=",r=>r.detail[6][11]="A".repeat(42),r=>r.detail[6][9]=r.detail[6][9].slice(0,-1)+"B",r=>r.detail[7][1][6]=null,r=>r.detail[7][2][9]=4,r=>r.detail[7][3][2]=4,r=>r.detail.push(0)]){const bad=structuredClone(wire);change(bad);assert.throws(()=>validateReceiptOwnedDiagnostic(bad));}
+  const capture=await receiptCapture(produced.frames),rows=[wire,{v:2,phase:"entry",state:"rejected",defined:false,exit:null,signal:null},{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>rows.push(r)})(capture.h.attached.result);
+  const lines=[];emitContainerFailure(rows,line=>lines.push(line));assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
 });
 // END attach diagnostic pure tests.

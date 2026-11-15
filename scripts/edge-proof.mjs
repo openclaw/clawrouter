@@ -64,6 +64,7 @@ function ownData(value, name) {
   return descriptor.value;
 }
 export function validatePackagingDiagnostic(value) {
+  if(value && typeof value==="object" && ownData(value,"v")===2) return validateOwnedCloseDiagnostic(value);
   const phase = value && typeof value === "object" ? ownData(value, "phase") : null;
   const summaries = {
     stdout_summary: ["bytes", "sha256", "esc", "complete"], stderr_summary: ["bytes", "sha256", "esc", "complete"],
@@ -114,6 +115,7 @@ export function createPackagingDiagnostics(role, writer) {
         row.errors = ownData(ownData(result, "errors"), "length");
         const remaining = ownData(result, "remaining"); row.remaining = remaining === null ? null : ownData(remaining, "length");
       }
+      if (result && Object.hasOwn(result,"ownedTrace")) { row.v=2;row.trace=ownData(result,"ownedTrace"); }
       accept(row);
     } catch (error) { errors.push(error); }
   };
@@ -234,6 +236,7 @@ export function acceptPackagingProcess(result, report, role, closePhase, reportP
     if (entry.length !== 1 || final.length !== 1 || parsed.records.some(row => row.outcome === "rejected") || parsed.output.length !== 1) refuse("missing-or-failed-child-milestone");
     report.mark(reportPhase, "fulfilled");
   } catch (error) { errors.push(error); report.mark(reportPhase, "rejected", error); }
+  try { if(Object.hasOwn(result,"observerErrors")) errors.push(...ownData(result,"observerErrors")); } catch(error) { errors.push(error); }
   raisePackagingFailures(errors);
   return parsed.output[0];
 }
@@ -335,75 +338,121 @@ export function namespaceArguments(node, args) {
   // --mount-proc mounts only inside the explicitly private mount namespace.
   return ["--user", "--map-root-user", "--net", "--mount", "--propagation", "private", "--pid", "--fork", "--kill-child=SIGKILL", "--mount-proc", "--", node, ...args];
 }
-export async function privateProcesses() {
-  if (process.platform !== "linux" || process.pid !== 1) refuse("process-census-outside-private-init");
+// Optional, invocation-local observations. No error properties or native calls.
+export const ownedErrorSites = Object.freeze(["stop_throw","monitor_sample","monitor_rows","monitor_capacity","capture_capacity","spawn","setup","child_error","final_sample"]);
+export const ownedSampleStages = Object.freeze(["admission","directory","entry_filter","stat_read","stat_parse","stat_shape","row","stat_error_filter","returned"]);
+export function createOwnedProcessLedger() {
+  const errors=[], counts=Array(5).fill(0); let saturation=0, first=null, sample=[0,0,0,0,0], condition=[0,0,0,0], operation=0, reasons=0, signals=0, firstReason=0, firstSignal=0, firstOutcome=0, firstThrow=0, active=false, sealed=false, ignored=0;
+  const note=fn=>{try{return fn();}catch(error){errors.push(error);}};
+  const bump=i=>{if(counts[i]===255)saturation|=2**i;else counts[i]++;};
+  return {errors,
+    sampleStage(stage){note(()=>{if(!sealed)sample=[stage,0,0,0,0];});},
+    sampleLeaf(id,value,negative){note(()=>{if(sealed)return;sample[3]|=2**(id-1);if(negative?!value:!!value)sample[4]|=2**(id-1);});},
+    sampleFalse(){note(()=>{if(sealed)return;sample[1]=1;sample[2]=[1,2,3].find(id=>(sample[3]&~sample[4])&2**(id-1))??0;});},
+    sampleState(){return note(()=>sample.slice());},
+    sampleRestore(value){note(()=>{if(!sealed)sample=value;});},
+    operation(stage){note(()=>{if(!sealed)operation=stage;});},
+    condition(value){note(()=>{if(!sealed)condition=value===undefined?[0,0,0,0]:[value?1:0,value?1:0,1,value?0:1];});},
+    error(site,reason,stage=0){note(()=>{
+      if(sealed||first)return;
+      const fact=[2,9].includes(site)?sample:[4,5].includes(site)?[1,...condition]:[site===3?operation:stage,0,0,0,0];
+      if(fact[1]===0&&fact[3])fact[1]=2;
+      first=[site,...fact,reason!==undefined];
+    });},
+    request(reason,signal){note(()=>{if(sealed)return;bump(0);reasons|=2**(reason-1);signals|=signal==="SIGINT"?1:signal==="SIGTERM"?2:4;active=false;});},
+    skipped(){note(()=>{if(!sealed)bump(4);});},
+    attempt(reason,signal){note(()=>{if(sealed)return;bump(1);active=true;if(!firstReason){firstReason=reason;firstSignal=receiptBuilderSignals.indexOf(signal);}});},
+    returned(){note(()=>{if(sealed||!active)return;bump(2);if(!firstOutcome)firstOutcome=1;active=false;});},
+    thrown(reason){note(()=>{if(sealed||!active)return;bump(3);if(!firstOutcome)firstOutcome=reason===undefined?2:3;if(!firstThrow)firstThrow=reason===undefined?1:2;active=false;});},
+    ignored(){note(()=>{if(sealed)return;if(ignored===255)saturation|=32;else ignored++;});},
+    finish(){return note(()=>{sealed=true;return [1,errors.length?null:first,errors.length?null:[...counts,reasons,signals,firstReason,firstSignal,firstOutcome,firstThrow,saturation,ignored],[Math.min(65535,errors.length),Math.min(65535,errors.filter(e=>e===undefined).length),(errors.length>65535?1:0)|(errors.filter(e=>e===undefined).length>65535?2:0)]];});},
+  };
+}
+const ownedNote=(recorder,method,...args)=>{if(recorder)try{return recorder[method](...args);}catch(error){recorder.errors.push(error);}};
+const ownedLeaf=(recorder,id,value,negative=false)=>{ownedNote(recorder,"sampleLeaf",id,value,negative);return value;};
+const ownedValue=(recorder,method,observed,value)=>{ownedNote(recorder,method,observed);return value;};
+const ownedCondition=(recorder,value)=>{ownedNote(recorder,"condition",value);return value;};
+const ownedArgument=(recorder,reason,signal,value)=>{ownedNote(recorder,"attempt",reason,signal);return value;};
+export async function privateProcesses(recorder) {
+  ownedNote(recorder,"sampleStage",1);
+  if (ownedLeaf(recorder,1,process.platform !== "linux",true) || ownedLeaf(recorder,2,process.pid !== 1,true)) { ownedNote(recorder,"sampleFalse"); refuse("process-census-outside-private-init"); }
   const rows = [];
+  ownedNote(recorder,"sampleStage",2);
   for (const name of await readdir("/proc")) {
+    ownedNote(recorder,"sampleStage",3);
     if (!/^\d+$/.test(name) || name === "1") continue;
     try {
+      ownedNote(recorder,"sampleStage",4);
       const text = await readFile(`/proc/${name}/stat`, "utf8");
+      ownedNote(recorder,"sampleStage",5);
       const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
-      if (!/^[RSDZTWXIKt]$/.test(fields[0]) || !/^\d+$/.test(fields[19]) || ![fields[1], fields[2]].every(value => /^\d+$/.test(value))) refuse("private-process-state-unknown");
+      ownedNote(recorder,"sampleStage",6);
+      if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,![fields[1], fields[2]].every(value => /^\d+$/.test(value)),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
+      ownedNote(recorder,"sampleStage",7);
       rows.push({ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] });
-    } catch (error) { if (error?.code !== "ENOENT") throw error; }
+    } catch (error) {
+      const failure=ownedNote(recorder,"sampleState");ownedNote(recorder,"sampleStage",8);
+      if (error?.code !== "ENOENT") { ownedNote(recorder,"sampleRestore",failure);throw error; }
+    }
   }
+  ownedNote(recorder,"sampleStage",9);
   return rows;
 }
 
-// Keep the original ChildProcess close outcome. No launcher signal-to-zero
-// mapping; output remains private and bounded. Timers supervise, never make a
-// failed command pass. The outer PID namespace also contains escaped groups.
-export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process } = {}) {
+// Original operations remain authoritative; observations never stop cleanup.
+export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process, recorder } = {}) {
   const result = { code: null, signal: null, timedOut: false, interrupted: false, closed: false, errors: [], spawnErrors: [], observed: new Map(), stdout: "", stderr: "" };
   const captures = Object.fromEntries(["stdout", "stderr"].map(key => [key, { bytes: 0, hash: createHash("sha256"), esc: false }]));
   let child, escalation, bytes = 0, sampling = false, stopped = false, finished = false;
-  const stop = signal => {
-    if (!child?.pid || finished) return;
-    try { process.kill(-child.pid, signal); } catch (error) { if (error?.code !== "ESRCH") result.errors.push(error); }
-    if (!escalation) escalation = setTimeout(() => stop("SIGKILL"), graceMs);
+  const stop = (signal,reason) => {
+    ownedNote(recorder,"request",reason,signal);
+    if (!child?.pid || finished) { ownedNote(recorder,"skipped");return; }
+    try { process.kill(ownedArgument(recorder,reason,signal,-child.pid), signal); ownedNote(recorder,"returned"); }
+    catch (error) { ownedNote(recorder,"thrown",error);if (error?.code !== "ESRCH") { result.errors.push(error);ownedNote(recorder,"error",1,error); } else ownedNote(recorder,"ignored"); }
+    if (!escalation) escalation = setTimeout(() => stop("SIGKILL",6), graceMs);
   };
-  const interrupted = signal => { result.interrupted = true; stop(signal); };
+  const interrupted = signal => { result.interrupted = true; stop(signal,signal==="SIGINT"?4:5); };
   const onInt = () => interrupted("SIGINT"), onTerm = () => interrupted("SIGTERM");
   const observe = async () => {
     if (sampling) return;
-    sampling = true;
+    sampling = true;let stage=2;
     try {
-      for (const row of await sample()) result.observed.set(`${row.pid}:${row.start}`, row);
-      if (result.observed.size > 512) refuse("process-monitor-capacity");
+      ownedNote(recorder,"sampleStage",0);const sampled=await sample();stage=3;ownedNote(recorder,"operation",1);
+      for (const row of sampled) { ownedNote(recorder,"operation",2);result.observed.set(ownedValue(recorder,"operation",3,`${row.pid}:${row.start}`), row); }
+      stage=4;ownedNote(recorder,"condition",undefined);
+      if (ownedCondition(recorder,result.observed.size > 512)) refuse("process-monitor-capacity");
     }
-    catch (error) { result.errors.push(error); stop("SIGTERM"); }
+    catch (error) { result.errors.push(error);ownedNote(recorder,"error",stage,error);stop("SIGTERM",1); }
     finally { sampling = false; }
   };
   const append = key => data => {
-    // Hash original bytes before the existing bounded UTF-8 capture. Chunk
-    // boundaries and malformed UTF-8 must not change these fingerprints.
     const capture = captures[key]; capture.bytes += data.length; capture.hash.update(data); capture.esc ||= data.includes(0x1b);
     bytes += data.length;
-    if (bytes > 1024 * 1024) { if (!stopped) result.errors.push(new Error("edge-proof: output-capacity")); stopped = true; stop("SIGTERM"); }
+    if (bytes > 1024 * 1024) { if (!stopped) { const error=new Error("edge-proof: output-capacity");result.errors.push(error);ownedNote(recorder,"condition",true);ownedNote(recorder,"error",5,error); } stopped = true; stop("SIGTERM",2); }
     else result[key] += data.toString("utf8");
   };
-  let deadline, monitor;
+  let deadline, monitor, setup=1;
   try {
     try { child = spawnProcess(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] }); }
     catch (error) { result.spawnErrors.push(error); throw error; }
-    child.stdout.on("data", append("stdout")); child.stderr.on("data", append("stderr"));
-    signalSource.on("SIGINT", onInt); signalSource.on("SIGTERM", onTerm);
-    deadline = setTimeout(() => { result.timedOut = true; stop("SIGTERM"); }, timeoutMs);
-    monitor = setInterval(() => { void observe(); }, 20);
-    await new Promise(resolveClose => {
-      child.on("error", error => { result.spawnErrors.push(error); result.errors.push(error); });
+    setup=2;child.stdout.on("data", append("stdout")); child.stderr.on("data", append("stderr"));
+    setup=3;signalSource.on("SIGINT", onInt); signalSource.on("SIGTERM", onTerm);
+    setup=4;deadline = setTimeout(() => { result.timedOut = true; stop("SIGTERM",3); }, timeoutMs);
+    setup=5;monitor = setInterval(() => { void observe(); }, 20);
+    setup=6;await new Promise(resolveClose => {
+      child.on("error", error => { result.spawnErrors.push(error); result.errors.push(error);ownedNote(recorder,"error",8,error); });
       child.once("close", (code, signal) => { result.code = code; result.signal = signal; result.closed = true; resolveClose(); });
     });
-  } catch (error) { result.errors.push(error); }
+  } catch (error) { result.errors.push(error);ownedNote(recorder,"error",setup===1?6:7,error,setup); }
   finally {
     finished = true;
     clearTimeout(deadline); clearInterval(monitor); clearTimeout(escalation);
     signalSource.removeListener("SIGINT", onInt); signalSource.removeListener("SIGTERM", onTerm);
   }
-  // Join any already-started observation before reading the final process set.
   while (sampling) await new Promise(resolveTick => setTimeout(resolveTick, 1));
-  try { result.remaining = await sample(); } catch (error) { result.errors.push(error); result.remaining = null; }
+  try { ownedNote(recorder,"sampleStage",0);result.remaining = await sample(); } catch (error) { result.errors.push(error);ownedNote(recorder,"error",9,error);result.remaining = null; }
   result.outputSummary = Object.fromEntries(Object.entries(captures).map(([key, value]) => [key, { bytes: value.bytes, sha256: value.hash.digest("hex"), esc: value.esc, complete: result.closed }]));
+  if(recorder){result.ownedTrace=ownedNote(recorder,"finish");result.observerErrors=recorder.errors;}
   return result;
 }
 export function requireProcessSuccess(result) {
@@ -478,7 +527,8 @@ export async function runPackagingPipeline(cwd, root, report, boundary) {
   for (const [label, role, launch, close, check] of [["a", "build_a", "build_a_launch", "build_a_close", "build_a_report"], ["b", "build_b", "build_b_launch", "build_b_close", "build_b_report"]]) {
     const capsule = join(root, `capsule-${label}`);
     report.mark(launch, "enter");
-    const built = await runOwnedProcess(process.execPath, boundary.buildArguments(capsule, role), { cwd: root, env, timeoutMs: 120000, sample: privateProcesses });
+    const recorder=boundary.builderDiagnostics?createOwnedProcessLedger():undefined;
+    const built = await runOwnedProcess(process.execPath, boundary.buildArguments(capsule, role), { cwd: root, env, timeoutMs: 120000, sample: recorder?()=>privateProcesses(recorder):privateProcesses, ...(recorder?{recorder}:{}) });
     const value = JSON.parse(acceptPackagingProcess(built, report, role, close, check));
     if (value.built !== true || Object.keys(value).join() !== "built") refuse("invalid-builder-receipt");
     receipts.push(await report.step(check, async () => JSON.parse(await readFile(join(capsule, "source-receipt.json"), "utf8"))));
@@ -964,7 +1014,83 @@ export function validateReceiptBuilderDiagnostic(value) {
   if (Buffer.byteLength(JSON.stringify(result)) > 512) refuse("receipt-builder-capacity");
   return result;
 }
+const ownedTuple=(value,length)=>{
+  if(!Array.isArray(value)||Object.getOwnPropertyNames(value).join()!==[...Array(length).keys(),"length"].join())refuse("owned-tuple");
+  return Array.from({length},(_,i)=>ownData(value,String(i)));
+};
+export function validateOwnedTrace(value,errorCount) {
+  const trace=ownedTuple(value,4);if(trace[0]!==1)refuse("owned-version");
+  if(!Number.isSafeInteger(errorCount)||errorCount<0||errorCount>65535)refuse("owned-error-count");
+  trace[3]=ownedTuple(trace[3],3);const [faults,undefinedFaults,reportSaturation]=trace[3];
+  if(![faults,undefinedFaults].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||undefinedFaults>faults)refuse("owned-reports");
+  if(!Number.isInteger(reportSaturation)||reportSaturation<0||reportSaturation>3||(reportSaturation&1)&&faults!==65535||(reportSaturation&2)&&(undefinedFaults!==65535||!(reportSaturation&1)))refuse("owned-report-saturation");
+  if(faults){if(trace[1]!==null||trace[2]!==null)refuse("owned-incomplete");return trace;}
+  if(trace[1]!==null){
+    trace[1]=ownedTuple(trace[1],7);const [site,stage,kind,leaf,seen,passed,defined]=trace[1];
+    if(![site,stage,kind,leaf,seen,passed].every(Number.isSafeInteger)||site<1||site>9||typeof defined!=="boolean"||kind<0||kind>2)refuse("owned-error");
+    const width=[2,9].includes(site)?stage===1?2:stage===6?3:0:[4,5].includes(site)?1:0;
+    if(stage<0||stage>([2,9].includes(site)?9:site===3?3:site===7?6:[4,5,6].includes(site)?1:0)||site===6&&stage!==1||site===7&&stage<2||[4,5].includes(site)&&stage!==1)refuse("owned-stage");
+    if(seen<0||seen>=2**width||passed<0||(passed&seen)!==passed||![0,1,3,7].includes(seen))refuse("owned-mask");
+    if(kind===1){if(!defined||leaf<1||leaf>width||seen!==2**leaf-1||passed!==2**(leaf-1)-1)refuse("owned-false");}
+    else if(leaf!==0||seen!==passed||(kind===0?seen!==0:seen===0||seen===2**width-1))refuse("owned-throw");
+    if(errorCount===0)refuse("owned-error-count");
+  } else if(errorCount!==0)refuse("owned-missing-error");
+  trace[2]=ownedTuple(trace[2],13);const [requests,attempts,returned,thrown,skipped,reasons,signals,reason,signal,outcome,throwDefined,saturation,ignored]=trace[2];
+  if(!trace[2].every(Number.isSafeInteger)||trace[2].slice(0,5).some(n=>n<0||n>255)||reasons<0||reasons>63||signals<0||signals>7||reason<0||reason>6||![0,1,2,3].includes(signal)||outcome<0||outcome>3||throwDefined<0||throwDefined>2||saturation<0||saturation>63||ignored<0||ignored>255)refuse("owned-stop");
+  for(let i=0;i<5;i++)if(saturation&2**i&&trace[2][i]!==255)refuse("owned-saturation");
+  if(saturation&32&&ignored!==255||!(saturation&8)&&(saturation&32?256:ignored)>thrown)refuse("owned-ignored-count");
+  if(!requests?(reasons||signals||attempts||skipped):(reasons===0||signals===0))refuse("owned-request");
+  let expectedSignals=0;for(let i=0;i<6;i++)if(reasons&2**i)expectedSignals|=i===3?1:i===5?4:2;
+  if(signals!==expectedSignals||!(saturation&1)&&reasons.toString(2).replaceAll("0","").length>requests)refuse("owned-signals");
+  if(!attempts?(reason||signal||outcome||returned||thrown):(reason===0||!(reasons&2**(reason-1))||signal!==(reason===4?1:reason===6?3:2)||outcome===0))refuse("owned-first-dispatch");
+  if(!thrown?throwDefined!==0:throwDefined===0)refuse("owned-throw-presence");
+  if(outcome===1&&!returned||outcome>=2&&(!thrown||throwDefined!==outcome-1))refuse("owned-first-outcome");
+  const bounds=i=>saturation&2**i?[256,Infinity]:[trace[2][i],trace[2][i]];
+  const sumMatches=(left,right,total)=>{const a=bounds(left),b=bounds(right),c=bounds(total);return a[0]+b[0]<=c[1]&&c[0]<=a[1]+b[1];};
+  if(!sumMatches(1,4,0)||!sumMatches(2,3,1))refuse("owned-stop-counts");
+  if((throwDefined===1||trace[1]?.[0]===1)&&!(saturation&8)&&(saturation&32?256:ignored)>=thrown)refuse("owned-ignored-undefined");
+  const unignored=Math.max(0,(saturation&8?256:thrown)-(saturation&32?Infinity:ignored),throwDefined===1||trace[1]?.[0]===1?1:0);
+  const site=trace[1]?.[0], monitorError=Boolean(reasons&1)||[2,3,4].includes(site), captureError=Boolean(reasons&2)||site===5;
+  const otherError=[6,7,8,9].includes(site)?1:0;
+  if(site===1&&(ignored===0||throwDefined===1)&&trace[1][6]!==(throwDefined===2))refuse("owned-same-throw-definedness");
+  if(errorCount<65535&&unignored+Number(monitorError)+Number(captureError)+otherError>errorCount)refuse("owned-stop-error-presence");
+  return trace;
+}
+export function validateOwnedCloseDiagnostic(value) {
+  const keys=["v","role","phase","outcome","defined","exit","signal","closed","timedOut","interrupted","errors","remaining","trace"];
+  if(Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("owned-close-keys");
+  const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));
+  if(row.v!==2||row.role!=="child"||!["build_a_close","build_b_close"].includes(row.phase))refuse("owned-close-role");
+  const prior={...row,v:1};delete prior.trace;validatePackagingDiagnostic(prior);
+  row.trace=validateOwnedTrace(row.trace,row.errors);
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-close-capacity");
+  return row;
+}
+// V13 positional fields: parser, child, reports, count, projector, lifecycle,
+// builder, owned trace. Builder hashes alone use canonical base64url (32 bytes).
+export function packReceiptOwnedDiagnostic(value,trace) {
+  const prior=validateReceiptBuilderDiagnostic(value),builder=prior.builder?.slice()??null;
+  if(builder)for(const i of [9,11])builder[i]=Buffer.from(builder[i],"hex").toString("base64url");
+  return validateReceiptOwnedDiagnostic({v:13,phase:prior.phase,state:prior.state,defined:prior.defined,exit:prior.exit,signal:prior.signal,detail:[prior.parser,prior.child,prior.reports,prior.count,prior.projection,prior.lifecycle,builder,trace]});
+}
+export function unpackReceiptOwnedDiagnostic(value) {
+  const detail=ownedTuple(ownData(value,"detail"),8),builder=detail[6]===null?null:ownedTuple(detail[6],12);
+  if(builder)for(const i of [9,11]){
+    if(typeof builder[i]!=="string"||!/^[A-Za-z0-9_-]{43}$/.test(builder[i]))refuse("owned-hash");
+    const bytes=Buffer.from(builder[i],"base64url");if(bytes.length!==32||bytes.toString("base64url")!==builder[i])refuse("owned-hash-canonical");builder[i]=bytes.toString("hex");
+  }
+  return {v:12,phase:ownData(value,"phase"),state:ownData(value,"state"),defined:ownData(value,"defined"),exit:ownData(value,"exit"),signal:ownData(value,"signal"),parser:detail[0],child:detail[1],reports:detail[2],count:detail[3],projection:detail[4],lifecycle:detail[5],builder};
+}
+export function validateReceiptOwnedDiagnostic(value) {
+  const keys=["v","phase","state","defined","exit","signal","detail"];
+  if(!value||Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("owned-receipt-keys");
+  const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));if(row.v!==13)refuse("owned-receipt-version");
+  row.detail=ownedTuple(row.detail,8);const prior=validateReceiptBuilderDiagnostic(unpackReceiptOwnedDiagnostic(row));
+  if(row.detail[7]!==null){if(!prior.builder)refuse("owned-unbound-trace");row.detail[7]=validateOwnedTrace(row.detail[7],prior.builder[6]);}
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-receipt-capacity");return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 13) return validateReceiptOwnedDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 12) return validateReceiptBuilderDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 11) return validateReceiptLifecycleDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 10) return validateReceiptBoundaryDiagnostic(value);
@@ -1075,7 +1201,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
