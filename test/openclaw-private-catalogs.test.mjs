@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -32,8 +33,8 @@ export const privateNativeControls=privateProviders.flatMap(provider=>["stream",
 // No SDK imports, module initialization, plugin loading or native client runs.
 export function privateNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
- const names=["samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
- const start="export function samePrivateDescriptor(",end="function emitNativeControl(";
+ const names=["createPrivateInvocationOwnership","newPrivateInvocationCaller","privateControlCaller","privateInvocationBound","samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
+ const start="export function createPrivateInvocationOwnership(",end="function emitNativeControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
  assert.deepEqual([...declarations.matchAll(/^export function (\w+)\(/gm)].map(m=>m[1]),names);
@@ -201,8 +202,8 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  const evaluator=privateNativeEvaluator();
  function nativeEvidence(){
   const owner={},identity={guard:()=>{}},reason={name:"AbortError"},stored={name:"AbortError"};
-  const caller={owner,signal:{aborted:true},reason,abortCalled:true,abortedAfter:true,noEarlierFailure:true,delivered:7,abortInvoke:8,abortObserved:9,result:"aborted"};
-  const input={signal:caller.signal},body={locked:false},response={body},acquisition={owner,guard:identity.guard,input,inputSignal:input.signal,response,result:{}};
+  const caller={kind:"inference",owner,signal:{aborted:true},reason,abortCalled:true,abortedAfter:true,noEarlierFailure:true,delivered:7,abortInvoke:8,abortObserved:9,result:"aborted"};
+  const input={signal:caller.signal},body={locked:false},response={body},acquisition={owner,guard:identity.guard,input,inputSignal:input.signal,response,result:{response},operation:{state:"fulfilled",pending:Promise.resolve()}};acquisition.pending=acquisition.operation.pending;
   const transport={owner,method:"POST",signal:{aborted:true},acquisition,response,bodies:[body],readers:[],guardObserved:true,releases:1,releaseDone:true,fetch:{state:"fulfilled"}};acquisition.transport=transport;
   const reader={owner,original:{},body,transport,closed:Promise.resolve(),acquired:2,unlocks:1,unlockFailed:false,unlockAt:14};reader.unlockReceiver=reader.original;transport.readers.push(reader);
   const common={owner,reader,receiver:reader.original};
@@ -211,15 +212,125 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],invoke:12,settle:13};
   const prefix={...common,kind:"read",state:"fulfilled",value:{done:false,value:new Uint8Array([1])},settle:5};
   const release={owner,kind:"guard_release",state:"fulfilled",acquisition,receiver:acquisition.result,invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
-  return {owner,identity,provider:"baseten",api:"stream",role:"partial",caller,transports:[transport],originals:[prefix,read,closed,cancel,release],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
+  const invocation=Object.freeze({owner,caller,signal:caller.signal,kind:"inference",fn:()=>{},receiver:undefined,args:Object.freeze([{}, {}, {signal:caller.signal}])});
+  acquisition.invocation=invocation;acquisition.context=Object.freeze({invocation,acquisition});transport.invocation=invocation;transport.context=acquisition.context;transport.caller=caller;
+  return {owner,identity,provider:"baseten",api:"stream",role:"partial",caller,callers:[caller],transports:[transport],originals:[prefix,read,closed,cancel,release],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
  }
  function controlEvidence(role,identity){
   const w=nativeEvidence();w.identity=identity;w.transports[0].acquisition.guard=identity.guard;w.role=role;
   if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":role==="preabort"?"aborted":"error";}
-  if(role==="preabort"){w.transports[0].method="GET";w.coldZeroDispatch=true;w.preabortPostDelta=0;}
+  if(role==="preabort"){const t=w.transports[0],a=t.acquisition,c=evaluator.newPrivateInvocationCaller(w.owner,undefined,"discovery");w.callers.push(c);t.method="GET";
+   const invocation=Object.freeze({owner:w.owner,caller:c,signal:c.signal,kind:"discovery",fn:()=>{},receiver:undefined,args:Object.freeze([{signal:c.signal}])});
+   a.invocation=t.invocation=invocation;a.context=t.context=Object.freeze({invocation,acquisition:a});t.caller=undefined;t.catalogInitiator=c;w.coldZeroDispatch=true;w.preabortPostDelta=0;}
   return w;
  }
  function controls(identity){return ["eof","preabort","partial","provider_error"].map(role=>evaluator.evaluatePrivateNativeControl(controlEvidence(role,identity)));}
+ function invocationHarness(){const storage=new AsyncLocalStorage();return {storage,ownership:evaluator.createPrivateInvocationOwnership(storage)};}
+ async function runInvocation(h,caller,wait=Promise.resolve()){
+  const publicReceiver={},guardReceiver={},options={signal:caller.signal},args=[{}, {}, options],guardSignal={},input={signal:guardSignal},response={body:{}},result={response},t={method:'POST'};
+  let publicContext,guardContext,transportContext,guardOriginal,guardReturned,publicOriginal,seenArgs,seenGuardArgs;
+  function originalGuard(...actual){assert.equal(this,guardReceiver);seenGuardArgs=actual;guardContext=h.storage.getStore();
+   guardOriginal=wait.then(()=>{transportContext=h.storage.getStore();h.ownership.transport(t);h.ownership.response(t,response);return result;});return guardOriginal;}
+  const acquisition={input,inputSignal:guardSignal,guard:originalGuard,operation:{state:"fulfilled"}},guardArgs=[input];
+  function originalPublic(...actual){assert.equal(this,publicReceiver);seenArgs=actual;publicContext=h.storage.getStore();
+   const completion=Promise.resolve().then(()=>{guardReturned=h.ownership.guard(originalGuard,guardReceiver,guardArgs,acquisition);assert.equal(guardReturned,guardOriginal);acquisition.pending=acquisition.operation.pending=guardOriginal;return guardReturned;}).then(r=>h.ownership.attach(acquisition,r));
+   publicOriginal={completion};return publicOriginal;}
+  const returned=h.ownership.invoke(caller,'inference',originalPublic,publicReceiver,args);assert.equal(returned,publicOriginal);await returned.completion;
+  assert.deepEqual(seenArgs,args);assert.deepEqual(seenGuardArgs,guardArgs);assert.equal(publicContext.invocation.caller,caller);
+  assert.equal(publicContext.invocation.fn,originalPublic);assert.equal(publicContext.invocation.receiver,publicReceiver);
+  assert.equal(publicContext.invocation.args[2],options);assert.ok(Object.isFrozen(publicContext.invocation));assert.ok(Object.isFrozen(publicContext.invocation.args));
+  assert.equal(guardContext.invocation,publicContext.invocation);assert.equal(transportContext,guardContext);assert.equal(acquisition.invocation,publicContext.invocation);
+  assert.equal(t.caller,caller);assert.equal(t.acquisition,acquisition);assert.equal(t.response,response);assert.equal(acquisition.result,result);assert.equal(h.ownership.bound(t),true);
+  assert.notEqual(input.signal,caller.signal);assert.equal(evaluator.privateInvocationBound({owner:caller.owner,callers:[caller]},t),true);
+  return {t,acquisition,result,context:guardContext};
+ }
+ test('private invocation wrapper preserves original identities across asynchronous guard and fetch',async()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:new AbortController().signal};await runInvocation(h,caller);assert.equal(h.storage.getStore(),undefined);h.ownership.restore();
+ });
+ test('private invocation wrapper preserves discovery receiver and original rejected promise',async()=>{
+  const h=invocationHarness(),caller={kind:"discovery",owner:{},signal:{}},receiver={},input={signal:caller.signal},reason={};let original,called=0;
+  function run(options){assert.equal(this,receiver);assert.equal(options,input);called++;return original=Promise.reject(reason);}
+  const returned=h.ownership.invoke(caller,'discovery',run,receiver,[input]);assert.equal(returned,original);await assert.rejects(returned,e=>e===reason);assert.equal(called,1);assert.equal(h.storage.getStore(),undefined);h.ownership.restore();
+ });
+ test('private invocation wrapper refuses ambiguous original response and foreign guard result',async()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:{}};const one=await runInvocation(h,caller);
+  assert.throws(()=>h.ownership.response(one.t,one.t.response));assert.throws(()=>h.ownership.attach(one.acquisition,{response:{}}));
+  const other={method:'POST'},a={input:{signal:{}},guard:undefined};
+  function guard(){h.ownership.transport(other);h.ownership.response(other,one.t.response);}
+  a.guard=guard;let caught=false;
+  try{h.ownership.invoke(caller,'inference',()=>h.ownership.guard(guard,undefined,[a.input],a),undefined,[{},{},{signal:caller.signal}]);}catch{caught=true;}
+  assert.equal(caught,true);assert.equal(other.guardObserved,undefined);h.ownership.restore();
+ });
+ test('private invocation wrapper isolates concurrent callers',async()=>{
+  const h=invocationHarness();let release;const held=new Promise(r=>{release=r;}),a={kind:"inference",owner:{},signal:new AbortController().signal},b={kind:"inference",owner:{},signal:new AbortController().signal};
+  const first=runInvocation(h,a,held);const second=await runInvocation(h,b);release();const initial=await first;
+  assert.notEqual(initial.context,second.context);assert.equal(initial.t.caller,a);assert.equal(second.t.caller,b);h.ownership.restore();
+ });
+ test('private invocation wrapper refuses missing foreign detached and substituted contexts',async()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:new AbortController().signal};
+  assert.throws(()=>h.ownership.transport({method:'POST'}));
+  const good=await runInvocation(h,caller);
+  h.storage.run({invocation:{...good.context.invocation},acquisition:good.acquisition},()=>assert.throws(()=>h.ownership.transport({method:'POST'})));
+  h.storage.run({...good.context,acquisition:{}},()=>assert.throws(()=>h.ownership.transport({method:'POST'})));
+  h.storage.run(good.context,()=>assert.throws(()=>h.ownership.transport({method:'POST'})));
+  const detached=AsyncLocalStorage.snapshot();h.storage.run(good.context,()=>detached(()=>assert.throws(()=>h.ownership.transport({method:'POST'}))));
+  assert.throws(()=>h.ownership.attach({},good.result));assert.throws(()=>h.ownership.attach(good.acquisition,good.result));h.ownership.restore();
+ });
+ test('private invocation wrapper refuses mismatched caller arguments and kind',()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:{}},fn=()=>assert.fail('original must not be called');
+  assert.throws(()=>h.ownership.invoke(caller,'inference',fn,undefined,[{},{},{signal:{}}]));
+  assert.throws(()=>h.ownership.invoke(caller,'unknown',fn,undefined,[{signal:caller.signal}]));h.ownership.restore();
+ });
+ test('private invocation wrapper preserves original synchronous undefined and restores context',()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:{}},args=[{},{},{signal:caller.signal}],receiver={};let calls=0,threw=false;
+  function original(){calls++;assert.equal(this,receiver);throw undefined;}
+  try{h.ownership.invoke(caller,'inference',original,receiver,args);}catch(e){threw=true;assert.equal(e,undefined);}
+  assert.equal(threw,true);assert.equal(calls,1);assert.equal(h.storage.getStore(),undefined);
+  function publicCall(){const input={signal:{}},a={input,guard:original};return h.ownership.guard(original,receiver,[input],a);}
+  threw=false;try{h.ownership.invoke(caller,'inference',publicCall,undefined,args);}catch(e){threw=true;assert.equal(e,undefined);}
+  assert.equal(threw,true);assert.equal(calls,2);assert.equal(h.storage.getStore(),undefined);h.ownership.restore();
+ });
+ test('private invocation wrapper retains an independent observer failure without replacing original result',async()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:{}},reason={},failures=[];let original;
+  function publicCall(){return original=Promise.resolve({value:1});}
+  const returned=h.ownership.invoke(caller,'inference',publicCall,undefined,[{},{},{signal:caller.signal}]);assert.equal(returned,original);
+  const observer=returned.then(()=>{throw reason;}).catch(e=>{failures.push(e);});assert.deepEqual(await returned,{value:1});await observer;assert.deepEqual(failures,[reason]);h.ownership.restore();
+ });
+ test('private invocation wrapper restoration rejects reuse without clobbering a foreign context',async()=>{
+  const h=invocationHarness(),caller={kind:"inference",owner:{},signal:{}};await runInvocation(h,caller);h.ownership.restore();assert.throws(()=>h.ownership.restore());
+  let called=false;assert.throws(()=>h.ownership.invoke(caller,'inference',()=>{called=true;},undefined,[{},{},{signal:caller.signal}]));assert.equal(called,false);
+  const other=new AsyncLocalStorage(),foreign={};other.run(foreign,()=>{assert.equal(other.getStore(),foreign);assert.throws(()=>h.ownership.transport({method:'POST'}));assert.equal(other.getStore(),foreign);});other.disable();
+ });
+ test('private invocation evaluator refuses coherent foreign tokens and permits distinct bound signals',()=>{
+  const w=nativeEvidence();assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
+  const t=w.transports[0];t.acquisition.inputSignal=t.acquisition.input.signal={};assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
+  const foreign=Object.freeze({...t.invocation,caller:{...w.caller},signal:{}});t.invocation=t.acquisition.invocation=foreign;t.context=t.acquisition.context=Object.freeze({invocation:foreign,acquisition:t.acquisition});t.caller=foreign.caller;
+  assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
+ });
+ test('private invocation wrapper creates distinct owners for reused and undefined signals',async()=>{
+  for(const signal of [undefined,new AbortController().signal]){
+   const h=invocationHarness(),owner={},first=evaluator.newPrivateInvocationCaller(owner,signal,"inference"),second=evaluator.newPrivateInvocationCaller(owner,signal,"inference");
+   assert.notEqual(first,second);assert.equal(first.signal,second.signal);const [a,b]=await Promise.all([runInvocation(h,first),runInvocation(h,second)]);
+   assert.notEqual(a.context.invocation,b.context.invocation);assert.equal(a.t.caller,first);assert.equal(b.t.caller,second);h.ownership.restore();
+  }
+ });
+ test('private invocation wrapper refuses an unrelated POST under discovery ownership',()=>{
+  const h=invocationHarness(),caller=evaluator.newPrivateInvocationCaller({},undefined,"discovery"),input={signal:undefined},a={input};
+  function guard(){h.ownership.transport({method:"POST"});}a.guard=guard;
+  assert.throws(()=>h.ownership.invoke(caller,"discovery",()=>h.ownership.guard(guard,undefined,[input],a),undefined,[{signal:undefined}]));h.ownership.restore();
+ });
+ test('private invocation shared catalog retains initiator context without assigning waiter cancellation ownership',async()=>{
+  const h=invocationHarness(),owner={},control=new AbortController(),first=evaluator.newPrivateInvocationCaller(owner,control.signal,"discovery"),second=evaluator.newPrivateInvocationCaller(owner,undefined,"discovery");
+  let release,shared,secondContext;const held=new Promise(r=>{release=r;}),response={body:{}},result={response},t={method:"GET"},input={signal:{}},a={input,inputSignal:input.signal};
+  function guard(){return held.then(()=>{h.ownership.transport(t);h.ownership.response(t,response);return result;});}a.guard=guard;
+  function catalog(){if(shared){secondContext=h.storage.getStore();return shared;}return shared=h.ownership.guard(guard,undefined,[input],a);}
+  const one=h.ownership.invoke(first,"discovery",catalog,undefined,[{signal:control.signal}]),two=h.ownership.invoke(second,"discovery",catalog,undefined,[{signal:undefined}]);
+  assert.equal(one,two);assert.notEqual(a.invocation,secondContext.invocation);control.abort();release();h.ownership.attach(a,await one);
+  assert.equal(t.catalogInitiator,first);assert.equal(t.caller,undefined);assert.notEqual(a.inputSignal,first.signal);assert.equal(h.ownership.bound(t),true);h.ownership.restore();
+ });
+ test('private invocation evaluator requires one inference invocation for a control vector',()=>{
+  const w=nativeEvidence();w.callers.push(evaluator.newPrivateInvocationCaller(w.owner,w.caller.signal,"inference"));assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
+ });
  test('private native evaluator records the predefined rejection vector without C0 identity or product credit',()=>{
   const w=nativeEvidence(),result=evaluator.evaluatePrivateNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);
   assert.notEqual(w.caller.reason,w.originals[1].reason);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
