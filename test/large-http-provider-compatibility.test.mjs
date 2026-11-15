@@ -58,7 +58,8 @@ test('chunked unified Responses retains provider selection across the actual nat
  t.after(async()=>{if(child&&child.exitCode===null){child.kill('SIGTERM');await once(child,'exit');}bridge.closeAllConnections();await new Promise(r=>bridge.close(r));await rm(directory,{recursive:true,force:true});});
  await require('esbuild').build({entryPoints:[resolve('runtime/large-http/main.ts')],bundle:true,format:'esm',platform:'node',target:'node24',define:{__CLAWROUTER_LARGE_RUNTIME__:'true'},outfile:directory+'/runtime.mjs',logLevel:'silent',plugins:[]});
  await copyFile(new URL('./fixtures/large-http-provider-wire.mjs',import.meta.url),directory+'/wire.mjs');
- child=spawn(process.execPath,[directory+'/wire.mjs'],{env:{...process.env,TMPDIR:directory,PORT:String(port),LARGE_HTTP_SLOT:'0',LARGE_HTTP_GENERATION:'1',LARGE_HTTP_RUNTIME_TOKEN:token,LARGE_HTTP_RUNTIME_SHA:'b'.repeat(64),LARGE_HTTP_ORIGIN:origin,LARGE_HTTP_FIXTURE_PROVIDER_ORIGIN:origin},stdio:['ignore','ignore','pipe']});child.stderr.on('data',b=>stderr+=b);
+ const childEnv={...process.env,NO_COLOR:'1'};delete childEnv.FORCE_COLOR;
+ child=spawn(process.execPath,[directory+'/wire.mjs'],{env:{...childEnv,TMPDIR:directory,PORT:String(port),LARGE_HTTP_SLOT:'0',LARGE_HTTP_GENERATION:'1',LARGE_HTTP_RUNTIME_TOKEN:token,LARGE_HTTP_RUNTIME_SHA:'b'.repeat(64),LARGE_HTTP_ORIGIN:origin,LARGE_HTTP_FIXTURE_PROVIDER_ORIGIN:origin},stdio:['ignore','ignore','pipe']});child.stderr.on('data',b=>stderr+=b);
  const wait=async fn=>{for(let i=0;i<500;i++){const result=await fn();if(result)return result;if(child.exitCode!==null)throw Error('fixture_native_exit:'+stderr);await delay(10);}throw Error('fixture_deadline');};
  const base='http://127.0.0.1:'+port,healthHeaders={'x-container-token':token};
  const ready=await wait(async()=>{try{const r=await fetch(base+'/startup-health',{headers:healthHeaders});return r.ok&&await r.json();}catch{return false;}});
