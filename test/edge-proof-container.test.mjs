@@ -1527,4 +1527,50 @@ test("empty gate closed evidence rejects inconsistent states and fits worst-case
   const output = []; emitContainerFailure(report.records, line => output.push(line)); assert.equal(output.length, 10); assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
   assert.ok(!output.join("").includes(hex) && !output.join("").includes(other));
 });
+const mixedClosePackets = [];
+test("empty gate retains asynchronous directory rejection and synchronous anchor failure through closed frames", async () => {
+  const api = await initGuardFactory();
+  for (const [directoryReason, anchorReason] of [[undefined, undefined], [{}, undefined], [undefined, {}]]) {
+    const read = Promise.withResolvers(), close = Promise.withResolvers();
+    const f = inertMasks({ rows: mounts(), readPending: read.promise, dirPending: close.promise, fail: "anchorClose" });
+    const originalOpen = f.io.open;
+    f.io.open = async (...args) => {
+      const handle = await originalOpen(...args);
+      handle.close = () => { f.state.anchorClosed++; throw anchorReason; };
+      return handle;
+    };
+    const frames = [], ledger = createInitGuardLedger(), calls = [], trace = createInitDiagnostics(line => frames.push(line));
+    const ops = inertInitOperations(undefined, calls); ops.runtime = () => api.validateEmptyMasks(f.rows, ledger, f.io);
+    let settled = false, failure;
+    const original = runInitPrerequisites([hex, other, "501", "20"], trace, ops, ledger);
+    const observed = original.then(() => { settled = true; assert.fail("mixed close accepted"); }, error => { settled = true; failure = error; });
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    assert.equal(f.state.readEntered, true); assert.equal(f.state.dirClosed, 0); assert.equal(f.state.anchorClosed, 0); assert.equal(settled, false);
+    read.resolve(null);
+    for (let i = 0; i < 100; i++) await Promise.resolve();
+    assert.equal(f.state.dirClosed, 1); assert.equal(f.state.anchorClosed, 1); assert.equal(settled, false);
+    assert.ok(!calls.some(c => c.name === "ready" || c.name === "permit"));
+    close.reject(directoryReason); await observed;
+    assert.ok(failure instanceof AggregateError); assert.equal(failure.errors.length, 2);
+    assert.equal(failure.errors[0], anchorReason); assert.equal(failure.errors[1], directoryReason);
+    assert.equal(f.state.dirClosed, 1); assert.equal(f.state.anchorClosed, 1);
+    assert.ok(!calls.some(c => c.name === "ready" || c.name === "permit")); assert.deepEqual(trace.errors, []); assert.deepEqual(ledger.errors, []);
+    const captured = await attachWithFrames(frames.join("")), parsed = parseInitPrerequisites(captured.h.attached.result, captured.binding);
+    const detail = { guard: null, source: "mask_anchor_close", e: [1,29,1,0,1,2,2,"UNOBSERVABLE"] };
+    assert.equal(parsed.reason, "original_failure"); assert.equal(parsed.defined, true); assert.deepEqual(parsed.detail, detail);
+    assert.throws(() => validateContainerDiagnostic({ ...parsed, defined: false }));
+    assert.throws(() => validateContainerDiagnostic({ ...parsed, state: "observed", reason: "complete" }));
+    for (const mutate of [d => d.e[4] = 0, d => d.e[4] = 2, d => d.e[5] = 0, d => d.e[6] = 1, d => d.guard = "mounts", d => d.source = "mask_open"]) {
+      const invalid = structuredClone(detail); mutate(invalid); assert.throws(() => validateInitDetail(invalid));
+    }
+    assert.ok(frames.every(frame => Buffer.byteLength(frame) <= 512));
+    const report = createContainerDiagnostics(); createAttachProjection(captured.h.attached, captured.binding, report)(captured.h.attached.result);
+    for (const phase of ["entry", "dispatch", "ready", "retirement"]) report.mark(phase, "rejected", undefined);
+    for (const phase of ["module_import", "host_runtime", "cwd", "temp", "environment", "image", "base", "create"]) report.mark(phase, "fulfilled");
+    const output = []; emitContainerFailure(report.records, line => output.push(line));
+    assert.equal(output.length, 10); assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+    const packet = output.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2).trimEnd()));
+    assert.deepEqual(packet.find(row => row.phase === "init_prerequisite").detail, detail); mixedClosePackets.push(packet);
+  }
+});
 // END attach diagnostic pure tests.

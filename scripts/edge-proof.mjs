@@ -752,7 +752,7 @@ export function validateInitDetail(value) {
       if (role !== null || ![0, total].includes(completed) || read || directoryClose || anchorClose) refuse("mask-detail-snapshot");
     } else {
       if (role === null || completed >= total) refuse("mask-detail-target");
-      if (row.source === "mask_open" && (read || directoryClose) || row.source === "mask_opendir" && (read || directoryClose || !anchorClose) || row.source === "mask_identity" && read === 2 || row.source === "mask_read" && !read || row.source === "mask_dir_close" && (read !== 1 || directoryClose !== 2) || row.source === "mask_anchor_close" && (read !== 1 || directoryClose !== 1 || anchorClose !== 2)) refuse("mask-detail-phase");
+      if (row.source === "mask_open" && (read || directoryClose) || row.source === "mask_opendir" && (read || directoryClose || !anchorClose) || row.source === "mask_identity" && read === 2 || row.source === "mask_read" && !read || row.source === "mask_dir_close" && (read !== 1 || directoryClose !== 2) || row.source === "mask_anchor_close" && (read !== 1 || ![1, 2].includes(directoryClose) || anchorClose !== 2 || directoryClose === 2 && row.guard !== null)) refuse("mask-detail-phase");
     }
   }
   if (row.m?.[1] === 28 && !row.e) refuse("mask-detail-missing-close");
@@ -804,6 +804,8 @@ export function validateContainerDiagnostic(value) {
     const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
     const terminal = ["original_failure", "reporter_failure", "complete"].includes(row.reason);
     if (Object.hasOwn(row, "detail")) { if (row.reason !== "original_failure" || !["runtime", "native_receipt"].includes(row.stage)) refuse("init-detail-stage"); row.detail = validateInitDetail(row.detail); if (row.detail.source.startsWith("native_") !== (row.stage === "native_receipt")) refuse("init-detail-source-stage"); }
+    // Two retained original close failures are thrown together as an AggregateError.
+    if (row.detail?.source === "mask_anchor_close" && row.detail.e?.[5] === 2 && row.defined !== true) refuse("mask-detail-aggregate-defined");
     if (row.phase !== "init_prerequisite" || !["binding_unavailable", "capture_unavailable", "capture_mismatch", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("init-summary-enum");
     if (terminal) {
       if (!Number.isInteger(row.records) || row.records < 2 || row.records > 9 || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 16 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) refuse("init-summary-counts");
