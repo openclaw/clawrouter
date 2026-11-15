@@ -21,7 +21,7 @@ function litellmOwnership(storage: any, generation = 0) {
     if (firstFault === "none") { firstFault = code; relation = observed; }
     faults.push(new Error("incomplete LiteLLM invocation ownership"));
   };
-  const entries = new WeakMap<object, any>();
+  const entries = new WeakMap<object, any>(), cleanupReaders = new WeakMap<object, any>(), cleanupLeases = new WeakMap<object, any>(), cleanupAttempts = new WeakMap<object, Set<string>>();
   let reactionObserver: ((q: Promise<unknown>) => void) | undefined;
   const entry = litellmProductReactions(() => invalid("reaction"), error => faults.push(error), q => reactionObserver?.(q), witness.tick);
   let stopHook: (() => void) | undefined;
@@ -40,6 +40,32 @@ function litellmOwnership(storage: any, generation = 0) {
     return !!(active && guards.has(a) && t?.context === a.context && t.acquisition === a && t.unique && t.state === "fulfilled"
       && a.result?.response === t.response && a.result.response.body === t.body && responses.get(t.response) === t && (!t.body || bodies.get(t.body) === t));
   };
+  // A resource claim does not identify its actor or the private producer callback.
+  // Consume before forwarding, even when binding/context/original execution fails.
+  function cleanup(self: any, key: object, binding: any, kind: string, receiver: unknown, method: Function | undefined, args: unknown[] | undefined, raw: any, captured: any) {
+    let attempts = cleanupAttempts.get(key); if (!attempts) cleanupAttempts.set(key, attempts = new Set());
+    const first = !attempts.has(kind), readerLive = kind !== "cancel" || !attempts.has("releaseLock"); attempts.add(kind);
+    const b = binding, lease = kind === "release" ? b : b?.lease, a = b?.acquisition, t = b?.transport;
+    const checks = [
+      !!b && active && readerLive && captured === self && b.observer === self && b.generation === generation,
+      !!b && tokens.has(b.token) && b.context === a?.context && b.context?.token === b.token,
+      !!a && guards.has(a) && a.transport === t && t?.acquisition === a && cleanupLeases.get(a) === lease,
+      !!t && t.unique === true && t.state === "fulfilled" && t.context === b?.context,
+      !!b && b.result === a?.result && b.result?.response === b.response && t?.response === b.response && responses.get(b.response) === t,
+      !!b && b.body === t?.body && b.response?.body === b.body && (b.body === null || bodies.get(b.body) === t),
+      kind === "release" ? !!b && key === a && cleanupLeases.get(key) === b : !!b && key === b.reader && cleanupReaders.get(key) === b && readers.get(key) === t,
+      !!lease && a?.releaseBinding === lease && lease.result === b?.result && lease.token === b?.token && lease.generation === generation,
+      !!b && method === (kind === "release" ? b.fn : b.methods[kind]),
+      receiver === (kind === "release" ? undefined : key) && Array.isArray(args) && (kind !== "release" || args.length === 0),
+      first,
+      raw === undefined || !!raw && tokens.has(raw.token) && raw.token === b?.token && (raw.acquisition === undefined || raw.acquisition === a),
+    ];
+    const reaction = entry.cleanupEvidence(b, receiver, method, kind, generation, args);
+    // Entry facts only; original return/rejection remains in this operation's census.
+    // Tuple: resource-bound, first attempt, reaction match, actor/source, checks.
+    return { bound: checks.every(Boolean), reaction: reaction.cap,
+      facts: Object.freeze([checks.every(Boolean), first, reaction.matches, "unknown", "unknown", Object.freeze(checks)]) };
+  }
   return {
     faults, transports, signals, witness, generation,
     invoke(owner: any, fn: Function, receiver: unknown, args: any[]) {
@@ -98,10 +124,12 @@ function litellmOwnership(storage: any, generation = 0) {
         generation, active, trusted, context: raw === undefined ? "absent" : !trusted ? "unrecognized" : t?.context?.token === raw.token ? "same" : "foreign",
         binding: !!t, receiver: receiver === body, sameOwner: origin === this, predicate,
       }));
-      if (predicate === "none" && c.token.owner.role === "chat" && methods && captured === this) {
+      if (predicate === "none" && methods && captured === this) {
         const stable = () => active && captured === this && bound(t.acquisition) && readers.get(reader) === t;
-        entries.set(reader, Object.freeze({ reader, body, response: t.response, transport: t, acquisition: t.acquisition,
-          token: c.token, observer: this, generation, stable, methods: Object.freeze({ ...methods }), lease: t.acquisition.releaseBinding }));
+        const binding = Object.freeze({ reader, body, response: t.response, transport: t, acquisition: t.acquisition, context: t.context, result: t.acquisition.result,
+          token: c.token, observer: this, generation, stable, methods: Object.freeze({ ...methods }), lease: cleanupLeases.get(t.acquisition) });
+        cleanupReaders.set(reader, binding);
+        if (c.token.owner.role === "chat") entries.set(reader, binding);
       }
     },
     operation(reader: object, receiver: unknown, kind = "unknown", captured?: any, operand?: unknown, method?: Function, args?: unknown[]) {
@@ -111,41 +139,38 @@ function litellmOwnership(storage: any, generation = 0) {
       const invocation = entry.snapshot({ generation, binding, token: t?.context?.token, acquisition: t?.acquisition, transport: t,
         response: t?.response, body: t?.body, reader, receiver, method, expectedReceiver: reader, expectedMethod: binding?.methods[kind],
         observer: this, captured: origin, args });
-      let reaction: any;
+      const resource = ["cancel", "releaseLock"].includes(kind)
+        ? cleanup(this, reader, cleanupReaders.get(reader), kind, receiver, method, args, raw, captured) : undefined;
+      const reaction = resource?.reaction;
       let predicate = "none";
-      if (!t) predicate = "reader_missing";
+      if (resource) { if (!resource.bound) predicate = "resource"; }
+      else if (!t) predicate = "reader_missing";
       else if (receiver !== reader) predicate = "receiver";
-      else if (!c) {
-        if (raw === undefined && active && captured === this && ["cancel", "releaseLock"].includes(kind)) {
-          const result = entry.operation(entries.get(reader), receiver, method, kind, generation, args);
-          reaction = result.cap; if (!result.admitted) predicate = "reaction";
-        } else predicate = "context";
-      }
+      else if (!c) predicate = "context";
       else if (c.token !== t.context?.token) predicate = "token";
       const event = origin.witness.begin(reader, kind, operand, {
         generation, active, trusted, context: raw === undefined ? "absent" : !trusted ? "unrecognized" : t?.context?.token === raw.token ? "same" : "foreign",
         binding: !!t, receiver: receiver === reader, sameOwner: origin === this, predicate,
       }, origin === this ? invocation[1] : undefined);
-      event.invocation = invocation; event.reaction = reaction;
+      event.invocation = invocation; event.reaction = reaction; event.resource = resource?.facts;
       if (predicate !== "none") { witness.fault(event); invalid("reader_operation", [!!c, !!t, c && t?.context ? c.token === t.context.token : null, receiver === reader]); }
       return event;
     },
     releaseBinding(a: any, result: any, fn: Function) {
       if (!bound(a) || a.releaseBinding || a.result !== result) { invalid("release_entry"); return; }
-      a.releaseBinding = Object.freeze({ acquisition: a, result, fn, generation });
+      const t = a.transport;
+      const binding = Object.freeze({ acquisition: a, result, fn, generation, context: a.context, token: a.context.token,
+        transport: t, response: t.response, body: t.body, observer: this });
+      cleanupLeases.set(a, binding); a.releaseBinding = binding;
     },
     releaseEntry(a: any, result: any, fn: Function, receiver: unknown, args: unknown[], captured: any) {
-      const raw = storage.getStore(), c = active && raw && tokens.has(raw.token) ? raw : undefined; let reaction: any, admitted = false;
+      const raw = storage.getStore(), c = active && raw && tokens.has(raw.token) ? raw : undefined;
       const t = a?.transport;
       const invocation = entry.snapshot({ generation, token: a?.context?.token, acquisition: a, transport: t, response: t?.response, body: t?.body,
         receiver, method: fn, expectedReceiver: undefined, expectedMethod: a?.releaseBinding?.fn, observer: this, captured, args });
-      if (active && captured === this && bound(a) && a.releaseBinding?.result === result && a.releaseBinding.fn === fn && a.releaseBinding.generation === generation) {
-        if (c?.token === a.context.token) admitted = true;
-        else if (raw === undefined) {
-          const verdict = entry.release(a.releaseBinding, receiver, args, generation); admitted = verdict.admitted; reaction = verdict.cap;
-        }
-      }
-      const event = witness.release(a, reaction?.binding.acquisition === a ? reaction.binding.reader : undefined, invocation[1]); event.reaction = reaction; event.invocation = invocation;
+      const resource = cleanup(this, a, cleanupLeases.get(a)?.result === result ? cleanupLeases.get(a) : undefined, "release", receiver, fn, args, raw, captured);
+      const admitted = resource.bound && a.releaseBinding?.result === result, reaction = resource.reaction;
+      const event = witness.release(a, reaction?.binding.acquisition === a ? reaction.binding.reader : undefined, invocation[1]); event.reaction = reaction; event.invocation = invocation; event.resource = resource.facts;
       event.context = { generation, active, trusted: !!c, context: raw === undefined ? "absent" : !c ? "unrecognized" : c.token === a.context?.token ? "same" : "foreign",
         binding: bound(a), receiver: receiver === undefined, sameOwner: captured === this, predicate: admitted ? "none" : "release_entry" };
       if (!admitted) { invalid("release_entry"); witness.fault(event); }
@@ -343,6 +368,13 @@ function litellmProductReactions(fault: () => void, error: (value: unknown) => v
         return q;
       };
     },
+    cleanupEvidence(binding: any, receiver: unknown, method: Function | undefined, kind: string, generation: number, args?: unknown[]) {
+      const cap = entered;
+      const matches = kind === "release"
+        ? !!cap && !!binding && usable(cap.binding, generation) && cap.binding.lease === binding && binding.fn === method && receiver === undefined && args?.length === 0 && !cap.release && !leases.has(binding)
+        : !!binding && usable(binding, generation) && receiver === binding.reader && ["cancel", "releaseLock"].includes(kind) && binding.methods[kind] === method && args?.length === 0 && !cap.calls.has(kind);
+      return { matches: !!matches, cap };
+    },
     operation(binding: any, receiver: unknown, method: Function | undefined, kind: string, generation: number, args?: unknown[]) {
       const cap = entered;
       const admitted = !!binding && usable(binding, generation) && receiver === binding.reader && ["cancel", "releaseLock"].includes(kind)
@@ -436,6 +468,12 @@ function litellmWitness(generation: number) {
     const shape = (op: any) => op ? [op.id, op.state, op.invoke, op.returned, op.settle, hasReason(op), hasReason(op) ? valueKind(op.reason) : null, ...[0, 1, 2].map(i => op.output?.[i].known ? op.output[i].aborted : null)] : null;
     const eqSignals = (op: any) => [0, 1, 2].map(i => hasReason(op) && op.output?.[i].known && op.output[i].aborted ? Object.is(op.reason, op.output[i].reason) : null);
     const sig = (op: any, key: string) => [0, 1, 2].map(i => { const v = op?.[key]?.[i]; return v?.known ? [v.aborted, v.aborted ? valueKind(v.reason) : null, v.event] : [null, null, null]; });
+    // A closed-first drain may still report its exact reader's unique cancel.
+    // Keep that operation's own ID/clock/context; never borrow a case's actor.
+    const cancels = census.filter((op: any) => op.row === row && op.kind === "cancel" && op.resource);
+    const cleanupEvent = event?.resource ? event : cancels.length === 1 ? cancels[0] : undefined;
+    const resource = cleanupEvent && cleanupEvent.row === row && cleanupEvent.census === census && cleanupEvent.generation === event?.generation
+      ? [cleanupEvent.id, cleanupEvent.kind, cleanupEvent.generation, cleanupEvent.invoke, cleanupEvent.context?.context ?? "unknown", cleanupEvent.resource] : null;
     const ctx = event?.context;
     return [
       { at, body, caseId: owner?.id ?? "none", role: owner?.role ?? "unknown", control: owner?.control ?? "unknown", api: ["catalog", "stream", "streamSimple"].includes(owner?.api) ? owner.api : "unknown", ids: bound,
@@ -443,7 +481,7 @@ function litellmWitness(generation: number) {
         ctx: ctx ? [ctx.context, ctx.active, ctx.trusted, ctx.binding, ctx.receiver, ctx.sameOwner, ctx.generation, event.capturedActive] : null,
         time: event ? [event.invoke, event.returned, event.settle, event.pending, event.restore] : null,
         life: [row?.unlockInvoke ?? 0, row?.unlockReturn ?? 0, rel?.invoke ?? 0, rel?.returned ?? 0, rel?.settle ?? 0, row?.unlockCount ?? 0, row?.unlockReturned ?? 0],
-        counts: event && event.generation !== currentGeneration ? null : counts, failures: failureCount, source: "unknown", reaction, invocation: event?.invocation ?? null },
+        counts: event && event.generation !== currentGeneration ? null : counts, failures: failureCount, source: "unknown", reaction, invocation: event?.invocation ?? null, resource },
       { ids: bound, acquisition: event && ["native_acquisition", "guard_acquisition"].includes(event.kind) ? shape(event) : null, originals: selected.map(shape), same: [equal(selected[0], selected[1]), equal(selected[0], selected[2]), equal(selected[1], selected[2])],
         signals: selected.map(eqSignals), cancel: selected[2] ? [valueKind(selected[2].operand), ...[0, 1, 2].map(i => selected[2].input[i].known && selected[2].input[i].aborted ? Object.is(selected[2].operand, selected[2].input[i].reason) : null)] : null,
         input: sig(event, "input"), output: sig(event, "output"),
@@ -564,10 +602,10 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   // Compact only the closed witness wire, not the observed facts. Tuple positions
   // retain the full schema; enum and boolean codes avoid width-dependent quotas.
   const witnessKeys = [
-    ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source", "reaction", "invocation"],
+    ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source", "reaction", "invocation", "resource"],
     ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand"],
   ];
-  const words = ["unknown", "undefined", "null", "object", "primitive", "invoking", "pending", "fulfilled", "rejected", "sync_throw", "release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer", "catalog", "chat", "eof", "preabort", "partial_abort", "provider_error", "product", "stream", "streamSimple", "none", "read", "closed", "cancel", "getReader", "releaseLock", "body_cancel", "release", "native_acquisition", "guard_acquisition", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "absent", "same", "foreign", "unrecognized", "reaction", "release_entry", "registered", "unmatched"];
+  const words = ["unknown", "undefined", "null", "object", "primitive", "invoking", "pending", "fulfilled", "rejected", "sync_throw", "release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer", "catalog", "chat", "eof", "preabort", "partial_abort", "provider_error", "product", "stream", "streamSimple", "none", "read", "closed", "cancel", "getReader", "releaseLock", "body_cancel", "release", "native_acquisition", "guard_acquisition", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "absent", "same", "foreign", "unrecognized", "reaction", "release_entry", "registered", "unmatched", "resource"];
   const caseNames = [...names];
   function witnessWire(data: any, part: number, encode: boolean) {
     const tuple = (v: unknown, length: number) => array(v, length, () => true);
@@ -584,6 +622,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       d.caseId = encode ? caseNames.indexOf(d.caseId) : Number.isInteger(d.caseId) && d.caseId >= 0 ? caseNames[d.caseId] : undefined;
       if (d.ctx !== null) d.ctx = map(d.ctx, 8, (x, i) => i === 0 ? word(x) : i === 6 ? x : bit(x));
       if (d.invocation !== null) d.invocation = map(d.invocation, 10, (x, i) => i === 3 ? word(x) : i === 8 ? bit(x) : i === 9 ? map(x, 12, bit) : x);
+      if (d.resource !== null) d.resource = map(d.resource, 6, (x, i) => i === 1 || i === 4 ? word(x) : i === 5 ? map(x, 6, (v, j) => j < 3 ? bit(v) : j < 5 ? word(v) : map(v, 12, bit)) : x);
     } else {
       d.acquisition = original(d.acquisition); d.originals = map(d.originals, 3, original);
       d.same = map(d.same, 3, bit); d.signals = map(d.signals, 3, row => map(row, 3, bit));
@@ -598,10 +637,10 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const select = array(w.select, 2, bool); if (!select || !select.some(Boolean)) return null;
     if (Array.isArray(w.data)) w.data = witnessWire(w.data, w.part, false);
     if (w.part === 0) {
-      const d = fields(w.data, ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source", "reaction", "invocation"]);
+      const d = fields(w.data, ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source", "reaction", "invocation", "resource"]);
       if (!d || !names.has(d.caseId) || !enumOf(["catalog", "chat", "unknown"])(d.role) || !enumOf(["eof", "preabort", "partial_abort", "provider_error", "product", "unknown"])(d.control) || !enumOf(["release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer"])(d.at)
         || !enumOf(["unknown", "fulfilled", "rejected"])(d.body) || !enumOf(["catalog", "stream", "streamSimple", "unknown"])(d.api) || !operation(d.op)
-        || !enumOf(["none", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "reaction", "release_entry"])(d.pred) || !number(d.failures) || d.source !== "unknown") return null;
+        || !enumOf(["none", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "reaction", "release_entry", "resource"])(d.pred) || !number(d.failures) || d.source !== "unknown") return null;
       const ids = array(d.ids, 4, number), g = array(d.g, 3, number), time = d.time === null ? null : array(d.time, 5, number);
       const life = array(d.life, 7, number), counts = d.counts === null ? null : array(d.counts, 4, number);
       const ctx = d.ctx === null ? null : array(d.ctx, 8, (v: unknown) => typeof v === "string" || bool(v) || number(v));
@@ -618,7 +657,17 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
         if (invocation[3] === "registered" && invocation.slice(4, 8).some(v => v === null)) return null;
         invocation[9] = [...invocation[9]];
       }
-      return { part: 0, select, data: { ...d, ids, g, time, life, counts, ctx, reaction, invocation } };
+      const resource = d.resource === null ? null : array(d.resource, 6, () => true);
+      if (d.resource !== null) {
+        if (!resource || ![resource[0], resource[2], resource[3]].every(number) || !["cancel", "releaseLock", "release"].includes(resource[1])
+          || !enumOf(["absent", "same", "foreign", "unrecognized", "unknown"])(resource[4])) return null;
+        const claims = array(resource[5], 6, () => true);
+        if (!claims || !claims.slice(0, 3).every(bool) || claims[3] !== "unknown" || claims[4] !== "unknown" || !array(claims[5], 12, bool)) return null;
+        if (claims[0] !== claims[5].every(Boolean) || claims[1] !== claims[5][10] || resource[2] !== g[0]
+          || claims[0] && !["absent", "same"].includes(resource[4])) return null;
+        claims[5] = [...claims[5]]; resource[5] = claims;
+      }
+      return { part: 0, select, data: { ...d, ids, g, time, life, counts, ctx, reaction, invocation, resource } };
     }
     const d = fields(w.data, ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand"]);
     if (!d || !nullableBool(d.locked) || !(state(d.release) || d.release === "unknown") || !bool(d.eof) || !number(d.otherRejected) || d.abortOperand !== "unknown") return null;
@@ -762,6 +811,10 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       const parts = unique.sort((a, b) => a.witness.part - b.witness.part);
       if (parts.length !== 2 || parts[0].witness.part !== 0 || parts[1].witness.part !== 1 || JSON.stringify(parts[0].witness.select) !== JSON.stringify(parts[1].witness.select)
         || JSON.stringify(parts[0].witness.data.ids) !== JSON.stringify(parts[1].witness.data.ids)) { suppressed += group.length; failed("REPORT_GROUP", new Error("incomplete LiteLLM witness")); continue; }
+      const resource = parts[0].witness.data.resource;
+      if (resource && resource[1] !== parts[0].witness.data.op && (resource[1] !== "cancel" || resource[0] !== parts[1].witness.data.originals[2]?.[0])) {
+        suppressed += group.length; failed("REPORT_GROUP", new Error("foreign LiteLLM cleanup operation")); continue;
+      }
       if (parts[0].witness.select.some((v: boolean, i: number) => v && selectedGroups[i])) { suppressed += group.length; failed("REPORT_GROUP", new Error("duplicate LiteLLM witness class")); continue; }
       for (let i = 0; i < 2; i++) selectedGroups[i] ||= parts[0].witness.select[i];
       ordered.push(parts);

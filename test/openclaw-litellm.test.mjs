@@ -954,6 +954,142 @@ test("invocation wire rejects malformed snapshots without observing hostile gett
   let reads = 0; const row = structuredClone(pair[0]); Object.defineProperty(row.witness.data, "invocation", { enumerable: true, get() { reads++; throw undefined; } });
   assert.equal(proof.validate(row), null); assert.equal(reads, 0);
 });
+test("resource ownership absent actor after Q remains bound without reaction authority", async () => {
+  const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+  const capBefore = litellmReactionVector(f.cap);
+  const cancel = f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []);
+  const unlock = f.owner.operation(f.reader, f.reader, "releaseLock", f.owner, undefined, f.methods.releaseLock, []);
+  const release = f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner);
+  for (const event of [cancel, unlock, release]) {
+    assert.equal(event.context.context, "absent"); assert.equal(event.context.predicate, "none");
+    assert.deepEqual(event.resource.slice(0, 5), [true, true, false, "unknown", "unknown"]);
+    assert.ok(event.resource[5].every(Boolean)); assert.equal(event.invocation[3], "none");
+  }
+  assert.deepEqual(litellmReactionVector(f.cap), capBefore); assert.equal(f.cap.state, 3); assert.deepEqual(f.owner.faults, []);
+});
+test("resource ownership detached exact live handle is bound while actor stays unknown", async () => {
+  const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+  // There is deliberately no callback capability or active invocation here.
+  const held = f.reader, event = f.owner.operation(held, held, "cancel", f.owner, undefined, f.methods.cancel, [undefined]);
+  assert.equal(event.resource[0], true); assert.equal(event.resource[2], false); assert.equal(event.resource[3], "unknown");
+  assert.equal(event.resource[4], "unknown"); assert.equal(event.invocation[2], 1); assert.equal(event.context.context, "absent");
+  assert.equal(event.context.predicate, "none"); assert.deepEqual(f.owner.faults, []);
+});
+test("resource ownership rejects each mutable chain identity and never repairs it from Q", async () => {
+  for (const mode of ["acquisition", "context", "token", "response", "body", "unique", "state", "lease", "reader", "method", "receiver", "observer", "foreign", "unrecognized", "foreign_acquisition"]) {
+    const f = await productOwnedReaderFixture(), b = f.cap.binding; let reader = f.reader, method = f.methods.cancel, receiver = reader, captured = f.owner;
+    if (mode === "acquisition") f.a.transport = {};
+    if (mode === "context") f.a.context = { token: b.token };
+    if (mode === "token") b.transport.context = { ...b.context, token: {} };
+    if (mode === "response") f.result.response = { body: b.body };
+    if (mode === "body") b.response.body = {};
+    if (mode === "unique") b.transport.unique = false;
+    if (mode === "state") b.transport.state = "rejected";
+    if (mode === "lease") f.a.releaseBinding = {};
+    if (mode === "reader") reader = receiver = {};
+    if (mode === "method") method = () => {};
+    if (mode === "receiver") receiver = {};
+    if (mode === "observer") captured = litellmOwnership({ getStore: () => undefined }, 6);
+    if (mode === "unrecognized") f.context({ token: {} });
+    if (mode === "foreign_acquisition") f.context({ token: b.token, acquisition: {} });
+    if (mode === "foreign") { let other; f.owner.invoke({ role: "chat", signal: undefined }, () => { other = f.storage.getStore(); }, undefined, [null, null, {}]); f.context(other); }
+    const event = f.owner.operation(reader, receiver, "cancel", captured, undefined, method, []);
+    assert.equal(event.resource[0], false, mode); assert.notEqual(event.context.predicate, "none", mode); assert.ok(f.owner.faults.length, mode);
+    assert.equal(event.resource[3], "unknown"); f.owner.reactionHooks.after(f.q); await f.q;
+  }
+});
+test("resource ownership consumes failed attempt before forwarding and rejects repaired replay", async () => {
+  for (const mode of ["reader", "lease"]) {
+    const f = await productOwnedReaderFixture();
+    const fail = mode === "reader" ? f.owner.operation(f.reader, {}, "cancel", f.owner, undefined, f.methods.cancel, []) : f.owner.releaseEntry(f.a, {}, f.release, undefined, [], f.owner);
+    assert.equal(fail.resource[0], false); assert.equal(fail.resource[1], true);
+    const retry = mode === "reader" ? f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []) : f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner);
+    assert.equal(retry.resource[0], false); assert.equal(retry.resource[1], false); assert.equal(retry.resource[5][10], false);
+    f.owner.reactionHooks.after(f.q); await f.q;
+  }
+});
+test("resource ownership later Q cannot replenish reader or lease cleanup attempts", async () => {
+  const f = await productOwnedReaderFixture();
+  const cancel = f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []);
+  const release = f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner);
+  assert.equal(cancel.resource[0], true); assert.equal(release.resource[0], true);
+  f.owner.reactionHooks.after(f.q); await f.q; f.owner.reactionHooks.before(f.q);
+  for (const event of [f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []), f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner)]) {
+    assert.equal(event.resource[0], false); assert.equal(event.resource[1], false); assert.equal(event.resource[2], false);
+  }
+  f.owner.reactionHooks.after(f.q); assert.equal(f.cap.state, 3);
+});
+test("resource ownership unlock and restoration close the original lifetime", async () => {
+  for (const mode of ["unlock", "restore"]) {
+    const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+    if (mode === "unlock") { const unlock = f.owner.operation(f.reader, f.reader, "releaseLock", f.owner, undefined, f.methods.releaseLock, []); f.owner.witness.returned(unlock); }
+    else f.owner.restore();
+    const event = f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []);
+    assert.equal(event.resource[0], false); assert.equal(event.resource[5][0], false); assert.ok(f.owner.faults.length);
+    if (mode === "restore") assert.equal(f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner).resource[0], false);
+  }
+});
+test("resource ownership bound original undefined rejection still fails strict drain", async () => {
+  for (const kind of ["cancel", "release"]) {
+    const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+    const event = kind === "cancel" ? f.owner.operation(f.reader, f.reader, kind, f.owner, undefined, f.methods.cancel, []) : f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner);
+    const p = Promise.reject(undefined); f.owner.witness.promise(event, p);
+    await assert.rejects(actualDrain()([{ kind, promise: p }]), error => error === undefined);
+    assert.equal(event.resource[0], true); assert.equal(event.state, "rejected"); assert.equal(event.reason, undefined);
+    assert.equal(event.resource[3], "unknown"); assert.ok(Object.isFrozen(event.resource) && Object.isFrozen(event.resource[5]));
+  }
+});
+test("resource ownership never accepts the same defined read closed cancel rejection vector", async () => {
+  const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+  const reason = {}, originals = ["read", "closed", "cancel"].map(kind => ({ kind, promise: Promise.reject(reason) }));
+  const event = f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []);
+  f.owner.witness.promise(event, originals[2].promise);
+  await assert.rejects(actualDrain()(originals), error => error instanceof AggregateError && error.errors.length === 3 && error.errors.every(e => e === reason));
+  assert.equal(event.resource[0], true); assert.equal(event.resource[3], "unknown"); assert.equal(event.reason, reason); assert.equal(event.state, "rejected");
+});
+test("resource ownership does not grant detached original read or acquisition attribution", async () => {
+  const f = await productOwnedReaderFixture(); f.owner.reactionHooks.after(f.q); await f.q;
+  const read = f.owner.operation(f.reader, f.reader, "read", f.owner, undefined, f.methods.read, []);
+  assert.equal(read.context.predicate, "context"); assert.equal(read.resource, undefined);
+  let receiver, args; const original = function (...values) { receiver = this; args = values; throw undefined; };
+  assert.throws(() => f.owner.guard("chat", original, f.reader, [7], {}), e => e === undefined);
+  assert.equal(receiver, f.reader); assert.deepEqual(args, [7]); assert.ok(f.owner.faults.length >= 2);
+});
+test("resource ownership evidence never hides primary undefined reporting or replay failures", async () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), parts = reportingParts("sdk_partial_abort");
+  parts[0].op = "cancel"; parts[0].resource = [7, "cancel", 4, 25, "absent", [true, true, false, "unknown", "unknown", Array(12).fill(true)]];
+  const pair = proof.witness(proof.record("sdk", "sdk_partial_abort", "join", undefined, "chat"), [true, true], parts);
+  await assert.rejects(withFailureEnvelope(async ({ emit }) => { emit(pair); throw undefined; }, proof, () => { throw undefined; }), error => reportingLeaves(error).length > 1 && reportingLeaves(error).every(e => e === undefined));
+  assert.equal(pair[0].witness.data.resource[5][3], "unknown");
+});
+test("resource wire rejects cross-generation and foreign cleanup-operation projection", () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), parts = reportingParts();
+  parts[0].op = "closed"; parts[0].resource = [7, "cancel", 4, 45, "absent", [true, true, false, "unknown", "unknown", Array(12).fill(true)]];
+  const pair = proof.witness(proof.record("sdk", "sdk_provider_error", "join", undefined, "chat"), [true, true], parts);
+  const lines = []; proof.emit(pair, line => lines.push(line)); assert.equal(reportingDecode(proof, lines).length, 2);
+  const foreign = structuredClone(pair); foreign[0].witness.data.resource[0]++;
+  assert.throws(() => litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy).emit(foreign, () => {}));
+  for (const [index, value] of [[2, 5], [4, "foreign"], [4, "unrecognized"]]) {
+    const bad = structuredClone(pair[0]); bad.witness.data.resource[index] = value; assert.equal(proof.validate(bad), null);
+  }
+});
+test("resource wire complete maximum-width evidence preserves roles and fixed quotas", () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), lines = [], pairs = [];
+  for (const [id, select] of [["sdk_stream_provider_error", [true, false]], ["sdk_partial_abort", [false, true]]]) {
+    const parts = reportingParts(id, true); parts[0].op = "cancel";
+    parts[0].invocation = [1_000_000, 1_000_000, 1_000_000, "registered", 1_000_000, 1_000_000, 2, 1_000_000, true, Array(12).fill(true)];
+    parts[0].reaction = [1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 3, 1_000_000, 2, 1];
+    parts[0].resource = [1_000_000, "cancel", 1_000_000, 1_000_000, "absent", [true, true, false, "unknown", "unknown", Array(12).fill(true)]];
+    pairs.push(...proof.witness(proof.record("sdk", id, "join", undefined, "chat"), select, parts));
+  }
+  const roles = ["streamSimple", "stream"].map(api => proof.roles({ api, outcomes: Array(4).fill(null) }));
+  proof.emit([...pairs, ...roles, proof.child({ code: 1 }).envelope, proof.boundary("REPORT_WITNESS", undefined)], line => lines.push(line)); proof.flush(line => lines.push(line));
+  const decoded = reportingDecode(proof, lines); assert.deepEqual(decoded.filter(r => r.witness), pairs); assert.deepEqual(decoded.filter(r => r.roles), roles);
+  assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  for (const mutate of [r => { r[3] = "caller"; }, r => { r[4] = "sdk"; }, r => { r[0] = false; }, r => { r[1] = false; }, r => { r[5][0] = undefined; }]) {
+    const bad = structuredClone(pairs[0]); mutate(bad.witness.data.resource[5]); assert.equal(proof.validate(bad), null);
+  }
+});
 // BEGIN read-return pure comparisons.
 // Exact inert excerpts: @vitest/spy 5.0.5 dist/index.js createMock, and the
 // cbbd SDK read implementation. No Vitest import, SDK, or native hook executes.
@@ -1126,6 +1262,16 @@ function closedFirstProjection() {
   const project = (current = 7) => witness.projection("original_drain", "fulfilled", current, [2, 0, 0, 2], 0, [{ kind: "closed", promise: closed.promise, state: "rejected" }]);
   return { witness, observer, token, acquisition, body, response, reader, p, q, t, closed, read, binding, cap, project };
 }
+test("resource projection closed-first uses exact same-reader cancel identity and clock", () => {
+  const f = closedFirstProjection(), cancel = f.witness.begin(f.reader, "cancel", undefined, { context: "absent", predicate: "none" });
+  cancel.resource = Object.freeze([true, true, false, "unknown", "unknown", Object.freeze(Array(12).fill(true))]);
+  f.witness.threw(cancel, undefined);
+  const pair = f.project(); assert.equal(pair[0].op, "closed");
+  assert.deepEqual(pair[0].resource, [cancel.id, "cancel", 7, cancel.invoke, "absent", cancel.resource]);
+  assert.equal(pair[1].originals[2][0], cancel.id);
+  f.witness.operations.push({ ...cancel }); assert.equal(f.project()[0].resource, null);
+  f.witness.operations.pop(); cancel.generation = 8; assert.equal(f.project()[0].resource, null);
+});
 test("role projection closed-first uses only the same reader original read P capability", () => {
   const f = closedFirstProjection(), pair = f.project();
   assert.equal(pair[0].op, "closed"); assert.equal(f.closed.reaction, undefined); assert.equal(litellmReactionVector(f.closed.reaction), null);
@@ -1264,7 +1410,7 @@ test("success envelope primary undefined and independent validation failures bot
 // Pure closed-data fixtures: no SDK, Worker, stream, or transport execution.
 function reportingParts(id = "sdk_provider_error", max = false) {
   const parts = [
-    { at: "original_drain", body: "fulfilled", caseId: id, role: "chat", control: "provider_error", api: "streamSimple", ids: [1, 1, 1, 1], g: [4, 4, 80], op: "read", pred: "none", ctx: ["same", true, true, true, true, true, 4, true], time: [25, 26, 53, 1, 0], life: [46, 49, 54, 55, 58, 1, 1], counts: [18, 0, 15, 3], failures: 0, source: "unknown", reaction: null, invocation: null },
+    { at: "original_drain", body: "fulfilled", caseId: id, role: "chat", control: "provider_error", api: "streamSimple", ids: [1, 1, 1, 1], g: [4, 4, 80], op: "read", pred: "none", ctx: ["same", true, true, true, true, true, 4, true], time: [25, 26, 53, 1, 0], life: [46, 49, 54, 55, 58, 1, 1], counts: [18, 0, 15, 3], failures: 0, source: "unknown", reaction: null, invocation: null, resource: null },
     { ids: [1, 1, 1, 1], acquisition: null, originals: [[5, "rejected", 25, 26, 53, true, "object", false, true, true], [4, "rejected", 20, 21, 52, true, "object", false, true, true], [7, "rejected", 45, 47, 51, true, "object", false, true, true]], same: [true, true, true], signals: [[false, true, true], [false, true, true], [false, true, true]], cancel: ["undefined", false, false, false], input: [[false, null, 0], [false, null, 0], [false, null, 0]], output: [[false, null, 0], [true, "object", 44], [true, "object", 43]], release: "fulfilled", locked: false, eof: false, otherRejected: 0, abortOperand: "unknown" },
   ];
   if (max) {
@@ -1290,7 +1436,7 @@ function reportingLeaves(value) {
 
 test("reporting repair exact 769-byte regression roundtrips all facts", () => {
   const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), pair = reportingPair(proof), lines = [];
-  const historical = structuredClone(pair); delete historical[0].witness.data.reaction; delete historical[0].witness.data.invocation;
+  const historical = structuredClone(pair); delete historical[0].witness.data.reaction; delete historical[0].witness.data.invocation; delete historical[0].witness.data.resource;
   assert.deepEqual(historical.map(r => Buffer.byteLength("::error title=LiteLLM typed contract::" + JSON.stringify(r) + "\n")), [554, 769]);
   proof.emit(pair, line => lines.push(line)); assert.deepEqual(reportingDecode(proof, lines), pair);
   assert.deepEqual(proof.parse(pair.map(r => proof.prefix + proof.json(r)).join("\n")), pair);
