@@ -1,5 +1,7 @@
 # Changelog
 
+- Bind Google speech startup diagnostics to its exact native SDK revision, fixture and agents-tools project. Preserve the existing SDK failure capsule and use only spare capacity or nonessential outer progress for missing-capsule runner evidence.
+
 - Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
 
 - Retain the independently decoded reaper outcome and exact private receipt-write result in the existing attach diagnostic. Record the coordinator’s first escaping post-permit boundary and independent FINISH outcome without interpreting process causes or granting receipt or retirement credit. Preserve original failures, complete-capture custody and historical diagnostics.
@@ -19,6 +21,11 @@
 
 ## Unreleased
 
+- Bind Google speech fixture observations to exact acquisition and resource identities, retain original closed promises and observer joins, and permanently seal each restored invocation without changing speech outcome assertions.
+
+- Google speech fixture: finish every original Worker waitUntil and resource join, including appended tails, before throwing retained join failures; preserve undefined and independent result failures.
+
+- Google speech proof: compose the landed response-reader retirement base while preserving the pinned speech scenarios, diagnostics, consumer selection, and provider snapshot indexes. Native speech qualification remains a separate original-CI requirement.
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
 - Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.
@@ -648,6 +655,7 @@
 - Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
+- Declare DeepSeek native Search alongside unchanged Chat cards with the frozen 750-microUSD maximum request tariff, complete-empty zero settlement and conservative uncertain charges; preserve original credentials and explicit fixed policy pricing.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.

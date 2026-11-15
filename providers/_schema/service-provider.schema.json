@@ -2644,14 +2644,15 @@
         "nativeProxy": { "const": true },
         "requestFormat": { "const": "deepseek.search" }, "responseFormat": { "const": "deepseek.search" },
         "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
-        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestPricing": { "$ref": "#/$defs/deepSeekSearchRequestPricing" }
       },
       "not": { "anyOf": [
         { "required": ["auth"] }, { "required": ["upstreamPath"] },
         { "required": ["streaming"] }, { "required": ["websocket"] },
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
-        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+        { "required": ["toolPricing"] }
       ] }
     },
     "xaiSpeechEndpoint": {
@@ -2853,7 +2854,8 @@
       "oneOf": [
         { "$ref": "#/$defs/successfulRequestPricing" },
         { "$ref": "#/$defs/outcomeRequestPricing" },
-        { "$ref": "#/$defs/imageRequestPricing" }
+        { "$ref": "#/$defs/imageRequestPricing" },
+        { "$ref": "#/$defs/deepSeekSearchRequestPricing" }
       ]
     },
     "outcomeRequestPricing": {
