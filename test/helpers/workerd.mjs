@@ -31,11 +31,19 @@ export async function startBundledWorkerdFixture(temporary, routerScript, upstre
     queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: queueConsumer ?? { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: "upstream",
   }, { name: "upstream", modules: true, script: upstreamScript, durableObjects: upstreamDurableObjects, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
+  return awaitWorkerdFixtureReady(mf);
+}
+
+export async function awaitWorkerdFixtureReady(mf) {
   try {
     await mf.ready;
     return mf;
   } catch (error) {
-    await mf.dispose();
+    try {
+      await mf.dispose();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Worker fixture readiness and disposal failed");
+    }
     throw error;
   }
 }

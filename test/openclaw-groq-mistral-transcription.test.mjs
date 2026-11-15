@@ -737,7 +737,7 @@ test("Groq/Mistral declarations compile to native-only offers and preserve the c
     assert.equal(models[0].pricing, null); assert.equal(models[0].pricing_ref, null);
   }
   const rows = parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy.matrix.include;
-  assert.equal(rows.length, 43); assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
+  assert.equal(rows.length, 44); assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
   assert.deepEqual(rows.filter(row => row.consumer === "groq-mistral-transcription"), [{ consumer: "groq-mistral-transcription", ref: sourceHead, test: "test/openclaw-groq-mistral-transcription.test.mjs" }]);
   for (const path of ["test/openclaw-groq-mistral-transcription.test.mjs", "test/fixtures/openclaw-groq-mistral-transcription-contract.test.ts"])
     assert.equal(affectsOpenClawContract(path), true);
@@ -1014,12 +1014,117 @@ function ownerAbortControl(entry, start, context, trace) {
   };
 }
 
+// One operation per actual fixture generation. Pin its promise before any
+// retirement effect can reenter; repeated callers only observe that operation.
+function singleFixtureRetirement(owner, retire) {
+  let operation;
+  return candidate => {
+    if (candidate !== owner) throw new Error("retirement generation mismatch");
+    if (!operation) operation = Promise.resolve().then(retire);
+    return operation;
+  };
+}
+
+function freezeRetirementReceipt(body) {
+  if (body.typed) {
+    for (const row of body.typed) Object.freeze(row);
+    Object.freeze(body.typed);
+  }
+  return Object.freeze({ body: Object.freeze(body), status: body.retired ? 200 : 500 });
+}
+
+test("single fixture retirement shares one pending operation and immutable receipt", async () => {
+  const owner = {}, foreign = {}, held = Promise.withResolvers(), calls = [];
+  class Original { wait(pending, failure, discard) { return pending; } }
+  const descriptor = Object.getOwnPropertyDescriptor(Original.prototype, "wait");
+  const tap = installHttpWaitTap(Original, () => {});
+  let original, reentrant, completed = false;
+  const join = singleFixtureRetirement(owner, async () => {
+    calls.push("retirement"); reentrant = join(owner);
+    await held.promise; calls.push("producer");
+    const failures = [], restoration = restoreWaitReceipt(tap, "groq_abort", false, failures);
+    calls.push("restoration"); await finishOwned(failures, [() => calls.push("later-cleanup")]);
+    return freezeRetirementReceipt({ retired: true, typed: [restoration] });
+  });
+  original = join(owner); const concurrent = join(owner);
+  assert.equal(concurrent, original); assert.throws(() => join(foreign), /generation mismatch/);
+  const observed = original.then(() => { completed = true; });
+  await Promise.resolve(); assert.equal(reentrant, original); assert.equal(completed, false);
+  assert.deepEqual(calls, ["retirement"]);
+  held.resolve(); const receipt = await original; await observed;
+  assert.equal(join(owner), original); assert.equal(await join(owner), receipt);
+  assert.deepEqual(calls, ["retirement", "producer", "restoration", "later-cleanup"]);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(Original.prototype, "wait"), descriptor);
+  assert.equal(receipt.status, 200); assert.equal(receipt.body.typed[0].restored, true);
+  assert.ok(Object.isFrozen(receipt) && Object.isFrozen(receipt.body) && Object.isFrozen(receipt.body.typed) && Object.isFrozen(receipt.body.typed[0]));
+  assert.throws(() => { receipt.body.retired = false; }, TypeError);
+  let otherRuns = 0; const other = singleFixtureRetirement(foreign, () => { otherRuns++; return 2; });
+  assert.notEqual(other(foreign), original); assert.equal(await other(foreign), 2); assert.equal(otherRuns, 1);
+});
+
+test("single fixture retirement retains original rejection and every cleanup failure", async t => {
+  for (const primary of [undefined, new Error("fixture body")]) await t.test(primary === undefined ? "undefined primary" : "object primary", async () => {
+    const owner = {}, cleanup = new Error("fixture cleanup"), calls = [];
+    const join = singleFixtureRetirement(owner, async () => {
+      await finishOwned([primary], [
+        () => { calls.push("producer"); throw cleanup; },
+        () => { calls.push("restoration"); throw undefined; },
+        () => { calls.push("later-cleanup"); },
+      ]);
+    });
+    const original = join(owner), repeated = join(owner); assert.equal(repeated, original);
+    const results = await Promise.allSettled([original, repeated]);
+    assert.ok(results.every(value => value.status === "rejected"));
+    assert.equal(results[0].reason, results[1].reason);
+    assert.ok(results[0].reason instanceof AggregateError);
+    assert.deepEqual(results[0].reason.errors, [primary, cleanup, undefined]);
+    const later = await Promise.allSettled([join(owner)]); assert.equal(later[0].reason, results[0].reason);
+    assert.deepEqual(calls, ["producer", "restoration", "later-cleanup"]);
+  });
+  const owner = {}; let attempts = 0;
+  const join = singleFixtureRetirement(owner, () => { attempts++; throw undefined; });
+  const result = await Promise.allSettled([join(owner), join(owner)]);
+  assert.deepEqual(result, [{ status: "rejected", reason: undefined }, { status: "rejected", reason: undefined }]);
+  assert.equal(attempts, 1);
+});
+
+test("single fixture retirement never conceals failed or foreign restoration", async t => {
+  for (const mode of ["foreign", "undefined", "stale-success"]) await t.test(mode, async () => {
+    const owner = {}, calls = [], failures = [];
+    class Original { wait(pending, failure, discard) { return pending; } }
+    const descriptor = Object.getOwnPropertyDescriptor(Original.prototype, "wait");
+    const realTap = installHttpWaitTap(Original, () => {}), foreign = () => {};
+    let tap = realTap;
+    if (mode === "foreign") Object.defineProperty(Original.prototype, "wait", { ...descriptor, value: foreign });
+    if (mode === "undefined") tap = { restore() { throw undefined; }, disposition: realTap.disposition };
+    if (mode === "stale-success") {
+      assert.equal(realTap.restore(), true);
+      Object.defineProperty(Original.prototype, "wait", { ...descriptor, value: foreign });
+    }
+    const join = singleFixtureRetirement(owner, async () => {
+      const restoration = restoreWaitReceipt(tap, "groq_abort", false, failures); calls.push("restore");
+      await finishOwned([], [() => { calls.push("later-cleanup"); }]);
+      return freezeRetirementReceipt({ retired: failures.length === 0, typed: [restoration] });
+    });
+    const original = join(owner), receipt = await original;
+    assert.equal(join(owner), original); assert.equal(await join(owner), receipt);
+    assert.equal(receipt.status, 500); assert.equal(receipt.body.retired, false);
+    assert.equal(receipt.body.typed[0].restored, false); assert.equal(receipt.body.typed[0].state, "rejected");
+    assert.equal(receipt.body.typed[0].failurePresent, true); assert.equal(failures.length, 1);
+    if (mode === "undefined") { assert.equal(failures[0], undefined); assert.equal(realTap.restore(), true); }
+    else assert.equal(Original.prototype.wait, foreign);
+    assert.deepEqual(calls, ["restore", "later-cleanup"]);
+  });
+});
+
 function routerFixture() {
   return `import handler from './worker/index.ts'; export * from './worker/index.ts';
 import { bodyBudgetCharged } from './worker/body-budget.ts';
 import { HttpOperation } from './worker/http-operation.ts';
 ${installHttpWaitTap.toString()}
 ${restoreWaitReceipt.toString()}
+${singleFixtureRetirement.toString()}
+${freezeRetirementReceipt.toString()}
 ${ownerAbortControl.toString()}
 ${observeOperation.toString()}
 ${joinOperations.toString()}
@@ -1034,6 +1139,7 @@ ${livePhaseWriter.toString()}
 const phaseStart = ${phaseStart.toString()};
 const routerPhases = livePhaseWriter("router", line => console.log(line));
 const records = new Map(), readers = new Map(), controllers = new Map(), requests = [];
+const retirements = new WeakMap();
 const originalFetch = globalThis.fetch, originalGetReader = ReadableStream.prototype.getReader, bodies = new WeakMap();
 globalThis.fetch = function(input, init) {
   const entry = bindHeldFetch(input, init, controllers);
@@ -1073,43 +1179,54 @@ export default { ...handler, async fetch(request, env, context) {
     if (action === 'rotate') { await admin('credentials/' + id + '/rotate', { secretSha256: ${JSON.stringify(hash("rotated-secret"))} }); return Response.json({ rotated: true }); }
     if (action === 'abort') { const entry = controllers.get(id); if (!entry || entry.id !== id || !entry.control) throw new Error('original control owner missing'); if (id === 'groq_abort') routerPhases.emit("router_control", "enter"); const accepted = entry.control.request(entry, 1); if (id === 'groq_abort') routerPhases.emit("router_control", "fulfill"); return Response.json({ accepted }); }
     if (action === 'join') {
-      const list = records.get(id) ?? [], entry = controllers.get(id), failures = [];
-      const trace = id === "groq_abort" ? routerPhases : null;
-      const attempt = async (start, phase) => { try { await phaseStart(trace, phase, start); } catch (error) { failures.push(error); } };
-      await attempt(() => entry?.outcome, "router_join_handler");
-      await attempt(() => entry?.control?.controlTask, "router_join_control");
-      if (id === "groq_abort") entry?.tap?.census(entry);
-      await attempt(async () => { for (let count = -1; count !== list.length;) {
-        count = list.length;
-        for (const record of list) trace?.emit('waituntil_snapshot', 'fulfill', { ordinal: record.ordinal, observed: record.settled ? record.rejected ? 'rejected' : 'fulfilled' : 'pending' });
-        await joinOperations(list);
-      } }, "router_join_waituntil");
-      await attempt(() => entry?.tap?.join(entry), "http_wait_join");
-      await attempt(() => entry?.witness.join(list, entry?.tap?.pairs(entry) ?? []), "router_join_reader");
-      await attempt(async () => { for (const result of await Promise.allSettled(entry?.observers ?? [])) if (result.status === 'rejected') failures.push(result.reason); }, "router_join_observers");
-      await attempt(() => { for (const value of readers.get(id) ?? []) if (!value.unlocked || value.body.locked) throw new Error('original reader remains owned'); }, "router_join_unlock");
-      if (id === 'groq_abort' || id === 'mistral_abort') await attempt(async () => {
-        const state = await (await originalFetch('https://fixture.example/state', { headers: { 'x-fixture-producer-join': id } })).json();
-        if (state.producerFailures !== 0) throw new Error('original upstream producer join failed');
-      }, "router_join_producer");
-      if (entry?.tap) await attempt(() => {
-        entry.restoration = restoreWaitReceipt(entry.tap, id, id === "groq_abort" && routerPhases.incomplete, failures);
-        if (id === "groq_abort") routerPhases.emit("http_restore", entry.restoration.restored ? "fulfill" : "reject", { restored: entry.restoration.restored });
-        entry.restoration.liveIncomplete ||= id === "groq_abort" && routerPhases.incomplete;
-        if (!entry.restoration.restored || entry.restoration.liveIncomplete) throw new Error("wait observer restoration or quota incomplete");
-      }, "http_wait_join");
-      if (entry) entry.joinFailures = failures;
-      let typed;
-      if (id === 'groq_abort' || id === 'mistral_abort') {
-        typed = entry?.witness.records(id) ?? [];
-        typed.push({ v: 1, test: 'held_original', case: id, scenario: 'abort', kind: 'binding', state: entry ? 'fulfilled' : 'rejected',
-          bound: !!entry && entry.id === id && entry.ingress.signal === entry.signals.Ingress && entry.forwarded.signal === entry.signals.Forwarded,
-          responseSame: !!entry && entry.response === entry.returnedResponse, bodySame: !!entry && entry.body === entry.response?.body, status: entry?.handlerStatus ?? null });
-        typed.push({ v: 1, test: 'held_original', case: id, scenario: 'abort', kind: 'summary', state: failures.length ? 'rejected' : 'fulfilled', failures: failures.length });
-        if (entry?.restoration) typed.push(entry.restoration);
-        validateHeldRecords(typed);
+      const list = records.get(id) ?? [], entry = controllers.get(id);
+      if (!records.has(id)) records.set(id, list);
+      const owner = entry ?? list;
+      let join = retirements.get(owner);
+      if (!join) {
+        join = singleFixtureRetirement(owner, async () => {
+          const failures = [];
+          const trace = id === "groq_abort" ? routerPhases : null;
+          const attempt = async (start, phase) => { try { await phaseStart(trace, phase, start); } catch (error) { failures.push(error); } };
+          await attempt(() => entry?.outcome, "router_join_handler");
+          await attempt(() => entry?.control?.controlTask, "router_join_control");
+          if (id === "groq_abort") entry?.tap?.census(entry);
+          await attempt(async () => { for (let count = -1; count !== list.length;) {
+            count = list.length;
+            for (const record of list) trace?.emit('waituntil_snapshot', 'fulfill', { ordinal: record.ordinal, observed: record.settled ? record.rejected ? 'rejected' : 'fulfilled' : 'pending' });
+            await joinOperations(list);
+          } }, "router_join_waituntil");
+          await attempt(() => entry?.tap?.join(entry), "http_wait_join");
+          await attempt(() => entry?.witness.join(list, entry?.tap?.pairs(entry) ?? []), "router_join_reader");
+          await attempt(async () => { for (const result of await Promise.allSettled(entry?.observers ?? [])) if (result.status === 'rejected') failures.push(result.reason); }, "router_join_observers");
+          await attempt(() => { for (const value of readers.get(id) ?? []) if (!value.unlocked || value.body.locked) throw new Error('original reader remains owned'); }, "router_join_unlock");
+          if (id === 'groq_abort' || id === 'mistral_abort') await attempt(async () => {
+            const state = await (await originalFetch('https://fixture.example/state', { headers: { 'x-fixture-producer-join': id } })).json();
+            if (state.producerFailures !== 0) throw new Error('original upstream producer join failed');
+          }, "router_join_producer");
+          if (entry?.tap) await attempt(() => {
+            entry.restoration = restoreWaitReceipt(entry.tap, id, id === "groq_abort" && routerPhases.incomplete, failures);
+            if (id === "groq_abort") routerPhases.emit("http_restore", entry.restoration.restored ? "fulfill" : "reject", { restored: entry.restoration.restored });
+            entry.restoration.liveIncomplete ||= id === "groq_abort" && routerPhases.incomplete;
+            if (!entry.restoration.restored || entry.restoration.liveIncomplete) throw new Error("wait observer restoration or quota incomplete");
+          }, "http_wait_join");
+          if (entry) entry.joinFailures = Object.freeze(failures);
+          let typed;
+          if (id === 'groq_abort' || id === 'mistral_abort') {
+            typed = entry?.witness.records(id) ?? [];
+            typed.push({ v: 1, test: 'held_original', case: id, scenario: 'abort', kind: 'binding', state: entry ? 'fulfilled' : 'rejected',
+              bound: !!entry && entry.id === id && entry.ingress.signal === entry.signals.Ingress && entry.forwarded.signal === entry.signals.Forwarded,
+              responseSame: !!entry && entry.response === entry.returnedResponse, bodySame: !!entry && entry.body === entry.response?.body, status: entry?.handlerStatus ?? null });
+            typed.push({ v: 1, test: 'held_original', case: id, scenario: 'abort', kind: 'summary', state: failures.length ? 'rejected' : 'fulfilled', failures: failures.length });
+            if (entry?.restoration) typed.push(entry.restoration);
+            validateHeldRecords(typed);
+          }
+          return freezeRetirementReceipt({ retired: failures.length === 0, provisional: !!typed, ...(typed ? { typed } : {}), operations: list.length, readers: (readers.get(id) ?? []).length, charged: bodyBudgetCharged() });
+        });
+        retirements.set(owner, join);
       }
-      return Response.json({ retired: failures.length === 0, provisional: !!typed, ...(typed ? { typed } : {}), operations: list.length, readers: (readers.get(id) ?? []).length, charged: bodyBudgetCharged() }, { status: failures.length ? 500 : 200 });
+      const receipt = await join(owner);
+      return Response.json(receipt.body, { status: receipt.status });
     }
     if (action === 'state') {
       const state = await (await originalFetch('https://fixture.example/state')).json();
@@ -1963,11 +2080,16 @@ test("original multipart two-reader Fetch retirement control", { timeout: 28000 
 // Request-bound diagnostics: originals are called once and never replaced by observers.
 function restoreWaitReceipt(tap, id, liveIncomplete, failures = []) {
   let failurePresent = false, failure;
-  try { tap.restore(); } catch (error) { failurePresent = true; failure = error; failures.push(error); }
-  const result = tap.disposition();
+  try {
+    if (tap.restore() !== true) throw new Error("original wait descriptor restoration refused");
+    const state = tap.disposition();
+    if (!state.restored || !state.descriptorOwned || state.incomplete || state.failures)
+      throw new Error("original wait descriptor restoration incomplete");
+  } catch (error) { failurePresent = true; failure = error; failures.push(error); }
+  const result = tap.disposition(), restored = result.restored && !failurePresent;
   return { v: 1, test: "held_original", case: id, scenario: "abort", kind: "restoration",
-    state: result.restored && !failurePresent ? "fulfilled" : "rejected", attempted: true,
-    descriptorOwned: result.descriptorOwned, restored: result.restored,
+    state: restored ? "fulfilled" : "rejected", attempted: true,
+    descriptorOwned: result.descriptorOwned, restored,
     failurePresent, failureDefined: failurePresent && failure !== undefined,
     failureType: failure === null ? "null" : typeof failure, liveIncomplete };
 }
