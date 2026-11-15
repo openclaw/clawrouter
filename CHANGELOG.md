@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Bound Bifrost partial-fixture demand to nonterminal SSE comments before holding, retaining the original cancellation lifetime, escape deadline and strict retirement/accounting checks.
+
 - Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
 
 - Use the existing direct Worker socket for Bifrost SDK and control requests, retaining strict producer cancellation, nonexpiry and accounting checks.
