@@ -15,14 +15,23 @@ import { snapshot } from "./media-resource-fixtures.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
 // BEGIN music diagnostic protocol.
+function musicFailureCounts() {
+  const kinds = ["acquisition", "acquisition_observer", "read", "cancel", "body_cancel", "closed", "release_invariant", "dispatcher_promise", "dispatcher_invariant", "observer_exception", "task", "body_join", "binding", "handler"];
+  const counts: Record<string, number> = {}; let overflow = false;
+  return { add(kind: string) {
+    if (!kinds.includes(kind)) throw new Error("unknown music failure kind");
+    const key = "f_" + kind, count = counts[key] ?? 0;
+    if (count === 65535) overflow = true; else counts[key] = count + 1;
+  }, snapshot(): Record<string, number | boolean> { return { ...counts, ...(overflow ? { failureOverflow: true } : {}) }; }, kinds };
+}
 function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   type Data = Record<string, string | number | boolean | null>;
   const prefix = "CLAWROUTER_MUSIC_DIAGNOSTIC_V1 ";
   const ids = new Set(["none", "m0_wav", "m0_mp3", "m1_wav", "m1_mp3", "reference", "options", "preabort", "missing", "foreign", "revoked", "unpriced", "stalegrant", "empty", "eof", "json", "utf8", "base64", "ambiguous", "partial", "error", "redirect", "wire", "audio", "transcript", "abort_headers", "abort_body", "deadline_body"]);
-  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
+  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
   const names = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "unknown"]);
   const codes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_REQUIRE_ESM", "ABORT_ERR", "ECONNRESET", "ETIMEDOUT"]);
-  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid"];
+  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
   const own = (value: unknown, key: string): unknown => {
     if (!value || typeof value !== "object" || isProxy(value)) return undefined;
     try { const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined; } catch { return undefined; }
@@ -40,6 +49,9 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         || !["none", "error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"].includes(out.category as string)) return;
       for (const key of found as string[]) {
         if (keys.indexOf(key) < 8) continue;
+        if (key.startsWith("f_")) { if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 65535) return; continue; }
+        if (key === "httpStatus") { if (out[key] !== null && (typeof out[key] !== "number" || !Number.isInteger(out[key]) || (out[key] as number) < 100 || (out[key] as number) > 599)) return; continue; }
+        if (key === "toolReturned" || key === "failureOverflow") { if (typeof out[key] !== "boolean") return; continue; }
         if (key === "name" ? !names.has(out[key] as string) : key === "code" ? !codes.has(out[key] as string)
           : key === "signal" ? ![null, "SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(out[key] as string | null) : !scalar(out[key])) return;
       }
@@ -110,15 +122,16 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
       if (suppressed) command(record({ layer: "outer", route: "none", caseId: "none", phase: "capacity", role: "summary", outcome: "unknown", suppressed: Math.min(suppressed, 1_000_000_000) }));
     }, get count() { return records.size; } };
   }
-  return { prefix, validate, record, parse, emitter, own, ids };
+  return { prefix, validate, record, parse, emitter, own, ids, failureCounts: musicFailureCounts };
 }
 // END music diagnostic protocol.
 const musicProtocol = musicDiagnosticProtocol(nodeTypes.isProxy);
 const musicDiagnosticErrors: unknown[] = [];
 let musicCase = "none", musicPhase = "module_entered", musicRecords = 0;
+let musicStageFacts: Record<string, number | boolean | null> = {};
 const musicRoute = ["native", "manifest"].includes(process.env.CLAWROUTER_CONTRACT_ROUTE ?? "") ? process.env.CLAWROUTER_CONTRACT_ROUTE! : "none";
 function musicMark(phase: string, outcome = "entered", role = "progress", failed = false, error?: unknown, facts: Record<string, number | boolean | null> = {}) {
-  musicPhase = phase;
+  musicPhase = phase; musicStageFacts = facts;
   try {
     if (musicRecords >= 512) throw new Error("music SDK diagnostic capacity exceeded");
     const record = musicProtocol.record({ layer: "sdk", route: musicRoute, caseId: musicCase, phase, role, outcome, partialDelivery: null, ...facts }, failed, error);
@@ -219,7 +232,7 @@ function observeResponse(response: Response, signal: AbortSignal | undefined, ex
 async function joinOriginalSdkOperations(input: {
   readers: Reader[]; bodyOperations: Operation[]; acquisitions: Acquisition[];
   agents: Array<{ retirements: number; pending: Promise<unknown>[] }>;
-  observationErrors: unknown[];
+  observationErrors: unknown[]; failureCounts?: ReturnType<typeof musicFailureCounts>;
 }, storedAbort: typeof ownedStoredAbort): Promise<unknown[]> {
   const { readers, bodyOperations, acquisitions, agents, observationErrors } = input;
   const outcomes = new Map<Promise<unknown>, PromiseSettledResult<unknown> | undefined>();
@@ -237,12 +250,16 @@ async function joinOriginalSdkOperations(input: {
     if (!joining.length) break;
     await Promise.all(joining);
   }
-  const failures: unknown[] = [];
+  const failures: unknown[] = [], reportingFailures: unknown[] = [];
+  const fail = (kind: string, reason: unknown) => {
+    failures.push(reason);
+    try { input.failureCounts?.add(kind); } catch (error) { reportingFailures.push(error); }
+  };
   for (const acquisition of acquisitions) {
     const observed = outcomes.get(acquisition.observed)!;
-    if (observed.status === "rejected") failures.push(observed.reason);
+    if (observed.status === "rejected") fail("acquisition_observer", observed.reason);
     const result = outcomes.get(acquisition.pending)!;
-    if (result.status === "rejected" && !(acquisition.expectedAbort && acquisition.rejectAborted && result.reason !== undefined && result.reason === acquisition.rejectReason)) failures.push(result.reason);
+    if (result.status === "rejected" && !(acquisition.expectedAbort && acquisition.rejectAborted && result.reason !== undefined && result.reason === acquisition.rejectReason)) fail("acquisition", result.reason);
   }
   for (const row of readers) row.closedOutcome = outcomes.get(row.closed)!;
   for (const operation of new Set([...bodyOperations, ...readers.flatMap(row => row.operations)])) {
@@ -251,17 +268,18 @@ async function joinOriginalSdkOperations(input: {
     const owner = readers.find(row => row.body === operation.body && (operation.kind === "body_cancel" || row.operations.includes(operation)) && storedAbort(row, result.reason));
     const expectedRead = operation.kind === "read" && operation.expectedAbort && operation.rejectAborted && result.reason !== undefined && operation.rejectReason === result.reason;
     const storedCancellation = operation.kind !== "read" && operation.expectedAbort && operation.invokeAborted && operation.invokeReason === result.reason && owner !== undefined;
-    if (!expectedRead && !storedCancellation) failures.push(result.reason);
+    if (!expectedRead && !storedCancellation) fail(operation.kind, result.reason);
   }
   for (const row of readers) {
-    if (row.closedOutcome?.status === "rejected" && !storedAbort(row, row.closedOutcome.reason)) failures.push(row.closedOutcome.reason);
-    if (row.releases !== 1 || row.returned !== 1 || row.body.locked) failures.push(new Error("original SDK reader not released"));
+    if (row.closedOutcome?.status === "rejected" && !storedAbort(row, row.closedOutcome.reason)) fail("closed", row.closedOutcome.reason);
+    if (row.releases !== 1 || row.returned !== 1 || row.body.locked) fail("release_invariant", new Error("original SDK reader not released"));
   }
   for (const row of agents) {
-    for (const pending of new Set(row.pending)) { const result = outcomes.get(pending)!; if (result.status === "rejected") failures.push(result.reason); }
-    if (row.retirements !== 1 || row.pending.length !== 1) failures.push(new Error("missing exact external dispatcher retirement"));
+    for (const pending of new Set(row.pending)) { const result = outcomes.get(pending)!; if (result.status === "rejected") fail("dispatcher_promise", result.reason); }
+    if (row.retirements !== 1 || row.pending.length !== 1) fail("dispatcher_invariant", new Error("missing exact external dispatcher retirement"));
   }
-  failures.push(...observationErrors);
+  for (const error of observationErrors) fail("observer_exception", error);
+  failures.push(...reportingFailures);
   return failures;
 }
 
@@ -310,15 +328,15 @@ beforeEach(context => {
   } catch (error) { musicMark("case_setup", "rejected", "primary", true, error); throw error; }
 });
 afterEach(async () => {
-  const failures: unknown[] = [];
+  const failures: unknown[] = [], failureCounts = musicProtocol.failureCounts();
   musicMark("original_join");
   try {
-    failures.push(...await joinOriginalSdkOperations({ readers, bodyOperations, acquisitions, agents, observationErrors }, ownedStoredAbort));
+    failures.push(...await joinOriginalSdkOperations({ readers, bodyOperations, acquisitions, agents, observationErrors, failureCounts }, ownedStoredAbort));
     musicMark("original_join", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { acquisitions: acquisitions.length, readers: readers.length,
       operations: bodyOperations.length + readers.reduce((n, row) => n + row.operations.length, 0),
       rejected: bodyOperations.filter(row => row.rejected).length + readers.reduce((n, row) => n + row.operations.filter(op => op.rejected).length, 0),
       releases: readers.reduce((n, row) => n + row.releases, 0), returned: readers.reduce((n, row) => n + row.returned, 0), dispatchers: agents.length });
-    for (const failure of failures) musicMark("original_join", "rejected", "cleanup", true, failure);
+    for (const failure of failures) musicMark("original_join", "rejected", "cleanup", true, failure, failureCounts.snapshot());
   } catch (error) { musicMark("original_join", "rejected", "cleanup", true, error); failures.push(error); }
   finally {
     musicMark("prepared_discard");
@@ -362,12 +380,17 @@ for (const row of cases) it(`real registered music ${route}/${row.id}`, async ()
     expect(catalog.status).toBe(200); await catalog.json();
     expect((await nativeFetch(origin + "/fixture/revoke?id=" + row.id, { method: "POST" })).status).toBe(204);
   }
-  musicMark("execute");
+  musicMark("tool_dispatch", "entered", "progress", false, undefined, { toolReturned: false, callerAborted: controller.signal.aborted });
   const pending = withPluginRuntimeRegistryScope(acquired.registry, () => tool!.execute(`music-${route}-${row.id}`, args, controller.signal));
+  musicMark("tool_returned", "fulfilled", "progress", false, undefined, { toolReturned: true, callerAborted: controller.signal.aborted });
   // The observation is attached immediately; a later await never leaves a rejection unhandled.
   const outcome = pending.then(value => ({ ok: true as const, value }), reason => ({ ok: false as const, reason }));
   if (row.kind.startsWith("abort_")) {
-    expect((await nativeFetch(origin + "/fixture/started?id=" + row.id)).status).toBe(204);
+    musicMark("started_fetch", "entered", "progress", false, undefined, { toolReturned: true, callerAborted: controller.signal.aborted });
+    const started = await nativeFetch(origin + "/fixture/started?id=" + row.id);
+    const status = started.status;
+    musicMark("started_status", "fulfilled", "progress", false, undefined, { httpStatus: Number.isInteger(status) && status >= 100 && status <= 599 ? status : null, toolReturned: true, callerAborted: controller.signal.aborted });
+    expect(status).toBe(204);
     controller.abort(new Error("owned caller cancellation"));
     musicMark("caller_abort", "fulfilled", "progress", false, undefined, { callerAborted: controller.signal.aborted });
   }
@@ -386,7 +409,7 @@ for (const row of cases) it(`real registered music ${route}/${row.id}`, async ()
     if (row.kind.startsWith("abort") || row.kind === "preabort") expect(controller.signal.aborted).toBe(true);
   }
   musicMark("body_assert", "fulfilled", "progress", false, undefined, { callerAborted: controller.signal.aborted });
-  } catch (error) { musicMark(musicPhase, "rejected", "primary", true, error, { callerAborted: controller.signal.aborted }); throw error; }
+  } catch (error) { musicMark(musicPhase, "rejected", "primary", true, error, { ...musicStageFacts, callerAborted: controller.signal.aborted }); throw error; }
 // The actual tool minimum is 120s. This new case encloses that real deadline;
 // the unchanged native consumer helper still owns its independent 240s ceiling.
 }, row.kind === "deadline_body" ? 180000 : 120000);

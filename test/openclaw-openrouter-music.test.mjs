@@ -39,6 +39,7 @@ assert.ok(musicDiagnosticStart >= 0 && musicDiagnosticEnd > musicDiagnosticStart
 const musicDiagnosticCode = stripTypeScriptTypes(musicDiagnosticSource.slice(musicDiagnosticStart, musicDiagnosticEnd));
 const createMusicProtocol = new Function(musicDiagnosticCode + "; return musicDiagnosticProtocol;")();
 const musicProtocol = createMusicProtocol(nodeTypes.isProxy);
+const createMusicFailureCounts = musicProtocol.failureCounts;
 const musicDiagnostics = musicProtocol.emitter(line => process.stdout.write(line)), musicDiagnosticFailures = [];
 function musicOuter(phase, route = "none", caseId = "none", outcome = "entered", role = "progress", failed = false, error, facts = {}) {
   try {
@@ -128,20 +129,20 @@ function observeBody(response, signal, owner) {
   };
   owner.join = async () => {
     const failures = [];
-    if (!rows.length) failures.push(new Error("missing original reader"));
+    if (!rows.length) { failures.push(new Error("missing original reader")); owner.failureCounts?.add("body_join"); }
     for (const row of rows) {
       let cursor = 0, closed;
       do {
         const batch = row.operations.slice(cursor); cursor = row.operations.length;
         const results = await Promise.allSettled(batch.map(operation => operation.pending));
         for (const [index, result] of results.entries()) {
-          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) failures.push(result.reason);
+          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) { failures.push(result.reason); owner.failureCounts?.add(batch[index].kind); }
         }
         closed = await Promise.allSettled([row.closed]);
       } while (cursor < row.operations.length);
-      if (closed[0].status === "rejected") failures.push(closed[0].reason);
-      failures.push(...row.errors);
-      if (row.unlocks !== 1 || row.returned !== 1 || body.locked) failures.push(new Error("original reader not physically released"));
+      if (closed[0].status === "rejected") { failures.push(closed[0].reason); owner.failureCounts?.add("closed"); }
+      failures.push(...row.errors); for (const _ of row.errors) owner.failureCounts?.add("observer_exception");
+      if (row.unlocks !== 1 || row.returned !== 1 || body.locked) { failures.push(new Error("original reader not physically released")); owner.failureCounts?.add("release_invariant"); }
     }
     if (failures.length) throw new AggregateError(failures, "original Worker body retirement failed");
     return { readers: rows.length, operations: rows.reduce((n, row) => n + row.operations.length, 0), unlocked: !body.locked };
@@ -257,44 +258,48 @@ function routerScript() {
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
 const originalFetch = globalThis.fetch;
+${createMusicFailureCounts.toString()}
+const failureCounts = musicFailureCounts();
 let sequence = 0; const tick = () => ++sequence;
 ${[observeBody, effectiveFetch, sameJson, bindAcquisition, observeAcquisition, acquisitionSnapshot, provisionalHeaderDisposition].map(fn => fn.toString()).join("\n")}
 globalThis.fetch = function(input, init) {
   const effective = effectiveFetch(input, init);
   if (effective.url !== target) return Reflect.apply(originalFetch, this, [input, init]);
-  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target) }; inputs.push(proof);
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target), failureCounts }; inputs.push(proof);
   try { return observeAcquisition(originalFetch, this, input, init, proof, tick); }
-  catch (error) { failures.push(error); throw error; }
+  catch (error) { failures.push(error); failureCounts.add("acquisition"); throw error; }
 };
 async function retire() {
   const errors = [], joined = [], candidates = [];
   let taskCursor = 0, inputCursor = 0;
   while (taskCursor < tasks.length || inputCursor < inputs.length) {
     const batch = tasks.slice(taskCursor); taskCursor = tasks.length;
-    for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason);
+    for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") { errors.push(result.reason); failureCounts.add("task"); }
     while (inputCursor < inputs.length) {
       const input = inputs[inputCursor++];
+      let failureKind = "acquisition";
       try {
         const [original] = await Promise.allSettled([input.pending]);
-        await input.observed;
-        errors.push(...input.observerErrors);
+        failureKind = "acquisition_observer"; await input.observed;
+        failureKind = "body_join";
+        errors.push(...input.observerErrors); for (const _ of input.observerErrors) failureCounts.add("observer_exception");
         if (original.status === "rejected") {
           const snapshot = acquisitionSnapshot(input, inputs, ingresses);
-          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else errors.push(original.reason);
+          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else { errors.push(original.reason); failureCounts.add("acquisition"); }
         } else {
           if (!input.join) throw new Error("acquired input unobserved");
           joined.push(await input.join());
         }
-      } catch (error) { errors.push(error); }
+      } catch (error) { errors.push(error); failureCounts.add(failureKind); }
     }
   }
   // A later duplicate cannot inherit an earlier provisional unique binding.
   for (const candidate of candidates) if (inputs.filter(input => input.effective.headers.get("authorization") === "Bearer fixture-upstream-" + candidate.id).length !== 1
-    || ingresses.filter(ingress => ingress.id === candidate.id).length !== 1) errors.push(new Error("duplicate disposition binding"));
+    || ingresses.filter(ingress => ingress.id === candidate.id).length !== 1) { errors.push(new Error("duplicate disposition binding")); failureCounts.add("binding"); }
   for (const ingress of ingresses) { ingress.signal.removeEventListener("abort", ingress.listener); ingress.listenerRemoved = true; }
   errors.push(...failures);
   if (errors.length) throw new AggregateError(errors, "original Worker operations failed");
-  return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved) };
+  return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
 }
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
@@ -321,7 +326,7 @@ export default { ...handler, async fetch(request, env, context) {
     if (request.method === "POST") { record.body = await request.clone().json(); if (ingress) ingress.body = record.body; }
   }
   return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending); context.waitUntil(pending); } }); }
-  catch (error) { failures.push(error); throw error; }
+  catch (error) { failures.push(error); failureCounts.add("handler"); throw error; }
 } };`;
 }
 
@@ -906,4 +911,102 @@ test("music diagnostic commands survive the actual Node24 default reporter at co
   assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix)));
   assert.ok(lines.every(line => musicProtocol.validate(JSON.parse(line.slice(prefix.length)))));
   assert.ok(Buffer.byteLength(lines.join("\n")) <= 8192);
+});
+
+
+test("music diagnostic preabort stages enforce closed status, returned and failure-count fields", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy);
+  for (const phase of ["tool_dispatch", "tool_returned", "started_fetch", "started_status"]) {
+    const value = protocol.record({ ...musicDiagnosticContext("native", "abort_headers", phase), httpStatus: 500, toolReturned: true, callerAborted: false, partialDelivery: null }, true, undefined);
+    assert.equal(value.httpStatus, 500); assert.equal(value.category, "undefined");
+    for (const fields of [{ httpStatus: 99 }, { httpStatus: 600 }, { httpStatus: 204.5 }, { httpStatus: "204" }, { toolReturned: 1 },
+      { f_read: -1 }, { f_read: 65536 }, { f_read: true }, { f_unknown: 1 }, { failureOverflow: 1 }]) assert.equal(protocol.validate({ ...value, ...fields }), undefined);
+  }
+  const counts = protocol.failureCounts();
+  for (const kind of counts.kinds) counts.add(kind);
+  assert.throws(() => counts.add("unknown"));
+  const snapshot = counts.snapshot(); assert.equal(Object.keys(snapshot).length, 14);
+  assert.ok(Object.values(snapshot).every(count => count === 1));
+  for (let i = 1; i < 65536; i++) counts.add("read");
+  assert.equal(counts.snapshot().f_read, 65535); assert.equal(counts.snapshot().failureOverflow, true);
+  const lines = [], emit = protocol.emitter(line => lines.push(line));
+  emit.fail(protocol.record({ ...musicDiagnosticContext("native", "abort_body", "original_join", "cleanup"), ...counts.snapshot(), partialDelivery: null }, true, undefined)); emit.flush();
+  assert.equal(lines.length, 1); assert.ok(Buffer.byteLength(lines[0]) <= 768);
+  const delivered = JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length));
+  assert.equal(delivered.f_read, 65535); assert.equal(delivered.f_cancel, 1); assert.equal(delivered.category, "undefined");
+});
+
+test("SDK actual drain sidecar classifies original failures without replacing undefined or order", async () => {
+  const join = sdkOriginalJoin(), counts = createMusicFailureCounts(), reason = new Error("owned test failure");
+  const rejected = value => { const pending = Promise.reject(value); void pending.catch(() => {}); return pending; };
+  const body = new ReadableStream(), reader = body.getReader();
+  const read = reader.read(), cancel = reader.cancel(); reader.releaseLock(); await Promise.all([read, cancel]);
+  // Original helper is exercised with explicit rejected originals for each branch.
+  const acquisition = rejected(undefined), observed = rejected(reason), closed = rejected(undefined);
+  const readFailure = rejected(reason), cancelFailure = rejected(undefined), bodyFailure = rejected(reason), dispatcher = rejected(undefined);
+  const failures = await join({ failureCounts: counts,
+    acquisitions: [{ pending: acquisition, observed, expectedAbort: false }],
+    readers: [{ body, closed, releases: 0, returned: 0, operations: [{ kind: "read", pending: readFailure, body, expectedAbort: false }, { kind: "cancel", pending: cancelFailure, body, expectedAbort: false }] }],
+    bodyOperations: [{ kind: "body_cancel", pending: bodyFailure, body, expectedAbort: false }],
+    agents: [{ retirements: 0, pending: [dispatcher] }], observationErrors: [undefined],
+  });
+  assert.equal(failures.length, 10);
+  assert.deepEqual(failures.slice(0, 6), [reason, undefined, reason, reason, undefined, undefined]);
+  assert.equal(failures[7], undefined); assert.equal(failures[9], undefined);
+  assert.deepEqual(counts.snapshot(), { f_acquisition_observer: 1, f_acquisition: 1, f_body_cancel: 1, f_read: 1, f_cancel: 1, f_closed: 1, f_release_invariant: 1, f_dispatcher_promise: 1, f_dispatcher_invariant: 1, f_observer_exception: 1 });
+});
+
+test("reader actual observer sidecar preserves original closed and read rejection", async () => {
+  const reason = new Error("owned test failure"), counts = createMusicFailureCounts(); let controller;
+  const response = new Response(new ReadableStream({ start(value) { controller = value; } }));
+  const proof = { failureCounts: counts }; observeBody(response, undefined, proof);
+  const reader = response.body.getReader(), read = reader.read(); void read.catch(() => {});
+  controller.error(reason); await assert.rejects(read, error => error === reason); reader.releaseLock();
+  await assert.rejects(proof.join(), error => error instanceof AggregateError && error.errors.length === 2 && error.errors.every(value => value === reason));
+  assert.deepEqual(counts.snapshot(), { f_read: 1, f_closed: 1 });
+});
+
+// Invocation ordering only: no claim that the GET entered the upstream waiter
+// before the POST. No SDK, injected abort, timer producer or forced resolution.
+test("original native started GET before one positive POST coordination", { timeout: 60000 }, async () => {
+  const proof = { ready: "unstarted", readyStatus: null, post: "unstarted", postStatus: null, sse: "unknown", upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown", waitEntered: null };
+  const failures = [], f = await start("native", { wav: Buffer.from(musicWave()).toString("base64"), mp3: Buffer.from(musicWave()).toString("base64") });
+  const emit = () => { try { process.stdout.write("MUSIC_COORDINATION " + JSON.stringify(proof) + "\n"); } catch (error) { failures.push(error); } };
+  try {
+    const row = positives[0];
+    proof.ready = "pending";
+    const ready = fetch(f.origin + "/fixture/started?id=" + row.id);
+    proof.post = "pending";
+    const posted = fetch(f.origin + "/v1/native/openrouter/v1/chat/completions", { method: "POST", headers: headers(row.id), body: JSON.stringify(body(row)) });
+    emit();
+    const [readyResult, postResult] = await Promise.allSettled([ready, posted]);
+    proof.ready = readyResult.status; proof.post = postResult.status;
+    if (readyResult.status === "fulfilled") proof.readyStatus = readyResult.value.status; else failures.push(readyResult.reason);
+    if (postResult.status === "fulfilled") proof.postStatus = postResult.value.status; else failures.push(postResult.reason);
+    emit();
+    if (postResult.status === "fulfilled") {
+      try { const wire = await postResult.value.text(); assert.equal(postResult.value.status, 200); assert.match(wire, /data: \[DONE\]/); assert.match(wire, /café/); proof.sse = "fulfilled"; }
+      catch (error) { proof.sse = "rejected"; failures.push(error); }
+    }
+    try { assert.equal(proof.readyStatus, 204); } catch (error) { failures.push(error); }
+    try { await retirement(f.origin); proof.retirement = "fulfilled"; } catch (error) { proof.retirement = "rejected"; failures.push(error); }
+    emit();
+    try {
+      const calls = await (await fetch(f.origin + "/fixture/state")).json();
+      assert.equal(calls.length, 1); assert.equal(calls[0].id, row.id); assert.equal(calls[0].authorization, "Bearer fixture-upstream-" + row.id);
+      assert.equal(calls[0].method, "POST"); assert.equal(calls[0].url, target); assert.deepEqual(calls[0].body, body(row)); assert.equal(calls[0].expired, false);
+      proof.upstream = "fulfilled";
+    } catch (error) { proof.upstream = "rejected"; failures.push(error); }
+    try {
+      const receipt = await usage(f.origin, row.id); assert.equal(receipt.usage.events.length, 1);
+      const event = receipt.usage.events[0]; assert.equal(receipt.budget.spentMicros, 700); assert.equal(event.actual_cost_micros, 700); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.status, "success");
+      assert.equal(event.credential_id, "orm_" + row.id); assert.equal(event.policy_id, "orm_" + row.id); assert.equal(event.model, "openrouter/" + row.model);
+      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]); proof.sqlite = "fulfilled";
+    } catch (error) { proof.sqlite = "rejected"; failures.push(error); }
+  } catch (error) { failures.push(error); }
+  finally {
+    try { await f.close(); proof.dispose = proof.scratch = "fulfilled"; } catch (error) { failures.push(error); }
+    emit();
+  }
+  if (failures.length) throw new AggregateError(failures, "original native readiness coordination failed");
 });
