@@ -661,12 +661,59 @@ export const initPrerequisiteStages = Object.freeze(["arguments", "identity", "e
 export const attachFailureBranches = Object.freeze(["spawn_throw", "setup_failure", "child_error", "stdin_error", "close_before_ready", "invalid_ready", "replayed_ready", "deadline", "ready_deadline", "interrupt", "output_capacity", "permit_write", "incomplete_ready"]);
 export const initGuardTags = Object.freeze(["runtime", "ancestry", "uid_gid_groups", "capabilities", "nnp", "seccomp", "mounts", "interfaces", "routes4", "routes6", "effective_env", "native_receipt_equality"]);
 export const initSourcePhases = Object.freeze(["runtime", "ancestry", "status_read", "status_validate", "mount_read", "mount_parse", "mount_validate", "namespace_read", "network_validate", "environment_construct", "environment_validate", "native_read", "native_parse", "native_validate", "native_qualify", "native_equality"]);
+// Wire IDs are fixed source-owned predicates, never parsed exception text.
+export const mountPredicates = Object.freeze([
+  ["path", 4], ["escape", 1], ["table_capacity", 3], ["row_identity", 5], ["filesystem_token", 2],
+  ["vfs_options", 5], ["super_options", 5], ["optional_array", 1], ["unique_rows", 2],
+  ["text_capacity", 3], ["sections", 1], ["fields", 5], ["propagation", 2], ["permitted_target", 2],
+  ["required_target", 1], ["root", 3], ["nearest_parent", 2], ["automatic", 8], ["metadata", 2],
+  ["readonly_proc", 7], ["null_mask", 5], ["directory_mask", 6], ["automatic_devices", 1],
+  ["task_size", 1], ["dev_size_mode", 2], ["shm_size", 1],
+]);
+export const mountTargets = Object.freeze(["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
+export const mountFilesystems = Object.freeze(["tmpfs", "proc", "devpts", "mqueue", "sysfs", "cgroup2", "overlay", "ext4", "xfs"]);
+export function validateMountDetail(value, source) {
+  if (!Array.isArray(value) || Object.getOwnPropertyNames(value).join() !== [...Array(11).keys(), "length"].join()) refuse("mount-detail-shape");
+  const row = Array.from({ length: 11 }, (_, i) => ownData(value, String(i)));
+  const [version, predicate, leaf, role, fs, root, seen, passed, count, distinct, overflow] = row;
+  if (version !== 1 || !Number.isInteger(predicate) || predicate < 1 || predicate > mountPredicates.length || !["mount_parse", "mount_validate"].includes(source)) refuse("mount-detail-predicate");
+  if (predicate >= 10 && predicate <= 13 ? source !== "mount_parse" : predicate >= 14 && source !== "mount_validate") refuse("mount-detail-source");
+  const width = mountPredicates[predicate - 1][1], limit = 2 ** width - 1;
+  if (!Number.isInteger(leaf) || leaf < 1 || leaf > width || !Number.isInteger(seen) || seen < 1 || seen > limit || !Number.isInteger(passed) || passed < 0 || (passed & seen) !== passed || !(seen & 2 ** (leaf - 1)) || passed & 2 ** (leaf - 1)) refuse("mount-detail-leaf");
+  let order = Array.from({ length: width }, (_, i) => i + 1);
+  if (predicate === 14) { if (leaf !== 2 || seen !== 3 || passed !== 0) refuse("mount-detail-or"); }
+  else {
+    if (predicate === 18) {
+      const target = role === null ? null : mountTargets[role - 2];
+      if (!["/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup"].includes(target)) refuse("mount-detail-automatic-role");
+      const flags = target === "/dev" ? [4, 6] : target === "/dev/pts" ? [4, 6, 8] : [target.startsWith("/sys") ? 5 : 4, 6, 7, 8];
+      order = [1, 2, 3, ...flags];
+    }
+    const end = order.indexOf(leaf), expected = order.slice(0, end + 1).reduce((mask, id) => mask + 2 ** (id - 1), 0);
+    if (end < 0 || seen !== expected || passed !== seen - 2 ** (leaf - 1)) refuse("mount-detail-short-circuit");
+  }
+  const optional = (n, max) => n === null || Number.isInteger(n) && n >= 1 && n <= max;
+  if (!optional(role, mountTargets.length + 1) || !optional(fs, mountFilesystems.length + 1) || !optional(root, 3)) refuse("mount-detail-enum");
+  const roles = { 15: Array.from({length:12},(_,i)=>i+2), 16:[2], 19:[11,12,13], 20:[14,15,16,17,18], 21:[19,20,21,22,23,24,25], 22:[1,26,27,28,29,30], 24:[3], 25:[5], 26:[7] };
+  if (roles[predicate] && !roles[predicate].includes(role)) refuse("mount-detail-role");
+  for (const n of [count, distinct]) if (!(n === null || Number.isInteger(n) && n >= 0 && n <= 4095)) refuse("mount-detail-count");
+  if (!Number.isInteger(overflow) || overflow < 0 || overflow > 3 || overflow & 1 && count !== 4095 || overflow & 2 && distinct !== 4095) refuse("mount-detail-saturation");
+  if (fs !== null && ![5, 16, 18, 19, 20, 21, 22].includes(predicate) || root !== null && ![1, 16, 18, 20, 21, 22].includes(predicate)) refuse("mount-detail-unobserved-field");
+  if (predicate === 16 && (leaf < 3 && fs !== null || leaf < 2 && root !== null) || predicate === 18 && leaf < 2 && root !== null || [20, 21, 22].includes(predicate) && leaf < 3 && root !== null || predicate === 1 && root !== null && role !== null) refuse("mount-detail-unreached-field");
+  if (count !== null && ![3, 6, 7, 9, 10, 11, 23].includes(predicate) || distinct !== null && ![6, 7, 9, 23].includes(predicate) || [6, 7].includes(predicate) && leaf < 4 && distinct !== null) refuse("mount-detail-unobserved-count");
+  if ([2, 3, 4, 9, 10, 11, 12, 13, 23].includes(predicate) && role !== null) refuse("mount-detail-unobserved-role");
+  const comparison = predicate === 9 ? leaf : predicate === 23 ? 1 : [6, 7].includes(predicate) && leaf >= 4 ? 4 : null;
+  if (comparison !== null && count !== null && distinct !== null && overflow === 0 && (count === distinct) !== Boolean(passed & 2 ** (comparison - 1))) refuse("mount-detail-count-comparison");
+  if (predicate === 23 && (count === null || distinct === null || role !== null)) refuse("mount-detail-aggregate");
+  return row;
+}
 export function validateInitDetail(value) {
-  if (!value || Object.getOwnPropertyNames(value).sort().join() !== "guard,source") refuse("init-detail-keys");
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== (Object.hasOwn(value, "m") ? "guard,m,source" : "guard,source")) refuse("init-detail-keys");
   const row = { guard: ownData(value, "guard"), source: ownData(value, "source") };
   if (!(row.guard === null || initGuardTags.includes(row.guard)) || !initSourcePhases.includes(row.source)) refuse("init-detail-enum");
   const sources = { runtime: ["runtime"], ancestry: ["ancestry"], uid_gid_groups: ["status_validate"], capabilities: ["status_validate"], nnp: ["status_validate"], seccomp: ["status_validate"], mounts: ["mount_parse", "mount_validate"], interfaces: ["network_validate"], routes4: ["network_validate"], routes6: ["network_validate"], effective_env: ["environment_validate"], native_receipt_equality: ["native_equality"] };
   if (row.guard !== null && !sources[row.guard].includes(row.source)) refuse("init-detail-pair");
+  if (Object.hasOwn(value, "m")) { if (row.guard !== "mounts") refuse("mount-detail-guard"); row.m = validateMountDetail(ownData(value, "m"), row.source); }
   return row;
 }
 export function createInitDiagnostics(writer = text => {

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -41,11 +41,12 @@ const imagePattern = /^sha256:[a-f0-9]{64}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
 const protocol = "EDGE_CONTAINER_V2 ";
 export function createInitGuardLedger() {
-  const errors = []; let source = null, guard = null, sealed = false, detail;
+  const errors = []; let source = null, guard = null, sealed = false, detail, mount;
   return { errors,
     source(value) { try { check(!sealed && initSourcePhases.includes(value), "init-source-phase"); source = value; } catch (error) { errors.push(error); } },
     guard(value) { try { check(!sealed && initGuardTags.includes(value), "init-guard-tag"); guard ??= value; } catch (error) { errors.push(error); } },
-    failure() { if (!sealed) { sealed = true; if (source !== null) detail = { guard, source }; } return detail; },
+    mount(value) { try { check(!sealed && mount === undefined, "mount-detail-stale"); mount = validateMountDetail(value, source); } catch (error) { errors.push(error); } },
+    failure() { if (!sealed) { sealed = true; if (source !== null) detail = { guard, source, ...(mount === undefined ? {} : { m: mount }) }; } return detail; },
   };
 }
 function initRecord(recorder, method, value) { if (recorder) try { recorder[method](value); } catch (error) { recorder.errors.push(error); } }
@@ -303,41 +304,69 @@ async function createBuildContext(cwd, root) {
   return { context, contextHash, files, dockerfileHash: hash(await readFile(join(context, "Dockerfile"))) };
 }
 
-function canonicalMountPath(path) {
-  check(typeof path === "string" && path.startsWith("/") && !/[\x00-\x1f\x7f]/.test(path) && (path === "/" || path.slice(1).split("/").every(part => part && part !== "." && part !== "..")), "mount-path");
+export function createMountObservation(recorder, predicate, initialRole) {
+  let seen = 0, passed = 0, leaf = null, role = null, fs = null, root = null, count = null, distinct = null, overflow = 0, broken = false, finished = false;
+  const note = operation => { if (recorder) try { operation(); } catch (error) { broken = true; recorder.errors.push(error); } };
+  const value = (kind, original) => { note(() => {
+    if (finished) fail("mount-observation-finished");
+    if (kind === "role") role = typeof original === "string" ? mountTargets.indexOf(original) + 2 : null;
+    else if (kind === "fs") fs = typeof original === "string" ? mountFilesystems.indexOf(original) + 2 : null;
+    else if (kind === "root") root = typeof original === "string" ? original === "/" ? 1 : original === "/null" ? 2 : 3 : null;
+    else if (kind === "count" || kind === "distinct") {
+      const valid = Number.isSafeInteger(original) && original >= 0, n = valid ? Math.min(original, 4095) : null, bit = kind === "count" ? 1 : 2;
+      if (kind === "count") count = n; else distinct = n;
+      overflow = (overflow & ~bit) | (valid && original > 4095 ? bit : 0);
+    } else fail("mount-observation-kind");
+  }); return original; };
+  if (initialRole !== undefined) value("role", initialRole);
+  return { value,
+    leaf(id, original) { note(() => { if (finished || !Number.isInteger(id) || id < 1 || id > 8) fail("mount-observation-leaf"); const bit = 2 ** (id - 1); seen |= bit; if (original) passed |= bit; else { passed &= ~bit; leaf = id; } }); return original; },
+    check(original, code) {
+      if (recorder && !original && !broken) note(() => { if (finished) fail("mount-observation-finished"); recorder.mount([1, predicate, leaf, role, fs, root, seen, passed, count, distinct, overflow]); });
+      finished = true;
+      initGuardCheck(original, code, recorder, "mounts");
+    },
+  };
+}
+function canonicalMountPath(path, recorder, kind) {
+  const m = createMountObservation(recorder, 1); if (kind) m.value(kind, path);
+  m.check(m.leaf(1, typeof path === "string") && m.leaf(2, path.startsWith("/")) && m.leaf(3, !/[\x00-\x1f\x7f]/.test(path)) && m.leaf(4, path === "/" || path.slice(1).split("/").every(part => part && part !== "." && part !== "..")), "mount-path");
   return path;
 }
-function decodeMountPath(path) {
-  // Linux fs/proc_namespace.c show_mountinfo/seq_path_root escapes these four
-  // bytes. Control-character paths are outside this proof route even if encoded.
-  check(!/\\(?!040|011|012|134)/.test(path), "mount-escape");
-  return canonicalMountPath(path.replace(/\\(040|011|012|134)/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))));
+function decodeMountPath(path, recorder, kind) {
+  // Decode only the documented mountinfo escapes; original path checks remain.
+  const m = createMountObservation(recorder, 2);
+  m.check(m.leaf(1, !/\\(?!040|011|012|134)/.test(path)), "mount-escape");
+  return canonicalMountPath(path.replace(/\\(040|011|012|134)/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))), recorder, kind);
 }
 function mountTable(rows, recorder) {
-  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
-  check(Array.isArray(rows) && rows.length > 0 && rows.length < 4096, "mount-capacity");
+  { const m = createMountObservation(recorder, 3); m.check(m.leaf(1, Array.isArray(rows)) && m.leaf(2, m.value("count", rows.length) > 0) && m.leaf(3, m.value("count", rows.length) < 4096), "mount-capacity"); }
   for (const row of rows) {
-    check(Number.isSafeInteger(row.id) && row.id > 0 && Number.isSafeInteger(row.parentId) && row.parentId >= 0 && /^(0|[1-9]\d*):(0|[1-9]\d*)$/.test(row.device), "mount-identity");
-    canonicalMountPath(row.target); canonicalMountPath(row.root);
-    check(typeof row.fs === "string" && /^[a-zA-Z0-9._-]+$/.test(row.fs), "mount-filesystem");
-    for (const options of [row.options, row.superOptions]) check(Array.isArray(options) && options.length > 0 && options.every(value => typeof value === "string" && value.length > 0) && new Set(options).size === options.length && options.filter(value => value === "rw" || value === "ro").length === 1, "mount-options");
-    check(Array.isArray(row.optional), "mount-optional");
+    { const m = createMountObservation(recorder, 4); m.check(m.leaf(1, Number.isSafeInteger(row.id)) && m.leaf(2, row.id > 0) && m.leaf(3, Number.isSafeInteger(row.parentId)) && m.leaf(4, row.parentId >= 0) && m.leaf(5, /^(0|[1-9]\d*):(0|[1-9]\d*)$/.test(row.device)), "mount-identity"); }
+    const target = canonicalMountPath(row.target, recorder, "role"); canonicalMountPath(row.root, recorder, "root");
+    { const m = createMountObservation(recorder, 5, target); m.check(m.leaf(1, typeof m.value("fs", row.fs) === "string") && m.leaf(2, /^[a-zA-Z0-9._-]+$/.test(m.value("fs", row.fs))), "mount-filesystem"); }
+    let channel = 0;
+    for (const options of [row.options, row.superOptions]) {
+      const m = createMountObservation(recorder, 6 + channel++, target);
+      m.check(m.leaf(1, Array.isArray(options)) && m.leaf(2, m.value("count", options.length) > 0) && m.leaf(3, options.every(value => typeof value === "string" && value.length > 0)) && m.leaf(4, m.value("distinct", new Set(options).size) === m.value("count", options.length)) && m.leaf(5, options.filter(value => value === "rw" || value === "ro").length === 1), "mount-options");
+    }
+    { const m = createMountObservation(recorder, 8, target); m.check(m.leaf(1, Array.isArray(row.optional)), "mount-optional"); }
   }
-  check(new Set(rows.map(row => row.id)).size === rows.length && new Set(rows.map(row => row.target)).size === rows.length, "mount-overmount");
+  { const m = createMountObservation(recorder, 9); m.check(m.leaf(1, m.value("distinct", new Set(rows.map(row => row.id)).size) === m.value("count", rows.length)) && m.leaf(2, m.value("distinct", new Set(rows.map(row => row.target)).size) === m.value("count", rows.length)), "mount-overmount"); }
   return rows;
 }
 const containsMountPath = (parent, path) => parent === "/" || path === parent || path.startsWith(parent + "/");
 const mountTuple = row => ({ id: row.id, parentId: row.parentId, target: row.target, root: row.root, device: row.device, fs: row.fs, options: [...row.options].sort(), superOptions: [...row.superOptions].sort(), optional: [...row.optional].sort() });
 export function parseMounts(text, privateView = true, recorder) {
-  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
-  check(typeof text === "string" && text.length > 0 && text.length < 128 * 1024, "mount-capacity");
+  { const m = createMountObservation(recorder, 10); m.check(m.leaf(1, typeof text === "string") && m.leaf(2, m.value("count", text.length) > 0) && m.leaf(3, m.value("count", text.length) < 128 * 1024), "mount-capacity"); }
   return mountTable(text.replace(/\n$/, "").split("\n").map(line => {
-    const halves = line.split(" - "); check(halves.length === 2, "mount-format");
+    const halves = line.split(" - ");
+    { const m = createMountObservation(recorder, 11); m.check(m.leaf(1, m.value("count", halves.length) === 2), "mount-format"); }
     const a = halves[0].split(" "), b = halves[1].split(" ");
-    check(a.length >= 6 && b.length === 3 && [...a, ...b].every(Boolean) && /^[1-9]\d*$/.test(a[0]) && /^(0|[1-9]\d*)$/.test(a[1]), "mount-format");
+    { const m = createMountObservation(recorder, 12); m.check(m.leaf(1, a.length >= 6) && m.leaf(2, b.length === 3) && m.leaf(3, [...a, ...b].every(Boolean)) && m.leaf(4, /^[1-9]\d*$/.test(a[0])) && m.leaf(5, /^(0|[1-9]\d*)$/.test(a[1])), "mount-format"); }
     const optional = a.slice(6);
-    check(optional.every(value => /^(?:(?:shared|master|propagate_from):[1-9]\d*|unbindable)$/.test(value)) && (!privateView || !optional.some(value => /^(shared|master|propagate_from):/.test(value))), "shared-mount");
-    return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4]), root: decodeMountPath(a[3]), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
+    { const m = createMountObservation(recorder, 13); m.check(m.leaf(1, optional.every(value => /^(?:(?:shared|master|propagate_from):[1-9]\d*|unbindable)$/.test(value))) && m.leaf(2, !privateView || !optional.some(value => /^(shared|master|propagate_from):/.test(value))), "shared-mount"); }
+    return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4], recorder, "role"), root: decodeMountPath(a[3], recorder, "root"), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
   }), recorder);
 }
 export function validateMountFreshness(before, after) {
@@ -371,7 +400,6 @@ export function validateMetadataMounts(inspect, targetMounts, parentMounts, daem
   return result;
 }
 export function validateMounts(rows, recorder) {
-  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
   mountTable(rows, recorder);
   // moby v28.5.2 oci/defaults.go: automatic mounts and conditional masks.
   const readonlyProc = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"];
@@ -386,34 +414,43 @@ export function validateMounts(rows, recorder) {
   const metadata = ["/etc/resolv.conf", "/etc/hostname", "/etc/hosts"];
   const thermalMask = path => /^\/sys\/devices\/system\/cpu\/cpu(0|[1-9]\d*)\/thermal_throttle$/.test(path);
   const permitted = new Set(["/", ...Object.keys(automatic), ...metadata, ...readonlyProc, ...fileMasks, ...directoryMasks]);
-  check(rows.every(row => permitted.has(row.target) || thermalMask(row.target)), "mount-topology");
-  for (const target of ["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts"]) check(rows.some(row => row.target === target), "mount-missing");
+  {
+    let failingRow;
+    const allowed = rows.every(row => { const m = createMountObservation(recorder, 14); const value = m.leaf(1, permitted.has(m.value("role", row.target))) || m.leaf(2, thermalMask(m.value("role", row.target))); if (!value) failingRow = m; return value; });
+    (failingRow ?? createMountObservation(recorder, 14)).check(allowed, "mount-topology");
+  }
+  for (const target of ["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts"]) {
+    const m = createMountObservation(recorder, 15, target); m.check(m.leaf(1, rows.some(row => row.target === target)), "mount-missing");
+  }
   const at = path => rows.find(row => row.target === path), root = at("/"), dev = at("/dev"), proc = at("/proc");
-  check(root.options.includes("ro") && root.root === "/" && ["overlay", "ext4", "xfs"].includes(root.fs), "root-not-readonly");
+  { const m = createMountObservation(recorder, 16, "/"); m.check(m.leaf(1, root.options.includes("ro")) && m.leaf(2, m.value("root", root.root) === "/") && m.leaf(3, ["overlay", "ext4", "xfs"].includes(m.value("fs", root.fs))), "root-not-readonly"); }
   for (const row of rows.filter(row => row.target !== "/")) {
-    const parent = rows.filter(candidate => candidate.target !== row.target && containsMountPath(candidate.target, row.target)).sort((a, b) => b.target.length - a.target.length)[0];
-    check(parent && row.parentId === parent.id, "mount-parent");
-    if (automatic[row.target]) {
-      const [fs, ...flags] = automatic[row.target];
-      check(row.fs === fs && row.root === "/" && row.device.startsWith("0:") && flags.every(flag => row.options.includes(flag)), "automatic-mount");
-    } else if (metadata.includes(row.target)) {
-      check(["ext4", "xfs"].includes(row.fs) && row.options.includes("ro"), "metadata-mount");
-    } else if (readonlyProc.includes(row.target)) {
-      check(row.fs === "proc" && row.device === proc.device && row.root === row.target.slice(5) && ["ro", "nosuid", "nodev", "noexec"].every(flag => row.options.includes(flag)), "proc-readonly-mount");
-    } else if (fileMasks.includes(row.target)) {
-      // runc rootfs_linux.go maskPath binds the container's /dev/null. Its
-      // writable tmpfs mount is legitimate ONLY with this exact /dev identity.
-      check(row.fs === dev.fs && row.device === dev.device && row.root === "/null" && same([...row.options].sort(), [...dev.options].sort()) && same([...row.superOptions].sort(), [...dev.superOptions].sort()), "null-mask-mount");
+    const m = createMountObservation(recorder, 17);
+    const parent = rows.filter(candidate => candidate.target !== m.value("role", row.target) && containsMountPath(candidate.target, row.target)).sort((a, b) => b.target.length - a.target.length)[0];
+    m.check(m.leaf(1, parent) && m.leaf(2, row.parentId === parent.id), "mount-parent");
+    let target; const targetValue = value => { target = value; return value; };
+    if (automatic[targetValue(row.target)]) {
+      const [fs, ...flags] = automatic[targetValue(row.target)], m = createMountObservation(recorder, 18, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === fs) && m.leaf(2, m.value("root", row.root) === "/") && m.leaf(3, row.device.startsWith("0:")) && flags.every(flag => m.leaf({ rw: 4, ro: 5, nosuid: 6, nodev: 7, noexec: 8 }[flag], row.options.includes(flag))), "automatic-mount");
+    } else if (metadata.includes(targetValue(row.target))) {
+      const m = createMountObservation(recorder, 19, target); m.check(m.leaf(1, ["ext4", "xfs"].includes(m.value("fs", row.fs))) && m.leaf(2, row.options.includes("ro")), "metadata-mount");
+    } else if (readonlyProc.includes(targetValue(row.target))) {
+      const m = createMountObservation(recorder, 20, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === "proc") && m.leaf(2, row.device === proc.device) && m.leaf(3, m.value("root", row.root) === row.target.slice(5)) && ["ro", "nosuid", "nodev", "noexec"].every(flag => m.leaf({ ro: 4, nosuid: 5, nodev: 6, noexec: 7 }[flag], row.options.includes(flag))), "proc-readonly-mount");
+    } else if (fileMasks.includes(targetValue(row.target))) {
+      // The original /dev/null identity and sorted-option comparisons remain.
+      const m = createMountObservation(recorder, 21, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === dev.fs) && m.leaf(2, row.device === dev.device) && m.leaf(3, m.value("root", row.root) === "/null") && m.leaf(4, same([...row.options].sort(), [...dev.options].sort())) && m.leaf(5, same([...row.superOptions].sort(), [...dev.superOptions].sort())), "null-mask-mount");
     } else {
-      // Directory masks are readonly tmpfs (MS_RDONLY), not generic /dev flags.
-      check(row.fs === "tmpfs" && row.device.startsWith("0:") && row.root === "/" && row.options.includes("ro") && row.superOptions.includes("ro") && !rows.some(other => other !== row && other.device === row.device), "directory-mask-mount");
+      const m = createMountObservation(recorder, 22, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === "tmpfs") && m.leaf(2, row.device.startsWith("0:")) && m.leaf(3, m.value("root", row.root) === "/") && m.leaf(4, row.options.includes("ro")) && m.leaf(5, row.superOptions.includes("ro")) && m.leaf(6, !rows.some(other => other !== row && other.device === row.device)), "directory-mask-mount");
     }
   }
   const devices = Object.keys(automatic).map(path => at(path).device);
-  check(new Set(devices).size === devices.length, "automatic-mount-device-alias");
-  check(at("/task").superOptions.includes("size=2097152k"), "task-mount");
-  check(dev.superOptions.includes("size=65536k") && dev.superOptions.includes("mode=755"), "dev-mount");
-  check(at("/dev/shm").superOptions.includes("size=65536k"), "shm-mount");
+  { const m = createMountObservation(recorder, 23); m.check(m.leaf(1, m.value("distinct", new Set(devices).size) === m.value("count", devices.length)), "automatic-mount-device-alias"); }
+  { const m = createMountObservation(recorder, 24, "/task"); m.check(m.leaf(1, at("/task").superOptions.includes("size=2097152k")), "task-mount"); }
+  { const m = createMountObservation(recorder, 25, "/dev"); m.check(m.leaf(1, dev.superOptions.includes("size=65536k")) && m.leaf(2, dev.superOptions.includes("mode=755")), "dev-mount"); }
+  { const m = createMountObservation(recorder, 26, "/dev/shm"); m.check(m.leaf(1, at("/dev/shm").superOptions.includes("size=65536k")), "shm-mount"); }
   return true;
 }
 export function validateChildStatus(text, expected, recorder) {

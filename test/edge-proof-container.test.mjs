@@ -8,10 +8,10 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { dirname, join, relative } from "node:path";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1197,14 +1197,14 @@ async function initGuardFactory(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const runtime = source.slice(source.indexOf("async function validateContainerRuntime("), source.indexOf("export function parseImageBuildReceipt("));
   const status = source.slice(source.indexOf("export function parseIdentity("), source.indexOf("export function validateMapping(")).replaceAll("export ", "") + source.slice(source.indexOf("export function validateChildStatus("), source.indexOf("async function readParentIdentity(")).replaceAll("export ", "");
-  const mounts = source.slice(source.indexOf("function canonicalMountPath("), source.indexOf("export function validateChildStatus(")).replaceAll("export ", "");
+  const mounts = source.slice(source.indexOf("export function createMountObservation("), source.indexOf("export function validateChildStatus(")).replaceAll("export ", "");
   const helpers = source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")).replaceAll("export ", "");
   const declarations = source.slice(source.indexOf("const same ="), source.indexOf("const hashPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
   const goodStatus = "Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n" + ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"].map(k => k + ":\t0000\n").join("") + "NoNewPrivs:\t1\nSeccomp:\t2\n";
-  const calls = [], bindings = { initGuardTags, initSourcePhases, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
+  const calls = [], bindings = { initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
     readFile: async path => { calls.push(path); if (path.endsWith("status")) return goodStatus; if (path.endsWith("mountinfo")) return ""; return "{}"; }, namespaceEvidence: async () => ({ interfaces: ["lo"], routes4: [], routes6: [] }), containerEnvironment: () => ({}),
     validateNativeIdentity: value => value, qualifyImageInputs: async () => ({}), containerContract: { input: "/input" }, join: (...parts) => parts.join("/"), ...overrides };
-  const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
+  const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, mountTable, canonicalMountPath, decodeMountPath, createMountObservation, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
   const runtimeBindings = { ...bindings, validateChildStatus: api.validateChildStatus, parseMounts: api.parseMounts, validateMounts: api.validateMounts, ...overrides };
   const runtimeApi = new Function(...Object.keys(runtimeBindings), declarations + helpers.replace(/export /g, "") + runtime + "return { validateContainerRuntime, nativeReceipt }; ")(...Object.values(runtimeBindings));
   return { ...api, ...runtimeApi, calls, goodStatus };
@@ -1274,5 +1274,103 @@ test("init guard private terminal detail is bounded identity bound and absent af
   maximum.finish(true, undefined, { guard: "native_receipt_equality", source: "native_equality" }, Array(16).fill(undefined)); assert.equal(maximum.errors.length, 0);
   const later = [], laterTrace = createInitDiagnostics(line => later.push(line)), fresh = createInitGuardLedger(), laterOps = inertInitOperations("ready", []); laterOps.runtime = () => fresh.source("environment_validate");
   await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], laterTrace, laterOps, fresh)); assert.equal(Object.hasOwn(JSON.parse(later.at(-1).trim().slice("EDGE_INIT_V1 ".length)), "detail"), false);
+});
+const mountDiagnosticCases = [];
+function observedMountFailure(operation, predicate, leaf, source = "mount_validate") {
+  const ledger = createInitGuardLedger(); ledger.source(source); let failed = false, reason;
+  try { operation(ledger); } catch (error) { failed = true; reason = error; }
+  assert.equal(failed, true); assert.deepEqual(ledger.errors, []);
+  const detail = ledger.failure(); assert.equal(detail.guard, "mounts"); assert.equal(detail.m[1], predicate); assert.equal(detail.m[2], leaf); validateInitDetail(detail);
+  mountDiagnosticCases.push(detail); return { detail, reason };
+}
+test("mount diagnostics actual path parser and table predicates identify original false leaves", async () => {
+  const api = await initGuardFactory();
+  for (const [value, leaf] of [[null, 1], ["relative", 2], ["/a\0", 3], ["/a/../b", 4]]) observedMountFailure(r => api.canonicalMountPath(value, r, "root"), 1, leaf);
+  observedMountFailure(r => api.decodeMountPath(String.raw`/a\999`, r, "root"), 2, 1, "mount_parse");
+  for (const [value, leaf] of [[null, 1], [[], 2], [Array(4096), 3]]) observedMountFailure(r => api.mountTable(value, r), 3, leaf);
+  for (const [key, value, leaf] of [["id", 1.5, 1], ["id", 0, 2], ["parentId", 0.5, 3], ["parentId", -1, 4], ["device", "bad", 5]]) { const rows = mounts(); rows[0][key] = value; observedMountFailure(r => api.mountTable(rows, r), 4, leaf); }
+  for (const [value, leaf] of [[null, 1], ["bad space", 2]]) { const rows = mounts(); rows[0].fs = value; observedMountFailure(r => api.mountTable(rows, r), 5, leaf); }
+  for (const [field, predicate] of [["options", 6], ["superOptions", 7]]) for (const [value, leaf] of [[null, 1], [[], 2], [[null], 3], [["rw", "rw"], 4], [["nosuid"], 5]]) { const rows = mounts(); rows[0][field] = value; observedMountFailure(r => api.mountTable(rows, r), predicate, leaf); }
+  { const rows = mounts(); rows[0].optional = null; observedMountFailure(r => api.mountTable(rows, r), 8, 1); }
+  for (const [field, leaf] of [["id", 1], ["target", 2]]) { const rows = mounts(); rows[1][field] = rows[0][field]; observedMountFailure(r => api.mountTable(rows, r), 9, leaf); }
+  for (const [value, leaf] of [[null, 1], ["", 2], ["x".repeat(128 * 1024), 3]]) observedMountFailure(r => api.parseMounts(value, true, r), 10, leaf, "mount_parse");
+  const line = "1 0 0:1 / / ro - overlay none rw\n";
+  observedMountFailure(r => api.parseMounts("invalid", true, r), 11, 1, "mount_parse");
+  for (const [value, leaf] of [["1 0 / ro - overlay none rw\n", 1], [line.replace("overlay none rw", "overlay none"), 2], [line.replace(" ro -", " ro  -"), 3], [line.replace("1 0", "01 0"), 4], [line.replace("1 0", "1 -1"), 5]]) observedMountFailure(r => api.parseMounts(value, true, r), 12, leaf, "mount_parse");
+  for (const [option, leaf] of [["invalid", 1], ["shared:1", 2]]) observedMountFailure(r => api.parseMounts(line.replace(" ro -", ` ro ${option} -`), true, r), 13, leaf, "mount_parse");
+});
+test("mount diagnostics actual topology and branch checks preserve row and aggregate attribution", async () => {
+  const api = await initGuardFactory();
+  const fail = (target, change, predicate, leaf) => { const rows = mounts(); change(rows.find(row => row.target === target), rows); return observedMountFailure(r => api.validateMounts(rows, r), predicate, leaf); };
+  const unexpected = [...mounts(), mount(500, 100, "/unlisted", "tmpfs", "0:88", ["ro"], "/", ["ro"])];
+  const topology = observedMountFailure(r => api.validateMounts(unexpected, r), 14, 2); assert.equal(topology.detail.m[3], 1); assert.deepEqual(topology.detail.m.slice(6, 8), [3, 0]);
+  const missing = mounts().filter(row => row.target !== "/dev/pts"), absent = observedMountFailure(r => api.validateMounts(missing, r), 15, 1); assert.equal(absent.detail.m[3], mountTargets.indexOf("/dev/pts") + 2);
+  fail("/", r => r.options = ["rw"], 16, 1); fail("/", r => r.root = "/other", 16, 2); fail("/", r => r.fs = "tmpfs", 16, 3);
+  { const rows = mounts(); let calls = 0; rows.filter = function(callback) { calls++; return calls === 2 ? [] : Array.prototype.filter.call(this, callback); }; const noParent = observedMountFailure(r => api.validateMounts(rows, r), 17, 1); assert.equal(noParent.detail.m[3], null); assert.equal(calls, 2); }
+  fail("/task", r => r.parentId = 99, 17, 2);
+  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.root = "/other", 2], [r => r.device = "8:1", 3], [r => r.options = ["ro", "nosuid", "nodev", "noexec"], 4], [r => r.options = ["rw", "nodev", "noexec"], 6], [r => r.options = ["rw", "nosuid", "noexec"], 7], [r => r.options = ["rw", "nosuid", "nodev"], 8]]) fail("/task", change, 18, leaf);
+  fail("/sys", r => r.options = ["rw", "nosuid", "nodev", "noexec"], 18, 5);
+  fail("/etc/hosts", r => r.fs = "tmpfs", 19, 1); fail("/etc/hosts", r => r.options = ["rw"], 19, 2);
+  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "0:99", 2], [r => r.root = "/other", 3], [r => r.options = ["rw", "nosuid", "nodev", "noexec"], 4], [r => r.options = ["ro", "nodev", "noexec"], 5], [r => r.options = ["ro", "nosuid", "noexec"], 6], [r => r.options = ["ro", "nosuid", "nodev"], 7]]) fail("/proc/bus", change, 20, leaf);
+  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "0:99", 2], [r => r.root = "/other", 3], [r => r.options.push("noexec"), 4], [r => r.superOptions.push("extra"), 5]]) fail("/proc/kcore", change, 21, leaf);
+  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "8:1", 2], [r => r.root = "/other", 3], [r => r.options = ["rw"], 4], [r => r.superOptions = ["rw"], 5], [r => r.device = "0:2", 6]]) fail("/sys/firmware", change, 22, leaf);
+  const alias = fail("/task", r => r.device = "0:3", 23, 1); assert.equal(alias.detail.m[3], null); assert.deepEqual(alias.detail.m.slice(8, 10), [8, 7]);
+  fail("/task", r => r.superOptions = ["rw", "size=1k"], 24, 1); fail("/dev", (r, rows) => { r.superOptions = ["rw", "size=1k", "mode=755"]; rows.find(row => row.target === "/proc/kcore").superOptions = [...r.superOptions]; }, 25, 1); fail("/dev", (r, rows) => { r.superOptions = ["rw", "size=65536k", "mode=700"]; rows.find(row => row.target === "/proc/kcore").superOptions = [...r.superOptions]; }, 25, 2);
+  fail("/dev/shm", r => r.superOptions = ["rw", "size=1k"], 26, 1);
+});
+test("mount diagnostics getters retain exact read order no coercion and operand undefined", async () => {
+  const api = await initGuardFactory(), expected = ["id", "id", "parentId", "parentId", "device", "target", "root", "fs"];
+  for (const observed of [false, true]) {
+    const reads = [], values = { id: 1, parentId: 0, device: "0:1", target: "/", root: "/", fs: { toString() { assert.fail("observer coercion"); } } }, row = {};
+    for (const key of Object.keys(values)) Object.defineProperty(row, key, { get() { reads.push(key); return values[key]; } });
+    const ledger = observed ? createInitGuardLedger() : undefined; ledger?.source("mount_validate"); assert.throws(() => api.mountTable([row], ledger)); assert.deepEqual(reads, expected);
+    if (observed) assert.equal(ledger.failure().m[1], 5);
+  }
+  const row = mounts()[0], ledger = createInitGuardLedger(); ledger.source("mount_validate"); Object.defineProperty(row, "fs", { get() { throw undefined; } });
+  assert.throws(() => api.mountTable([row], ledger), error => error === undefined); assert.equal(ledger.failure().guard, null); assert.equal(Object.hasOwn(ledger.failure(), "m"), false);
+  const thermal = mount(500, 107, "/sys/devices/system/cpu/cpu0/thermal_throttle", "tmpfs", "0:88", ["ro"], "/", ["ro"]), success = createInitGuardLedger(); success.source("mount_validate"); assert.equal(api.validateMounts([...mounts(), thermal], success), true); assert.equal(success.failure().guard, null); assert.equal(Object.hasOwn(success.failure(), "m"), false);
+  const later = mounts(); later.find(row => row.target === "/task").superOptions = ["rw"]; observedMountFailure(r => api.validateMounts([...later, thermal], r), 24, 1);
+});
+test("mount diagnostics saturation and recorder faults cannot change original comparisons", async () => {
+  const api = await initGuardFactory(), ledger = createInitGuardLedger(); ledger.source("mount_validate");
+  const observation = api.createMountObservation(ledger, 23); assert.throws(() => observation.check(observation.leaf(1, observation.value("distinct", 5000) === observation.value("count", 5001)), "original-inequality"));
+  const tuple = ledger.failure().m; assert.deepEqual(tuple.slice(6), [1, 0, 4095, 4095, 3]); validateMountDetail(tuple, "mount_validate");
+  const unsaturated = [...tuple]; unsaturated[10] = 0; assert.throws(() => validateMountDetail(unsaturated, "mount_validate"));
+  const broken = createInitGuardLedger(); broken.source("mount_validate"); broken.mount = () => { throw undefined; };
+  const rows = mounts(); rows[0].options = ["rw"]; assert.throws(() => api.validateMounts(rows, broken)); assert.deepEqual(broken.errors, [undefined]); assert.equal(Object.hasOwn(broken.failure(), "m"), false);
+  const stale = api.createMountObservation(ledger, 23); assert.throws(() => stale.check(stale.leaf(1, false), "still-original")); assert.equal(ledger.errors.length, 2); assert.deepEqual(ledger.failure().m, tuple);
+});
+test("mount diagnostics strict tuple relationships and maximum frames preserve closed binding", async () => {
+  assert.equal(new Set(mountDiagnosticCases.map(detail => detail.m[1])).size, 26);
+  let maximumPrivate = 0, maximumPublic = 0;
+  for (const detail of mountDiagnosticCases) {
+    const frames = [], trace = createInitDiagnostics(line => frames.push(line));
+    trace.enter("arguments"); trace.bind(hex, other); for (const stage of initPrerequisiteStages.slice(1, 5)) trace.enter(stage);
+    trace.finish(true, undefined, detail, Array(16).fill(undefined)); assert.deepEqual(trace.errors, []);
+    maximumPrivate = Math.max(maximumPrivate, ...frames.map(line => Buffer.byteLength(line)));
+    const captured = await attachWithFrames(frames.join("")), parsed = parseInitPrerequisites(captured.h.attached.result, captured.binding);
+    assert.deepEqual(parsed.detail, detail); assert.equal(parsed.defined, false); assert.equal(parsed.reportFailures, 16);
+    const report = createContainerDiagnostics(); createAttachProjection(captured.h.attached, captured.binding, report)(captured.h.attached.result);
+    for (const phase of ["entry", "dispatch", "ready", "retirement"]) report.mark(phase, "rejected", undefined);
+    for (const phase of ["module_import", "host_runtime", "cwd", "temp", "environment", "image", "base", "create"]) report.mark(phase, "fulfilled");
+    const lines = []; emitContainerFailure(report.records, line => lines.push(line)); maximumPublic = Math.max(maximumPublic, ...lines.map(line => Buffer.byteLength(line)));
+    assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192); assert.ok(!lines.join("").includes(hex) && !lines.join("").includes(other));
+    const altered = frames.join("").replace('"m":[1,', '"m":[2,'); const invalid = await attachWithFrames(altered); assert.equal(parseInitPrerequisites(invalid.h.attached.result, invalid.binding).reason, "invalid");
+  }
+  assert.ok(maximumPrivate <= 512); assert.ok(maximumPublic <= 768);
+  const sample = mountDiagnosticCases.find(detail => detail.m[1] === 18).m;
+  for (const change of [r => r[0] = 2, r => r[1] = 99, r => r[2] = 9, r => r[3] = 1, r => r[4] = 99, r => r[5] = 99, r => r[6] = 512, r => r[7] = 255, r => r[8] = 9000, r => r[9] = 1, r => r[10] = 1, r => r.push(0)]) { const invalid = [...sample]; change(invalid); assert.throws(() => validateMountDetail(invalid, "mount_validate")); }
+  assert.throws(() => validateMountDetail(sample, "mount_parse"));
+  let getter = false; const hostile = [...sample]; Object.defineProperty(hostile, "3", { get() { getter = true; throw undefined; } }); assert.throws(() => validateMountDetail(hostile, "mount_validate")); assert.equal(getter, false);
+});
+test("mount diagnostics each structural leaf and original unobserved operand relation is exercised", () => {
+  const covered = new Set(mountDiagnosticCases.map(detail => `${detail.m[1]}:${detail.m[2]}`));
+  for (const [index, [, width]] of mountPredicates.entries()) for (let leaf = 1; leaf <= width; leaf++) {
+    // A failed OR has both operands false; the first false is not a terminal leaf.
+    if (index + 1 === 14 && leaf === 1) continue;
+    assert.ok(covered.has(`${index + 1}:${leaf}`), `missing original predicate ${index + 1} leaf ${leaf}`);
+  }
+  const firstFs = mountDiagnosticCases.find(detail => detail.m[1] === 18 && detail.m[2] === 1).m;
+  assert.equal(firstFs[5], null); assert.equal(firstFs[6], 1); assert.equal(firstFs[7], 0);
 });
 // END attach diagnostic pure tests.
