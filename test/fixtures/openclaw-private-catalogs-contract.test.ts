@@ -11,7 +11,7 @@ import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import type { DispatcherAwareRequestInit } from "../../src/infra/net/runtime-fetch.js";
 import * as guard from "../../src/infra/net/fetch-guard.js";
 
-const pin="2d1a1c293537ed34fdbf0f496d364aec575e5ba9";
+const pin="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635";
 const origin=process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 type Provider="baseten"|"arcee"|"novita";
 type Control="eof"|"preabort"|"partial"|"provider_error";

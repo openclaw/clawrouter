@@ -13,7 +13,7 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
-export const privateCatalogPin="2d1a1c293537ed34fdbf0f496d364aec575e5ba9";
+export const privateCatalogPin="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635";
 export const privateProviders=["baseten","arcee","novita"];
 export const privateGroups={stream:["eof","provider_error"],simple:["eof","provider_error"],empty:["empty"],opaque:["unpriced"],
   foreign:["foreign_discovery","foreign_inference"],environment:["environment"],rotation:["rotation"],revocation:["caller_revoke","grant_revoke"],
