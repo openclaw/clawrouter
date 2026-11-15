@@ -69,9 +69,21 @@ test("actual SDK drain joins late cancel and retirement originals and retains un
 test("actual Worker unknown-price admission denies inference before any paid POST", { timeout: 60000 }, async () => {
   await withGateway([{ id: "dollar", mode: "unpriced", unrestricted: true }], async f => {
     const response = await f.call("dollar", "/v1/native/litellm/v1/chat/completions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: selected, messages: [{ role: "user", content: "synthetic fixture" }], stream: true }) });
-    const result = await response.json(); assert.ok(response.status >= 400); assert.equal(result.error.code, "pricing_required");
+    const result = await response.json(); assert.equal(response.status, 400); assert.equal(result.error.code, "pricing_required");
     assert.equal((await f.state("dollar")).calls.length, 0); assert.equal((await f.control("retire", "dollar")).retired, true);
-    const usage = await f.control("usage", "dollar"); assert.equal(usage.events.length, 0);
+    // Admission denial still records the original request, without a reservation or charge.
+    const usage = await f.control("usage", "dollar"); assert.equal(usage.events.length, 1);
+    const [event] = usage.events;
+    assert.deepEqual({
+      credential: event.credential_id, policy: event.policy_id, provider: event.provider,
+      status: event.status, statusCode: event.status_code, basis: event.cost_basis,
+      reserved: event.reserved_cost_micros, actual: event.actual_cost_micros,
+      input: event.input_tokens, output: event.output_tokens, total: event.total_tokens,
+    }, {
+      credential: "dollar", policy: "dollar", provider: "litellm",
+      status: "client_error", statusCode: 400, basis: "none",
+      reserved: 0, actual: 0, input: null, output: null, total: null,
+    });
   });
 });
 test("actual LiteLLM registered catalog, native stream/streamSimple and original retirement through Worker SQLite", { skip: !source, timeout: 300000 }, async t => {
