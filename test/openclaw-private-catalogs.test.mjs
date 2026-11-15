@@ -511,6 +511,73 @@ export async function privateInertReader(read,closed=Promise.resolve()){
  const actual=s.ownership.run(token,()=>response.body.getReader());return {s,context,token,request,body,reader:actual,calls};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ // BEGIN Private capture entry inert regressions
+ function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false}={}){
+  source??=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const section=(a,b)=>{assert.equal(source.split(a).length,2);return source.slice(source.indexOf(a),source.indexOf(b,source.indexOf(a)));};
+  const wrapper=section("export function createPrivateFetchObserver(","export function createPrivateInvocationOwnership(").replace(/^export /gm,"");
+  const capture=section(" const observedFetch=(fetcher:Function)=>", "\n const check=");
+  const records=[],originals=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v));
+  const row={provider:"baseten",api:"stream",control:"eof"};r.bindCase(0,0);r.bindBody(0,row,originals);r.bindBodyMetadata(0,row,privateNodeTypes.isProxy);
+  const w={sequence:0,syncFailures:[],observerFailures:[]},calls=[],receiver={},pending=Promise.resolve({}),signalClass=class {};
+  const hit=n=>{calls.push(n);if(failAt===n)throw reason;};
+  let assertion=0;
+  const expect=value=>({toBe(expected){hit([6,7,13,14][assertion++]);assert.equal(value,expected);},
+   toContain(expected){hit(assertion===2?8:15);assert.ok(value.includes(expected));},
+   toBeInstanceOf(expected){hit(16);assert.ok(value instanceof expected);},toBeDefined(){hit(17);assert.notEqual(value,undefined);}});
+  const input="https://fixture.invalid/chat/completions",init={signal:new signalClass(),dispatcher:{close(){}}};
+  if(failAt===19)Object.defineProperty(init.dispatcher,"close",{get(){hit(19);}});
+  const fakeURL=class {constructor(value){hit(5);assert.equal(value,input);this.origin="https://fixture.invalid";this.search="";this.href=value;this.pathname="/chat/completions";}};
+  const fakeHeaders=class {constructor(){hit(9);}get(){hit(10);return "Bearer key";}has(){return false;}};
+  const transportRows=[];transportRows.push=function(value){hit(18);return Array.prototype.push.call(this,value);};
+  const ownership={transport(){hit(11);},response(){}};
+  const checkpoints={bodyCaptureFailure(...args){if(reportThrow)throw undefined;r.bodyCaptureFailure(...args);},bodyOperationFailure(...args){r.bodyOperationFailure(...args);}};
+  const record=(kind,details)=>{hit(20);const o={kind,...details,state:"pending"};originals.push(o);return o;};
+  const returned=(o,p)=>{o.pending=p;o.state="fulfilled";};const observer=()=>{};
+  const dependencies={URL:fakeURL,Headers:fakeHeaders,Request:class {},AbortSignal:signalClass,expect,origin:"https://fixture.invalid",base:()=>"https://fixture.invalid",row,key:()=>"key",ownership,
+   signalHistory:()=>{hit(12);return [];},transports:transportRows,observedDispatchers:new Set(),patch:(o,k,v)=>{o[k]=v;},invoke:(_k,fn)=>fn(),record,w,checkpoints,caseIndex:0,returned,observer,observeBody:()=>{}};
+  const factory=new Function(...Object.keys(dependencies),'"use strict";'+stripTypeScriptTypes(wrapper+capture,{mode:"strip"})+';return observedFetch;')(...Object.values(dependencies));
+  let fetchCalls=0,actualReceiver,actualArgs;
+  const wrapped=factory(function(...args){fetchCalls++;actualReceiver=this;actualArgs=args;if(fetchThrow)throw reason;return pending;});
+  return {wrapped,receiver,input,init,pending,row,r,w,records,calls,originals,get fetchCalls(){return fetchCalls;},get actualReceiver(){return actualReceiver;},get actualArgs(){return actualArgs;},
+   capsule(){r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);return records.find(v=>v.v===7||v.v===6);}};
+ }
+ test("Private capture entry identifies original URL ownership and header failures before fetch",()=>{
+  for(const failAt of Array.from({length:16},(_,i)=>i+5))for(const reason of [undefined,{}]){
+   const h=privateCaptureHarness({failAt,reason});let present=false,caught;
+   try{Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]);}catch(e){present=true;caught=e;}
+   assert.equal(present,true);assert.equal(caught,reason);assert.equal(h.fetchCalls,0);
+   assert.deepEqual(JSON.parse(JSON.stringify(h.capsule().meta[3])),[failAt,1,reason!==undefined]);assert.equal(h.r.failures.length,0);
+  }
+ });
+ test("Private capture entry preserves successful call and separates native fetch failure",async()=>{
+  for(const fetchThrow of [false,true])for(const reason of [undefined,{}]){
+   const h=privateCaptureHarness({fetchThrow,reason});let caught,present=false,result;
+   try{result=Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]);}catch(e){present=true;caught=e;}
+   assert.equal(h.fetchCalls,1);assert.equal(h.actualReceiver,h.receiver);assert.equal(h.actualArgs[0],h.input);assert.equal(h.actualArgs[1],h.init);
+   assert.equal(present,fetchThrow);if(fetchThrow){assert.equal(caught,reason);assert.deepEqual(JSON.parse(JSON.stringify(h.capsule().meta[3])),[2,1,reason!==undefined]);}
+   else {assert.equal(result,h.pending);await result;assert.equal(h.capsule().meta[3],null);}
+  }
+ });
+ test("Private capture entry missing foreign late invalid and reporting failures never gain evidence",async()=>{
+  const empty=privateCaptureHarness();assert.equal(empty.capsule().meta[3],null);assert.equal(empty.fetchCalls,0);
+  for(const fault of [h=>h.r.bodyCaptureFailure(0,{},6,undefined),h=>h.r.bodyCaptureFailure(0,h.row,21,undefined)]){
+   const h=privateCaptureHarness();fault(h);assert.equal(h.r.failures.length,1);assert.equal(h.capsule().meta[3],null);
+  }
+  const h=privateCaptureHarness({failAt:11,reason:undefined,reportThrow:true});const cleanup={};let aggregate;
+  try{await finishPrivateOwned(()=>Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]),[()=>{throw h.w.observerFailures[0];},()=>{throw cleanup;}]);}catch(e){aggregate=e;}
+  assert.deepEqual(aggregate.errors,[undefined,undefined,cleanup]);assert.equal(h.fetchCalls,0);assert.equal(h.w.observerFailures.length,1);assert.equal(h.capsule().meta[3],null);
+  const first=privateCaptureHarness();first.r.bodyCaptureFailure(0,first.row,6,undefined);first.r.bodyCaptureFailure(0,first.row,11,{});
+  assert.deepEqual(JSON.parse(JSON.stringify(first.capsule().meta[3])),[6,1,false]);first.r.bodyCaptureFailure(0,first.row,12,{});assert.equal(first.records.filter(v=>v.v===7).length,1);
+ });
+ test("Private capture V7 reserved capsule relays atomically without widening historical versions",()=>{
+  const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,20,undefined);const cap=h.capsule(),commands=[],emit=privateAnnotationEmitter(v=>commands.push(v));
+  emit(cap);assert.ok(Buffer.byteLength(JSON.stringify(cap))<=512);assert.ok(Buffer.byteLength(commands[0])<=768);
+  const {validatePrivateCheckpoint}=privateCheckpointFunctions();validatePrivateCheckpoint(cap);
+  for(const patch of [{v:6},{v:7,meta:[...cap.meta.slice(0,3),[20,2,false],cap.meta[4]]},{case:4},{decl:4}])assert.throws(()=>validatePrivateCheckpoint({...cap,...patch}));
+  const error={stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)};assert.equal(JSON.stringify(privateCheckpointRecords(error)),JSON.stringify([cap]));
+ });
+ // END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
  function privateEOFSource(deps){
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
