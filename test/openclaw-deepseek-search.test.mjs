@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import { types as nodeTypes } from "node:util";
+import { runnerStartupRecord, runnerStartupCommand } from "./helpers/openclaw-runner-reporter.mjs";
 import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +18,68 @@ const uncertain = ["malformed", "truncated", "oversized", "non_success", "redire
 const denied = ["grant", "foreign", "policy", "revoked", "budget", "key", "long_query", "surrogate", "content", "country", "zero", "eleven", "fraction"];
 const scenarios = [...successful, ...uncertain, ...denied];
 const query = "site:example.com synthetic search";
+
+// Decode only the fixture's closed, source-owned records. Ordinary runner output stays private.
+const fixtureSha256 = "ab2441ddee15225ce452eeae807d7ed7761b6d212f4fa2f9723f488a5959513f", reporterSha256 = "71189036a0b33a2b9e709254d36ab71919e63e928b5f8e4f5b8717eee503637d";
+const sdkText = readFileSync(new URL("./fixtures/openclaw-deepseek-search-contract.test.ts", import.meta.url), "utf8");
+const protocolStart = sdkText.indexOf("// BEGIN DeepSeek failure capsule."), protocolEnd = sdkText.indexOf("// END DeepSeek failure capsule.");
+assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
+const failureProtocol = new Function(stripTypeScriptTypes(sdkText.slice(protocolStart, protocolEnd)) + "; return deepSeekFailureProtocol;")()();
+assert.equal(failureProtocol.pin, sourceHead); assert.deepEqual(failureProtocol.cases, scenarios);
+
+function deepSeekDiagnostics(write = line => process.stdout.write(line)) {
+  const rows = new Map(), faults = [];
+  let runner, primary, cleanup = 0, finished = false, bytes = 0, inputBytes = 0;
+  const protect = run => { try { run(); } catch (error) { faults.push(error); } };
+  function parse(text) {
+    if (typeof text !== "string") return;
+    inputBytes += Buffer.byteLength(text); assert.ok(inputBytes <= 4 * 1024 * 1024);
+    for (const row of failureProtocol.parse(text)) {
+      assert.equal(rows.has(row.caseId), false, "duplicate SDK capsule"); rows.set(row.caseId, row);
+    }
+  }
+  function rejected(error) {
+    const pending = [error], seen = new Set(); let visited = 0;
+    while (pending.length) {
+      assert.ok(++visited <= 32, "bounded original error graph");
+      const value = pending.pop();
+      if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || !nodeTypes.isNativeError(value) || seen.has(value)) continue;
+      seen.add(value);
+      const own = key => { const d = Object.getOwnPropertyDescriptor(value, key); return d && Object.hasOwn(d, "value") ? d.value : undefined; };
+      for (const key of ["stdout", "stderr"]) parse(own(key));
+      const children = own("errors");
+      if (!children || nodeTypes.isProxy(children) || !Array.isArray(children)) continue;
+      const length = Object.getOwnPropertyDescriptor(children, "length")?.value;
+      assert.ok(Number.isSafeInteger(length) && length <= 32);
+      for (let i = length - 1; i >= 0; i--) {
+        const d = Object.getOwnPropertyDescriptor(children, String(i));
+        assert.ok(d && Object.hasOwn(d, "value")); pending.push(d.value);
+      }
+    }
+  }
+  return {
+    diagnostic(text) { protect(() => parse(text)); },
+    runner(packet) { protect(() => { assert.equal(runner, undefined, "duplicate runner packet"); runner = runnerStartupRecord(packet); }); },
+    failed(error, phase) { primary ??= { phase, failurePresent: true, reasonDefined: error !== undefined }; if (phase === "helper") protect(() => rejected(error)); },
+    cleanup(error) { cleanup++; primary ??= { phase: "cleanup", failurePresent: true, reasonDefined: error !== undefined }; },
+    finish() {
+      if (finished) return []; finished = true;
+      const failed = [...rows.values()].filter(row => row.failurePresent);
+      if (!primary && !failed.length && !faults.length) return [];
+      const commands = [];
+      const command = row => "::error title=DeepSeek contract diagnostic::" + JSON.stringify(row).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
+      if (failed.length) commands.push(command({ source: "sdk", ...failed[0] }));
+      if (primary) commands.push(command({ v: 1, source: "outer", ...primary }));
+      // Startup supplements never substitute a case outcome or a missing resource observation.
+      if (rows.size === 0 && runner) commands.push(runnerStartupCommand(runner));
+      commands.push(command({ v: 1, source: "summary", records: rows.size, failedRecords: failed.length,
+        omittedRecords: rows.size - (failed.length ? 1 : 0), cleanupFailures: cleanup, reportingFailures: faults.length }));
+      assert.ok(commands.length <= 9);
+      for (const line of commands) protect(() => { const n = Buffer.byteLength(line); assert.ok(n <= 768 && bytes + n <= 8192); bytes += n; write(line); });
+      return faults;
+    },
+  };
+}
 
 function deferred() {
   let resolve;
@@ -145,7 +211,8 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
   assert.equal(endpoint.requestPricing.successfulNonemptyRequestMicros, 750);
   assert.equal(endpoint.requestPricing.emptyRequestMicros, 0);
   const ids = scenarios.map(name => `ds_${name}`), failures = [];
-  let barrier, temporary, mf;
+  const diagnostics = deepSeekDiagnostics();
+  let barrier, temporary, mf, phase = "setup";
   try {
     barrier = await abortBarrier();
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-deepseek-client-"));
@@ -154,11 +221,14 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const initialized = await fetch(`${origin}/__deepseek/init`, { method: "POST" });
     assert.equal(initialized.status, 200, await initialized.text());
-    await runOpenClawConsumer(t, {
+    phase = "helper";
+    await runOpenClawConsumer({ diagnostic: text => diagnostics.diagnostic(text) }, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-deepseek-search-contract.test.ts", import.meta.url),
       testPath: "src/agents/tools/worker-clawrouter-deepseek-contract.test.ts",
+      runnerReport: { expectedInvocations: 1, fixtureSha256, reporterSha256, onReport: packet => diagnostics.runner(packet) },
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CONTROL: barrier.origin, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead },
     });
+    phase = "upstream";
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
     assert.deepEqual(await (await fetch(`${origin}/__deepseek/audit`)).json(), [], "blocked egress/route attempts are failures too");
@@ -173,6 +243,7 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
           body: { query, count: name === "one" ? 1 : name === "ten" ? 10 : 5, need_content: false },
         });
       }
+      phase = "worker_receipt";
       const joined = await (await fetch(`${origin}/__deepseek/join/${id}`)).json();
       assert.equal(joined.calls, paid ? 1 : 0, name);
       assert.equal(joined.retired, true, name);
@@ -191,6 +262,7 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
         assert.ok(joined.cancelResults.every(status => status === "fulfilled"), "original reader.cancel must settle successfully");
         assert.equal(joined.reservedBeforeFetch, name === "fixed" ? 17 : 750, name);
       }
+      phase = "accounting";
       const receipt = await (await fetch(`${origin}/__deepseek/usage/${id}`)).json();
       if (paid) {
         assert.equal(receipt.usage.events.length, 1, name);
@@ -213,12 +285,13 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
       assert.doesNotMatch(JSON.stringify(receipt.usage.events), /fixture-secret|managed-ds_|must-not-fallback|synthetic search|Synthetic summary/);
     }
     assert.equal(calls.find(call => call.id === "ds_abort").finished, true, "held upstream really ended before teardown");
-  } catch (error) { failures.push(error); }
+  } catch (error) { failures.push(error); diagnostics.failed(error, phase); }
   finally {
-    try { await barrier?.close(); } catch (error) { failures.push(error); }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    try { await barrier?.close(); } catch (error) { failures.push(error); diagnostics.cleanup(error); }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); diagnostics.cleanup(error); }
+    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); diagnostics.cleanup(error); }
   }
+  try { failures.push(...diagnostics.finish()); } catch (error) { failures.push(error); }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "DeepSeek contract or owned cleanup failed");
 });

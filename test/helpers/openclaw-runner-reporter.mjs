@@ -4,13 +4,22 @@ import { constants, closeSync, fstatSync, openSync, readFileSync, readSync, writ
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Source-qualified D8 explicit-file plan, not an observed execution count.
+// Exact source-qualified explicit-file plans, not observed execution counts.
 export const runnerContract = Object.freeze({
   schema: "openclaw-native-runner.v1",
   pin: "d8bb939408aa4d2be7df0161748edb52ebf3b1fb",
   target: "extensions/qwen/worker-regions-contract.test.ts",
   expectedInvocations: 1,
 });
+// Both profiles retain one original native invocation and the same reporter API.
+const ownRunnerContract = Object.freeze({ ...runnerContract,
+  pin: "82dd065e23b678e61ad497f9d57fbb4c3da10eae", target: "src/agents/tools/worker-clawrouter-deepseek-contract.test.ts",
+});
+export function runnerProfile(pin, target) {
+  if (pin === runnerContract.pin && target === runnerContract.target) return { contract: runnerContract, project: "extension-providers" };
+  assert.ok(pin === ownRunnerContract.pin && target === ownRunnerContract.target, "unsupported native diagnostic pin/target");
+  return { contract: ownRunnerContract, project: "agents-tools" };
+}
 export const reportByteLimit = 64 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
 const phases = ["run_start", "module_queued", "module_collected", "module_start", "module_end"];
@@ -27,7 +36,7 @@ function count(value) {
 }
 export function validateBinding(binding) {
   keys(binding, [...Object.keys(runnerContract), "fixtureSha256", "reporterSha256", "nonce"]);
-  for (const [key, value] of Object.entries(runnerContract)) assert.equal(binding[key], value, "unsupported native runner plan");
+  for (const [key, value] of Object.entries(runnerProfile(binding.pin, binding.target).contract)) assert.equal(binding[key], value, "unsupported native runner plan");
   for (const key of ["fixtureSha256", "reporterSha256", "nonce"]) assert.match(binding[key], hashPattern);
   return binding;
 }
@@ -152,11 +161,11 @@ export default class NativeRunnerReporter {
   onInit(ctx) {
     assert.equal(this.#file, undefined, "runner reporter initialized twice");
     assert.equal(ctx.version, "5.0.5", "unqualified native reporter API");
-    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === "extension-providers", "unqualified native project plan");
     assert.equal(typeof ctx.config.outputFile, "string", "explicit runner output required");
     this.#file = resolve(ctx.config.outputFile); this.#root = resolve(ctx.config.root);
     const plan = readPrivateFile(join(dirname(this.#file), "plan.json"), 4096);
     this.#binding = validateBinding(JSON.parse(plan.toString("utf8")));
+    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === runnerProfile(this.#binding.pin, this.#binding.target).project, "unqualified native project plan");
     assert.equal(sha256(readFileSync(fileURLToPath(import.meta.url))), this.#binding.reporterSha256);
     assert.equal(sha256(readFileSync(join(this.#root, this.#binding.target))), this.#binding.fixtureSha256);
     const fd = openSync(this.#file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -222,4 +231,34 @@ export default class NativeRunnerReporter {
     this.#write({ kind: "end", reason, ready: this.#ready, results: this.#results, errors: this.#errors, omitted: this.#omitted, complete: this.#omitted === 0 }, true);
     this.#ended = true;
   }
+}
+
+// Only packets returned by the private, binding-validated reader reach this relay.
+// Revalidate records before projecting; nonce, paths and serialized error text stay private.
+export function runnerStartupRecord(packet) {
+  if (packet.reporter === "absent") {
+    assert.equal(packet.complete, false); assert.equal(packet.records.length, 0);
+    assert.equal(packet.bytes, 0); assert.equal(packet.sha256, null);
+    return { v: 1, source: "runner", present: false, complete: false, phases: null,
+      ready: null, results: null, errors: null, omitted: null, reason: null, firstError: null };
+  }
+  const bytes = Buffer.from(packet.records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const checked = parseRunnerReport(bytes, packet.records[0]?.binding);
+  assert.equal(checked.complete, packet.complete); assert.equal(checked.bytes, packet.bytes); assert.equal(checked.sha256, packet.sha256);
+  const end = checked.records.at(-1).kind === "end" ? checked.records.at(-1) : null;
+  const first = checked.records.find(row => row.kind === "error");
+  const row = { v: 1, source: "runner", present: true, complete: checked.complete,
+    phases: phases.map(phase => checked.records.find(row => row.kind === "phase" && row.phase === phase)?.count ?? null),
+    ready: end?.ready ?? null, results: end?.results ?? null, errors: end?.errors ?? null,
+    omitted: end?.omitted ?? null, reason: end?.reason ?? null,
+    firstError: first ? { surface: first.surface, ...first.error } : null };
+  assert.ok(Buffer.byteLength(JSON.stringify(row)) <= 640);
+  return row;
+}
+export function runnerStartupCommand(row, replacedProgress = 0) {
+  assert.ok(replacedProgress === 0 || replacedProgress === 1);
+  const line = "::error title=OpenClaw runner startup::" + JSON.stringify({ ...row, replacedProgress })
+    .replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
+  assert.ok(Buffer.byteLength(line) <= 768);
+  return line;
 }

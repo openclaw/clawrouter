@@ -20,6 +20,76 @@ import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { ToolInputError } from "../tool-input-error.js";
 import { createWebSearchTool } from "./web-search.js";
 
+// BEGIN DeepSeek failure capsule.
+function deepSeekFailureProtocol() {
+  const pin = "82dd065e23b678e61ad497f9d57fbb4c3da10eae", prefix = "DS753_SDK_V1 ";
+  const cases = ["default", "one", "ten", "empty", "fixed", "malformed", "truncated", "oversized", "non_success", "redirect", "unsafe", "encoding", "abort", "grant", "foreign", "policy", "revoked", "budget", "key", "long_query", "surrogate", "content", "country", "zero", "eleven", "fraction"];
+  const phases = ["state_scope", "plugin_load", "registration", "tool", "body", "join", "worker_receipt", "registry_retirement", "complete"];
+  type Pair = [number, number];
+  type Row = { v: number; pin: string; caseId: string; phase: string; failurePresent: boolean; reasonDefined: boolean | null;
+    failures: number; selectedRows: number | null; close: Pair | null; cancel: Pair | null; workerCommand: string };
+  function validate(value: unknown): Row {
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid DeepSeek capsule");
+    const row = value as Row;
+    if (Object.keys(row).sort().join() !== "cancel,caseId,close,failurePresent,failures,phase,pin,reasonDefined,selectedRows,v,workerCommand"
+      || row.v !== 1 || row.pin !== pin || !cases.includes(row.caseId) || !phases.includes(row.phase)
+      || typeof row.failurePresent !== "boolean" || !Number.isSafeInteger(row.failures) || row.failures < 0 || row.failures > 65535
+      || row.failurePresent !== (row.failures > 0) || (row.failurePresent ? typeof row.reasonDefined !== "boolean" : row.reasonDefined !== null)
+      || !["unknown", "fulfilled", "rejected"].includes(row.workerCommand)) throw new Error("invalid DeepSeek capsule identity");
+    if (row.selectedRows !== null && (!Number.isSafeInteger(row.selectedRows) || row.selectedRows < 0 || row.selectedRows > 65535)) throw new Error("invalid selected-row count");
+    for (const pair of [row.close, row.cancel]) if (pair !== null && (!Array.isArray(pair) || pair.length !== 2
+      || pair.some(n => !Number.isSafeInteger(n) || n < 0 || n > 65535))) throw new Error("invalid original outcomes");
+    if ((row.close === null) !== (row.cancel === null) || (row.selectedRows === null && row.close !== null)) throw new Error("unbound original outcomes");
+    if (new TextEncoder().encode(JSON.stringify(row)).length > 640) throw new Error("DeepSeek capsule bound");
+    return row;
+  }
+  function parse(text: string) {
+    const rows: Row[] = [];
+    if (new TextEncoder().encode(text).length > 2 * 1024 * 1024) throw new Error("DeepSeek input bound");
+    for (const line of text.split(/\r?\n/)) {
+      const start = line.indexOf(prefix); if (start < 0) continue;
+      const bytes = line.slice(start + prefix.length), value = JSON.parse(bytes);
+      if (JSON.stringify(value) !== bytes) throw new Error("noncanonical DeepSeek capsule");
+      rows.push(validate(value)); if (rows.length > 26) throw new Error("DeepSeek capsule count");
+    }
+    return rows;
+  }
+  function owner(caseId: string, write: (line: string) => unknown) {
+    let phase = "state_scope", first: { phase: string; error: unknown } | undefined, failures = 0;
+    let selected: Set<object> | undefined, workerCommand = "unknown", finished = false;
+    const outcomes = new Map<object, { close: Pair; cancel: Pair }>(), faults: unknown[] = [];
+    const protect = (run: () => void) => { try { run(); } catch (error) { faults.push(error); } };
+    return {
+      at(value: string) { phase = value; },
+      failed(error: unknown) { first ??= { phase, error }; failures++; },
+      select(rows: object[]) { protect(() => { if (selected) throw new Error("repeated original join"); selected = new Set(rows); if (selected.size !== rows.length) throw new Error("aliased selected row"); }); },
+      transport(row: object, close: PromiseSettledResult<unknown>[], cancel: PromiseSettledResult<unknown>[]) {
+        protect(() => {
+          if (!selected?.has(row) || outcomes.has(row)) throw new Error("foreign or repeated selected row");
+          const count = (values: PromiseSettledResult<unknown>[]): Pair => [values.filter(value => value.status === "fulfilled").length, values.filter(value => value.status === "rejected").length];
+          outcomes.set(row, { close: count(close), cancel: count(cancel) });
+        });
+      },
+      worker(status: string) { workerCommand = status; },
+      finish() {
+        if (finished) return []; finished = true;
+        protect(() => {
+          const complete = selected !== undefined && outcomes.size === selected.size && faults.length === 0;
+          const sum = (key: "close" | "cancel"): Pair => [...outcomes.values()].reduce<Pair>((pair, row) => [pair[0] + row[key][0], pair[1] + row[key][1]], [0, 0]);
+          const row = validate({ v: 1, pin, caseId, phase: first?.phase ?? "complete", failurePresent: first !== undefined,
+            reasonDefined: first ? first.error !== undefined : null, failures, selectedRows: selected?.size ?? null,
+            close: complete ? sum("close") : null, cancel: complete ? sum("cancel") : null, workerCommand });
+          write(prefix + JSON.stringify(row) + "\n");
+        });
+        return faults;
+      },
+    };
+  }
+  return { pin, prefix, cases, validate, parse, owner };
+}
+// END DeepSeek failure capsule.
+const failureProtocol = deepSeekFailureProtocol();
+
 const expectedHead = "82dd065e23b678e61ad497f9d57fbb4c3da10eae";
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
@@ -154,8 +224,9 @@ beforeEach(() => {
 
 afterEach(() => { vi.restoreAllMocks(); expect(unexpected).toEqual([]); });
 
-async function join(name: string) {
+async function join(name: string, evidence: ReturnType<typeof failureProtocol.owner>) {
   const selected = observations.filter(row => row.credential.startsWith(`Bearer clawrouter-live-ds_${name}-`));
+  evidence.select(selected);
   const transport = selected.map(async row => {
     const completion = await row.done;
     // Join every original close/cancel before checking the observation contract.
@@ -163,6 +234,7 @@ async function join(name: string) {
       Promise.allSettled(row.closes.map(entry => entry.result)),
       Promise.allSettled(row.cancels),
     ]);
+    evidence.transport(row, closures, cancellations);
     expect(row.dispatcher).toBeDefined();
     expect(row.closes).toHaveLength(1);
     expect(row.closes[0].receiver).toBe(row.dispatcher);
@@ -186,11 +258,13 @@ async function join(name: string) {
   // Attempt every original transport and the Worker join before any one
   // observation failure can prevent another owned resource's cleanup.
   const results = await Promise.allSettled([...transport, command(`/__deepseek/join/ds_${name}`)]);
+  evidence.worker(results[results.length - 1].status);
   const failures = results.filter((value): value is PromiseRejectedResult => value.status === "rejected").map(value => value.reason);
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Search transport or Worker join failed");
   const worker = results.at(-1);
   if (worker?.status !== "fulfilled" || typeof worker.value !== "string") throw new Error("missing Worker join result");
+  evidence.at("worker_receipt");
   const state = JSON.parse(worker.value);
   expect(selected.map(row => row.path)).toEqual(state.paths);
   expect(state).toMatchObject({ retired: true, charged: 0 });
@@ -209,6 +283,7 @@ async function join(name: string) {
 
 async function fixture(name: string, run: (execute: (args?: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>) => Promise<void>) {
   const failures: unknown[] = [];
+  const evidence = failureProtocol.owner(name, line => process.stdout.write(line));
   let callbackFailed = false;
   let callbackFailure: unknown;
   try { await withOpenClawTestState({ label: "clawrouter-deepseek-worker", env: {
@@ -231,6 +306,7 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
     // then the real registration API and request-owned registry scope. This
     // keeps the unchanged AgentTool caller and the plugin's actual factories
     // on the same guarded-fetch instance; no provider result is substituted.
+    evidence.at("plugin_load");
     const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
       pluginId: "clawrouter", artifactBasename: "index.js",
     });
@@ -246,10 +322,12 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
       origin: "bundled", enabled: true, configSchema: true, contracts: manifest.contracts,
     });
     try {
+      evidence.at("registration");
       registerTestPlugin({ registry: builder, config, record, register: plugin.register });
       expect(builder.registry.diagnostics.filter(row => row.level === "error")).toEqual([]);
       expect(builder.registry.webSearchProviders.map(row => [row.pluginId, row.provider.id])).toEqual([["clawrouter", "clawrouter"]]);
       await withPluginRuntimeGenerationRegistryScope(builder.registry, async () => {
+        evidence.at("tool");
         const tool = createWebSearchTool({ config, agentDir: state.agentDir() });
         if (!tool) throw new Error("missing actual registered Search tool");
         const execute = async (args: Record<string, unknown> = {}, signal?: AbortSignal) => {
@@ -257,15 +335,19 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
           expect(JSON.stringify(result)).not.toMatch(/fixture-secret|must-not-fallback|managed-ds_/);
           return result.details as Record<string, unknown>;
         };
-        try { await run(execute); } catch (error) { failures.push(error); }
-        try { await join(name); } catch (error) { failures.push(error); }
+        evidence.at("body");
+        try { await run(execute); } catch (error) { failures.push(error); evidence.failed(error); }
+        evidence.at("join");
+        try { await join(name, evidence); } catch (error) { failures.push(error); evidence.failed(error); }
       });
-    } catch (error) { failures.push(error); }
+    } catch (error) { failures.push(error); evidence.failed(error); }
+    evidence.at("registry_retirement");
     try {
       const retired = await disposePluginRegistryInstances(builder.registry, undefined, { cfg: config });
       expect(retired.failures).toEqual([]);
       expect(retired.deferredPluginIds ?? []).toEqual([]);
-    } catch (error) { failures.push(error); }
+    } catch (error) { failures.push(error); evidence.failed(error); }
+    evidence.at("state_scope");
     if (failures.length) {
       callbackFailed = true;
       callbackFailure = failures.length === 1 ? failures[0] : new AggregateError(failures, "Search assertion or original cleanup failed");
@@ -274,8 +356,9 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
   }); } catch (error) {
     // Test-state cleanup can throw before it rethrows the callback failure.
     // Keep both; still throw inside the callback so its retention guard runs.
-    if (!callbackFailed || error !== callbackFailure) failures.push(error);
+    if (!callbackFailed || error !== callbackFailure) { failures.push(error); evidence.failed(error); }
   }
+  failures.push(...evidence.finish());
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Search assertion or original cleanup failed");
 }
