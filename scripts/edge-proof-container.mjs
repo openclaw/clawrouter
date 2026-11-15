@@ -261,42 +261,114 @@ async function createBuildContext(cwd, root) {
   return { context, contextHash, files, dockerfileHash: hash(await readFile(join(context, "Dockerfile"))) };
 }
 
+function canonicalMountPath(path) {
+  check(typeof path === "string" && path.startsWith("/") && !/[\x00-\x1f\x7f]/.test(path) && (path === "/" || path.slice(1).split("/").every(part => part && part !== "." && part !== "..")), "mount-path");
+  return path;
+}
+function decodeMountPath(path) {
+  // Linux fs/proc_namespace.c show_mountinfo/seq_path_root escapes these four
+  // bytes. Control-character paths are outside this proof route even if encoded.
+  check(!/\\(?!040|011|012|134)/.test(path), "mount-escape");
+  return canonicalMountPath(path.replace(/\\(040|011|012|134)/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))));
+}
+function mountTable(rows) {
+  check(Array.isArray(rows) && rows.length > 0 && rows.length < 4096, "mount-capacity");
+  for (const row of rows) {
+    check(Number.isSafeInteger(row.id) && row.id > 0 && Number.isSafeInteger(row.parentId) && row.parentId >= 0 && /^(0|[1-9]\d*):(0|[1-9]\d*)$/.test(row.device), "mount-identity");
+    canonicalMountPath(row.target); canonicalMountPath(row.root);
+    check(typeof row.fs === "string" && /^[a-zA-Z0-9._-]+$/.test(row.fs), "mount-filesystem");
+    for (const options of [row.options, row.superOptions]) check(Array.isArray(options) && options.length > 0 && options.every(value => typeof value === "string" && value.length > 0) && new Set(options).size === options.length && options.filter(value => value === "rw" || value === "ro").length === 1, "mount-options");
+    check(Array.isArray(row.optional), "mount-optional");
+  }
+  check(new Set(rows.map(row => row.id)).size === rows.length && new Set(rows.map(row => row.target)).size === rows.length, "mount-overmount");
+  return rows;
+}
+const containsMountPath = (parent, path) => parent === "/" || path === parent || path.startsWith(parent + "/");
+const mountTuple = row => ({ id: row.id, parentId: row.parentId, target: row.target, root: row.root, device: row.device, fs: row.fs, options: [...row.options].sort(), superOptions: [...row.superOptions].sort(), optional: [...row.optional].sort() });
 export function parseMounts(text, privateView = true) {
-  check(typeof text === "string" && text.length < 128 * 1024, "mount-capacity");
-  return text.trim().split("\n").map(line => {
+  check(typeof text === "string" && text.length > 0 && text.length < 128 * 1024, "mount-capacity");
+  return mountTable(text.replace(/\n$/, "").split("\n").map(line => {
     const halves = line.split(" - "); check(halves.length === 2, "mount-format");
-    const a = halves[0].split(" "), b = halves[1].split(" "); check(a.length >= 6 && b.length >= 3 && (!privateView || !a.slice(6).some(value => /^(shared|master|propagate_from):/.test(value))), "shared-mount");
-    check(/^\d+:\d+$/.test(a[2]) && isAbsolute(a[3]) && isAbsolute(a[4]), "mount-identity");
-    return { target: a[4], root: a[3], device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(",") };
-  });
+    const a = halves[0].split(" "), b = halves[1].split(" ");
+    check(a.length >= 6 && b.length === 3 && [...a, ...b].every(Boolean) && /^[1-9]\d*$/.test(a[0]) && /^(0|[1-9]\d*)$/.test(a[1]), "mount-format");
+    const optional = a.slice(6);
+    check(optional.every(value => /^(?:(?:shared|master|propagate_from):[1-9]\d*|unbindable)$/.test(value)) && (!privateView || !optional.some(value => /^(shared|master|propagate_from):/.test(value))), "shared-mount");
+    return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4]), root: decodeMountPath(a[3]), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
+  }));
+}
+export function validateMountFreshness(before, after) {
+  const snapshot = rows => mountTable(rows).map(mountTuple).sort((a, b) => a.id - b.id);
+  // IDs are namespace-local and may be reused after unmount. This compares two
+  // observations in ONE unchanged namespace, not continuous/ABA-free custody.
+  check(same(snapshot(before), snapshot(after)), "mount-observation-drift");
 }
 // mountinfo identifies the filesystem and bind root independently of directory
 // traversal permissions. Never stat Docker's root-owned private storage.
 export function validateMetadataMounts(inspect, targetMounts, parentMounts, daemonRoot, cid) {
-  check(cidPattern.test(cid) && typeof daemonRoot === "string" && isAbsolute(daemonRoot) && resolve(daemonRoot) === daemonRoot, "daemon-root-identity");
+  check(cidPattern.test(cid), "daemon-root-identity"); canonicalMountPath(daemonRoot);
+  mountTable(parentMounts); mountTable(targetMounts);
   const result = [];
   for (const [key, name] of [["ResolvConfPath", "resolv.conf"], ["HostnamePath", "hostname"], ["HostsPath", "hosts"]]) {
     const source = inspect[key];
     check(source === join(daemonRoot, "containers", cid, name), "daemon-metadata-custody");
-    const candidates = parentMounts.filter(row => source === row.target || source.startsWith(row.target === "/" ? "/" : row.target + "/")).sort((a, b) => b.target.length - a.target.length);
+    const candidates = parentMounts.filter(row => containsMountPath(row.target, source)).sort((a, b) => b.target.length - a.target.length);
     check(candidates.length > 0 && (candidates.length === 1 || candidates[0].target.length > candidates[1].target.length), "daemon-metadata-parent-ambiguous");
     const parent = candidates[0], matches = targetMounts.filter(row => row.target === `/etc/${name}`);
     check(matches.length === 1, "daemon-metadata-target");
-    const target = matches[0], root = resolve(parent.root, relative(parent.target, source));
+    // ext4/xfs expose the same resolved filesystem-relative dentry root in both
+    // namespaces. Overlay/unknown mappings stop here. A symlink alias whose
+    // resolved root differs cannot be certified by lexical normalization.
+    check(["ext4", "xfs"].includes(parent.fs), "daemon-metadata-filesystem-unqualified");
+    const target = matches[0], root = join(parent.root, relative(parent.target, source));
     check(target.root === root && target.device === parent.device && target.fs === parent.fs && target.options.includes("ro"), "daemon-metadata-mount-identity");
-    result.push({ name, root, device: target.device, fs: target.fs });
+    // Keep each namespace's IDs separately, including selected parent ancestry.
+    result.push({ name, parent: candidates.map(mountTuple), target: mountTuple(target) });
   }
   return result;
 }
 export function validateMounts(rows) {
-  const permitted = new Set(["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger", "/proc/acpi", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
-  check(new Set(rows.map(row => row.target)).size === rows.length && rows.every(row => permitted.has(row.target)), "mount-topology");
+  mountTable(rows);
+  // moby v28.5.2 oci/defaults.go: automatic mounts and conditional masks.
+  const readonlyProc = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"];
+  const fileMasks = ["/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug"];
+  const directoryMasks = ["/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"];
+  const automatic = {
+    "/task": ["tmpfs", "rw", "nosuid", "nodev", "noexec"], "/proc": ["proc", "rw", "nosuid", "nodev", "noexec"],
+    "/dev": ["tmpfs", "rw", "nosuid"], "/dev/pts": ["devpts", "rw", "nosuid", "noexec"],
+    "/dev/shm": ["tmpfs", "rw", "nosuid", "nodev", "noexec"], "/dev/mqueue": ["mqueue", "rw", "nosuid", "nodev", "noexec"],
+    "/sys": ["sysfs", "ro", "nosuid", "nodev", "noexec"], "/sys/fs/cgroup": ["cgroup2", "ro", "nosuid", "nodev", "noexec"],
+  };
+  const metadata = ["/etc/resolv.conf", "/etc/hostname", "/etc/hosts"];
+  const thermalMask = path => /^\/sys\/devices\/system\/cpu\/cpu(0|[1-9]\d*)\/thermal_throttle$/.test(path);
+  const permitted = new Set(["/", ...Object.keys(automatic), ...metadata, ...readonlyProc, ...fileMasks, ...directoryMasks]);
+  check(rows.every(row => permitted.has(row.target) || thermalMask(row.target)), "mount-topology");
   for (const target of ["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts"]) check(rows.some(row => row.target === target), "mount-missing");
-  check(rows.find(row => row.target === "/").options.includes("ro"), "root-not-readonly");
-  const task = rows.find(row => row.target === "/task");
-  check(task.fs === "tmpfs" && ["rw", "noexec", "nosuid", "nodev"].every(flag => task.options.includes(flag)) && task.superOptions.includes("size=2097152k"), "task-mount");
-  check(rows.find(row => row.target === "/proc").fs === "proc" && rows.find(row => row.target === "/sys/fs/cgroup").fs === "cgroup2", "proc-cgroup-mount");
-  for (const row of rows.filter(row => row.target.startsWith("/sys"))) check(row.options.includes("ro"), "sys-write");
+  const at = path => rows.find(row => row.target === path), root = at("/"), dev = at("/dev"), proc = at("/proc");
+  check(root.options.includes("ro") && root.root === "/" && ["overlay", "ext4", "xfs"].includes(root.fs), "root-not-readonly");
+  for (const row of rows.filter(row => row.target !== "/")) {
+    const parent = rows.filter(candidate => candidate.target !== row.target && containsMountPath(candidate.target, row.target)).sort((a, b) => b.target.length - a.target.length)[0];
+    check(parent && row.parentId === parent.id, "mount-parent");
+    if (automatic[row.target]) {
+      const [fs, ...flags] = automatic[row.target];
+      check(row.fs === fs && row.root === "/" && row.device.startsWith("0:") && flags.every(flag => row.options.includes(flag)), "automatic-mount");
+    } else if (metadata.includes(row.target)) {
+      check(["ext4", "xfs"].includes(row.fs) && row.options.includes("ro"), "metadata-mount");
+    } else if (readonlyProc.includes(row.target)) {
+      check(row.fs === "proc" && row.device === proc.device && row.root === row.target.slice(5) && ["ro", "nosuid", "nodev", "noexec"].every(flag => row.options.includes(flag)), "proc-readonly-mount");
+    } else if (fileMasks.includes(row.target)) {
+      // runc rootfs_linux.go maskPath binds the container's /dev/null. Its
+      // writable tmpfs mount is legitimate ONLY with this exact /dev identity.
+      check(row.fs === dev.fs && row.device === dev.device && row.root === "/null" && same([...row.options].sort(), [...dev.options].sort()) && same([...row.superOptions].sort(), [...dev.superOptions].sort()), "null-mask-mount");
+    } else {
+      // Directory masks are readonly tmpfs (MS_RDONLY), not generic /dev flags.
+      check(row.fs === "tmpfs" && row.device.startsWith("0:") && row.root === "/" && row.options.includes("ro") && row.superOptions.includes("ro") && !rows.some(other => other !== row && other.device === row.device), "directory-mask-mount");
+    }
+  }
+  const devices = Object.keys(automatic).map(path => at(path).device);
+  check(new Set(devices).size === devices.length, "automatic-mount-device-alias");
+  check(at("/task").superOptions.includes("size=2097152k"), "task-mount");
+  check(dev.superOptions.includes("size=65536k") && dev.superOptions.includes("mode=755"), "dev-mount");
+  check(at("/dev/shm").superOptions.includes("size=65536k"), "shm-mount");
   return true;
 }
 export function validateChildStatus(text, expected) {
@@ -548,10 +620,14 @@ async function hostContainerRun(report) {
       bound = await bindCgroup(target, cid);
       // Parent and target kernel mount tables correlate the daemon's exact
       // per-container metadata paths without privileged storage traversal.
+      check(await readlink("/proc/self/ns/mnt") === parentNamespaces.mnt, "parent-mount-namespace-drift");
       const parentMounts = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false);
       const metadata = validateMetadataMounts(row, target.mounts, parentMounts, daemonRoot, cid);
       const again = await processEvidence(target.pid); check(again.start === target.start && same(again.namespaces, target.namespaces) && again.cgroup === target.cgroup, "init-identity-drift"); validateTarget(again, parentNamespaces, identity);
+      validateMountFreshness(target.mounts, again.mounts);
+      check(same(bound, await bindCgroup(again, cid)), "init-cgroup-drift");
       check(same(metadata, validateMetadataMounts(row, again.mounts, parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false), daemonRoot, cid)), "daemon-metadata-drift");
+      check(await readlink("/proc/self/ns/mnt") === parentNamespaces.mnt, "parent-mount-namespace-drift");
     });
     // READY keeps init alive before compilation. Starting wait only after the
     // running PID was admitted avoids observing an as-yet-unstarted container.
