@@ -270,8 +270,8 @@ function litellmJoinFacts(at: string, body: string, operations: Operation[], acq
   };
 }
 function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
-  const prefix = "LITELLM_PROOF_V1 ", phases = new Set(["setup", "body", "catalog", "chat", "control", "join", "restore", "child_launch", "child_result", "retirement", "cleanup", "overflow"]);
-  const names = new Set(["none", ...ids]), seen = new Set<string>(); let emitted = 0, suppressed = 0, bytes = 0, overflow = false;
+  const prefix = "LITELLM_PROOF_V1 ", phases = new Set(["setup", "body", "catalog", "chat", "control", "join", "restore", "child_launch", "child_result", "retirement", "cleanup", "reporting", "overflow"]);
+  const names = new Set(["none", ...ids]), seen = new Set<string>(); let emitted = 0, ordinary = 0, suppressed = 0, bytes = 0, overflow = false, reporting = false;
   const own = (v: unknown, k: string) => { try { return v && typeof v === "object" && !isProxy(v) ? Object.getOwnPropertyDescriptor(v, k)?.value : undefined; } catch { return undefined; } };
   const fields = (v: unknown, keys: string[]) => {
     if (!v || typeof v !== "object" || isProxy(v) || Reflect.ownKeys(v).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(v, k) ?? {}, "value"))) return null;
@@ -303,9 +303,41 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   const valueKind = enumOf(["undefined", "null", "object", "primitive"]);
   const state = enumOf(["invoking", "pending", "fulfilled", "rejected", "sync_throw"]);
   const operation = enumOf(["none", "unknown", "read", "closed", "cancel", "getReader", "releaseLock", "body_cancel", "release", "native_acquisition", "guard_acquisition"]);
+  // Compact only the closed witness wire, not the observed facts. Tuple positions
+  // retain the full schema; enum and boolean codes avoid width-dependent quotas.
+  const witnessKeys = [
+    ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source"],
+    ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand"],
+  ];
+  const words = ["unknown", "undefined", "null", "object", "primitive", "invoking", "pending", "fulfilled", "rejected", "sync_throw", "release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer", "catalog", "chat", "eof", "preabort", "partial_abort", "provider_error", "product", "stream", "streamSimple", "none", "read", "closed", "cancel", "getReader", "releaseLock", "body_cancel", "release", "native_acquisition", "guard_acquisition", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "absent", "same", "foreign", "unrecognized"];
+  const caseNames = [...names];
+  function witnessWire(data: any, part: number, encode: boolean) {
+    const tuple = (v: unknown, length: number) => array(v, length, () => true);
+    const word = (v: any) => v === null ? null : encode ? words.indexOf(v) : Number.isInteger(v) && v >= 0 ? words[v] : undefined;
+    const bit = (v: any) => v === null ? null : encode ? (v ? 1 : 0) : v === 1 ? true : v === 0 ? false : undefined;
+    const map = (v: any, length: number, f: (x: any, i: number) => any) => tuple(v, length)?.map(f);
+    const original = (v: any) => v === null ? null : map(v, 10, (x, i) => i === 1 || i === 6 ? word(x) : i === 5 || i >= 7 ? bit(x) : x);
+    const signals = (v: any) => map(v, 3, row => map(row, 3, (x, i) => i === 0 ? bit(x) : i === 1 ? word(x) : x));
+    const values = encode ? witnessKeys[part].map(k => data[k]) : tuple(data, witnessKeys[part].length);
+    if (!values) return undefined;
+    const d: any = Object.fromEntries(witnessKeys[part].map((k, i) => [k, values[i]]));
+    if (part === 0) {
+      for (const k of ["at", "body", "role", "control", "api", "op", "pred", "source"]) d[k] = word(d[k]);
+      d.caseId = encode ? caseNames.indexOf(d.caseId) : Number.isInteger(d.caseId) && d.caseId >= 0 ? caseNames[d.caseId] : undefined;
+      if (d.ctx !== null) d.ctx = map(d.ctx, 8, (x, i) => i === 0 ? word(x) : i === 6 ? x : bit(x));
+    } else {
+      d.acquisition = original(d.acquisition); d.originals = map(d.originals, 3, original);
+      d.same = map(d.same, 3, bit); d.signals = map(d.signals, 3, row => map(row, 3, bit));
+      if (d.cancel !== null) d.cancel = map(d.cancel, 4, (x, i) => i === 0 ? word(x) : bit(x));
+      d.input = signals(d.input); d.output = signals(d.output); d.release = word(d.release);
+      d.locked = bit(d.locked); d.eof = bit(d.eof); d.abortOperand = word(d.abortOperand);
+    }
+    return encode ? witnessKeys[part].map(k => d[k]) : d;
+  }
   function witnessPart(value: unknown) {
     const w = fields(value, ["part", "select", "data"]); if (!w || ![0, 1].includes(w.part)) return null;
     const select = array(w.select, 2, bool); if (!select || !select.some(Boolean)) return null;
+    if (Array.isArray(w.data)) w.data = witnessWire(w.data, w.part, false);
     if (w.part === 0) {
       const d = fields(w.data, ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source"]);
       if (!d || !names.has(d.caseId) || !enumOf(["catalog", "chat", "unknown"])(d.role) || !enumOf(["eof", "preabort", "partial_abort", "provider_error", "product", "unknown"])(d.control) || !enumOf(["release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer"])(d.at)
@@ -345,7 +377,9 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       const r: any = Object.fromEntries(keys.map(k => [k, own(v, k)]));
       if (r.v !== 1 || !["sdk", "outer"].includes(r.layer) || !names.has(r.id) || !["unknown", "catalog", "chat"].includes(r.role) || !phases.has(r.phase)
         || !["undefined", "unknown", "child", "overflow"].includes(r.kind) || !(r.count === null || Number.isSafeInteger(r.count) && r.count >= 0 && r.count <= 1000000)
-        || !["UNKNOWN", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL"].includes(r.code)) return null;
+        || !["UNKNOWN", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL", "REPORT_INVALID", "REPORT_GROUP", "REPORT_QUOTA", "REPORT_WRITE", "REPORT_WORKER", "REPORT_WITNESS", "REPORT_FLUSH"].includes(r.code)) return null;
+      if (r.code.startsWith("REPORT_") && r.phase !== "reporting") return null;
+      if (r.phase === "reporting" && (r.id !== "none" || r.role !== "unknown" || !r.code.startsWith("REPORT_") || keys.length !== 8)) return null;
       if (keys.includes("join")) { if (r.phase !== "join" || !(r.join = joinFacts(r.join))) return null; }
       if (keys.includes("witness")) { if (keys.includes("join") || r.phase !== "join" || !(r.witness = witnessPart(r.witness)) || (r.witness.part === 0 && (r.id !== r.witness.data.caseId || r.role !== r.witness.data.role))) return null; }
       if (keys.includes("worker")) {
@@ -393,30 +427,65 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     return { records, envelope: { v: 1, layer: "outer", id: "none", role: "unknown", phase: "child_result", kind: "child", count: records.length,
       code: resultCode } };
   }
+  function json(value: unknown) {
+    const r = validate(value); if (!r) throw new Error("invalid LiteLLM diagnostic");
+    if (r.witness) r.witness = { ...r.witness, data: witnessWire(r.witness.data, r.witness.part, true) };
+    return JSON.stringify(r);
+  }
+  function boundary(code: string, error: unknown) {
+    const r = validate({ v: 1, layer: "outer", id: "none", role: "unknown", phase: "reporting", kind: error === undefined ? "undefined" : "unknown", count: null, code });
+    if (!r) throw new Error("invalid LiteLLM reporting boundary"); return r;
+  }
   function emit(records: unknown[], write: (s: string) => void) {
-    const valid = records.map(validate); if (valid.some(r => !r)) throw new Error("invalid LiteLLM diagnostic");
+    const errors: unknown[] = [], valid: any[] = []; let failureCode: string | undefined;
+    const failed = (code: string, error: unknown) => { errors.push(error); failureCode ??= code; };
+    for (const value of records) {
+      const r = validate(value);
+      if (r) valid.push(r); else failed("REPORT_INVALID", new Error("invalid LiteLLM diagnostic"));
+    }
     const groups = new Map<string, any[]>();
     for (const r of valid) if (r.witness) { const key = [r.layer, r.role, r.id].join("/"); const group = groups.get(key) ?? []; group.push(r); groups.set(key, group); }
-    const ordered: any[][] = [];
+    const ordered: any[][] = [], selectedGroups: boolean[] = [false, false];
     for (const group of groups.values()) {
       const unique = [...new Map(group.map(r => [JSON.stringify(r), r])).values()];
       const parts = unique.sort((a, b) => a.witness.part - b.witness.part);
       if (parts.length !== 2 || parts[0].witness.part !== 0 || parts[1].witness.part !== 1 || JSON.stringify(parts[0].witness.select) !== JSON.stringify(parts[1].witness.select)
-        || JSON.stringify(parts[0].witness.data.ids) !== JSON.stringify(parts[1].witness.data.ids)) { suppressed++; continue; }
+        || JSON.stringify(parts[0].witness.data.ids) !== JSON.stringify(parts[1].witness.data.ids)) { suppressed += group.length; failed("REPORT_GROUP", new Error("incomplete LiteLLM witness")); continue; }
+      if (parts[0].witness.select.some((v: boolean, i: number) => v && selectedGroups[i])) { suppressed += group.length; failed("REPORT_GROUP", new Error("duplicate LiteLLM witness class")); continue; }
+      for (let i = 0; i < 2; i++) selectedGroups[i] ||= parts[0].witness.select[i];
       ordered.push(parts);
     }
-    ordered.push(...valid.filter(r => r.worker).map(r => [r]), ...valid.filter(r => !r.witness && !r.worker).map(r => [r]));
+    ordered.push(...valid.filter(r => r.worker).map(r => [r]), ...valid.filter(r => !r.witness && !r.worker && r.phase === "child_result").map(r => [r]),
+      ...valid.filter(r => r.phase === "reporting").map(r => [r]), ...valid.filter(r => !r.witness && !r.worker && !["child_result", "reporting"].includes(r.phase)).map(r => [r]));
     for (const group of ordered) {
+      const reserved = group[0].phase === "child_result" || group[0].phase === "reporting";
       const key = [group[0].layer, group[0].role, group[0].id, group[0].phase, group[0].witness ? "complete_witness" : "fragment"].join("/");
-      if (seen.has(key)) continue;
-      const lines = group.map(r => `::error title=LiteLLM typed contract::${JSON.stringify(r).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
+      if (seen.has(key) || group[0].phase === "reporting" && reporting) continue;
+      let lines: string[];
+      try { lines = group.map(r => `::error title=LiteLLM typed contract::${json(r).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`); }
+      catch (error) { failed("REPORT_INVALID", error); continue; }
       const sizes = lines.map(line => new TextEncoder().encode(line).length);
-      if (sizes.some(size => size > 768) || bytes + sizes.reduce((a, b) => a + b, 0) > 8192) throw new Error("LiteLLM diagnostic quota");
-      if (emitted + group.length > 9) { suppressed += group.length; seen.add(key); continue; }
-      // Validate/reserve the whole group before writing either part. Writer failures remain hard.
-      for (let i = 0; i < lines.length; i++) { write(lines[i]); bytes += sizes[i]; emitted++; }
+      if (sizes.some(size => size > 768) || bytes + sizes.reduce((a, b) => a + b, 0) > 8192 - 768) { failed("REPORT_QUOTA", new Error("LiteLLM diagnostic quota")); continue; }
+      // Seven ordinary slots leave one helper and one reporting-failure slot.
+      if ((!reserved && ordinary + group.length > 7) || emitted + group.length > 9) { suppressed += group.length; seen.add(key); continue; }
+      // Reserve the complete pair before writing; a failed physical write is not retried.
       seen.add(key);
+      if (group[0].phase === "reporting") reporting = true;
+      for (let i = 0; i < lines.length; i++) {
+        bytes += sizes[i]; emitted++; if (!reserved) ordinary++;
+        try { write(lines[i]); } catch (error) { failed("REPORT_WRITE", error); break; }
+      }
     }
+    if (failureCode && !reporting && emitted < 9) {
+      reporting = true;
+      const line = `::error title=LiteLLM typed contract::${json(boundary(failureCode, errors[0]))}\n`;
+      const size = new TextEncoder().encode(line).length;
+      if (size <= 768 && bytes + size <= 8192 - 768) {
+        emitted++; bytes += size; try { write(line); } catch (error) { errors.push(error); }
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, "LiteLLM reporting failures");
   }
   function flush(write: (s: string) => void) {
     if (!suppressed || overflow) return; overflow = true;
@@ -424,7 +493,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const line = `::error title=LiteLLM typed contract::${JSON.stringify(r)}\n`; const size = new TextEncoder().encode(line).length;
     if (size > 768 || bytes + size > 8192) throw new Error("LiteLLM diagnostic quota"); write(line); bytes += size;
   }
-  return { prefix, own, validate, record, joined, witness, worker, parse, child, emit, flush };
+  return { prefix, own, validate, record, joined, witness, worker, parse, child, json, boundary, emit, flush };
 }
 // END shared proof functions.
 let observerGeneration = 0;
@@ -440,7 +509,14 @@ function reportSdk(phase: string, error: unknown, join?: ReturnType<typeof litel
 }
 function flushSdk() {
   if (diagnosticSuppressed) { diagnosticRecords.push(diagnostic.record("sdk", "none", "overflow", undefined, "unknown", Math.min(diagnosticSuppressed, 1000000))); diagnosticSuppressed = 0; }
-  for (const record of diagnosticRecords.splice(0, 64)) process.stdout.write(diagnostic.prefix + JSON.stringify(record) + "\n");
+  const errors: unknown[] = [];
+  for (const record of diagnosticRecords.splice(0, 64)) {
+    try { process.stdout.write(diagnostic.prefix + diagnostic.json(record) + "\n"); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) {
+    try { process.stdout.write(diagnostic.prefix + diagnostic.json(diagnostic.boundary("REPORT_FLUSH", errors[0])) + "\n"); } catch (error) { errors.push(error); }
+    raise(errors);
+  }
 }
 function remember<T extends Promise<unknown>>(kind: string, promise: T): T {
   const record: Operation = { kind, promise, state: "pending" }; operations.push(record);
@@ -617,7 +693,7 @@ afterEach(async () => {
       // Both complete parts precede old fragments; failure reporting grants no acceptance.
       diagnosticRecords.unshift(...pair); selectedWitness.drain ||= drain; selectedWitness.ownership ||= owned;
     }
-  } catch (error) { errors.push(error); }
+  } catch (error) { errors.push(error); diagnosticRecords.push(diagnostic.boundary("REPORT_WITNESS", error)); }
   try { flushSdk(); } catch (error) { errors.push(error); }
   raise(errors);
 });
