@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -397,34 +397,117 @@ test('unsupported per-version GraphQL schema is not reported as a successful com
 test('command timeout terminates a descendant CLI before recovery can proceed', async (t) => {
   mkdirSync('.artifacts', { recursive: true });
   const directory = mkdtempSync(join(process.cwd(), '.artifacts/train-timeout-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const executable = join(directory, 'pnpm'), receipt = join(directory, 'pid');
-  writeFileSync(executable, `#!${process.execPath}
-import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'inherit' });
-writeFileSync(process.env.TEST_RECEIPT, String(child.pid));
-setInterval(() => {}, 1000);
-`);
-  chmodSync(executable, 0o700);
-  await assert.rejects(command(['fixture'], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, TEST_RECEIPT: receipt }, timeout: 500 }), /timed out/);
-  const pid = Number(readFileSync(receipt, 'utf8'));
-  // close is emitted after inherited pipes close; the forced process-group kill
-  // has happened before command() rejects, not later during rollback.
+  const executable = join(directory, 'pnpm'), receipt = join(directory, 'ready'), term = join(directory, 'term'), group = join(directory, 'group');
+  // Only the parent's command timers are virtual. Process startup, signals,
+  // inherited pipes and close remain real, with independent bounded I/O waits.
+  const realTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const watchers = new Set(), waits = [];
+  const bounded = (pending, label) => new Promise((resolve, reject) => {
+    const timer = realTimeout(() => reject(new Error(`${label} did not finish`)), 5_000);
+    pending.then(value => { realClearTimeout(timer); resolve(value); }, error => { realClearTimeout(timer); reject(error); });
+  });
+  const waitReceipt = path => {
+    const pending = new Promise((resolve, reject) => {
+      let settled = false, timer, watcher;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true; realClearTimeout(timer); watcher?.close(); watchers.delete(cancel);
+        if (error) reject(error); else resolve(value);
+      };
+      const cancel = () => finish(new Error('fixture receipt wait stopped'));
+      const check = () => {
+        try { if (existsSync(path)) finish(null, readFileSync(path, 'utf8')); }
+        catch (error) { finish(error); }
+      };
+      watchers.add(cancel);
+      watcher = watch(directory, check);
+      watcher.on('error', error => finish(error));
+      timer = realTimeout(() => finish(new Error('fixture receipt deadline')), 5_000);
+      check();
+    });
+    void pending.catch(() => {}); waits.push(pending); return pending;
+  };
+  let observed, state = 'unstarted', pid, terminalObserved = false;
   const terminal = () => {
     try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return true; throw error; }
-    // Linux may retain a killed, reparented zombie until init reaps it. A PID
-    // still existing is not evidence that it can execute or mutate a deployment.
+    // A reparented Linux zombie is terminal even before init reaps it.
     if (process.platform === 'linux') {
       try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
       catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return true; throw error; }
     }
     return false;
   };
-  const deadline = Date.now() + 1_000;
-  let exited = terminal();
-  while (!exited && Date.now() < deadline) { await delay(20); exited = terminal(); }
-  // Exit is terminal. Do not re-read a zombie while Linux reaps it (or a
-  // subsequently reused PID) after already proving it cannot execute.
-  assert.equal(exited, true, 'descendant must have exited, not merely received a signal');
+  const assertTerminal = async () => {
+    if (terminalObserved) return;
+    const deadline = Date.now() + 1_000;
+    while (!terminal()) {
+      assert.ok(Date.now() < deadline, 'descendant must have exited, not merely received a signal');
+      await new Promise(resolve => realTimeout(resolve, 20));
+    }
+    terminalObserved = true;
+  };
+  t.after(async () => {
+    let joined = !observed;
+    try {
+      if (observed) {
+        if (state === 'pending') {
+          // Failure-prefix cleanup cannot count as the passing close proof.
+          t.mock.timers.tick(500); t.mock.timers.tick(5_000);
+          if (existsSync(group)) {
+            const ownedGroup = Number(readFileSync(group, 'utf8'));
+            assert.ok(Number.isSafeInteger(ownedGroup) && ownedGroup > 0);
+            try { process.kill(-ownedGroup, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+          }
+        }
+        await bounded(observed, 'original command close'); joined = true;
+        if (pid === undefined && existsSync(receipt)) pid = JSON.parse(readFileSync(receipt, 'utf8')).pid;
+        if (pid !== undefined) {
+          assert.ok(Number.isSafeInteger(pid) && pid > 0);
+          await assertTerminal();
+        }
+      }
+    } finally {
+      for (const cancel of [...watchers]) cancel();
+      await Promise.allSettled(waits);
+      if (joined) {
+        t.mock.timers.reset();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+  const descendant = `const { renameSync, writeFileSync } = require('node:fs');
+const publish = (path, value) => { writeFileSync(path + '.tmp', value); renameSync(path + '.tmp', path); };
+process.on('SIGTERM', () => publish(process.env.TEST_TERM, String(process.pid)));
+setInterval(() => {}, 1000);
+publish(process.env.TEST_RECEIPT, JSON.stringify({ pid: process.pid, parent: process.ppid }));`;
+  writeFileSync(executable, `#!${process.execPath}
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.TEST_GROUP, String(process.pid));
+spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'inherit' });
+setInterval(() => {}, 1000);
+`);
+  chmodSync(executable, 0o700);
+  const ready = waitReceipt(receipt); // Watch before launching the original command.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  state = 'pending';
+  const original = command(['fixture'], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, TEST_RECEIPT: receipt, TEST_TERM: term, TEST_GROUP: group }, timeout: 500 });
+  observed = original.then(value => { state = 'fulfilled'; return { value }; }, error => { state = 'rejected'; return { error }; });
+  const started = JSON.parse(await ready); pid = started.pid;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(started.parent, Number(readFileSync(group, 'utf8')));
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(499);
+  assert.equal(state, 'pending'); assert.equal(existsSync(term), false);
+  const terminated = waitReceipt(term);
+  t.mock.timers.tick(1);
+  assert.equal(Number(await terminated), pid);
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(4_999);
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(1);
+  const result = await bounded(observed, 'forced original command close');
+  assert.equal(state, 'rejected'); assert.match(result.error.message, /timed out/);
+  await assertTerminal(); // Recovery is permitted only after this original close proof.
+  t.diagnostic('descendant READY and TERM witnessed; original command closed; descendant terminal before recovery');
 });
