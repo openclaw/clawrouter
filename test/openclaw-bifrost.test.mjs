@@ -107,18 +107,84 @@ export function bifrostAnnotationEmitter(write){
   assert.ok(Buffer.byteLength(line)<=768&&bytes+Buffer.byteLength(line)<=8192&&count<32,"Bifrost annotation quota exceeded");
   bytes+=Buffer.byteLength(line);count++;write(line);};
 }
+// Reserve the complete child group before optional parent/native records. The
+// existing wire limits still apply; joined writes are not platform atomicity.
+export function createBifrostParentRelay(write){
+ const evidence=[],optional=[],failures=[];let closed=false,evidenceInvalid=false;
+ const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
+ const snapshot=value=>{
+  let nodes=0;
+  const copy=(v,depth)=>{
+   assert.ok(depth<=16&&++nodes<=512,"parent record exceeds bounds");
+   if(v===null||typeof v==="boolean")return v;
+   if(typeof v==="number"){assert.ok(Number.isFinite(v));return v;}
+   if(typeof v==="string"){assert.ok(Buffer.byteLength(v)<=1024);return v;}
+   assert.ok(v&&typeof v==="object"&&!types.isProxy(v),"exotic parent record");
+   const descriptors=Object.getOwnPropertyDescriptors(v),array=Array.isArray(v),out=array?[]:{};
+   if(array){const size=descriptors.length?.value;assert.ok(Number.isSafeInteger(size)&&size>=0&&size<=512);
+    assert.deepEqual(Reflect.ownKeys(descriptors).sort(),["length",...Array.from({length:size},(_,i)=>String(i))].sort());}
+   for(const key of Reflect.ownKeys(descriptors)){
+    assert.equal(typeof key,"string");const d=descriptors[key];assert.ok(Object.hasOwn(d,"value"),"parent record accessor");
+    if(array&&key==="length")continue;
+    assert.ok(d.enumerable&&key!=="__proto__","invalid parent field");out[key]=copy(d.value,depth+1);
+   }
+   return out;
+  };
+  return copy(value,0);
+ };
+ return Object.freeze({
+  record(value){
+   if(closed)throw Error("parent record after output seal");
+   let evidenceInput=true;
+   try{
+    const record=snapshot(value),encoded=JSON.stringify(record);
+    evidenceInput=record.evidence===true;
+    if(Object.hasOwn(record,"api"))bifrostNativeDiagnosticRecords({stdout:"BIFROST_NATIVE_CONTROL "+encoded});
+    else validateBifrostCheckpoint(record);
+    // Store immutable bytes, never a later-mutated producer record.
+    const group=record.evidence===true?evidence:optional;
+    assert.ok(group.length<(group===evidence?5:32),"parent record capacity exceeded");group.push(encoded);
+   }catch(error){failures.push(error);if(evidenceInput)evidenceInvalid=true;}
+  },
+  async flush(){
+   if(closed)throw Error("duplicate parent output seal");closed=true;
+   let valid=!evidenceInvalid;
+   try{if(evidence.length)bifrostCheckpointRecords({stdout:evidence.map(v=>"BIFROST_CHECKPOINT "+v).join("\n")});}
+   catch(error){failures.push(error);valid=false;}
+   if(valid){
+    let pending;const emit=bifrostAnnotationEmitter(line=>{pending=write(line);assert.ok(pending instanceof Promise,"unjoined parent output");});
+    for(const encoded of [...evidence,...optional]){
+     try{emit(JSON.parse(encoded));await pending;}
+     catch(error){failures.push(error);break;}
+    }
+   }
+   if(failures.length===1)throw failures[0];
+   if(failures.length)throw new AggregateError(failures,"parent diagnostic delivery failed");
+  },
+ });
+}
+export function bifrostJoinedOutput(output){
+ const write=output.write;
+ return line=>new Promise((resolve,reject)=>{
+  let returned=false,called=false,callbackError;
+  const settle=()=>callbackError==null?resolve():reject(callbackError);
+  try{Reflect.apply(write,output,[line,error=>{called=true;callbackError=error;if(returned)settle();}]);}
+  catch(error){reject(called&&callbackError!=null?new AggregateError([error,callbackError],"output invocation and callback failed"):error);return;}
+  returned=true;if(called)settle();
+ });
+}
 export async function withBifrostNativeDiagnostics(run,emit){
  try{return await run();}catch(error){const reporting=[];
   for(const collect of [bifrostCheckpointRecords,bifrostNativeDiagnosticRecords])try{for(const record of collect(error))emit(record);}catch(reportError){reporting.push(reportError);}
   if(reporting.length)throw new AggregateError([error,...reporting],"native child and diagnostic delivery failed");throw error;}
 }
-export async function runBifrostReported(body,cleanups,emit){
+export async function runBifrostReported(body,cleanups,emit,flush=()=>{}){
  const reporter=bifrostCheckpointFunctions().createBifrostCheckpointReporter("outer",emit);
  reporter.mark(null,"setup","enter");reporter.flush(null);
  return finishBifrostOwned(()=>body(reporter),[...cleanups.map(cleanup=>()=>cleanup(reporter)),async()=>{
   await reporter.drain();reporter.flush(null);reporter.finish();
   if(reporter.failures.length)throw new AggregateError(reporter.failures,"Bifrost diagnostic observation failed");
- }]);
+ },flush]);
 }
 
 export async function finishBifrostOwned(body, cleanups) {
@@ -818,6 +884,89 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
   assert.ok(proof.readers.every(r=>r.unlocks===1&&!r.locked));
   assert.equal(proof.charged,0);assert.equal(proof.source.held,0);assert.equal(proof.source.expired,0);
   for(const call of proof.calls){assert.equal(call.noCaller,true);assert.equal(call.redirect,'manual');assert.ok(call.original||call.rotated);}
+}
+
+export async function bifrostParentRelayInertCases(assert){
+ const passed=[],run=async(name,fn)=>{await fn();passed.push(name);};
+ const outcome=async p=>{try{return {failed:false,value:await p};}catch(error){return {failed:true,error};}};
+ const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
+ const f=bifrostCheckpointFunctions(),prefix="::notice title=Bifrost closed diagnostic::";
+ const group=()=>f.bifrostCaseEvidence(2,{transports:[],acquisitions:[],originals:[],caller:{},failures:[],syncFailures:[],observerFailures:[],evidenceRestoreFailures:0,evidenceRestoreUndefined:0},undefined,false,[]);
+ const coarse=i=>({v:1,pin:bifrostPin,lane:"outer",case:i,phase:"setup",state:"fulfilled",defined:null,acq:null,op:null,count:0});
+ const parse=line=>{assert.ok(line.startsWith(prefix));assert.ok(Buffer.byteLength(line)<=768);return JSON.parse(line.slice(prefix.length));};
+ const parts=records=>records.filter(r=>r.evidence===true).map(r=>r.part);
+ const expected=["identity","reasons","order","retirement","postlude"];
+ const child=()=>{const records=[],r=f.createBifrostCheckpointReporter("sdk",value=>records.push(value),true);r.mark(null,"module","fulfilled");r.flush(null);for(let i=0;i<3;i++){r.mark(i,"setup","fulfilled");r.flush(i);}r.evidence(group());r.finish();return {stdout:records.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")};};
+ const pipeline=(relay,primary,cleanups=[])=>runBifrostReported(async report=>{
+  await report.observe(null,"setup",()=>Promise.resolve(),undefined,[]);report.mark(null,"child","enter");report.flush(null);
+  await withBifrostNativeDiagnostics(()=>report.observe(null,"child",()=>Promise.reject(primary),undefined,[]),relay.record);
+ },cleanups,relay.record,relay.flush);
+ await run("actual parent pipeline reserves five notices under a ten-notice sink",async()=>{
+  const accepted=[],lines=[];const relay=createBifrostParentRelay(line=>{lines.push(line);if(lines.length<=10)accepted.push(parse(line));return Promise.resolve();}),primary=child();
+  const result=await outcome(pipeline(relay,primary));assert.ok(result.failed);assert.equal(result.error,primary);
+  assert.deepEqual(parts(accepted),expected);assert.deepEqual(lines.slice(0,5).map(line=>parse(line).part),expected);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+ });
+ await run("original cleanup joins before any output",async()=>{
+  const held=deferred(),entered=deferred(),lines=[],primary=child(),relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});
+  const work=outcome(pipeline(relay,primary,[()=>{entered.resolve();return held.promise;}]));await entered.promise;assert.equal(lines.length,0);held.resolve();assert.equal((await work).error,primary);assert.deepEqual(parts(lines.map(parse)),expected);
+ });
+ await run("first output completion is held and joined before later writes",async()=>{
+  const held=deferred(),entered=deferred(),lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);if(lines.length===1){entered.resolve();return held.promise;}return Promise.resolve();});group().forEach(relay.record);
+  let complete=false;const pending=relay.flush().then(()=>{complete=true;});await entered.promise;assert.equal(lines.length,1);assert.equal(complete,false);held.resolve();await pending;assert.equal(lines.length,5);
+ });
+ for(const error of [undefined,{}])await run("original child cleanup and output failures independent "+(error===undefined?"undefined":"defined"),async()=>{
+  const primary=child(),cleanup={},relay=createBifrostParentRelay(()=>Promise.reject(error));const result=await outcome(pipeline(relay,primary,[()=>{throw cleanup;}]));
+  assert.ok(result.failed);assert.deepEqual(result.error.errors,[primary,cleanup,error]);
+ });
+ for(const error of [undefined,{}])await run("synchronous output failure preserved "+(error===undefined?"undefined":"defined"),async()=>{
+  let writes=0;const relay=createBifrostParentRelay(()=>{writes++;throw error;});group().forEach(relay.record);const result=await outcome(relay.flush());assert.ok(result.failed);assert.equal(result.error,error);assert.equal(writes,1);
+ });
+ await run("joined native writer preserves receiver arguments and backpressure callback",async()=>{
+  let callback,calls=0,completed=false;const output={write(line,done){assert.equal(this,output);assert.equal(line,"closed line");assert.equal(arguments.length,2);calls++;callback=done;return false;}};
+  const work=bifrostJoinedOutput(output)("closed line").then(()=>{completed=true;});await Promise.resolve();assert.equal(completed,false);assert.equal(calls,1);callback();await work;
+ });
+ await run("output callback error is an independent rejection",async()=>{
+  const error={},write=bifrostJoinedOutput({write(_line,callback){callback(error);return true;}});const result=await outcome(write("closed line"));assert.ok(result.failed);assert.equal(result.error,error);
+ });
+ await run("synchronous callback success cannot mask later undefined throw",async()=>{
+  const result=await outcome(bifrostJoinedOutput({write(_line,callback){callback();throw undefined;}})("closed line"));assert.ok(result.failed);assert.equal(result.error,undefined);
+ });
+ await run("invocation and callback errors both survive",async()=>{
+  const callback={},result=await outcome(bifrostJoinedOutput({write(_line,done){done(callback);throw undefined;}})("closed line"));assert.ok(result.failed);assert.deepEqual(result.error.errors,[undefined,callback]);
+ });
+ await run("partial writer failure remains explicit with no optional continuation",async()=>{
+  const error={},lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return lines.length===3?Promise.reject(error):Promise.resolve();});relay.record(coarse(0));group().forEach(relay.record);const result=await outcome(relay.flush());assert.ok(result.failed);assert.equal(result.error,error);assert.equal(lines.length,3);assert.ok(lines.every(line=>parse(line).evidence));assert.throws(()=>bifrostCheckpointRecords({stdout:lines.map(line=>"BIFROST_CHECKPOINT "+JSON.stringify(parse(line))).join("\n")}));
+ });
+ for(const [name,change]of [
+  ["missing part",g=>g.slice(0,4)],["duplicate part",g=>[...g,g[0]]],["foreign case",g=>g.map((r,i)=>i===1?{...r,case:3}:r)],
+  ["conflicting completeness",g=>g.map((r,i)=>i===1?{...r,complete:!r.complete}:r)],["foreign version",g=>g.map((r,i)=>i===1?{...r,v:2}:r)],["foreign pin",g=>g.map((r,i)=>i===1?{...r,pin:"foreign"}:r)],
+ ])await run("invalid group emits no evidence: "+name,async()=>{const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});change(group()).forEach(relay.record);assert.ok((await outcome(relay.flush())).failed);assert.equal(lines.length,0);});
+ await run("optional saturation cannot displace the reserved group",async()=>{
+  const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});for(let i=0;i<32;i++)relay.record(coarse(i));group().forEach(relay.record);const result=await outcome(relay.flush());assert.ok(result.failed);assert.deepEqual(lines.slice(0,5).map(line=>parse(line).part),expected);assert.ok(lines.length<=32);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+ });
+ await run("capture stores immutable bytes",async()=>{
+  const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();}),g=group();g.forEach(relay.record);g[0].pin="foreign";await relay.flush();assert.equal(parse(lines[0]).pin,bifrostPin);
+ });
+ for(const kind of ["accessor","proxy","sparse","array extra"] )await run("reject exotic record without getter: "+kind,async()=>{
+  let touched=0;const g=group();if(kind==="accessor")Object.defineProperty(g[0],"pin",{get(){touched++;throw undefined;}});
+  if(kind==="proxy")g[0]=new Proxy(g[0],{ownKeys(){touched++;throw undefined;}});
+  if(kind==="sparse")g[1].readSignals=new Array(3);
+  if(kind==="array extra")g[1].readSignals.extra=1;
+  const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});g.forEach(relay.record);assert.ok((await outcome(relay.flush())).failed);assert.equal(touched,0);assert.equal(lines.length,0);
+ });
+ await run("no evidence keeps original optional bytes and order",async()=>{
+  const input=Array.from({length:32},(_,i)=>coarse(i)),expected=[],actual=[];const direct=bifrostAnnotationEmitter(line=>expected.push(line));input.forEach(direct);
+  const relay=createBifrostParentRelay(line=>{actual.push(line);return Promise.resolve();});input.forEach(relay.record);await relay.flush();assert.deepEqual(actual,expected);assert.ok((await outcome(relay.flush())).failed);assert.throws(()=>relay.record(coarse(2)));assert.equal(actual.length,32);
+ });
+ await run("synchronous boolean is not joined output completion",async()=>{
+  const relay=createBifrostParentRelay(()=>false);group().forEach(relay.record);assert.ok((await outcome(relay.flush())).failed);
+ });
+ await run("maximum transport postlude stays inside unchanged command and total caps",async()=>{
+  const g=group(),r=g[4];r.transport=[4,Array(8).fill(16),Array(8).fill(1000000),[63,16,16,16,7,7]];
+  r.control=Array.from({length:6},()=>[3,false,1000000,1000000,1000000]);r.validated=true;r.producer=[false,Array.from({length:4},(_,i)=>[i,3,false]),...Array(7).fill(1000000)];r.router=Array.from({length:4},()=>[3,false]);r.usage=[true,1000000,1000000];
+  const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});g.forEach(relay.record);await relay.flush();assert.deepEqual(parts(lines.map(parse)),expected);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+ });
+ return passed;
 }
 
 export async function bifrostDemandProducerInertCases(assert, source) {
@@ -1615,6 +1764,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   await build({stdin:{contents:fixture,sourcefile:"bifrost-sdk.ts",loader:"ts"},write:false,format:"esm",platform:"node",target:"node24",logLevel:"silent"});
  });
 
+ test("Bifrost parent reserves complete groups and joins output (inert)",async()=>{assert.equal((await bifrostParentRelayInertCases(assert)).length,27);});
  test("Bifrost SDK diagnostic relay retains only closed records and preserves original failure",async()=>{
   const r={v:1,pin:bifrostPin,api:"stream",role:"partial",qualified:true,vector:true,worker:false,restored:true,rejected:3,pending:0};
   const child=Object.assign(new Error("unused"),{stdout:"BIFROST_NATIVE_CONTROL "+JSON.stringify(r)+"\n"}),cleanup={},outer=new AggregateError([child,cleanup],"unused");let getter=0;
@@ -1736,7 +1886,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   });
   test("registered Bifrost catalog and public inference through Worker SQLite", {skip:!process.env.CLAWROUTER_OPENCLAW_CHECKOUT,timeout:300000},async t=>{
     let f;const created=[],executionCases=[...bifrostControls,...bifrostCases,...bifrostProgressCases];
-    const emit=bifrostAnnotationEmitter(line=>process.stdout.write(line));
+    const relay=createBifrostParentRelay(bifrostJoinedOutput(process.stdout)),emit=relay.record;
     await runBifrostReported(async report=>{
       f=await report.observe(null,"setup",startBifrostFixture,undefined,[]);
       for(const [index,row]of executionCases.entries()){await report.observe(index,"case_setup",f.setup,f,[row]);created.push(row);}
@@ -1764,6 +1914,6 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
       report.mark(index,"accounting","fulfilled");
       }catch(error){report.mark(index,"accounting","rejected",error);report.flush(index);throw error;}
       });
-    }),report=>f?report.observe(null,"cleanup",f.close,f,[]):undefined],emit);
+    }),report=>f?report.observe(null,"cleanup",f.close,f,[]):undefined],emit,relay.flush);
   });
 }

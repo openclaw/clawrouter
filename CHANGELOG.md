@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Reserve complete Bifrost diagnostic groups before optional parent records and join output completion without changing native failure acceptance.
+
 - Bound Bifrost partial-fixture demand to nonterminal SSE comments before holding, retaining the original cancellation lifetime, escape deadline and strict retirement/accounting checks.
 
 - Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
