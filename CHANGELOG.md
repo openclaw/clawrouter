@@ -796,7 +796,7 @@
 - Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
 - Providers: qualify eight frozen GMI Chat identities and credential-bound model discovery, with real Worker grant, replay, usage and cancellation fixtures.
 - Verify the registered GMI client, strict keyed discovery and both reasoning wrappers through Worker/SQLite, preserving optional organization binding and ordinary Bearer credentials.
-- Define bodyless native Baseten, Arcee and Novita catalog routes with original managed-key authority, preserving inference cards and unknown facts while runtime/client activation remains separately qualified.
+- Activate bodyless Baseten, Arcee and Novita catalog declarations in the shipping snapshot with real Worker/SQLite coverage, preserving inference cards and unknown facts; post-read authority qualification and actual client proof remain separate.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.

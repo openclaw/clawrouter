@@ -30,35 +30,40 @@ namespace from Chat discovery. Missing prices/limits stay absent; observed units
 are neither converted nor promoted to model-card prices or serving entitlement.
 The existing zero-inference-cost metadata operation does not make inference free.
 
-## Qualified source and remaining integration
+## Shipping activation and local evidence
 
-[PR751](https://github.com/openclaw/clawrouter/pull/751), qualified squash
-`752a16c82fd242b71d2ddeea03c39fc46d90f8a6`, supplies the actual private dispatch
-and owner checks. This declaration uses frozen qualified base
-`fa12bfab595f438a8abb61fb95d3cd2347936552`, which contains that squash and the
-workerd-compatible manual-redirect factories from
-[PR794](https://github.com/openclaw/clawrouter/pull/794). All current Baseten,
-Arcee and Novita cards, prices and inference blocks remain byte-identical to
-that base. No old card set is restored.
+The generated snapshot now includes these three declarations. The other 84
+provider records, model index and unrelated capability-index entries remain
+identical to the frozen parent. Only three discovery capability entries are added.
+Existing Chat endpoints, model cards, prices and authentication declarations
+remain unchanged. No snapshot row is replaced by a runtime test injection.
+
+The cases run the actual Worker under the locked Workerd runtime with real
+SQLite Durable Objects. They cover native and manifest GETs, empty inventory,
+caller override rejection, original-grant revocation and rotation, redirect
+refusal, exact upstream destinations, filtered IDs and zero-cost metadata
+settlement. The queue sink explicitly ingests original events into the real
+UsageLedger; this is not a hosted queue-delivery claim. Original fetch, response
+read, cancellation, reader-closed and Worker continuation outcomes are joined
+independently before fixture disposal.
+
+## Publication-authority witness
+
+A bounded Baseten response delivers a nonempty JSON prefix, then the fixture
+narrows the actual durable caller policy to an empty model allowlist before
+completing the original upstream response. The current runtime still returns
+HTTP 200 with the previously allowed model. Its pre-dispatch owner check does
+not refresh the policy after the complete private response is read. The witness
+records this behavior; it does not treat a successful transport or zero-cost
+receipt as proof of current publication authority.
+
+The existing [runtime contract](keyed-model-discovery-runtime.md) promises a
+fresh owner/caller check immediately before dispatch. The stronger post-read
+publication requirement needs an explicit runtime review before this activation
+is published. No runtime change, new revocation guarantee or vulnerability
+cause is claimed here.
 
 The existing contracts are [Baseten](baseten-models-schema.md),
-[Arcee](arcee-models-schema.md), [Novita](novita-models-schema.md) and the
-[shared runtime](keyed-model-discovery-runtime.md). No new schema or codec is
-introduced. The additive Novita hunk preserves the frozen Chat cards already
-present in this qualified base; this branch neither copies nor replaces them.
-
-The actual source4 factory correction and common private-authority runtime are
-qualified. This declaration adds no runtime logic. Source6 retains the existing
-serialized snapshot/composed queue after
-[PR799](https://github.com/openclaw/clawrouter/pull/799). Source2 retains actual
-client route selection and unknown-fact materialization; the accepted handoff
-is not client execution or completed E01 parity. No snapshot is generated here.
-
-The new cases compile the actual declarations and exercise native/manifest
-Worker dispatch, original credentials, policy filtering, empty inventories,
-caller override denial, revocation and decision exclusion through the real
-readers and existing Worker/SQLite fixture. All 19 cases remain authored but
-unrun locally because this retained checkout has no qualified dependencies.
-Syntax, byte-preservation and privacy checks pass; all-manifest validation and
-hosted final-head checks remain required. Node fixture execution would not by
-itself prove workerd constructor compatibility.
+[Arcee](arcee-models-schema.md) and [Novita](novita-models-schema.md). Registered
+OpenClaw client execution remains separate and unrun by this declaration test;
+client defaults must not become vendor price, context or entitlement facts.
