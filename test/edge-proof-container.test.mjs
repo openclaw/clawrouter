@@ -464,7 +464,7 @@ test("internal build actual shell markers preserve both RUN sequences and all or
 test("internal build shell entry precedes command substitution and keeps argv HOME and failure priority", async () => {
   const [shell] = await actualStageShells();
   const substitution = harmlessShell(shell + 'proof_op() { test "$(printf "SUBSTITUTION\\n" >&3; printf expected)" = expected; }; edge_stage node_version proof_op 3>&1');
-  assert.equal(substitution.status, 0); const lines = substitution.stdout.trimEnd().split("\n"); assert.match(lines[0], /"event":"entered"/); assert.equal(lines[1], "SUBSTITUTION"); assert.match(lines[2], /"event":"terminal","status":0/);
+  assert.equal(substitution.status, 0); const lines = substitution.stdout.trimEnd().split("\n").filter(Boolean); assert.match(lines[0], /"event":"entered"/); assert.equal(lines[1], "SUBSTITUTION"); assert.match(lines[2], /"event":"terminal","status":0/);
   for (const [subcommand, expectedStatus] of [["printf expected; exit 29", 0], ["printf different; exit 0", 1]]) {
     const result = harmlessShell(shell + `proof_op() { test "$( ${subcommand} )" = expected; }; edge_stage node_version proof_op`);
     assert.equal(result.status, expectedStatus); assert.equal(JSON.parse(result.stdout.trimEnd().split("\n").at(-1).slice("EDGE_BUILD_STAGE_V1 ".length)).status, expectedStatus);
@@ -487,8 +487,8 @@ test("internal build parser refuses discarded tails despite complete flags and v
   const splitUtf8 = structuredClone(original); splitUtf8.stderr = "\ufffd\ufffd"; splitUtf8.outputSummary.stderr = { bytes: 2, sha256: createHash("sha256").update(Buffer.from([0xc3, 0xa9])).digest("hex"), complete: true }; assert.equal(parseImageBuildStages(splitUtf8, stageIdentity).reason, "capture_mismatch");
 });
 test("internal build parser rejects echoed source foreign duplicate reordered ANSI and malformed frames", async () => {
-  const original = await actualStageCapture("node_version"), lines = original.stdout.trimEnd().split("\n");
-  const invalid = ["Step 1 : RUN printf '" + lines[0] + "'\n", lines.concat(lines[1]).join("\n") + "\n", [...lines].reverse().join("\n") + "\n", original.stdout.replace(other, hex), original.stdout.replace(hex, other), original.stdout.replace('"stage":"node_version"', '"stage":"foreign"'), "\x1b[31m" + original.stdout, original.stdout.replace('"v":1', '"v":1,"v":1'), original.stdout.replace('"seq":1', '"seq":99'), original.stdout.replace('"event":"entered"', '"event":"foreign"')];
+  const original = await actualStageCapture("node_version"), lines = original.stdout.trimEnd().split("\n").filter(Boolean);
+  const invalid = ["Step 1 : RUN printf '" + lines[0] + "'\n", lines.concat(lines[1]).join("\n") + "\n", [...lines].reverse().join("\n") + "\n", original.stdout.replace(other, hex), original.stdout.replace(hex, other), original.stdout.replace('"stage":"node_version"', '"stage":"foreign"'), original.stdout.replace("EDGE_BUILD", "\x1b[31mEDGE_BUILD"), original.stdout.replace('"v":1', '"v":1,"v":1'), original.stdout.replace('"seq":1', '"seq":99'), original.stdout.replace('"event":"entered"', '"event":"foreign"')];
   for (const stdout of invalid) { const row = parseImageBuildStages(capturedStageResult(stdout), stageIdentity); assert.equal(row.reason, "invalid"); assert.equal(row.stage, null); assert.equal(row.status, null); validateContainerDiagnostic(row); }
   assert.equal(parseImageBuildStages(capturedStageResult("", original.stdout), stageIdentity).reason, "no_records");
   assert.equal(parseImageBuildStages(capturedStageResult(lines[0] + "\n"), stageIdentity).reason, "incomplete");
@@ -507,4 +507,58 @@ test("internal build observations cannot override original failure and reserve t
   const failedReport = createContainerDiagnostics(); failedReport.internal = () => { throw undefined; };
   await assert.rejects(observeImageBuild(() => original, () => {}, () => {}, failedReport, stageIdentity), error => error instanceof AggregateError && error.errors[0] instanceof AggregateError && error.errors[1] === undefined);
   const unknown = parseImageBuildStages({}, stageIdentity); for (const change of [r => r.stage = "pnpm_bootstrap", r => r.status = 1, r => r.records = 0, r => r.message = "private", r => r.reason = "foreign"]) { const invalid = { ...unknown }; change(invalid); assert.throws(() => validateContainerDiagnostic(invalid)); }
+});
+
+async function actualMarkerFormatter() {
+  const source = await readFile(new URL("../config/edge-proof/Dockerfile", import.meta.url), "utf8");
+  const formats = [...source.matchAll(/printf '([^']+)' 'EDGE_BUILD_' 'STAGE_V1'/g)].map(match => match[1]);
+  assert.equal(formats.length, 2); assert.equal(formats[0], formats[1]);
+  const format = formats[0]; assert.ok(format.startsWith("\\n%s%s ") && format.endsWith("\\n"));
+  assert.ok(!source.includes("EDGE_BUILD_STAGE_V1"));
+  assert.ok(!format.replaceAll("%s", "").replaceAll("\\n", "").includes("%"));
+  // Evaluate only the frozen printf format's %s and newline conversions. No
+  // shell, build command, Docker renderer or process marker runs in these tests.
+  return (seq, stage, event, status, legacy = false) => {
+    const values = ["EDGE_BUILD_", "STAGE_V1", other, hex, String(seq), stage, event, String(status)]; let index = 0;
+    const text = (legacy ? format.slice(2) : format).replaceAll("\\n", "\n").replace(/%s/g, () => values[index++]);
+    assert.equal(index, values.length); return text;
+  };
+}
+test("marker delimiter actual formats separate prior output without changing candidate bytes", async () => {
+  const format = await actualMarkerFormatter();
+  for (const [prior, legacyReason] of [["", "validated_failure"], ["no-final-newline", "invalid"], ["prior-CR\r", "invalid"], ["first\nlast", "invalid"], ["first\nlast\n", "validated_failure"]]) {
+    const current = format(1, "node_version", "entered", null) + prior + format(2, "node_version", "terminal", 23);
+    const old = format(1, "node_version", "entered", null, true) + prior + format(2, "node_version", "terminal", 23, true);
+    assert.equal(parseImageBuildStages(capturedStageResult(old), stageIdentity).reason, legacyReason);
+    const result = parseImageBuildStages(capturedStageResult(current), stageIdentity);
+    assert.equal(result.reason, "validated_failure"); assert.equal(result.status, 23); assert.equal(result.records, 2);
+  }
+  for (const status of [0, 1, 23, 127, 255]) {
+    const current = format(2, "node_version", "terminal", status), old = format(2, "node_version", "terminal", status, true);
+    assert.equal(current, "\n" + old); assert.ok(current.endsWith("\n") && !current.startsWith("\n\n"));
+  }
+});
+test("marker delimiter keeps inter-RUN order and strict malformed foreign control and capture rejection", async () => {
+  const format = await actualMarkerFormatter();
+  const rows = imageBuildStages.map((stage, i) => format(i * 2 + 1, stage, "entered", null) + format(i * 2 + 2, stage, "terminal", 0));
+  const text = rows.slice(0, 8).join("") + "synthetic inter-RUN metadata without final LF" + rows.slice(8).join("");
+  assert.equal(parseImageBuildStages(capturedStageResult(text, "", 0), stageIdentity).reason, "complete");
+  const entry = format(1, "node_version", "entered", null), terminal = format(2, "node_version", "terminal", 23), valid = entry + terminal;
+  for (const invalid of [valid.replace(other, hex), valid.replace('"stage":"node_version"', '"stage":"foreign"'), valid.replace('"seq":1', '"seq":2'), valid.replace('"v":1', '"v":1,"v":1'), valid.replace('"status":23', '"status":'), entry + terminal.replace("EDGE_BUILD", "\x1b[31mEDGE_BUILD"), valid + terminal]) {
+    assert.equal(parseImageBuildStages(capturedStageResult(invalid), stageIdentity).reason, "invalid");
+  }
+  const truncated = capturedStageResult(valid); truncated.stdout = entry;
+  assert.equal(parseImageBuildStages(truncated, stageIdentity).reason, "capture_mismatch");
+  const stderrTail = capturedStageResult(valid, "complete tail"); stderrTail.stderr = "complete";
+  assert.equal(parseImageBuildStages(stderrTail, stageIdentity).reason, "capture_mismatch");
+});
+test("marker delimiter missing reporter output stays unknown and independent report failure preserves original status", async () => {
+  const format = await actualMarkerFormatter(), entry = format(1, "node_version", "entered", null);
+  for (const status of [23, 70, 127]) {
+    const original = capturedStageResult(entry, "", status), report = createContainerDiagnostics(); let reached = false;
+    const parsed = parseImageBuildStages(original, stageIdentity); assert.equal(parsed.reason, "incomplete"); assert.equal(parsed.stage, null); assert.equal(parsed.status, null);
+    report.internal = () => { throw undefined; };
+    await assert.rejects(observeImageBuild(() => original, () => { reached = true; }, () => { reached = true; }, report, stageIdentity), error => error instanceof AggregateError && error.errors[0] instanceof AggregateError && error.errors[1] === undefined);
+    assert.equal(reached, false); assert.equal(original.code, status); assert.equal(report.records[0].exit, status);
+  }
 });

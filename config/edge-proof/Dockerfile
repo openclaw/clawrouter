@@ -8,7 +8,7 @@ ARG CONTEXT_HASH
 ARG TASK_NONCE
 ENV PNPM_HOME=/usr/local/share/pnpm
 RUN edge_seq=0; \
-    edge_emit() { printf '%s%s {"v":1,"context":"%s","nonce":"%s","seq":%s,"stage":"%s","event":"%s","status":%s}\n' 'EDGE_BUILD_' 'STAGE_V1' "$CONTEXT_HASH" "$TASK_NONCE" "$edge_seq" "$1" "$2" "$3"; }; \
+    edge_emit() { printf '\n%s%s {"v":1,"context":"%s","nonce":"%s","seq":%s,"stage":"%s","event":"%s","status":%s}\n' 'EDGE_BUILD_' 'STAGE_V1' "$CONTEXT_HASH" "$TASK_NONCE" "$edge_seq" "$1" "$2" "$3"; }; \
     edge_stage() { edge_name=$1; shift; edge_seq=$((edge_seq+1)); edge_emit "$edge_name" entered null || return 70; if "$@"; then edge_status=0; else edge_status=$?; fi; edge_seq=$((edge_seq+1)); if edge_emit "$edge_name" terminal "$edge_status"; then :; elif [ "$edge_status" -eq 0 ]; then return 70; fi; return "$edge_status"; }; \
     node_version() { test "$(/usr/local/bin/node --version)" = v24.22.1; }; \
     node_abi() { test "$(/usr/local/bin/node -p 'process.versions.modules')" = 137; }; \
@@ -30,7 +30,7 @@ COPY --chown=${HOST_UID}:${HOST_GID} input/ /opt/edge-input/
 USER ${HOST_UID}:${HOST_GID}
 WORKDIR /opt/edge-input
 RUN edge_seq=16; \
-    edge_emit() { printf '%s%s {"v":1,"context":"%s","nonce":"%s","seq":%s,"stage":"%s","event":"%s","status":%s}\n' 'EDGE_BUILD_' 'STAGE_V1' "$CONTEXT_HASH" "$TASK_NONCE" "$edge_seq" "$1" "$2" "$3"; }; \
+    edge_emit() { printf '\n%s%s {"v":1,"context":"%s","nonce":"%s","seq":%s,"stage":"%s","event":"%s","status":%s}\n' 'EDGE_BUILD_' 'STAGE_V1' "$CONTEXT_HASH" "$TASK_NONCE" "$edge_seq" "$1" "$2" "$3"; }; \
     edge_stage() { edge_name=$1; shift; edge_seq=$((edge_seq+1)); edge_emit "$edge_name" entered null || return 70; if "$@"; then edge_status=0; else edge_status=$?; fi; edge_seq=$((edge_seq+1)); if edge_emit "$edge_name" terminal "$edge_status"; then :; elif [ "$edge_status" -eq 0 ]; then return 70; fi; return "$edge_status"; }; \
     frozen_install() { HOME=/opt/build-home /usr/local/bin/pnpm install --frozen-lockfile; }; \
     native_prepare() { HOME=/opt/build-home /usr/local/bin/node scripts/edge-proof.mjs container-prepare "$CONTEXT_HASH"; }; \
