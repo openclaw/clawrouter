@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import { createRequire } from "node:module";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
@@ -179,14 +179,81 @@ function emitControl(row:Case,w:any,result:any,worker:boolean):void {
  if(diagnosticCount>=8||Buffer.byteLength(line)>400||diagnosticBytes+Buffer.byteLength(line)+1>4096)throw Error("native diagnostic quota exceeded");
  diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;console.log(line);
 }
+// Closed diagnostics only. They report boundaries, never classify an error.
+export function validateBifrostCheckpoint(record:any):void {
+ const keys=["v","pin","lane","case","phase","state","defined","acq","op","count"];
+ if(!record||Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.v!==1||
+  record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||!["outer","sdk"].includes(record.lane)||
+  !["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow"].includes(record.phase)||
+  !["enter","fulfilled","rejected","threw","summary"].includes(record.state)||
+  !(record.defined===null||typeof record.defined==="boolean")||
+  ![record.case,record.acq,record.op].every((n:any)=>n===null||Number.isSafeInteger(n)&&n>=0&&n<4096)||
+  !(record.case===null||record.case<32)||!Number.isSafeInteger(record.count)||record.count<0||record.count>65535||
+  (["rejected","threw"].includes(record.state)?typeof record.defined!=="boolean":record.defined!==null))throw Error("invalid Bifrost checkpoint");
+}
+export function createBifrostCheckpointReporter(lane:string,emit:Function) {
+ const records=new Map<string,any>(),sent=new Set<string>(),observers:Promise<unknown>[]=[],failures:unknown[]=[];
+ let emitted=0,suppressed=0,finished=false,failed=0;
+ const make=(index:number|null,phase:string,state:string,reason:unknown,acq:number|null=null,op:number|null=null,count=0)=>({v:1,pin:"d8bb939408aa4d2be7df0161748edb52ebf3b1fb",lane,case:index,phase,state,
+  defined:state==="rejected"||state==="threw"?reason!==undefined:null,acq,op,count});
+ const send=(record:any)=>{try{validateBifrostCheckpoint(record);emit(record);}catch(error){failures.push(error);}};
+ const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null)=>{
+  try{const record=make(index,phase,state,reason,acq,op);validateBifrostCheckpoint(record);
+   if(finished)throw Error("checkpoint after final flush");
+   const key=String(index)+":"+phase;
+   // Keep the first failure even when a later cleanup of the same kind succeeds.
+   if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
+   if(state==="rejected"||state==="threw")failed++;
+  }catch(error){failures.push(error);}
+ };
+ const flush=(index:number|null)=>{
+  const selected=[...records.values()].filter(r=>r.case===index);
+  selected.sort((a,b)=>Number(["rejected","threw"].includes(b.state))-Number(["rejected","threw"].includes(a.state)));
+  for(const record of selected){const key=JSON.stringify(record);if(sent.has(key))continue;sent.add(key);
+   if(emitted<7){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
+ };
+ return {failures,mark,flush,
+  observe(index:number|null,phase:string,fn:Function,receiver:unknown,args:any[]){
+   mark(index,phase,"enter");let original;
+   try{original=Reflect.apply(fn,receiver,args);}catch(reason){mark(index,phase,"threw",reason);flush(index);throw reason;}
+   try{if(original&&typeof original.then==="function"){
+    const observed=original.then(()=>mark(index,phase,"fulfilled"),(reason:unknown)=>{mark(index,phase,"rejected",reason);flush(index);});
+    observers.push(observed.then(()=>{},(error:unknown)=>{failures.push(error);}));
+   }else mark(index,phase,"fulfilled");}catch(error){failures.push(error);}
+   return original;
+  },
+  async drain(){let at=0;while(at<observers.length){const batch=observers.slice(at);at=observers.length;
+   for(const result of await Promise.allSettled(batch))if(result.status==="rejected")failures.push(result.reason);}},
+  finish(){if(finished){failures.push(Error("duplicate checkpoint final flush"));return;}finished=true;
+   if(suppressed)send(make(null,"overflow","summary",undefined,null,null,suppressed));
+   send(make(null,"final","summary",undefined,null,null,Math.min(65535,failed)));},
+ };
+}
+// The enclosing case_result observer is joined by afterAll, never by its own case.
+export function finishBifrostCheckpointCase(report:any,index:number,failures:unknown[]):void {
+ report.mark(index,"assertions",failures.length?"rejected":"fulfilled",failures[0]);
+ if(failures.length)report.flush(index);
+}
+const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"));
+checkpoints.mark(null,"module","fulfilled");checkpoints.flush(null);
+afterAll(async()=>{await checkpoints.drain();checkpoints.finish();throwFailures(checkpoints.failures);});
+function checkpointCase(row:Case):number {
+ const inventory=[...JSON.parse(process.env.CLAWROUTER_BIFROST_CONTROLS!),...cases,...JSON.parse(process.env.CLAWROUTER_BIFROST_PROGRESS!)];
+ const matches=inventory.map((r:Case,i:number)=>r.id===row.id?i:-1).filter((i:number)=>i>=0);
+ if(matches.length!==1||matches[0]>=32)throw Error("ambiguous diagnostic case");return matches[0];
+}
 async function command(id:string,kind:string,body:unknown={}) {
  const response=await nativeFetch(origin+"/__bifrost/"+kind+"/"+id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
  const text=await response.text();expect(response.status).toBe(200);return JSON.parse(text);
 }
 function throwFailures(failures:unknown[]):void{if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"Bifrost originals and cleanup failed");}
 
-async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortController,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,inferenceKey:string)=>Promise<void>){
- const state=await createOpenClawTestState({label:"bifrost-worker-contract"}),control=new AbortController();
+function fixture(row:Case,body:Parameters<typeof fixtureOwned>[1]){
+ return checkpoints.observe(checkpointCase(row),"case_result",fixtureOwned,undefined,[row,body]);
+}
+async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:AbortController,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,inferenceKey:string)=>Promise<void>){
+ const caseIndex=checkpointCase(row);
+ const state=await checkpoints.observe(caseIndex,"setup",createOpenClawTestState,undefined,[{label:"bifrost-worker-contract"}]),control=new AbortController();
  const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:"bifrost",api:row.api,role:row.control,
   originals:[],observers:[],transports:[],acquisitions:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
  const ownership=createBifrostInvocationOwnership(new AsyncLocalStorage());
@@ -195,7 +262,9 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
  const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);return o;};
  const returned=(o:Original,value:any)=>{o.returned=value;o.returnAt=++w.sequence;
   const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
-   o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;};
+   o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;
+   const phase=["read","closed","cancel"].includes(o.kind)?o.kind:o.kind==="guard_release"?"release":null;
+   if(phase)checkpoints.mark(caseIndex,phase,state,v,o.reader?transports.indexOf(o.reader.transport):null,originals.indexOf(o));};
   if(value&&typeof value.then==="function"){o.pending=value;observer(value.then((v:any)=>settle("fulfilled",v),(e:unknown)=>settle("rejected",e)));}else settle("fulfilled",value);return value;};
  const track=<T>(kind:string,p:Promise<T>):Promise<T>=>{if(kind==="inference_result")observer(p.then((v:any)=>{w.caller.result=v.stopReason;w.caller.emptyContent=Array.isArray(v.content)&&v.content.length===0;w.caller.completed=true;},()=>{w.caller.completed=true;}));return returned(record(kind),p);};
  const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}};
@@ -241,6 +310,7 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
    returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
+ let bodyEntered=false;
  let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false,proof:any;
  // Undici 8.12.3 publishes the original request/socket pair synchronously.
  // Subscribers never throw or print request headers; they only retain identity.
@@ -286,23 +356,28 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
     const plugin=await registerSingleProviderPlugin(entry);expect(plugin.id).toBe("bifrost");expect(plugin.catalog?.run).toBeTypeOf("function");
     const discover=()=>track("catalog_result",ownership.invoke(c,"discovery",plugin.catalog!.run,plugin.catalog,[{config,env,agentDir:state.agentDir(),workspaceDir:state.workspaceDir,signal:control.signal,
       resolveProviderApiKey,resolveProviderAuth}]));
-    await body(discover,control,track,resolveProviderAuth("bifrost").apiKey!);
- }catch(e){failures.push(e);}
+    bodyEntered=true;await checkpoints.observe(caseIndex,"body",body,undefined,[discover,control,track,resolveProviderAuth("bifrost").apiKey!]);
+ }catch(e){if(!bodyEntered)checkpoints.mark(caseIndex,"case_setup","rejected",e);failures.push(e);}
+ checkpoints.mark(caseIndex,"original_join","enter");
  let at=0,seen=0;
  while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
   const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
+ checkpoints.mark(caseIndex,"original_join","fulfilled");
+ if(w.observerFailures.length)checkpoints.mark(caseIndex,"observer","rejected",w.observerFailures[0]);
  w.preabortPostDelta=transports.filter(t=>t.method==="POST").length-(c.postsBefore??0);
  if(row.mode==="preabort")await check(()=>expect(transports.filter(t=>t.method==="POST")).toHaveLength(0));
  for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(b.locked).toBe(false));}
  const workerFailures:unknown[]=[];
+ checkpoints.mark(caseIndex,"worker_retirement","enter");
  try{const response=await nativeFetch(origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});proof=JSON.parse(await response.text());w.sourceExpired=proof.source?.expired??null;worker=response.status===200&&proof.retired===true;if(!worker)workerFailures.push(Error("independent Worker retirement failed"));}catch(e){workerFailures.push(e);}
+ checkpoints.mark(caseIndex,"worker_retirement",workerFailures.length?"rejected":"fulfilled",workerFailures[0]);
  const beforeRestore=failures.length;
- for(const restore of restores.toReversed())await check(restore);
- if(spy)await check(()=>{if(!sameBifrostDescriptor(Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard"),spyDescriptor))throw Error("foreign guard descriptor");spy!.mockRestore();});
- for(const cleanup of [()=>ownership.restore(),()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(cleanup);
+ for(const restore of restores.toReversed())await check(()=>checkpoints.observe(caseIndex,"restoration",restore,undefined,[]));
+ if(spy)await check(()=>checkpoints.observe(caseIndex,"restoration",()=>{if(!sameBifrostDescriptor(Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard"),spyDescriptor))throw Error("foreign guard descriptor");spy!.mockRestore();},undefined,[]));
+ for(const cleanup of [()=>ownership.restore(),()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(()=>checkpoints.observe(caseIndex,"cleanup",cleanup,undefined,[]));
  w.restored=failures.length===beforeRestore;
  let allowed:Original[]=[];
- if(row.control){const evaluated=evaluateBifrostNativeControl(w);if(evaluated.qualified&&row.control==="partial")allowed=bifrostStoredErrorVector(w)??[];
+ if(row.control){checkpoints.mark(caseIndex,"control","enter");const evaluated=evaluateBifrostNativeControl(w);checkpoints.mark(caseIndex,"control","fulfilled");if(evaluated.qualified&&row.control==="partial")allowed=bifrostStoredErrorVector(w)??[];
   const reports=controlReports.get(row.api)??new Map();try{emitControl(row,w,evaluated,worker);}catch(e){failures.push(e);evaluated.qualified=false;}
   reports.set(row.control,evaluated);controlReports.set(row.api,reports);const q=bifrostQualification([...reports.values()],nativeIdentity,"bifrost",row.api);if(q)qualifications.set(row.api,q);
   if(!evaluated.qualified)failures.push(Error("native control qualification incomplete"));
@@ -312,7 +387,8 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
   const f=bifrostProgressWitness(w,proof,allowed,worker,workerFailures);
   if(!bifrostProgressQualified(f))failures.push(Error("progress case physical or accounting proof incomplete"));
  }
- failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);throwFailures(failures);
+ failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);
+ finishBifrostCheckpointCase(checkpoints,caseIndex,failures);throwFailures(failures);
 }
 
 function inference(provider:any,row:Case,signal:AbortSignal,inferenceKey:string) {

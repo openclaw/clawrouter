@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -48,22 +50,18 @@ export function performBifrostProgress(s,command,enqueue){
  enqueue();s.progressEnqueued=1;return {accepted:true,alreadyCanceled:false,enqueued:true};
 }
 
-export function bifrostNativeDiagnosticRecords(error){
+function bifrostChildDiagnosticRecords(error,prefix,decode){
  const records=new Map(),seen=new Set(),pending=[error];let bytes=0,nodes=0;
  while(pending.length){const value=pending.pop();if(!value||(typeof value!=="object"&&typeof value!=="function")||seen.has(value))continue;
   seen.add(value);if(++nodes>64)throw Error("native diagnostic error closure exceeded");
   for(const field of ["stdout","stderr"]){const d=Object.getOwnPropertyDescriptor(value,field);if(!d||!("value" in d)||typeof d.value!=="string")continue;
    if(Buffer.byteLength(d.value)>2*1024*1024)throw Error("native diagnostic source exceeded");
-   for(const line of d.value.split("\n")){if(!line.startsWith("BIFROST_NATIVE_CONTROL "))continue;
-    if(Buffer.byteLength(line)>400)throw Error("native diagnostic record exceeded");
-    const record=JSON.parse(line.slice("BIFROST_NATIVE_CONTROL ".length));
-    assert.deepEqual(Object.keys(record).sort(),["v","pin","api","role","qualified","vector","worker","restored","rejected","pending"].sort());
-    assert.equal(record.v,1);assert.equal(record.pin,bifrostPin);assert.ok(["stream","simple"].includes(record.api));assert.ok(["eof","preabort","partial","provider_error"].includes(record.role));
-    for(const k of ["qualified","vector","worker","restored"])assert.equal(typeof record[k],"boolean");
-    for(const k of ["rejected","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
-    const id=record.api+":"+record.role,encoded=JSON.stringify(record);
+   for(const line of d.value.split("\n")){if(!line.startsWith(prefix))continue;
+    if(Buffer.byteLength(line)>768)throw Error("native diagnostic record exceeded");
+    const record=JSON.parse(line.slice(prefix.length));
+    const id=decode(record),encoded=JSON.stringify(record);
     if(records.has(id)){assert.equal(records.get(id),encoded);continue;}
-    bytes+=Buffer.byteLength(encoded)+1;assert.ok(records.size<8&&bytes<=4096);records.set(id,encoded);
+    bytes+=Buffer.byteLength(encoded)+1;assert.ok(records.size<9&&bytes<=4096);records.set(id,encoded);
    }
   }
   const cause=Object.getOwnPropertyDescriptor(value,"cause");if(cause&&"value" in cause)pending.push(cause.value);
@@ -74,8 +72,44 @@ export function bifrostNativeDiagnosticRecords(error){
  }
  return [...records.values()].map(v=>JSON.parse(v));
 }
+export function bifrostNativeDiagnosticRecords(error){
+ return bifrostChildDiagnosticRecords(error,"BIFROST_NATIVE_CONTROL ",record=>{
+  assert.deepEqual(Object.keys(record).sort(),["v","pin","api","role","qualified","vector","worker","restored","rejected","pending"].sort());
+  assert.equal(record.v,1);assert.equal(record.pin,bifrostPin);assert.ok(["stream","simple"].includes(record.api));assert.ok(["eof","preabort","partial","provider_error"].includes(record.role));
+  for(const k of ["qualified","vector","worker","restored"])assert.equal(typeof record[k],"boolean");
+  for(const k of ["rejected","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(record))<400);return record.api+":"+record.role;
+ });
+}
+export function bifrostCheckpointFunctions(){
+ const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
+ const start="export function validateBifrostCheckpoint(",end="const checkpoints=createBifrostCheckpointReporter(";
+ assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
+ const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase})",{},{timeout:1000});
+}
+export function bifrostCheckpointRecords(error){
+ const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
+ return bifrostChildDiagnosticRecords(error,"BIFROST_CHECKPOINT ",record=>{validateBifrostCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
+}
+export function bifrostAnnotationEmitter(write){
+ let bytes=0,count=0;
+ return record=>{const line="::notice title=Bifrost closed diagnostic::"+JSON.stringify(record)+"\n";
+  assert.ok(Buffer.byteLength(line)<=768&&bytes+Buffer.byteLength(line)<=8192&&count<32,"Bifrost annotation quota exceeded");
+  bytes+=Buffer.byteLength(line);count++;write(line);};
+}
 export async function withBifrostNativeDiagnostics(run,emit){
- try{return await run();}catch(error){try{for(const record of bifrostNativeDiagnosticRecords(error))emit(record);}catch(reportError){throw new AggregateError([error,reportError],"native child and diagnostic delivery failed");}throw error;}
+ try{return await run();}catch(error){const reporting=[];
+  for(const collect of [bifrostCheckpointRecords,bifrostNativeDiagnosticRecords])try{for(const record of collect(error))emit(record);}catch(reportError){reporting.push(reportError);}
+  if(reporting.length)throw new AggregateError([error,...reporting],"native child and diagnostic delivery failed");throw error;}
+}
+export async function runBifrostReported(body,cleanups,emit){
+ const reporter=bifrostCheckpointFunctions().createBifrostCheckpointReporter("outer",emit);
+ reporter.mark(null,"setup","enter");reporter.flush(null);
+ return finishBifrostOwned(()=>body(reporter),[...cleanups.map(cleanup=>()=>cleanup(reporter)),async()=>{
+  await reporter.drain();reporter.flush(null);reporter.finish();
+  if(reporter.failures.length)throw new AggregateError(reporter.failures,"Bifrost diagnostic observation failed");
+ }]);
 }
 
 export async function finishBifrostOwned(body, cleanups) {
@@ -344,6 +378,98 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+ test("Bifrost checkpoint preserves original invocation, promise and undefined rejection",async()=>{
+  const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v)),receiver={},args=[{},undefined];
+  let calls=0,reject;const original=new Promise((_,no)=>{reject=no;});
+  function operation(...got){calls++;assert.equal(this,receiver);assert.deepEqual(got,args);return original;}
+  assert.equal(r.observe(0,"body",operation,receiver,args),original);reject(undefined);await r.drain();
+  assert.equal(calls,1);assert.ok(records.some(v=>v.phase==="body"&&v.state==="rejected"&&v.defined===false));
+  let threw=false;try{r.observe(1,"setup",()=>{throw undefined;},undefined,[]);}catch(e){threw=true;assert.equal(e,undefined);}
+  assert.equal(threw,true);r.finish();assert.equal(r.failures.length,0);
+ });
+ test("Bifrost checkpoint startup failure still finalizes and attempts every cleanup",async()=>{
+  const records=[],order=[],secondary={};
+  await assert.rejects(runBifrostReported(report=>report.observe(null,"setup",()=>{throw undefined;},undefined,[]),[
+   report=>report.observe(null,"cleanup",()=>{order.push(1);throw secondary;},undefined,[]),
+   ()=>{order.push(2);}
+  ],v=>records.push(v)),e=>e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1]===secondary);
+  assert.deepEqual(order,[1,2]);assert.ok(records.some(v=>v.phase==="setup"&&v.state==="threw"&&!v.defined));
+  assert.ok(records.some(v=>v.phase==="cleanup"&&v.state==="threw"&&v.defined));assert.equal(records.at(-1).phase,"final");
+ });
+ test("Bifrost checkpoint retains original read closed and independent cleanup faults",async()=>{
+  const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v));
+  const data={},cleanup={};r.mark(2,"read","rejected",data,0,1);r.mark(2,"closed","rejected",data,0,2);
+  r.observe(2,"cleanup",()=>Promise.reject(cleanup),undefined,[]);await r.drain();r.mark(2,"cleanup","fulfilled");r.flush(2);r.finish();
+  for(const phase of ["read","closed","cleanup"])assert.ok(records.some(v=>v.phase===phase&&v.state==="rejected"&&v.defined));
+  assert.equal(records.at(-1).phase,"final");assert.equal(r.failures.length,0);
+ });
+ test("Bifrost checkpoint reporting faults never replace undefined primary",async()=>{
+  let writes=0;
+  await assert.rejects(runBifrostReported(()=>{throw undefined;},[()=>{}],()=>{writes++;throw undefined;}),e=>
+   e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1] instanceof AggregateError&&e.errors[1].errors.every(v=>v===undefined));
+  assert.ok(writes>0);
+ });
+ test("Bifrost checkpoint observer fault preserves original return and is joined separately",async()=>{
+  const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v));
+  const original={};Object.defineProperty(original,"then",{get(){throw undefined;}});
+  assert.equal(r.observe(0,"case_result",()=>original,undefined,[]),original);await r.drain();r.finish();
+  assert.equal(r.failures.length,1);assert.equal(r.failures[0],undefined);assert.equal(records.at(-1).phase,"final");
+ });
+ test("Bifrost checkpoint case finalization never joins its own completion observer",async()=>{
+  const {createBifrostCheckpointReporter,finishBifrostCheckpointCase}=bifrostCheckpointFunctions(),records=[];
+  const report=createBifrostCheckpointReporter("sdk",r=>records.push(r));let finalized=false;
+  const original=Promise.resolve().then(()=>{
+   assert.equal(finishBifrostCheckpointCase(report,0,[]),undefined);finalized=true;
+  });
+  assert.equal(report.observe(0,"case_result",()=>original,undefined,[]),original);
+  await original;assert.equal(finalized,true);await report.drain();report.finish();assert.equal(report.failures.length,0);
+  const second=createBifrostCheckpointReporter("sdk",r=>records.push(r));
+  const rejected=Promise.resolve().then(()=>{finishBifrostCheckpointCase(second,1,[undefined]);throw undefined;});
+  assert.equal(second.observe(1,"case_result",()=>rejected,undefined,[]),rejected);
+  let caught=false;try{await rejected;}catch(reason){caught=true;assert.equal(reason,undefined);}assert.equal(caught,true);
+  await second.drain();second.finish();assert.ok(records.some(r=>r.case===1&&r.phase==="assertions"&&r.defined===false));
+  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(source.slice(source.indexOf('async function fixtureOwned('),source.indexOf('function inference(')),/checkpoints\.drain\(/);
+ });
+ test("Bifrost checkpoint bounded overflow reserves final summary and rejects unsafe fields",async()=>{
+  const {createBifrostCheckpointReporter,validateBifrostCheckpoint}=bifrostCheckpointFunctions(),records=[];
+  const r=createBifrostCheckpointReporter("sdk",v=>records.push(v));
+  for(let i=0;i<32;i++){r.mark(i,"body","rejected",{});r.flush(i);}r.finish();
+  assert.equal(records.length,9);assert.equal(records.at(-2).phase,"overflow");assert.equal(records.at(-2).count,25);assert.equal(records.at(-1).phase,"final");
+  const commands=[],emit=bifrostAnnotationEmitter(v=>commands.push(v));for(const record of records)emit(record);
+  assert.ok(commands.every(v=>Buffer.byteLength(v)<=768));assert.ok(Buffer.byteLength(commands.join(""))<8192);
+  for(const change of [{pin:"foreign"},{case:32},{phase:"unknown_module_name"},{op:-1},{acq:4096},{defined:null},{message:"private"}])
+   assert.throws(()=>validateBifrostCheckpoint({...records[0],...change}));
+ });
+ test("Bifrost checkpoint collector preserves child plus cleanup closure without getters",async()=>{
+  const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v));r.mark(0,"setup","threw",undefined);r.flush(0);r.finish();
+  const child=Object.assign(new Error("not forwarded"),{stdout:records.map(v=>"BIFROST_CHECKPOINT "+JSON.stringify(v)).join("\n")});
+  const outer=new AggregateError([child,undefined],"not forwarded");Object.defineProperty(outer,"cause",{value:outer});let getters=0;
+  Object.defineProperty(outer,"stderr",{get(){getters++;throw Error("not called");}});
+  const emitted=[];await assert.rejects(withBifrostNativeDiagnostics(()=>{throw outer;},v=>emitted.push(v)),e=>e===outer);
+  assert.deepEqual(emitted,JSON.parse(JSON.stringify(records)));assert.equal(getters,0);
+  assert.throws(()=>bifrostCheckpointRecords({stdout:"BIFROST_CHECKPOINT "+JSON.stringify({...records[0],unknown:true})}));
+  assert.deepEqual(bifrostCheckpointRecords({stdout:"untrusted text\n# BIFROST_CHECKPOINT {}"}),[]);
+ });
+ test("Bifrost checkpoint observes real child import rejection with column-zero protocol",async()=>{
+  const {createBifrostCheckpointReporter,validateBifrostCheckpoint}=bifrostCheckpointFunctions();
+  const code=validateBifrostCheckpoint.toString()+"\n"+createBifrostCheckpointReporter.toString()+`
+const r=createBifrostCheckpointReporter("sdk",v=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(v)+"\\n"));
+try{await r.observe(null,"setup",()=>import("node:missing_bifrost_diagnostic_module"),undefined,[]);}
+catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
+  let child;try{await promisify(execFile)(process.execPath,["--input-type=module","-e",code],{timeout:10000,maxBuffer:16384});}catch(error){child=error;}
+  assert.ok(child);const records=bifrostCheckpointRecords(child);
+  assert.ok(records.some(v=>v.phase==="setup"&&v.state==="rejected"&&v.defined));assert.equal(records.at(-1).phase,"final");
+  assert.ok(child.stdout.split("\n").filter(Boolean).every(line=>line.startsWith("BIFROST_CHECKPOINT ")));
+  const emitted=[];await assert.rejects(withBifrostNativeDiagnostics(()=>Promise.reject(child),v=>emitted.push(v)),e=>e===child);
+  assert.deepEqual(emitted,records);
+ });
+ test("Bifrost checkpoint missing child protocol distinguishes helper boundary from SDK entry",async()=>{
+  const emitted=[],reason={};
+  await assert.rejects(runBifrostReported(report=>withBifrostNativeDiagnostics(()=>report.observe(null,"child",()=>Promise.reject(reason),undefined,[]),v=>emitted.push(v)),[],v=>emitted.push(v)),e=>e===reason);
+  assert.ok(emitted.some(v=>v.lane==="outer"&&v.phase==="child"&&v.state==="rejected"));
+  assert.equal(emitted.some(v=>v.lane==="sdk"),false);assert.equal(emitted.at(-1).phase,"final");
+ });
  const evaluator=bifrostNativeEvaluator();
  function nativeEvidence(){
   const owner={},identity={guard:()=>{}},reason={name:"AbortError"},stored={name:"AbortError"};
@@ -709,14 +835,19 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const secondary={},order=[];await assert.rejects(finishBifrostOwned(()=>{throw undefined;},[()=>{order.push(1);throw secondary;},()=>{order.push(2);}]),e=>e instanceof AggregateError&&e.errors.length===2&&e.errors[0]===undefined&&e.errors[1]===secondary);assert.deepEqual(order,[1,2]);
   });
   test("registered Bifrost catalog and public inference through Worker SQLite", {skip:!process.env.CLAWROUTER_OPENCLAW_CHECKOUT,timeout:300000},async t=>{
-    const f=await startBifrostFixture(), created=[],executionCases=[...bifrostControls,...bifrostCases,...bifrostProgressCases];
-    await finishBifrostOwned(async()=>{
-      for(const row of executionCases){await f.setup(row);created.push(row);}
-      await withBifrostNativeDiagnostics(()=>runOpenClawConsumer(t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:bifrostPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-bifrost-contract.test.ts',import.meta.url)),testPath:'extensions/bifrost/clawrouter-contract.test.ts',
-        env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:bifrostPin,CLAWROUTER_BIFROST_CASES:JSON.stringify(bifrostCases),CLAWROUTER_BIFROST_CONTROLS:JSON.stringify(bifrostControls),CLAWROUTER_BIFROST_PROGRESS:JSON.stringify(bifrostProgressCases)}}),record=>console.log("::notice title=Bifrost native diagnostic::"+JSON.stringify(record)));
-    },[...executionCases.map(row=>async()=>{
+    let f;const created=[],executionCases=[...bifrostControls,...bifrostCases,...bifrostProgressCases];
+    const emit=bifrostAnnotationEmitter(line=>process.stdout.write(line));
+    await runBifrostReported(async report=>{
+      f=await report.observe(null,"setup",startBifrostFixture,undefined,[]);
+      for(const [index,row]of executionCases.entries()){await report.observe(index,"case_setup",f.setup,f,[row]);created.push(row);}
+      report.mark(null,"child","enter");report.flush(null);
+      await withBifrostNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:bifrostPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-bifrost-contract.test.ts',import.meta.url)),testPath:'extensions/bifrost/clawrouter-contract.test.ts',
+        env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:bifrostPin,CLAWROUTER_BIFROST_CASES:JSON.stringify(bifrostCases),CLAWROUTER_BIFROST_CONTROLS:JSON.stringify(bifrostControls),CLAWROUTER_BIFROST_PROGRESS:JSON.stringify(bifrostProgressCases)}}]),emit);
+    },[...executionCases.map((row,index)=>async report=>{
       if(!created.includes(row))return;
-      const proof=await f.join(row.id);assertBifrostRetired(proof);
+      const proof=await report.observe(index,"worker_retirement",f.join,f,[row.id]);
+      report.mark(index,"assertions","enter");
+      try{assertBifrostRetired(proof);
       assert.equal(proof.source.calls.filter(c=>c.chat).length,['eof','provider_error','partial','account_a','account_b','profile','rotation','progress'].includes(row.mode)?1:0);
       assert.equal(proof.source.calls.filter(c=>!c.chat).length,['missing_owner','invalid_owner'].includes(row.mode)?0:1);
       if(row.mode==='partial'||row.mode==='progress'){assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);}
@@ -726,6 +857,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         if(event.capability==='models.list'){assert.equal(event.model,null);assert.equal(event.actual_cost_micros,0);assert.equal(event.reserved_cost_micros,0);}
         else if(event.status==='success'){assert.equal(event.actual_cost_micros,7);assert.equal(event.input_tokens,4);assert.equal(event.output_tokens,3);}
       }
-    }),()=>f.close()]);
+      report.mark(index,"assertions","fulfilled");
+      }catch(error){report.mark(index,"assertions","rejected",error);report.flush(index);throw error;}
+    }),report=>f?report.observe(null,"cleanup",f.close,f,[]):undefined],emit);
   });
 }
