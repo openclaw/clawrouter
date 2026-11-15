@@ -6,11 +6,12 @@ import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
 import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -295,7 +296,7 @@ async function pureCliModuleSources() {
   const names = backImport.split("{", 2)[1].split("}", 1)[0].trim().split(", ");
   const tail = entry.slice(entry.indexOf("const containerDiagnosticPhases ="));
   assert.ok(tail.includes('launchCli(process.argv.slice(2));'));
-  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages", "nativePrepareStages"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
+  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages", "nativePrepareStages", "validateEnumerationDetail"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
   // Actual dispatch and CLI functions, including their back-import. Only the
   // container operation is replaced by a closed, inert return value.
   const prefix = 'import { pathToFileURL } from "node:url"; import { resolve } from "node:path";\n' + pureHelpers + '\nconst refuse = code => { throw new Error(code); };\n' + entry.slice(entry.indexOf("function ownData("), entry.indexOf("export function validatePackagingDiagnostic("));
@@ -807,4 +808,158 @@ test("native preparation ordinary entry guard remains nondispatching and missing
   invoke(process, "file:///owned/imported.mjs", url, path => path, () => calls++); assert.equal(calls, 0);
   invoke(process, "file:///owned/entry.mjs", url, path => path, args => { calls++; assert.deepEqual(args, ["container-prepare", other]); }); assert.equal(calls, 1);
   assert.equal(parseNativePrepareStages(nativePrepareCapture(""), stageIdentity).reason, "no_records");
+});
+
+async function extractedContextTraversal() {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("async function contextFiles("), source.indexOf("async function writeExclusive("));
+  assert.ok(body.includes('files.length < 50000 && size <= 256 * 1024 * 1024'));
+  // Only the recursive call binding is fault-injected, in this private realm.
+  // The original walk body, arguments and receiver still execute unchanged.
+  const anchor = "  try {\n    await walk();";
+  assert.equal(body.split(anchor).length, 2);
+  const faultable = body.replace(anchor, "  const originalWalk = walk; walk = function (...args) { hooks.recursion(args); return originalWalk.apply(this, args); };\n" + anchor);
+  return bindings => runInNewContext(`const originalSort = Array.prototype.sort;
+    Array.prototype.sort = function (...args) { hooks.finalSort(this, args); return originalSort.apply(this, args); };
+    const originalPush = Array.prototype.push;
+    Array.prototype.push = function (...args) { hooks.fileRecord(this, args); return originalPush.apply(this, args); };
+    ${faultable}\ncontextFiles;`, bindings);
+}
+function traversalBindings(options = {}) {
+  const { fault, nodes, excluded = [], hugeBytes, noObservation = false, reporterFailure = false, traceLimit = 10000 } = options;
+  const reason = Object.hasOwn(options, "reason") ? options.reason : new Error("inert traversal failure");
+  const tree = nodes ?? { "": ["z", "dir", "a", "node_modules", ".edge-context.json"], dir: ["nested", "b"], "dir/nested": ["c"], node_modules: ["ignored"] };
+  const trace = [], frames = []; let traceCount = 0, active, failed = false, writes = 0;
+  const record = (...args) => { traceCount++; if (trace.length < traceLimit) trace.push(JSON.parse(JSON.stringify(args))); };
+  const reject = op => { if (!failed && fault === op) { failed = true; throw reason; } };
+  const diagnostics = createNativePrepareDiagnostics(stageIdentity, (bytes, offset, length) => {
+    frames.push(bytes.subarray(offset, offset + length).toString()); writes++;
+    if (reporterFailure && frames.at(-1).includes('"event":"terminal"')) throw undefined;
+    return length;
+  });
+  if (!noObservation) {
+    nativePrepareStages.slice(0, 8).forEach(stage => diagnostics.enter(stage));
+    const point = diagnostics.enumerationPoint;
+    diagnostics.enumerationPoint = (...args) => { active = args[0]; point(...args); };
+  }
+  const controls = new Set(excluded), has = controls.has;
+  controls.has = function (path) { record("has", path); reject("exclusion"); return has.call(this, path); };
+  const bindings = {
+    hooks: {
+      recursion(args) { if (args.length) { record("walk", ...args); reject("recursion"); } },
+      finalSort(receiver, args) { record("final_sort", receiver.length, args.length); reject("final_sort"); },
+      fileRecord(receiver, args) { record("file_record", receiver.length, args[0]); reject("file_record"); },
+    },
+    join(...args) { record("join", ...args); return join(...args); },
+    check(value, code) { record("check", value, code); reject(({ "context-path": "path_check", "context-link-or-special": "file_type_check", "context-capacity": "capacity" })[code]); if (!value) throw reason; },
+    async readdir(path, options) {
+      record("readdir", path, options); reject("directory_read");
+      const prefix = path === "/fixture" ? "" : path.slice("/fixture/".length); assert.ok(Object.hasOwn(tree, prefix));
+      const entries = tree[prefix].map(name => {
+        const full = prefix ? prefix + "/" + name : name;
+        return { get name() { record("name", full); if (active === "entry_path") reject("entry_path"); return name; },
+          isDirectory() { record("isDirectory", full); reject("directory_type"); return Object.hasOwn(tree, full); },
+          isFile() { record("isFile", full); reject("file_type"); return name !== "special"; },
+        };
+      });
+      entries.sort = function (...args) { record("directory_sort", prefix, args.length); reject("directory_sort"); return Array.prototype.sort.apply(this, args); };
+      return entries;
+    },
+    async readFile(path) {
+      record("readFile", path); reject("file_read");
+      if (fault === "byte_count" || hugeBytes !== undefined) return { get length() { record("length", path); reject("byte_count"); return hugeBytes ?? 1; } };
+      return Buffer.from(path.endsWith("/a") ? "unicode-音" : path);
+    },
+    hash(bytes) { record("hash", Buffer.isBuffer(bytes) ? bytes.toString() : "synthetic-sized-input"); reject("hash"); return createHash("sha256").update(Buffer.isBuffer(bytes) ? bytes : "synthetic-sized-input").digest("hex"); },
+  };
+  return { bindings, diagnostics, observation: noObservation ? undefined : diagnostics, controls, frames, trace, get traceCount() { return traceCount; }, get writes() { return writes; }, reason };
+}
+test("enumeration diagnostics actual traversal preserves manifest bytes access order exclusions and observer-off callers", async () => {
+  const factory = await extractedContextTraversal(), excluded = ["node_modules", ".edge-context.json"];
+  const on = traversalBindings({ excluded }), off = traversalBindings({ excluded, noObservation: true });
+  const observed = await factory(on.bindings)("/fixture", on.controls, on.observation), silent = await factory(off.bindings)("/fixture", off.controls);
+  assert.equal(JSON.stringify(observed), JSON.stringify(silent)); assert.deepEqual(on.trace, off.trace);
+  assert.deepEqual(Array.from(observed, row => row.path), ["a", "dir/b", "dir/nested/c", "z"]);
+  assert.equal(observed[0].sha256, createHash("sha256").update("unicode-音").digest("hex"));
+  assert.ok(!on.trace.some(row => row[0] === "readFile" && /ignored|edge-context/.test(row[1])));
+  assert.equal(off.frames.length, 0); assert.deepEqual(on.diagnostics.errors, []);
+  // Producer and receiver styles see identical source inputs despite excluded
+  // installation/receipt entries. All traversal runs use inert filesystem data.
+  const producer = traversalBindings({ nodes: { "": ["a", "dir", "z"], dir: ["b", "nested"], "dir/nested": ["c"] }, noObservation: true });
+  const manifest = await factory(producer.bindings)("/fixture"); assert.equal(JSON.stringify(manifest), JSON.stringify(observed));
+});
+test("enumeration diagnostics actual traversal locates every operation failure and preserves undefined", async () => {
+  const factory = await extractedContextTraversal();
+  for (const op of enumerationOperations) for (const reason of [new Error("inert original failure"), undefined]) {
+    const fixture = traversalBindings({ fault: op, reason });
+    let caught = false, error;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (reason) { caught = true; error = reason; }
+    assert.equal(caught, true, op);
+    assert.equal(error, reason, op);
+    fixture.diagnostics.finish(true, error);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+    assert.equal(row.reason, "original_failure", op); assert.equal(row.stage, "context_enumeration"); assert.equal(row.records, 9);
+    assert.equal(row.enumeration.op, op); assert.equal(row.enumeration.failed, true); assert.equal(row.enumeration.defined, reason !== undefined); validateContainerDiagnostic(row);
+    assert.equal(fixture.frames.length, 9); assert.equal(fixture.frames.filter(frame => frame.includes('"enumeration"')).length, 1);
+  }
+});
+test("enumeration diagnostics actual path type depth and capacity predicates remain independent", async () => {
+  const factory = await extractedContextTraversal();
+  const cases = [
+    [{ nodes: { "": ["../bad"] } }, "path_check", "unknown", 0, 0, 0, false],
+    [{ nodes: { "": ["special"] } }, "file_type_check", "other", 0, 0, 0, false],
+    [{ nodes: { "": ["one"], one: ["two"], "one/two": ["leaf"] }, fault: "file_read" }, "file_read", "file", 2, 0, 0, false],
+    [{ nodes: { "": ["large"] }, hugeBytes: 268435457 }, "capacity", "file", 0, 0, 268435456, true],
+    [{ nodes: { "": Array.from({ length: 50001 }, (_, i) => String(i).padStart(5, "0")) }, traceLimit: 0 }, "capacity", "file", 0, 50000, 50001 * Buffer.byteLength("/fixture/00000"), false],
+  ];
+  for (const [options, op, type, depth, files, bytes, overflow] of cases) {
+    const fixture = traversalBindings(options); let failed = false, error;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (reason) { failed = true; error = reason; }
+    assert.equal(failed, true); assert.equal(error, fixture.reason); fixture.diagnostics.finish(true, error);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+    assert.deepEqual(row.enumeration, { op, type, depth, files, bytes, overflow, failed: true, defined: true });
+  }
+  const exact = traversalBindings({ nodes: { "": ["large"] }, hugeBytes: 268435456 });
+  const result = await factory(exact.bindings)("/fixture", exact.controls, exact.observation);
+  assert.equal(result.length, 1); assert.equal(result[0].bytes, 268435456); assert.equal(exact.frames.length, 8);
+});
+test("enumeration diagnostics original and reporter failures retain identity without exposing errors", async () => {
+  const factory = await extractedContextTraversal();
+  for (const reason of [Object.defineProperty({}, "message", { get() { assert.fail("error property inspected"); } }), undefined]) {
+    const fixture = traversalBindings({ fault: "file_read", reason, reporterFailure: true }); let originalFailed = false, original;
+    try { await factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation); } catch (error) { originalFailed = true; original = error; }
+    assert.equal(originalFailed, true); assert.equal(original, reason);
+    fixture.diagnostics.finish(originalFailed, original); assert.deepEqual(fixture.diagnostics.errors, [undefined]);
+    const failures = [original, ...fixture.diagnostics.errors]; assert.equal(failures.length, 2); assert.equal(failures[0], reason); assert.equal(failures[1], undefined);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.frames.join("")), stageIdentity);
+    assert.equal(row.enumeration.op, "file_read"); assert.equal(row.enumeration.defined, reason !== undefined);
+  }
+  const invalid = createNativePrepareDiagnostics(stageIdentity, (_bytes, _offset, length) => length);
+  nativePrepareStages.slice(0, 8).forEach(stage => invalid.enter(stage));
+  invalid.enumerationPoint("foreign", "unknown", 0, 0, 0); invalid.enumerationFailure(undefined); assert.equal(invalid.errors.length, 2);
+});
+test("enumeration diagnostics terminal schema quotas capture binding and private projections stay strict", async () => {
+  const factory = await extractedContextTraversal(), fixture = traversalBindings({ fault: "file_read" });
+  await assert.rejects(factory(fixture.bindings)("/fixture", fixture.controls, fixture.observation), error => error === fixture.reason);
+  fixture.diagnostics.finish(true, fixture.reason);
+  const text = fixture.frames.join(""), original = nativePrepareCapture(text), summary = parseNativePrepareStages(original, stageIdentity);
+  const corrupt = change => {
+    const rows = fixture.frames.map(frame => JSON.parse(frame.slice(frame.indexOf(" {") + 1)));
+    change(rows);
+    return nativePrepareCapture(rows.map(row => "\nEDGE_NATIVE_PREPARE_V1 " + JSON.stringify(row) + "\n").join(""));
+  };
+  for (const change of [rows => rows[0].enumeration = rows.at(-1).enumeration, rows => rows.at(-1).enumeration.op = "foreign", rows => rows.at(-1).enumeration.type = "symlink", rows => rows.at(-1).enumeration.path = "private", rows => rows.at(-1).enumeration.defined = false, rows => rows.at(-1).enumeration.files = 50001, rows => rows.at(-1).enumeration.bytes = 268435457, rows => rows.at(-1).enumeration.depth = -1, rows => rows.at(-1).enumeration.overflow = 1, rows => rows.at(-1).enumeration.failed = false]) {
+    const row = parseNativePrepareStages(corrupt(change), stageIdentity); assert.equal(row.reason, "invalid"); assert.equal(row.stage, null); assert.equal(Object.hasOwn(row, "enumeration"), false);
+  }
+  const missing = parseNativePrepareStages(nativePrepareCapture(fixture.frames.slice(0, -1).join("")), stageIdentity); assert.equal(missing.reason, "incomplete"); assert.equal(Object.hasOwn(missing, "enumeration"), false);
+  const truncated = structuredClone(original); truncated.stdout = truncated.stdout.slice(0, -1); assert.equal(parseNativePrepareStages(truncated, stageIdentity).reason, "capture_mismatch");
+  const context = ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base"].map(phase => ({ v: 2, phase, state: "fulfilled", defined: null, exit: null, signal: null }));
+  const output = []; emitContainerFailure([...context, containerProcessDiagnostic(original), parseImageBuildStages(original, stageIdentity), summary, { v: 2, phase: "entry", state: "rejected", defined: true, exit: null, signal: null }], line => output.push(line));
+  assert.equal(output.length, 10); assert.ok(output.every(line => line.startsWith("::error ") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  for (const secret of [hex, other, "/fixture", "inert traversal", "sha256"]) assert.ok(!output.join("").includes(secret));
+  const oversized = [], bounds = createNativePrepareDiagnostics(stageIdentity, (bytes, offset, length) => { oversized.push(bytes.subarray(offset, offset + length).toString()); return length; });
+  nativePrepareStages.slice(0, 8).forEach(stage => bounds.enter(stage)); bounds.enumerationPoint("file_type_check", "other", 65536, 50001, 268435457); bounds.enumerationFailure(undefined); bounds.finish(true, undefined);
+  assert.deepEqual(bounds.errors, []); assert.equal(oversized.length, 9); assert.ok(oversized.every(frame => Buffer.byteLength(frame) <= 512));
+  const maximum = parseNativePrepareStages(nativePrepareCapture(oversized.join("")), stageIdentity); assert.equal(maximum.enumeration.overflow, true); validateContainerDiagnostic(maximum);
+  let touched = false; const hostile = { ...summary.enumeration }; Object.defineProperty(hostile, "op", { get() { touched = true; throw undefined; } }); assert.throws(() => validateEnumerationDetail(hostile)); assert.equal(touched, false);
 });

@@ -528,10 +528,23 @@ export const nativePrepareStages = Object.freeze([
   "esbuild_resolver", "native_node", "native_git", "native_typescript", "native_esbuild", "native_wrangler", "native_identity",
   "typescript_resolver", "esbuild_child", "esbuild_version_check", "pnpm_child", "pnpm_version_check", "receipt_write", "receipt_output", "cli_serialization",
 ]);
+export const enumerationOperations = Object.freeze(["directory_read", "directory_sort", "entry_path", "exclusion", "path_check", "directory_type", "recursion", "file_type", "file_type_check", "file_read", "byte_count", "capacity", "hash", "file_record", "final_sort"]);
+export function validateEnumerationDetail(value) {
+  const fields = ["op", "type", "depth", "files", "bytes", "overflow", "failed", "defined"];
+  if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).join() !== fields.join()) refuse("enumeration-detail-keys");
+  const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+  if (!enumerationOperations.includes(row.op) || !["unknown", "directory", "not_directory", "file", "other"].includes(row.type) || row.failed !== true || typeof row.defined !== "boolean" || typeof row.overflow !== "boolean") refuse("enumeration-detail-enum");
+  const types = row.op === "recursion" ? ["directory"] : row.op === "file_type" ? ["not_directory"] : row.op === "file_type_check" ? ["file", "other"] : ["file_read", "byte_count", "capacity", "hash", "file_record"].includes(row.op) ? ["file"] : ["unknown"];
+  if (!types.includes(row.type)) refuse("enumeration-detail-type");
+  for (const [key, limit] of [["depth", 65535], ["files", 50000], ["bytes", 268435456]]) if (!Number.isInteger(row[key]) || row[key] < 0 || row[key] > limit) refuse("enumeration-detail-count");
+  if (row.overflow && row.depth !== 65535 && row.files !== 50000 && row.bytes !== 268435456) refuse("enumeration-detail-overflow");
+  return row;
+}
 // Private preparation frames never become GitHub commands. A synchronous writer
 // must deliver the entire bounded frame or retain an independent failure.
 export function createNativePrepareDiagnostics(identity, write = (bytes, offset, length) => writeSync(1, bytes, offset, length)) {
   const errors = []; let context, nonce, sequence = 0, index = -1, finished = false, admitted = false;
+  let enumerationPoint = null, enumerationFailure = null;
   try {
     context = ownData(identity, "contextHash"); nonce = ownData(identity, "nonce");
     if (![context, nonce].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) refuse("prepare-diagnostic-identity");
@@ -541,6 +554,7 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     if (!admitted) return;
     const row = { v: 1, context, nonce, seq: ++sequence, stage: nativePrepareStages[index], event, outcome, defined,
       reportFailures: event === "terminal" ? errors.length : null, undefinedReportFailures: event === "terminal" ? errors.filter(error => error === undefined).length : null };
+    if (event === "terminal" && outcome === "original_failure" && row.stage === "context_enumeration" && enumerationFailure) row.enumeration = enumerationFailure;
     const bytes = Buffer.from("\n" + "EDGE_NATIVE_" + "PREPARE_V1 " + JSON.stringify(row) + "\n");
     if (sequence > 32 || bytes.length > 512) refuse("prepare-diagnostic-capacity");
     for (let offset = 0; offset < bytes.length;) {
@@ -550,6 +564,20 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     }
   };
   return { errors,
+    enumerationPoint(op, type, depth, files, bytes) {
+      try {
+        if (nativePrepareStages[index] !== "context_enumeration" || finished) refuse("enumeration-observer-stage");
+        const values = [depth, files, bytes], limits = [65535, 50000, 268435456];
+        if (values.some(value => !Number.isSafeInteger(value) || value < 0)) refuse("enumeration-observer-count");
+        enumerationPoint = validateEnumerationDetail({ op, type, depth: Math.min(depth, limits[0]), files: Math.min(files, limits[1]), bytes: Math.min(bytes, limits[2]), overflow: values.some((value, i) => value > limits[i]), failed: true, defined: false });
+      } catch (error) { enumerationPoint = null; errors.push(error); }
+    },
+    enumerationFailure(reason) {
+      try {
+        if (!enumerationPoint || nativePrepareStages[index] !== "context_enumeration" || finished) refuse("enumeration-observer-missing");
+        enumerationFailure = validateEnumerationDetail({ ...enumerationPoint, defined: reason !== undefined });
+      } catch (error) { enumerationFailure = null; errors.push(error); }
+    },
     enter(stage) {
       try {
         if (finished || nativePrepareStages[index + 1] !== stage) refuse("prepare-diagnostic-order");
@@ -571,6 +599,7 @@ const processDiagnosticFields = ["v", "phase", "state", "defined", "available", 
 export function validateContainerDiagnostic(value) {
   if (value && typeof value === "object" && ownData(value, "v") === 5) {
     const fields = ["v", "phase", "state", "stage", "defined", "records", "reason", "reportFailures", "undefinedReportFailures"];
+    if (Object.hasOwn(value, "enumeration")) fields.push("enumeration");
     if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("prepare-summary-keys");
     const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
     if (row.phase !== "native_prepare_internal" || !["capture_unavailable", "capture_mismatch", "outer_inconsistent", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("prepare-summary-enum");
@@ -583,6 +612,11 @@ export function validateContainerDiagnostic(value) {
     } else {
       if (row.state !== "observed" || row.stage !== null || row.defined !== null || row.reportFailures !== null || row.undefinedReportFailures !== null) refuse("prepare-summary-unknown");
       if (row.reason === "no_records" ? row.records !== 0 : row.reason === "incomplete" ? !Number.isInteger(row.records) || row.records < 1 || row.records > 28 : row.records !== null) refuse("prepare-summary-unknown-count");
+    }
+    if (Object.hasOwn(row, "enumeration")) {
+      if (row.reason !== "original_failure" || row.stage !== "context_enumeration") refuse("enumeration-summary-stage");
+      row.enumeration = validateEnumerationDetail(row.enumeration);
+      if (row.enumeration.defined !== row.defined) refuse("enumeration-summary-outcome");
     }
     return row;
   }

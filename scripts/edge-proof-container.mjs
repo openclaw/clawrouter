@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -160,7 +160,7 @@ async function qualifyImageInputs(contextHash, prepare) {
   prepare?.enter("context_identity");
   check(hash(JSON.stringify(inputPlan.files)) === contextHash && inputPlan.sourceSha === edgeProof.sourceSha && inputPlan.sourceTree === edgeProof.sourceTree, "context-identity");
   prepare?.enter("context_enumeration");
-  const actual = await contextFiles(root, new Set(["node_modules", "admin/node_modules", ".edge-context.json", ".edge-native.json"]));
+  const actual = await contextFiles(root, new Set(["node_modules", "admin/node_modules", ".edge-context.json", ".edge-native.json"]), prepare);
   prepare?.enter("context_byte_closure");
   check(same(actual, inputPlan.files), "context-byte-closure");
   prepare?.enter("input_hashes");
@@ -197,21 +197,55 @@ async function qualifyImageInputs(contextHash, prepare) {
   check(esbuildVersion === JSON.parse(await readFile(esbuildRequire.resolve("esbuild/package.json"), "utf8")).version, "esbuild-platform");
   return result;
 }
-async function contextFiles(root, excluded = new Set()) {
+async function contextFiles(root, excluded = new Set(), prepare) {
   const files = []; let size = 0;
+  const observation = prepare ? { depth: -1 } : null;
   async function walk(prefix = "") {
-    for (const entry of (await readdir(join(root, prefix), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, "en"))) {
-      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (excluded.has(path)) continue;
-      check(/^[a-zA-Z0-9_./-]+$/.test(path) && !path.split("/").includes(".."), "context-path");
-      if (entry.isDirectory()) await walk(path);
-      else {
-        check(entry.isFile(), "context-link-or-special"); const bytes = await readFile(join(root, path)); size += bytes.length;
-        check(files.length < 50000 && size <= 256 * 1024 * 1024, "context-capacity"); files.push({ path, sha256: hash(bytes), bytes: bytes.length });
+    const depth = observation ? ++observation.depth : null;
+    try {
+      prepare?.enumerationPoint("directory_read", "unknown", depth, files.length, size);
+      const entries = await readdir(join(root, prefix), { withFileTypes: true });
+      prepare?.enumerationPoint("directory_sort", "unknown", depth, files.length, size);
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name, "en"))) {
+        prepare?.enumerationPoint("entry_path", "unknown", depth, files.length, size);
+        const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+        prepare?.enumerationPoint("exclusion", "unknown", depth, files.length, size);
+        if (excluded.has(path)) continue;
+        prepare?.enumerationPoint("path_check", "unknown", depth, files.length, size);
+        check(/^[a-zA-Z0-9_./-]+$/.test(path) && !path.split("/").includes(".."), "context-path");
+        prepare?.enumerationPoint("directory_type", "unknown", depth, files.length, size);
+        const directory = entry.isDirectory();
+        if (directory) {
+          prepare?.enumerationPoint("recursion", "directory", depth, files.length, size);
+          await walk(path);
+        }
+        else {
+          prepare?.enumerationPoint("file_type", "not_directory", depth, files.length, size);
+          const file = entry.isFile();
+          prepare?.enumerationPoint("file_type_check", file ? "file" : "other", depth, files.length, size);
+          check(file, "context-link-or-special");
+          prepare?.enumerationPoint("file_read", "file", depth, files.length, size);
+          const bytes = await readFile(join(root, path));
+          prepare?.enumerationPoint("byte_count", "file", depth, files.length, size);
+          size += bytes.length;
+          prepare?.enumerationPoint("capacity", "file", depth, files.length, size);
+          check(files.length < 50000 && size <= 256 * 1024 * 1024, "context-capacity");
+          prepare?.enumerationPoint("hash", "file", depth, files.length, size);
+          const sha256 = hash(bytes);
+          prepare?.enumerationPoint("file_record", "file", depth, files.length, size);
+          files.push({ path, sha256, bytes: bytes.length });
+        }
       }
-    }
+    } finally { if (observation) observation.depth--; }
   }
-  await walk(); return files.sort((a, b) => a.path.localeCompare(b.path, "en"));
+  try {
+    await walk();
+    prepare?.enumerationPoint("final_sort", "unknown", 0, files.length, size);
+    return files.sort((a, b) => a.path.localeCompare(b.path, "en"));
+  } catch (error) {
+    prepare?.enumerationFailure(error);
+    throw error;
+  }
 }
 async function writeExclusive(root, path, bytes) {
   const target = join(root, path); await mkdir(dirname(target), { recursive: true, mode: 0o700 }); await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
@@ -535,20 +569,26 @@ export function parseNativePrepareStages(result, identity) {
     if (index <= start || index >= end || !line.startsWith(prefix) || Buffer.byteLength(line) + 2 > 512 || /[\x00-\x1f\x7f-\x9f]/.test(line) || count >= 32 || terminal) return unknown("invalid");
     let row;
     try { row = JSON.parse(line.slice(prefix.length)); } catch { return unknown("invalid"); }
-    if (!row || Object.getPrototypeOf(row) !== Object.prototype || Object.keys(row).join() !== "v,context,nonce,seq,stage,event,outcome,defined,reportFailures,undefinedReportFailures" || JSON.stringify(row) !== line.slice(prefix.length)) return unknown("invalid");
+    const keys = "v,context,nonce,seq,stage,event,outcome,defined,reportFailures,undefinedReportFailures" + (row && Object.hasOwn(row, "enumeration") ? ",enumeration" : "");
+    if (!row || Object.getPrototypeOf(row) !== Object.prototype || Object.keys(row).join() !== keys || JSON.stringify(row) !== line.slice(prefix.length)) return unknown("invalid");
     if (row.v !== 1 || row.context !== identity.contextHash || row.nonce !== identity.nonce || row.seq !== count + 1) return unknown("invalid");
     count++;
     if (row.event === "entered") {
-      if (entered >= nativePrepareStages.length || row.stage !== nativePrepareStages[entered++] || [row.outcome, row.defined, row.reportFailures, row.undefinedReportFailures].some(value => value !== null)) return unknown("invalid");
+      if (Object.hasOwn(row, "enumeration") || entered >= nativePrepareStages.length || row.stage !== nativePrepareStages[entered++] || [row.outcome, row.defined, row.reportFailures, row.undefinedReportFailures].some(value => value !== null)) return unknown("invalid");
     } else if (row.event === "terminal") {
       if (!entered || row.stage !== nativePrepareStages[entered - 1] || !["original_failure", "reporter_failure", "complete"].includes(row.outcome) || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 32 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) return unknown("invalid");
       if (row.outcome === "original_failure" ? typeof row.defined !== "boolean" : row.defined !== null || entered !== nativePrepareStages.length || (row.outcome === "complete" ? row.reportFailures !== 0 : row.reportFailures < 1)) return unknown("invalid");
+      if (Object.hasOwn(row, "enumeration")) {
+        if (row.outcome !== "original_failure" || row.stage !== "context_enumeration") return unknown("invalid");
+        try { row.enumeration = validateEnumerationDetail(row.enumeration); } catch { return unknown("invalid"); }
+        if (row.enumeration.defined !== row.defined) return unknown("invalid");
+      }
       terminal = row;
     } else return unknown("invalid");
   }
   if (!terminal) return unknown(count ? "incomplete" : "no_records", count);
   if (terminal.outcome === "complete" ? outer.reason !== "complete" || own(result, "code") !== 0 : outer.reason !== "validated_failure" || own(result, "code") === 0) return unknown("outer_inconsistent");
-  return { v: 5, phase: "native_prepare_internal", state: terminal.outcome === "complete" ? "observed" : "rejected", stage: terminal.outcome === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: count, reason: terminal.outcome, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures };
+  return { v: 5, phase: "native_prepare_internal", state: terminal.outcome === "complete" ? "observed" : "rejected", stage: terminal.outcome === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: count, reason: terminal.outcome, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures, ...(Object.hasOwn(terminal, "enumeration") ? { enumeration: terminal.enumeration } : {}) };
 }
 export async function observeImageBuild(operation, readImageId, parseReceipt, report, stageIdentity) {
   let built, available = false;
