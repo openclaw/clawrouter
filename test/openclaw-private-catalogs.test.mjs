@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -42,22 +44,18 @@ export function privateNativeEvaluator(){
  const code=stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"});
  return runInNewContext('"use strict";\n'+code+"\n({"+names.join(",")+"})",{}, {timeout:1000});
 }
-export function privateNativeDiagnosticRecords(error){
+function privateChildDiagnosticRecords(error,prefix,decode,{maxRecords=9,maxBytes=4096,maxLine=768}={}){
  const records=new Map(),seen=new Set(),pending=[error];let bytes=0,nodes=0;
  while(pending.length){const value=pending.pop();if(!value||(typeof value!=="object"&&typeof value!=="function")||seen.has(value))continue;
   seen.add(value);if(++nodes>64)throw Error("native diagnostic error closure exceeded");
   for(const field of ["stdout","stderr"]){const d=Object.getOwnPropertyDescriptor(value,field);if(!d||!("value" in d)||typeof d.value!=="string")continue;
    if(Buffer.byteLength(d.value)>2*1024*1024)throw Error("native diagnostic source exceeded");
-   for(const line of d.value.split("\n")){if(!line.startsWith("PRIVATE_NATIVE_CONTROL "))continue;
-    if(Buffer.byteLength(line)>300)throw Error("native diagnostic record exceeded");
-    const record=JSON.parse(line.slice("PRIVATE_NATIVE_CONTROL ".length));
-    assert.deepEqual(Object.keys(record).sort(),["v","pin","p","a","r","q","vect","worker","restore","rejects","pending"].sort());
-    assert.equal(record.v,1);assert.equal(record.pin,privateCatalogPin);assert.ok(privateProviders.includes(record.p));assert.ok(["stream","simple"].includes(record.a));assert.ok(["eof","preabort","partial","provider_error"].includes(record.r));
-    for(const k of ["q","vect","worker","restore"])assert.equal(typeof record[k],"boolean");
-    for(const k of ["rejects","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
-    const id=record.p+":"+record.a+":"+record.r,encoded=JSON.stringify(record);
+   for(const line of d.value.split("\n")){if(!line.startsWith(prefix))continue;
+    if(Buffer.byteLength(line)>maxLine)throw Error("native diagnostic record exceeded");
+    const record=JSON.parse(line.slice(prefix.length));
+    const id=decode(record),encoded=JSON.stringify(record);
     if(records.has(id)){assert.equal(records.get(id),encoded);continue;}
-    bytes+=Buffer.byteLength(encoded)+1;assert.ok(records.size<24&&bytes<=8000);records.set(id,encoded);
+    bytes+=Buffer.byteLength(encoded)+1;assert.ok(records.size<maxRecords&&bytes<=maxBytes);records.set(id,encoded);
    }
   }
   const cause=Object.getOwnPropertyDescriptor(value,"cause");if(cause&&"value" in cause)pending.push(cause.value);
@@ -68,9 +66,46 @@ export function privateNativeDiagnosticRecords(error){
  }
  return [...records.values()].map(v=>JSON.parse(v));
 }
-export async function withPrivateNativeDiagnostics(run,emit){
- try{return await run();}catch(error){try{for(const record of privateNativeDiagnosticRecords(error))emit(record);}catch(reportError){throw new AggregateError([error,reportError],"native child and diagnostic delivery failed");}throw error;}
+export function privateNativeDiagnosticRecords(error){
+ return privateChildDiagnosticRecords(error,"PRIVATE_NATIVE_CONTROL ",record=>{
+  assert.deepEqual(Object.keys(record).sort(),["v","pin","p","a","r","q","vect","worker","restore","rejects","pending"].sort());
+  assert.equal(record.v,1);assert.equal(record.pin,privateCatalogPin);assert.ok(privateProviders.includes(record.p));assert.ok(["stream","simple"].includes(record.a));assert.ok(["eof","preabort","partial","provider_error"].includes(record.r));
+  for(const k of ["q","vect","worker","restore"])assert.equal(typeof record[k],"boolean");
+  for(const k of ["rejects","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
+  return record.p+":"+record.a+":"+record.r;
+ },{maxRecords:24,maxBytes:8000,maxLine:300});
 }
+export function privateCheckpointFunctions(){
+ const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+ const start="export function validatePrivateCheckpoint(",end="const checkpoints=createPrivateCheckpointReporter(";
+ assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
+ const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validatePrivateCheckpoint,createPrivateCheckpointReporter,finishPrivateCheckpointCase,privateCheckpointCaseIndex})",{},{timeout:1000});
+}
+export function privateCheckpointRecords(error){
+ const {validatePrivateCheckpoint}=privateCheckpointFunctions();
+ return privateChildDiagnosticRecords(error,"PRIVATE_CHECKPOINT ",record=>{validatePrivateCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
+}
+export function privateAnnotationEmitter(write){
+ let bytes=0,count=0;
+ return record=>{const line="::notice title=Private closed diagnostic::"+JSON.stringify(record)+"\n";
+  assert.ok(Buffer.byteLength(line)<=768&&bytes+Buffer.byteLength(line)<=16384&&count<48,"Private annotation quota exceeded");
+  bytes+=Buffer.byteLength(line);count++;write(line);};
+}
+export async function withPrivateNativeDiagnostics(run,emit){
+ try{return await run();}catch(error){const reporting=[];
+  for(const collect of [privateCheckpointRecords,privateNativeDiagnosticRecords])try{for(const record of collect(error))emit(record);}catch(reportError){reporting.push(reportError);}
+  if(reporting.length)throw new AggregateError([error,...reporting],"native child and diagnostic delivery failed");throw error;}
+}
+export async function runPrivateReported(body,cleanups,emit){
+ const reporter=privateCheckpointFunctions().createPrivateCheckpointReporter("outer",emit);
+ reporter.mark(null,"setup","enter");reporter.flush(null);
+ return finishPrivateOwned(()=>body(reporter),[...cleanups.map(cleanup=>()=>cleanup(reporter)),async()=>{
+  await reporter.drain();reporter.flush(null);reporter.finish();
+  if(reporter.failures.length)throw new AggregateError(reporter.failures,"Private diagnostic observation failed");
+ }]);
+}
+
 export const privateKey=(id,kind="inference",secret="fixture-secret")=>`clawrouter-live-${id}_${kind}-${secret}`;
 export async function finishPrivateOwned(body,cleanups){const failures=[];let value;try{value=await body();}catch(e){failures.push(e);}for(const f of cleanups)try{await f();}catch(e){failures.push(e);}if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"private catalog body and owned cleanup failed");return value;}
 export async function joinPrivateOriginals(s){let at=0;while(at<s.roots.length){const batch=s.roots.slice(at);at=s.roots.length;for(const result of await Promise.allSettled(batch))if(result.status==='rejected')s.failures.push(result.reason);}for(const o of s.operations)if(o.failed)s.failures.push(o.error);if(s.failures.length)throw new AggregateError(s.failures,"private catalog original operations failed");}
@@ -199,6 +234,118 @@ export function assertPrivateReceipt(row,p){assert.equal(p.retired,true);assert.
  if(row.scenario==='shared_abort'){assert.equal(p.source.settled,1);assert.equal(p.source.canceled,0);}// Explicit completion of shared acquisition, not disconnect proof.
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ test("Private checkpoint preserves original invocation, promise and undefined rejection",async()=>{
+  const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v)),receiver={},args=[{},undefined];
+  let calls=0,reject;const original=new Promise((_,no)=>{reject=no;});
+  function operation(...got){calls++;assert.equal(this,receiver);assert.deepEqual(got,args);return original;}
+  assert.equal(r.observe(0,"body",operation,receiver,args),original);reject(undefined);await r.drain();
+  assert.equal(calls,1);assert.ok(records.some(v=>v.phase==="body"&&v.state==="rejected"&&v.defined===false));
+  let threw=false;try{r.observe(1,"setup",()=>{throw undefined;},undefined,[]);}catch(e){threw=true;assert.equal(e,undefined);}
+  assert.equal(threw,true);r.finish();assert.equal(r.failures.length,0);
+ });
+ test("Private checkpoint startup failure still finalizes and attempts every cleanup",async()=>{
+  const records=[],order=[],secondary={};
+  await assert.rejects(runPrivateReported(report=>report.observe(null,"setup",()=>{throw undefined;},undefined,[]),[
+   report=>report.observe(null,"cleanup",()=>{order.push(1);throw secondary;},undefined,[]),
+   ()=>{order.push(2);}
+  ],v=>records.push(v)),e=>e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1]===secondary);
+  assert.deepEqual(order,[1,2]);assert.ok(records.some(v=>v.phase==="setup"&&v.state==="threw"&&!v.defined));
+  assert.ok(records.some(v=>v.phase==="cleanup"&&v.state==="threw"&&v.defined));assert.equal(records.at(-1).phase,"final");
+ });
+ test("Private checkpoint retains original read closed and independent cleanup faults",async()=>{
+  const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v));
+  const data={},cleanup={};r.mark(2,"read","rejected",data,0,1);r.mark(2,"closed","rejected",data,0,2);
+  r.observe(2,"cleanup",()=>Promise.reject(cleanup),undefined,[]);await r.drain();r.mark(2,"cleanup","fulfilled");r.flush(2);r.finish();
+  for(const phase of ["read","closed","cleanup"])assert.ok(records.some(v=>v.phase===phase&&v.state==="rejected"&&v.defined));
+  assert.equal(records.at(-1).phase,"final");assert.equal(r.failures.length,0);
+ });
+ test("Private checkpoint reporting faults never replace undefined primary",async()=>{
+  let writes=0;
+  await assert.rejects(runPrivateReported(()=>{throw undefined;},[()=>{}],()=>{writes++;throw undefined;}),e=>
+   e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1] instanceof AggregateError&&e.errors[1].errors.every(v=>v===undefined));
+  assert.ok(writes>0);
+ });
+ test("Private checkpoint observer fault preserves original return and is joined separately",async()=>{
+  const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v));
+  const original={};Object.defineProperty(original,"then",{get(){throw undefined;}});
+  assert.equal(r.observe(0,"case_result",()=>original,undefined,[]),original);await r.drain();r.finish();
+  assert.equal(r.failures.length,1);assert.equal(r.failures[0],undefined);assert.equal(records.at(-1).phase,"final");
+ });
+ test("Private checkpoint case finalization never joins its own completion observer",async()=>{
+  const {createPrivateCheckpointReporter,finishPrivateCheckpointCase}=privateCheckpointFunctions(),records=[];
+  const report=createPrivateCheckpointReporter("sdk",r=>records.push(r));let finalized=false;
+  const original=Promise.resolve().then(()=>{
+   assert.equal(finishPrivateCheckpointCase(report,0,[]),undefined);finalized=true;
+  });
+  assert.equal(report.observe(0,"case_result",()=>original,undefined,[]),original);
+  await original;assert.equal(finalized,true);await report.drain();report.finish();assert.equal(report.failures.length,0);
+  const second=createPrivateCheckpointReporter("sdk",r=>records.push(r));
+  const rejected=Promise.resolve().then(()=>{finishPrivateCheckpointCase(second,1,[undefined]);throw undefined;});
+  assert.equal(second.observe(1,"case_result",()=>rejected,undefined,[]),rejected);
+  let caught=false;try{await rejected;}catch(reason){caught=true;assert.equal(reason,undefined);}assert.equal(caught,true);
+  await second.drain();second.finish();assert.ok(records.some(r=>r.case===1&&r.phase==="assertions"&&r.defined===false));
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  assert.doesNotMatch(source.slice(source.indexOf('async function fixtureOwned('),source.indexOf('function inference(')),/checkpoints\.drain\(/);
+ });
+ test("Private checkpoint bounded overflow reserves final summary and rejects unsafe fields",async()=>{
+  const {createPrivateCheckpointReporter,validatePrivateCheckpoint}=privateCheckpointFunctions(),records=[];
+  const r=createPrivateCheckpointReporter("sdk",v=>records.push(v));
+  for(let i=0;i<108;i++){r.mark(i,"body","rejected",{});r.flush(i);}r.finish();
+  assert.equal(records.length,9);assert.equal(records.at(-2).phase,"overflow");assert.equal(records.at(-2).count,101);assert.equal(records.at(-1).phase,"final");
+  const commands=[],emit=privateAnnotationEmitter(v=>commands.push(v));for(const record of records)emit(record);
+  assert.ok(commands.every(v=>Buffer.byteLength(v)<=768));assert.ok(Buffer.byteLength(commands.join(""))<16384);
+  for(const change of [{pin:"foreign"},{case:108},{phase:"unknown_module_name"},{op:-1},{acq:4096},{defined:null},{message:"private"}])
+   assert.throws(()=>validatePrivateCheckpoint({...records[0],...change}));
+ });
+ test("Private checkpoint collector preserves child plus cleanup closure without getters",async()=>{
+  const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v));r.mark(0,"setup","threw",undefined);r.flush(0);r.finish();
+  const child=Object.assign(new Error("not forwarded"),{stdout:records.map(v=>"PRIVATE_CHECKPOINT "+JSON.stringify(v)).join("\n")});
+  const outer=new AggregateError([child,undefined],"not forwarded");Object.defineProperty(outer,"cause",{value:outer});let getters=0;
+  Object.defineProperty(outer,"stderr",{get(){getters++;throw Error("not called");}});
+  const emitted=[];await assert.rejects(withPrivateNativeDiagnostics(()=>{throw outer;},v=>emitted.push(v)),e=>e===outer);
+  assert.deepEqual(emitted,JSON.parse(JSON.stringify(records)));assert.equal(getters,0);
+  assert.throws(()=>privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify({...records[0],unknown:true})}));
+  assert.deepEqual(privateCheckpointRecords({stdout:"untrusted text\n# PRIVATE_CHECKPOINT {}"}),[]);
+ });
+ test("Private checkpoint observes real child import rejection with column-zero protocol",async()=>{
+  const {createPrivateCheckpointReporter,validatePrivateCheckpoint}=privateCheckpointFunctions();
+  const code=validatePrivateCheckpoint.toString()+"\n"+createPrivateCheckpointReporter.toString()+`
+const r=createPrivateCheckpointReporter("sdk",v=>process.stdout.write("PRIVATE_CHECKPOINT "+JSON.stringify(v)+"\\n"));
+try{await r.observe(null,"setup",()=>import("node:missing_private_diagnostic_module"),undefined,[]);}
+catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
+  let child;try{await promisify(execFile)(process.execPath,["--input-type=module","-e",code],{timeout:10000,maxBuffer:16384});}catch(error){child=error;}
+  assert.ok(child);const records=privateCheckpointRecords(child);
+  assert.ok(records.some(v=>v.phase==="setup"&&v.state==="rejected"&&v.defined));assert.equal(records.at(-1).phase,"final");
+  assert.ok(child.stdout.split("\n").filter(Boolean).every(line=>line.startsWith("PRIVATE_CHECKPOINT ")));
+  const emitted=[];await assert.rejects(withPrivateNativeDiagnostics(()=>Promise.reject(child),v=>emitted.push(v)),e=>e===child);
+  assert.deepEqual(emitted,records);
+ });
+ test("Private checkpoint missing child protocol distinguishes helper boundary from SDK entry",async()=>{
+  const emitted=[],reason={};
+  await assert.rejects(runPrivateReported(report=>withPrivateNativeDiagnostics(()=>report.observe(null,"child",()=>Promise.reject(reason),undefined,[]),v=>emitted.push(v)),[],v=>emitted.push(v)),e=>e===reason);
+  assert.ok(emitted.some(v=>v.lane==="outer"&&v.phase==="child"&&v.state==="rejected"));
+  assert.equal(emitted.some(v=>v.lane==="sdk"),false);assert.equal(emitted.at(-1).phase,"final");
+ });
+ test("Private checkpoint correlates actual authored rows without borrowed case identity",()=>{
+  const {privateCheckpointCaseIndex}=privateCheckpointFunctions(),all=[...privateNativeControls,...privateCases];
+  assert.equal(all.length,108);assert.equal(privateCases.filter(r=>!r.workerOnly).length,75);assert.equal(privateNativeControls.length,24);
+  for(const [index,row]of all.entries())assert.equal(privateCheckpointCaseIndex(all,row.id),index);
+  assert.throws(()=>privateCheckpointCaseIndex(all,"unknown"));assert.throws(()=>privateCheckpointCaseIndex([...all,all[0]],all[0].id));
+  assert.throws(()=>privateCheckpointCaseIndex([...all,{id:"late"}],"late"));
+ });
+ test("Private checkpoint joins late observation and bounds controls plus both reporting lanes",async()=>{
+  const {createPrivateCheckpointReporter}=privateCheckpointFunctions(),commands=[],emit=privateAnnotationEmitter(line=>commands.push(line));
+  for(const row of privateNativeControls)emit({v:1,pin:privateCatalogPin,p:row.provider,a:row.api,r:row.control,q:false,vect:false,worker:false,restore:false,rejects:1024,pending:1024});
+  for(const lane of ["outer","sdk"]){const report=createPrivateCheckpointReporter(lane,emit);
+   const first=Promise.resolve().then(()=>{report.observe(1,"cleanup",()=>Promise.reject(undefined),undefined,[]);});
+   report.observe(0,"body",()=>first,undefined,[]);await report.drain();
+   for(let i=2;i<108;i++){report.mark(i,"worker_retirement","rejected",{});report.flush(i);}report.finish();
+   assert.equal(report.failures.length,0);
+  }
+  assert.equal(commands.length,42);assert.ok(Buffer.byteLength(commands.join(""))<=16384);assert.ok(commands.every(line=>Buffer.byteLength(line)<=768));
+  assert.equal(commands.filter(line=>line.includes('"phase":"final"')).length,2);
+ });
+
  const evaluator=privateNativeEvaluator();
  function nativeEvidence(){
   const owner={},identity={guard:()=>{}},reason={name:"AbortError"},stored={name:"AbortError"};
@@ -440,8 +587,17 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  });
  test('private cleanup preserves body, undefined and every original cleanup failure',async()=>{const first={},last={},order=[];await assert.rejects(finishPrivateOwned(()=>{throw first;},[()=>{order.push(1);throw undefined;},()=>{order.push(2);throw last;}]),e=>e instanceof AggregateError&&e.errors[0]===first&&e.errors[1]===undefined&&e.errors[2]===last);assert.deepEqual(order,[1,2]);});
  test('private dynamic original join never treats settled rejection as success',async()=>{const reason={},s={roots:[],operations:[],failures:[]};s.roots.push(Promise.resolve().then(()=>{s.roots.push(Promise.reject(undefined));s.operations.push({failed:true,error:reason});}));await assert.rejects(joinPrivateOriginals(s),e=>e instanceof AggregateError&&e.errors[0]===undefined&&e.errors[1]===reason);});
- test('registered private discovery and public inference through Worker SQLite',{skip:!process.env.CLAWROUTER_OPENCLAW_CHECKOUT,timeout:300000},async t=>{const f=await startPrivateCatalogFixture(),created=[];
-  const all=[...privateNativeControls,...privateCases];
-  await finishPrivateOwned(async()=>{for(const row of all){await f.setup(row);created.push(row);}await withPrivateNativeDiagnostics(()=>runOpenClawConsumer(t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}),record=>console.log("::notice title=Private native diagnostic::"+JSON.stringify(record)));},[...all.map(row=>async()=>{if(created.includes(row))assertPrivateReceipt(row,await f.join(row));}),()=>f.close()]);
+ test('registered private discovery and public inference through Worker SQLite',{skip:!process.env.CLAWROUTER_OPENCLAW_CHECKOUT,timeout:300000},async t=>{let f;const created=[];
+  const all=[...privateNativeControls,...privateCases],emit=privateAnnotationEmitter(line=>process.stdout.write(line));
+  await runPrivateReported(async report=>{
+   f=await report.observe(null,"setup",startPrivateCatalogFixture,undefined,[]);
+   for(const [index,row]of all.entries()){await report.observe(index,"case_setup",f.setup,f,[row]);created.push(row);}
+   report.mark(null,"child","enter");report.flush(null);
+   await withPrivateNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}]),emit);
+  },[...all.map((row,index)=>async report=>{if(!created.includes(row))return;
+   const proof=await report.observe(index,"worker_retirement",f.join,f,[row]);report.mark(index,"assertions","enter");
+   try{assertPrivateReceipt(row,proof);report.mark(index,"assertions","fulfilled");}
+   catch(error){report.mark(index,"assertions","rejected",error);report.flush(index);throw error;}
+  }),report=>f?report.observe(null,"cleanup",f.close,f,[]):undefined],emit);
  });
 }
