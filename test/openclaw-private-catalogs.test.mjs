@@ -512,7 +512,7 @@ export async function privateInertReader(read,closed=Promise.resolve()){
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  // BEGIN Private capture entry inert regressions
- function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false}={}){
+ function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false,ownershipOverride}={}){
   source??=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
   const section=(a,b)=>{assert.equal(source.split(a).length,2);return source.slice(source.indexOf(a),source.indexOf(b,source.indexOf(a)));};
   const wrapper=section("export function createPrivateFetchObserver(","export function createPrivateInvocationOwnership(").replace(/^export /gm,"");
@@ -530,7 +530,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const fakeURL=class {constructor(value){hit(5);assert.equal(value,input);this.origin="https://fixture.invalid";this.search="";this.href=value;this.pathname="/chat/completions";}};
   const fakeHeaders=class {constructor(){hit(9);}get(){hit(10);return "Bearer key";}has(){return false;}};
   const transportRows=[];transportRows.push=function(value){hit(18);return Array.prototype.push.call(this,value);};
-  const ownership={transport(){hit(11);},response(){}};
+  const ownership=ownershipOverride??{transport(){hit(11);},response(){}};
   const checkpoints={bodyCaptureFailure(...args){if(reportThrow)throw undefined;r.bodyCaptureFailure(...args);},bodyOperationFailure(...args){r.bodyOperationFailure(...args);}};
   const record=(kind,details)=>{hit(20);const o={kind,...details,state:"pending"};originals.push(o);return o;};
   const returned=(o,p)=>{o.pending=p;o.state="fulfilled";};const observer=()=>{};
@@ -576,6 +576,90 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const {validatePrivateCheckpoint}=privateCheckpointFunctions();validatePrivateCheckpoint(cap);
   for(const patch of [{v:6},{v:7,meta:[...cap.meta.slice(0,3),[20,2,false],cap.meta[4]]},{case:4},{decl:4}])assert.throws(()=>validatePrivateCheckpoint({...cap,...patch}));
   const error={stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)};assert.equal(JSON.stringify(privateCheckpointRecords(error)),JSON.stringify([cap]));
+ });
+
+ // V8 source sites: 0 getStore, 1 inactive, 2 absent context, 3 invocation member,
+ // 4 acquisition operand, 5 absent acquisition, 6 acquisition member, 7 context,
+ // 8 previous transport, 9 transport member, 10 original method/invocation kind.
+ function privateOwnershipSource(source){
+  source??=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const start="export function createPrivateInvocationOwnership(",end="export function newPrivateInvocationCaller(";
+  assert.equal(source.split(start).length,2);return source.slice(source.indexOf(start),source.indexOf(end));
+ }
+ function privateOwnershipVector(source,{bits=0,throwAt=-1,reason,method="POST",reportThrow=false,reenter=false}={}){
+  const calls=[],out=[],observerFailures=[],guardErrors=[{},{}];let sets=0,nested=false;
+  const hit=(site,label)=>{calls.push(label);if(site===throwAt)throw reason;};
+  const read=(obj,key,site,value)=>Object.defineProperty(obj,key,{configurable:true,get(){hit(site,key);return typeof value==="function"?value():value;}});
+  const invocation={owner:{},caller:{}},context={},a={},t={};
+  read(context,"invocation",3,invocation);read(context,"acquisition",4,()=>bits&8?undefined:a);
+  read(a,"context",7,()=>bits&32?{}:context);Object.defineProperty(a,"transport",{get(){hit(8,"previous");return bits&64?{}:undefined;},set(v){calls.push("set.transport");}});
+  read(t,"method",10,method);read(invocation,"kind",10,()=>bits&256?"discovery":"inference");
+  const weak=class {constructor(){this.id=sets++;}add(){calls.push("add."+this.id);return this;}has(){const id=[3,6,9][this.id];hit(id,"has."+this.id);return this.id===0?!(bits&4):this.id===1?!(bits&16):!!(bits&128);}};
+  let owner;const storage={getStore(){hit(0,"getStore");if(reenter&&!nested){nested=true;owner.transport({method:"POST"});}return bits&2?null:context;},disable(){calls.push("disable");}};
+  const factory=new Function("WeakSet","WeakMap","Error",'"use strict";'+stripTypeScriptTypes(source.replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')(weak,class {},text=>guardErrors[text==="incomplete invocation context"?0:1]);
+  owner=factory(storage);if(bits&1)owner.restore();let value,present=false,caught;
+  try{value=owner.transport(t,w=>{out.push(w);if(reportThrow)throw undefined;},observerFailures);}catch(e){present=true;caught=e;}
+  return {calls,out,observerFailures,present,caught,value,guardErrors,table:{context,a,t,invocation}};
+ }
+ test("Private ownership V8 preserves every original short-circuit truth vector",()=>{
+  const actual=privateOwnershipSource();
+  // The frozen pre-V8 expressions are the comparison oracle, not a new checker.
+  const original=actual.slice(0,actual.indexOf(" const current="))+` const current=()=>{const value=storage.getStore();if(!active||!value||!invocations.has(value.invocation))throw Error("incomplete invocation context");return value;};
+ return {transport(t){const context=current(),a=context.acquisition;
+ if(!a||!acquisitions.has(a)||a.context!==context||a.transport||transports.has(t)||(t.method==="POST"?"inference":t.method==="GET"?"discovery":"invalid")!==context.invocation.kind)throw Error("incomplete transport ownership");
+ t.context=context;t.invocation=context.invocation;t.acquisition=a;t.caller=context.invocation.kind==="inference"?context.invocation.caller:undefined;t.catalogInitiator=context.invocation.kind==="discovery"?context.invocation.caller:undefined;t.owner=context.invocation.owner;
+ a.transport=t;transports.add(t);},restore(){if(!active)throw Error("duplicate invocation restoration");active=false;storage.disable();}};}`;
+  for(let bits=0;bits<512;bits++)for(const method of ["POST","GET","post"]){
+   const old=privateOwnershipVector(original,{bits,method}),now=privateOwnershipVector(actual,{bits,method});
+   assert.deepEqual(now.calls,old.calls);assert.equal(now.present,old.present);assert.equal(now.value,old.value);
+   if(old.present){assert.equal(now.guardErrors.indexOf(now.caught),old.guardErrors.indexOf(old.caught));const tuple=now.out[0];assert.equal(tuple[0],11);assert.equal(tuple[2],2**(tuple[1]+1)-1);assert.equal(tuple[3],2**tuple[1]-1);assert.deepEqual(tuple.slice(4),[false,true]);}
+   else assert.equal(now.out.length,0);
+  }
+ });
+ test("Private ownership V8 retains operand throws and independent reporting failures",()=>{
+  const source=privateOwnershipSource();
+  for(const site of [0,3,4,6,7,8,9,10])for(const reason of [undefined,{}])for(const reportThrow of [false,true]){
+   const h=privateOwnershipVector(source,{throwAt:site,reason,reportThrow});assert.equal(h.present,true);assert.equal(h.caught,reason);
+   assert.deepEqual(h.out,[[11,site,2**(site+1)-1,2**site-1,true,reason!==undefined]]);assert.deepEqual(h.observerFailures,reportThrow?[undefined]:[]);
+  }
+ });
+ test("Private ownership V8 reentrant evaluations keep invocation-local traces",()=>{
+  const source=privateOwnershipSource(),h=privateOwnershipVector(source,{reenter:true});assert.equal(h.present,false);assert.equal(h.out.length,0);assert.equal(h.calls.filter(x=>x==="getStore").length,2);
+  for(const bits of [1,2,4,8,16,32,64,128,256]){const r=privateOwnershipVector(source,{bits});assert.equal(r.present,true);assert.equal(r.out.length,1);}
+ });
+ test("Private ownership V8 actual capture associates the same rejected transport",()=>{
+  const factory=new Function('"use strict";'+stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')();
+  for(const mode of ["healthy","missing","kind","foreign","late"]){
+   let store,saved;const storage={getStore(){return store;},run(value,fn){const old=store;store=value;try{return fn();}finally{store=old;}},disable(){store=undefined;}};
+   const owner=factory(storage),h=privateCaptureHarness({ownershipOverride:owner}),signal={},caller={kind:mode==="kind"?"discovery":"inference",owner:{},signal};let pending,present=false;h.init.method="POST";
+   const fetch=()=>Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]);
+   const guarded=()=>{const input={},fn=()=>{saved=store;if(mode==="late"){owner.restore();return storage.run(saved,fetch);}return fetch();};return owner.guard(fn,undefined,[input],{input,guard:fn});};
+   try{pending=mode==="missing"?fetch():mode==="foreign"?storage.run({invocation:{}},fetch):owner.invoke(caller,caller.kind,guarded,undefined,caller.kind==="inference"?[{}, {}, {signal}]:[{signal}]);}catch(error){present=true;}
+   assert.equal(present,mode!=="healthy");assert.equal(h.fetchCalls,mode==="healthy"?1:0);
+   if(mode==="healthy"){assert.equal(pending,h.pending);assert.equal(h.capsule().meta[3],null);}
+   else {h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",{});const cap=h.records.find(v=>v.v===8);assert.ok(cap);assert.equal(Math.floor(cap.meta[3][1]/4),{missing:2,kind:10,foreign:3,late:1}[mode]);}
+  }
+ });
+ test("Private ownership V8 reserved capsule has strict masks and legacy relay",()=>{
+  const {validatePrivateCheckpoint}=privateCheckpointFunctions();
+  for(let id=0;id<=10;id++)for(const operand of [false,true])for(const reason of [undefined,{}]){
+   if(!operand&&[0,4].includes(id))continue;
+   const h=privateCaptureHarness(),tuple=[11,id,2**(id+1)-1,2**id-1,operand,reason!==undefined];h.r.bodyCaptureFailure(0,h.row,11,reason,tuple);
+   h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",reason);const cap=h.records.find(v=>v.v===8);assert.ok(cap);validatePrivateCheckpoint(cap);assert.deepEqual(JSON.parse(JSON.stringify(cap.meta[3])),[tuple[2]*2048+tuple[3],id*4+(operand?2:0)+(reason!==undefined?1:0)]);
+   const commands=[],emit=privateAnnotationEmitter(v=>commands.push(v));emit(cap);assert.ok(Buffer.byteLength(JSON.stringify(cap))<=375);assert.ok(Buffer.byteLength(commands[0])<=418);
+   assert.equal(JSON.stringify(privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)})),JSON.stringify([cap]));
+   for(const wrong of [[(tuple[2]+1)*2048+tuple[3],id*4], [tuple[2]*2048+tuple[3]+1,id*4], [4193280,43], [4193279,44], [2048,0], [1,2,3], null])assert.throws(()=>validatePrivateCheckpoint({...cap,meta:[...cap.meta.slice(0,3),wrong,cap.meta[4]]}));
+   for(const v of [2,4,5,6,7])assert.throws(()=>validatePrivateCheckpoint({...cap,v}));
+  }
+ });
+ test("Private ownership V8 foreign absent late and reporting evidence stays unknown",async()=>{
+  for(const mutate of [h=>h.r.bodyCaptureFailure(0,{},11,undefined,[11,0,1,0,true,false]),h=>h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,0,1,0,true,true])]){
+   const h=privateCaptureHarness();mutate(h);assert.equal(h.r.failures.length,1);assert.equal(h.capsule().meta[3],null);
+  }
+  const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,6,undefined);h.r.bodyCaptureFailure(0,h.row,11,{},[11,5,63,31,false,true]);assert.deepEqual(JSON.parse(JSON.stringify(h.capsule().meta[3])),[6,1,false]);
+  const r=privateOwnershipVector(privateOwnershipSource(),{throwAt:0,reason:undefined,reportThrow:true});let all;
+  try{await finishPrivateOwned(()=>{throw r.caught;},[()=>{throw r.observerFailures[0];},()=>{throw undefined;}]);}catch(e){all=e;}
+  assert.deepEqual(all.errors,[undefined,undefined,undefined]);
  });
  // END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
