@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -61,6 +61,7 @@ const own = (value, key) => {
   return descriptor.value;
 };
 const receiptRecord = (recorder, method, ...args) => { if (recorder) try { recorder[method](...args); } catch (error) { recorder.errors.push(error); } };
+const receiptCount = (recorder, value) => { receiptRecord(recorder, "count", value); return value; };
 const receiptLeaf = (recorder, id, value) => { receiptRecord(recorder, "leaf", id, value); return value; };
 const exactKeys = (value, keys, recorder) => check(receiptLeaf(recorder, 1, same(Object.getOwnPropertyNames(value).sort(), [...keys].sort())), "data-keys");
 export function raiseContainerFailures(errors) {
@@ -882,60 +883,88 @@ export function parseInitPrerequisites(result, binding) {
 }
 // This validates the source-defined record lifecycle, not native success or
 // operation-vs-bookkeeping causality. Report errors can follow FINAL fulfilled.
-export function parseChildPackaging(result, binding, initSummary) {
+export function createProjectionLedger() {
+  const errors = [], stack = []; let first = null, broken = false;
+  const note = operation => { try { return operation(); } catch (error) { broken = true; errors.push(error); } };
+  return { errors,
+    start(boundary, context) { return note(() => { const frame = { boundary, context, seen: 0, passed: 0 }; stack.push(frame); return frame; }); },
+    leaf(id, value, negative) { note(() => { const frame = stack.at(-1); if (!frame) return; const bit = 2 ** (id - 1); frame.seen |= bit; if (negative ? !value : value) frame.passed |= bit; }); },
+    finish(frame, rejected, threw, reason) { note(() => {
+      check(stack.pop() === frame, "projection-ledger-order");
+      if (!first && (rejected || threw)) {
+        const failed = frame.seen & ~frame.passed;
+        const leaf = threw ? 0 : Array.from({ length: projectionBoundaries[frame.boundary - 1][1] }, (_, i) => i + 1).find(id => failed & 2 ** (id - 1)) ?? 0;
+        first = [1,frame.boundary,frame.context,threw ? 2 : 1,leaf,frame.seen,frame.passed,threw ? reason !== undefined : null];
+      }
+    }); },
+    detail() { return broken || errors.length || stack.length ? null : first; },
+  };
+}
+const projectionRecord = (recorder, method, ...args) => { if (recorder) try { return recorder[method](...args); } catch (error) { recorder.errors.push(error); } };
+const projectionLeaf = (recorder, id, value, negative = false) => { projectionRecord(recorder, "leaf", id, value, negative); return value; };
+function projectionRun(recorder, boundary, context, operation, negative = false) {
+  if (!recorder) return operation();
+  const frame = projectionRecord(recorder, "start", boundary, context);
+  try { const value = operation(); projectionRecord(recorder, "finish", frame, projectionBoundaries[boundary - 1][1] > 0 && (negative ? !!value : !value), false); return value; }
+  catch (error) { projectionRecord(recorder, "finish", frame, false, true, error); throw error; }
+}
+export function parseChildPackaging(result, binding, initSummary, recorder) {
   const unknown = (reason, records = null) => [1,reason,records,0,0,0,0,null,"UNKNOWN"];
-  if (!binding || !cidPattern.test(binding.cid) || !hashPattern.test(binding.nonce) || !hashPattern.test(binding.contextHash) || binding.attached?.result !== result) return unknown("binding_unavailable");
-  if (!result.supervisor?.[4] || !result.supervisor?.[5] || !result.closed) return unknown("capture_unavailable");
+  if (projectionRun(recorder, 1, 0, () => projectionLeaf(recorder, 1, !binding, true) || projectionLeaf(recorder, 2, !cidPattern.test(binding.cid), true) || projectionLeaf(recorder, 3, !hashPattern.test(binding.nonce), true) || projectionLeaf(recorder, 4, !hashPattern.test(binding.contextHash), true) || projectionLeaf(recorder, 5, binding.attached?.result !== result, true), true)) return unknown("binding_unavailable");
+  if (projectionRun(recorder, 2, 0, () => projectionLeaf(recorder, 1, !result.supervisor?.[4], true) || projectionLeaf(recorder, 2, !result.supervisor?.[5], true) || projectionLeaf(recorder, 3, !result.closed, true), true)) return unknown("capture_unavailable");
   for (const key of ["stdout", "stderr"]) {
-    const summary = result.outputSummary?.[key];
-    if (!summary || summary.complete !== true || summary.truncated !== false) return unknown("capture_unavailable");
-    const bytes = Buffer.from(result[key]);
-    if (bytes.length !== summary.bytes || bytes.length !== summary.retainedBytes || hash(bytes) !== summary.sha256 || summary.retainedSha256 !== summary.sha256) return unknown("capture_mismatch");
+    const context = key === "stdout" ? 1 : 2;
+    const summary = projectionRun(recorder, 3, context, () => result.outputSummary?.[key]);
+    if (projectionRun(recorder, 4, context, () => projectionLeaf(recorder, 1, !summary, true) || projectionLeaf(recorder, 2, summary.complete !== true, true) || projectionLeaf(recorder, 3, summary.truncated !== false, true), true)) return unknown("capture_unavailable");
+    const bytes = projectionRun(recorder, 5, context, () => Buffer.from(result[key]));
+    if (projectionRun(recorder, 6, context, () => projectionLeaf(recorder, 1, bytes.length !== summary.bytes, true) || projectionLeaf(recorder, 2, bytes.length !== summary.retainedBytes, true) || projectionLeaf(recorder, 3, hash(bytes) !== summary.sha256, true) || projectionLeaf(recorder, 4, summary.retainedSha256 !== summary.sha256, true), true)) return unknown("capture_mismatch");
   }
-  if (initSummary?.reason !== "complete" || initSummary.records !== 9) return unknown("init_unqualified");
+  if (projectionRun(recorder, 7, 0, () => projectionLeaf(recorder, 1, initSummary?.reason !== "complete", true) || projectionLeaf(recorder, 2, initSummary.records !== 9, true), true)) return unknown("init_unqualified");
   const rows = [], prefix = "EDGE_PACKAGING_V1 ";
   try {
-    const lines = result.stdout.split("\n");
+    const lines = projectionRun(recorder, 8, 0, () => result.stdout.split("\n"));
     for (const [index,line] of lines.entries()) {
-      if (!line.includes("EDGE_PACKAGING")) continue;
-      check(index < lines.length - 1 && line.startsWith(prefix) && !line.includes("\x1b") && Buffer.byteLength(line + "\n") <= 768 && rows.length < 256, "child-frame");
-      const value = JSON.parse(line.slice(prefix.length)), row = validatePackagingDiagnostic(value);
-      check(JSON.stringify(value) === line.slice(prefix.length) && JSON.stringify(row) === JSON.stringify(value) && ["child","build_a","build_b"].includes(row.role), "child-frame-canonical");
-      if (row.outcome === "rejected") check(typeof row.defined === "boolean", "child-rejection-presence");
-      else if (row.outcome !== "observed") check(row.defined === null, "child-nonfailure-presence");
-      rows.push(row);
+      if (!projectionRun(recorder, 9, 0, () => line.includes("EDGE_PACKAGING"))) continue;
+      check(projectionRun(recorder, 10, 0, () => projectionLeaf(recorder, 1, index < lines.length - 1) && projectionLeaf(recorder, 2, line.startsWith(prefix)) && projectionLeaf(recorder, 3, !line.includes("\x1b")) && projectionLeaf(recorder, 4, Buffer.byteLength(line + "\n") <= 768) && projectionLeaf(recorder, 5, rows.length < 256)), "child-frame");
+      const value = projectionRun(recorder, 11, 0, () => JSON.parse(line.slice(prefix.length))), row = projectionRun(recorder, 12, 0, () => validatePackagingDiagnostic(value));
+      check(projectionRun(recorder, 13, 0, () => projectionLeaf(recorder, 1, JSON.stringify(value) === line.slice(prefix.length)) && projectionLeaf(recorder, 2, JSON.stringify(row) === JSON.stringify(value)) && projectionLeaf(recorder, 3, ["child","build_a","build_b"].includes(row.role))), "child-frame-canonical");
+      if (row.outcome === "rejected") check(projectionRun(recorder, 14, 0, () => projectionLeaf(recorder, 1, typeof row.defined === "boolean")), "child-rejection-presence");
+      else if (row.outcome !== "observed") check(projectionRun(recorder, 15, 0, () => projectionLeaf(recorder, 1, row.defined === null)), "child-nonfailure-presence");
+      projectionRun(recorder, 16, 0, () => rows.push(row));
     }
-    if (!rows.length) return unknown("no_records",0);
+    if (projectionRun(recorder, 17, 0, () => projectionLeaf(recorder, 1, !rows.length, true), true)) return unknown("no_records",0);
     const roles = ["child","build_a","build_b"], lifecycle = new Map();
     for (const role of roles) {
-      const records = rows.filter(row => row.role === role); if (!records.length) continue;
-      const terminal = validateChildLifecycle(records, role); if (!terminal) return unknown("incomplete",rows.length);
-      lifecycle.set(role,terminal);
+      const context = roles.indexOf(role) + 3;
+      const records = projectionRun(recorder, 18, context, () => rows.filter(row => row.role === role)); if (!records.length) continue;
+      const terminal = projectionRun(recorder, 19, context, () => validateChildLifecycle(records, role, recorder, context)); if (projectionRun(recorder, 20, context, () => projectionLeaf(recorder, 1, !terminal, true), true)) return unknown("incomplete",rows.length);
+      projectionRun(recorder, 21, context, () => lifecycle.set(role,terminal));
     }
-    if (!lifecycle.has("child")) return unknown("incomplete",rows.length);
+    if (projectionRun(recorder, 22, 0, () => projectionLeaf(recorder, 1, !lifecycle.has("child"), true), true)) return unknown("incomplete",rows.length);
     const child = lifecycle.get("child"), rejected = rows.find(row => row.outcome === "rejected");
     for (const role of ["build_a","build_b"]) {
-      const members = rows.filter(row => row.role === role), accepted = child.accepts.find(item => item.role === role);
+      const context = roles.indexOf(role) + 3;
+      const [members, accepted] = projectionRun(recorder, 23, context, () => [rows.filter(row => row.role === role), child.accepts.find(item => item.role === role)]);
       if (members.length) {
-        check(accepted && rows.indexOf(members[0]) > rows.indexOf(accepted.close) && rows.indexOf(members.at(-1)) < rows.indexOf(accepted.row) && rows.indexOf(members.at(-1)) - rows.indexOf(members[0]) + 1 === members.length, "child-forwarded-order");
+        check(projectionRun(recorder, 24, context, () => projectionLeaf(recorder, 1, accepted) && projectionLeaf(recorder, 2, rows.indexOf(members[0]) > rows.indexOf(accepted.close)) && projectionLeaf(recorder, 3, rows.indexOf(members.at(-1)) < rows.indexOf(accepted.row)) && projectionLeaf(recorder, 4, rows.indexOf(members.at(-1)) - rows.indexOf(members[0]) + 1 === members.length)), "child-forwarded-order");
       }
-      if (accepted?.row.outcome === "fulfilled") check(lifecycle.get(role)?.terminal === "fulfilled" && !members.some(row => row.outcome === "rejected"), "child-accepted-role");
+      if (accepted?.row.outcome === "fulfilled") check(projectionRun(recorder, 25, context, () => projectionLeaf(recorder, 1, lifecycle.get(role)?.terminal === "fulfilled") && projectionLeaf(recorder, 2, !members.some(row => row.outcome === "rejected"))), "child-accepted-role");
     }
-    check(child.terminal !== "fulfilled" || !rejected && lifecycle.size === 3, "child-final-conflict");
+    check(projectionRun(recorder, 26, 0, () => projectionLeaf(recorder, 1, child.terminal !== "fulfilled") || projectionLeaf(recorder, 2, !rejected) && projectionLeaf(recorder, 3, lifecycle.size === 3)), "child-final-conflict");
     const first = rejected ?? null, mask = roles.reduce((bits,role,index) => bits | (lifecycle.has(role) ? 2 ** index : 0),0);
-    return [1,first ? "reported_rejection" : "reported_complete",rows.length,mask,child.terminal === "fulfilled" ? 1 : 2,first ? roles.indexOf(first.role)+1 : 0,first ? receiptChildPhases.indexOf(first.phase)+1 : 0,first ? first.defined : null,"UNKNOWN"];
+    return projectionRun(recorder, 27, 0, () => [1,first ? "reported_rejection" : "reported_complete",rows.length,mask,child.terminal === "fulfilled" ? 1 : 2,first ? roles.indexOf(first.role)+1 : 0,first ? receiptChildPhases.indexOf(first.phase)+1 : 0,first ? first.defined : null,"UNKNOWN"]);
   } catch { return unknown("invalid"); }
 }
-function validateChildLifecycle(rows, role) {
+function validateChildLifecycle(rows, role, recorder, context) {
   let index = 0, failed = false; const accepts = [];
-  const peek = (phase,outcome) => rows[index]?.phase === phase && (outcome === undefined || rows[index]?.outcome === outcome);
-  const take = (phase,outcome) => { check(peek(phase,outcome),"child-lifecycle-order"); return rows[index++]; };
+  const peek = (phase,outcome, observed) => projectionLeaf(observed, 1, rows[index]?.phase === phase) && (projectionLeaf(observed, 2, outcome === undefined) || projectionLeaf(observed, 3, rows[index]?.outcome === outcome));
+  const take = (phase,outcome) => { check(projectionRun(recorder, 28, context, () => peek(phase,outcome,recorder)),"child-lifecycle-order"); return rows[index++]; };
   const final = complete => {
     if (!peek("final")) return null;
-    const row = rows[index++]; check(index === rows.length && ["fulfilled","rejected"].includes(row.outcome) && (row.outcome !== "fulfilled" || complete && !failed),"child-lifecycle-final");
+    const row = rows[index++]; check(projectionRun(recorder, 29, context, () => projectionLeaf(recorder, 1, index === rows.length) && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(row.outcome)) && (projectionLeaf(recorder, 3, row.outcome !== "fulfilled") || projectionLeaf(recorder, 4, complete) && projectionLeaf(recorder, 5, !failed))),"child-lifecycle-final");
     return { terminal: row.outcome, accepts };
   };
-  const step = phase => { take(phase,"enter"); const row=rows[index++]; check(row?.phase===phase && ["fulfilled","rejected"].includes(row.outcome),"child-lifecycle-step"); failed ||= row.outcome === "rejected"; return row.outcome === "fulfilled"; };
+  const step = phase => { take(phase,"enter"); const row=rows[index++]; check(projectionRun(recorder, 30, context, () => projectionLeaf(recorder, 1, row?.phase===phase) && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(row.outcome))),"child-lifecycle-step"); failed ||= row.outcome === "rejected"; return row.outcome === "fulfilled"; };
   take("entry","fulfilled");
   if (role !== "child") {
     if (!step("namespace_read")) return final(false);
@@ -949,11 +978,11 @@ function validateChildLifecycle(rows, role) {
   for (const phase of ["namespace_read","process_inventory","environment"]) if (!step(phase)) return final(false);
   for (const role of ["build_a","build_b"]) {
     take(role+"_launch","enter"); if (peek("final")) return final(false);
-    const close = rows[index++]; check(close?.phase === role+"_close" && ["fulfilled","rejected"].includes(close.outcome),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
+    const close = rows[index++]; check(projectionRun(recorder, 31, context, () => projectionLeaf(recorder, 1, close?.phase === role+"_close") && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(close.outcome))),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
     let summaries = 0;
     for (const phase of ["stdout_summary","stderr_summary","protocol_summary"]) { if (!peek(phase,"observed")) break; take(phase,"observed"); summaries++; }
     if (summaries !== 3) { take(role+"_report","rejected"); failed = true; }
-    const accepted = rows[index++]; check(accepted?.phase === role+"_report" && ["fulfilled","rejected"].includes(accepted.outcome),"child-lifecycle-report"); failed ||= accepted.outcome === "rejected"; accepts.push({role,row:accepted,close});
+    const accepted = rows[index++]; check(projectionRun(recorder, 32, context, () => projectionLeaf(recorder, 1, accepted?.phase === role+"_report") && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(accepted.outcome))),"child-lifecycle-report"); failed ||= accepted.outcome === "rejected"; accepts.push({role,row:accepted,close});
     if (failed) return final(false);
     if (peek("final")) return final(false); // original JSON/result checks can throw
     if (!step(role+"_report")) return final(false); // legitimate repeated phase
@@ -962,7 +991,7 @@ function validateChildLifecycle(rows, role) {
   for (const role of ["edge","upstream"]) {
     if (!step(role+"_config")) return final(false);
     take(role+"_launch","enter"); if (peek("final")) return final(false);
-    const close = rows[index++]; check(close?.phase === role+"_close" && ["fulfilled","rejected"].includes(close.outcome),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
+    const close = rows[index++]; check(projectionRun(recorder, 31, context, () => projectionLeaf(recorder, 1, close?.phase === role+"_close") && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(close.outcome))),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
     if (failed) return final(false);
     for (const suffix of ["output","marker","hash","privacy"]) if (!step(role+"_"+suffix)) return final(false);
   }
@@ -982,7 +1011,7 @@ export function createAttachProjection(attached, plan, report) {
     });
     retain(() => { initSummary = parseInitPrerequisites(result, binding); report.internal(initSummary); });
   };
-  project.child = result => parseChildPackaging(result, binding, initSummary);
+  project.child = (result, recorder) => parseChildPackaging(result, binding, initSummary, recorder);
   return project;
 }
 export async function runInitPrerequisites(args, trace, operations, ledger) {
@@ -1148,9 +1177,11 @@ export async function observeImageBuild(operation, readImageId, parseReceipt, re
   return { imageId, native };
 }
 export function createReceiptLedger() {
-  const errors = []; let operation = 0, ordinal = 0, seen = 0, passed = 0, falseLeaf = 0, broken = false;
+  const errors = []; let operation = 0, ordinal = 0, seen = 0, passed = 0, falseLeaf = 0, broken = false, cardinality = "UNKNOWN";
   const note = fn => { try { fn(); } catch (error) { broken = true; errors.push(error); } };
   return { errors,
+    count(value) { note(() => { cardinality = Number.isSafeInteger(value) && value >= 0 ? value === 0 ? "ZERO" : value === 1 ? "ONE" : "MULTIPLE" : "UNKNOWN"; }); },
+    cardinality() { return broken || errors.length ? "UNKNOWN" : cardinality; },
     enter(name, role = 0) { note(() => { operation = receiptOperations.findIndex(row => row[0] === name) + 1; check(operation > 0 && [0,1,2].includes(role), "receipt-observation-operation"); ordinal = role; seen = passed = falseLeaf = 0; }); },
     leaf(id, value) { note(() => { check(operation > 0 && Number.isInteger(id) && id > 0 && id <= receiptOperations[operation - 1][1], "receipt-observation-leaf"); const bit = 2 ** (id - 1); seen |= bit; if (value) passed |= bit; else falseLeaf ||= id; }); },
     finish(outcome, reason) { return broken || errors.length ? null : [1,outcome,outcome === 2 ? reason !== undefined : null,outcome === 2 ? operation : 0,outcome === 2 ? falseLeaf ? 1 : seen ? 2 : 0 : 0,outcome === 2 ? falseLeaf : 0,outcome === 2 ? ordinal : 0,outcome === 2 ? seen : 0,outcome === 2 ? passed : 0]; },
@@ -1160,7 +1191,7 @@ export function parseContainerReceipt(text, plan, recorder) {
   receiptRecord(recorder, "enter", "scan"); const split = text.split("\n");
   receiptRecord(recorder, "enter", "filter"); const lines = split.filter(line => line.startsWith("EDGE_CONTAINER_RECEIPT_V2 "));
   receiptRecord(recorder, "enter", "count_size");
-  check(receiptLeaf(recorder, 1, lines.length === 1) && receiptLeaf(recorder, 2, Buffer.byteLength(lines[0]) <= 8192), "container-receipt-count");
+  check(receiptLeaf(recorder, 1, receiptCount(recorder, lines.length) === 1) && receiptLeaf(recorder, 2, Buffer.byteLength(lines[0]) <= 8192), "container-receipt-count");
   receiptRecord(recorder, "enter", "json"); const receipt = JSON.parse(lines[0].slice("EDGE_CONTAINER_RECEIPT_V2 ".length));
   receiptRecord(recorder, "enter", "keys"); exactKeys(receipt, ["version", "isolation", "nonce", "contextHash", "nativeHash", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk", "masks"], recorder);
   receiptRecord(recorder, "enter", "identity");
@@ -1185,8 +1216,12 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
   if (stepFailed && !reporting.length && (outcome !== 2 || !Object.is(stepReason, operationReason))) failures.push(stepReason);
   failures.push(...recorder.errors);
   if (failures.length) {
-    try { report.internal(validateReceiptDiagnostic({ v: 9, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
-      parser: recorder.finish(outcome, operationReason), child: childSummary(), reports: [reporting.length + recorder.errors.length, [...reporting, ...recorder.errors].filter(error => error === undefined).length] })); }
+    const projector = createProjectionLedger(); let child;
+    try { child = childSummary(projector); } catch (error) { reporting.push(error); failures.push(error); child = [1,"invalid",null,0,0,0,0,null,"UNKNOWN"]; }
+    failures.push(...projector.errors);
+    const diagnostics = [...reporting, ...recorder.errors, ...projector.errors];
+    try { report.internal(validateReceiptBoundaryDiagnostic({ v: 10, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail() })); }
     catch (error) { failures.push(error); }
     raiseContainerFailures(failures);
   }
@@ -1334,7 +1369,7 @@ async function hostContainerRun(report) {
     raiseContainerFailures(outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason));
     const attachResult = outcomes[0].value, waitResult = outcomes[1].value;
     projectAttach(attachResult);
-    receipt = await observeContainerReceipt(report, attachResult.stdout, plan, () => projectAttach.child(attachResult));
+    receipt = await observeContainerReceipt(report, attachResult.stdout, plan, recorder => projectAttach.child(attachResult, recorder));
     await report.step("terminal", async () => {
       await recheckParent(); const terminal = await readOwned();
       const cgroup = await report.step("cgroup", () => retiredCgroup(bound));

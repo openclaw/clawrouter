@@ -852,7 +852,58 @@ export function validateReceiptDiagnostic(value) {
   row.reports=tuple(row.reports,2);if(!row.reports.every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||row.reports[1]>row.reports[0]||row.parser?.[1]!==2&&row.reports[0]===0)refuse("receipt-report-failure");
   return row;
 }
+// Projector failures describe validation of evidence, never a child payload cause.
+// Contexts: 0 global, 1 stdout, 2 stderr, 3 child, 4 build_a, 5 build_b.
+export const projectionBoundaries = Object.freeze([
+  ["binding",5,[0]], ["supervisor",3,[0]], ["capture_summary_read",0,[1,2]], ["capture_summary",3,[1,2]],
+  ["capture_bytes",0,[1,2]], ["capture_integrity",4,[1,2]], ["init",2,[0]], ["scan",0,[0]], ["line_select",0,[0]],
+  ["frame",5,[0]], ["json",0,[0]], ["schema",0,[0]], ["canonical",3,[0]], ["rejection_presence",1,[0]], ["nonfailure_presence",1,[0]],
+  ["append",0,[0]], ["records_present",1,[0]], ["role_filter",0,[3,4,5]], ["lifecycle",0,[3,4,5]], ["terminal_present",1,[3,4,5]],
+  ["lifecycle_store",0,[3,4,5]], ["child_present",1,[0]], ["role_members",0,[4,5]], ["forwarding",4,[4,5]], ["accepted_role",2,[4,5]],
+  ["final_consistency",3,[0]], ["summary",0,[0]], ["lifecycle_take",3,[3,4,5]], ["lifecycle_final",5,[3,4,5]],
+  ["lifecycle_step",2,[3,4,5]], ["lifecycle_close",2,[3]], ["lifecycle_report",2,[3]],
+]);
+export function validateReceiptBoundaryDiagnostic(value) {
+  const keys = ["v","phase","state","defined","exit","signal","parser","child","reports","count","projection"];
+  if (Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("receipt-boundary-keys");
+  const row = Object.fromEntries(keys.map(key => [key, ownData(value,key)]));
+  if (row.v !== 10 || !["ZERO","ONE","MULTIPLE","UNKNOWN"].includes(row.count)) refuse("receipt-boundary-version-count");
+  const original = Object.fromEntries(keys.slice(0,9).map(key => [key,row[key]])); original.v = 9;
+  const validated = validateReceiptDiagnostic(original), parser = validated.parser;
+  if (row.count !== "UNKNOWN") {
+    if (!parser || parser[1] === 0 || parser[1] === 2 && parser[3] < 3) refuse("receipt-count-unreached");
+    const countFalse = parser[1] === 2 && parser[3] === 3 && parser[4] === 1 && parser[5] === 1;
+    if (parser[1] === 2 && parser[3] === 3 && !(parser[7] & 1)) refuse("receipt-count-not-observed");
+    if (row.count === "ONE" ? countFalse : !countFalse) refuse("receipt-count-comparison");
+  }
+  if (row.projection !== null) {
+    const detail = row.projection;
+    if (!Array.isArray(detail) || Object.getOwnPropertyNames(detail).join() !== "0,1,2,3,4,5,6,7,length") refuse("projection-tuple");
+    row.projection = Array.from({length:8},(_,i)=>ownData(detail,String(i)));
+    const [v,boundary,context,kind,leaf,seen,passed,defined] = row.projection;
+    if (v !== 1 || ![boundary,context,kind,leaf,seen,passed].every(Number.isSafeInteger) || boundary < 1 || boundary > projectionBoundaries.length || ![1,2].includes(kind)) refuse("projection-values");
+    const [,width,contexts] = projectionBoundaries[boundary-1];
+    if (!contexts.includes(context) || leaf < 0 || seen < 0 || seen >= 2**width || passed < 0 || passed >= 2**width || (seen & passed) !== passed) refuse("projection-masks");
+    const possible = boundary === 26 ? [0,1,3,7] : boundary === 28 ? [0,1,3,7] : Array.from({length:width+1},(_,i)=>2**i-1);
+    if (!possible.includes(seen)) refuse("projection-evaluation-order");
+    if (kind === 2) {
+      const beforeThrow = boundary === 26 ? [[0,0],[1,0],[3,2]] : boundary === 28 ? [[0,0],[1,1],[3,1]] : boundary === 29 ? [[0,0],[1,1],[3,3],[7,3],[15,11]] : width ? Array.from({length:width},(_,i)=>[2**i-1,2**i-1]) : [[0,0]];
+      if (leaf !== 0 || typeof defined !== "boolean" || validated.child[1] !== "invalid" || !beforeThrow.some(([a,b])=>a===seen&&b===passed)) refuse("projection-throw");
+    }
+    else {
+      if (!width || defined !== null || leaf < 1 || leaf > width) refuse("projection-false");
+      const failed = seen & ~passed, first = Array.from({length:width},(_,i)=>i+1).find(i=>failed & 2**(i-1));
+      const falseMasks = boundary === 26 ? [[3,0],[7,2]] : boundary === 28 ? [[1,0],[7,1]] : boundary === 29 ? [[1,0],[3,1],[15,3],[31,11]] : Array.from({length:width},(_,i)=>[2**(i+1)-1,2**i-1]);
+      if (leaf !== first || !falseMasks.some(([a,b])=>a===seen&&b===passed)) refuse("projection-false-mask");
+      const reason = boundary === 1 ? "binding_unavailable" : [2,4].includes(boundary) ? "capture_unavailable" : boundary === 6 ? "capture_mismatch" : boundary === 7 ? "init_unqualified" : boundary === 17 ? "no_records" : [20,22].includes(boundary) ? "incomplete" : "invalid";
+      if (validated.child[1] !== reason) refuse("projection-reason");
+    }
+    if (["reported_complete","reported_rejection"].includes(validated.child[1])) refuse("projection-lifecycle-credit");
+  }
+  return {...validated,v:10,count:row.count,projection:row.projection};
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 10) return validateReceiptBoundaryDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 9) return validateReceiptDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 8) return validateParentAdmission(value);
   if (value && typeof value === "object" && ownData(value, "v") === 6) {
@@ -960,7 +1011,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
