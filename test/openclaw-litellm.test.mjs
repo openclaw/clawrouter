@@ -864,6 +864,96 @@ test("product reaction pure actual release entry rejects wrong original function
     f.owner.reactionHooks.after(f.q); await f.q;
   }
 });
+function invocationFacts(f, args = []) {
+  const b = f.cap.binding;
+  return { generation: b.generation, binding: b, token: b.token, acquisition: b.acquisition, transport: b.transport,
+    response: b.response, body: b.body, reader: b.reader, receiver: b.reader, expectedReceiver: b.reader,
+    method: b.methods.cancel, expectedMethod: b.methods.cancel, observer: b.observer, captured: b.observer, args };
+}
+test("invocation snapshot shares generation clock and stays immutable after final join", async () => {
+  const f = await productOwnedReaderFixture(), event = f.owner.operation(f.reader, f.reader, "cancel", f.owner, undefined, f.methods.cancel, []);
+  const initial = structuredClone(event.invocation);
+  assert.equal(event.invoke, initial[1]); assert.equal(initial[0], 5); assert.equal(initial[3], "registered");
+  assert.equal(initial[6], 2); assert.equal(initial[8], true); assert.ok(initial[9].every(v => v === true));
+  assert.ok(f.cap.register < f.cap.enter && f.cap.enter < event.invoke);
+  assert.ok(Object.isFrozen(event.invocation) && Object.isFrozen(event.invocation[9]));
+  f.owner.witness.threw(event, undefined); f.owner.reactionHooks.after(f.q); await f.q;
+  assert.ok(event.invoke < event.settle && event.settle < f.cap.exit);
+  assert.equal(litellmReactionVector(f.cap)[5], 3); assert.deepEqual(event.invocation, initial);
+  assert.equal(event.state, "sync_throw"); assert.equal(event.reason, undefined);
+});
+test("invocation snapshot distinguishes zero args from explicit undefined without granting entry", async () => {
+  const snapshots = [];
+  for (const args of [[], [undefined]]) {
+    const f = await productOwnedReaderFixture(); f.context(f.a.context);
+    const event = f.owner.operation(f.reader, f.reader, "cancel", f.owner, args[0], f.methods.cancel, args);
+    snapshots.push(event.invocation); assert.equal(event.context.predicate, "none"); assert.equal(event.operand, undefined);
+    assert.equal(f.cap.call, undefined); f.owner.reactionHooks.after(f.q); await f.q;
+  }
+  assert.deepEqual(snapshots.map(v => v[2]), [0, 1]);
+});
+test("invocation snapshot distinguishes foreign stale receiver and current Q mismatch", () => {
+  const f = productReactionFixture(); f.register(); f.h.hooks.before(f.q);
+  const cap = f.h.capture(f.p), facts = invocationFacts({ cap });
+  const first = f.h.snapshot(facts); assert.equal(first[6], 2);
+  for (const [field, index, value] of [["binding", 0, {}], ["reader", 6, {}], ["generation", 7, 6], ["receiver", 8, {}], ["method", 9, () => {}], ["captured", 10, {}]]) {
+    const row = f.h.snapshot({ ...facts, [field]: value }); assert.equal(row[9][index], false);
+  }
+  const foreign = {}; f.h.hooks.before(foreign);
+  const mismatch = f.h.snapshot(facts); assert.equal(mismatch[3], "unrecognized"); assert.ok(mismatch.slice(4, 9).every(v => v === null));
+  f.h.hooks.after(foreign); f.h.hooks.after(f.q);
+  assert.deepEqual(first.slice(4, 9), [1, 1, 2, 5, true]);
+});
+test("invocation snapshot separates absent current Q consumed adoption and unmatched boundary", () => {
+  const f = productReactionFixture(); f.register(); const facts = invocationFacts({ cap: f.h.capture(f.p) });
+  assert.equal(f.h.snapshot(facts)[3], "none");
+  f.h.hooks.before(f.q); f.h.hooks.after(f.q);
+  f.h.hooks.before(f.q); const adoption = f.h.snapshot(facts);
+  assert.equal(adoption[3], "registered"); assert.equal(adoption[6], 3); assert.equal(adoption[8], false);
+  assert.equal(f.cancel().admitted, false); f.h.hooks.after(f.q);
+  f.h.hooks.after({}); assert.equal(f.h.snapshot(facts)[3], "unmatched");
+});
+test("invocation snapshot cross-generation clocks and exact release entry stay distinct", async () => {
+  const f = await productOwnedReaderFixture(), other = litellmOwnership({ getStore: () => undefined }, 4);
+  const event = f.owner.operation(f.reader, f.reader, "cancel", other, undefined, f.methods.cancel, []);
+  assert.equal(event.generation, 4); assert.equal(event.invocation[0], 5); assert.equal(event.invocation[9][10], false);
+  const release = f.owner.releaseEntry(f.a, f.result, f.release, undefined, [], f.owner);
+  assert.equal(release.invoke, release.invocation[1]); assert.equal(release.invocation[2], 0);
+  assert.equal(release.invocation[9][8], true); assert.equal(release.invocation[9][9], true);
+  f.owner.reactionHooks.after(f.q); await f.q;
+});
+test("invocation wire max width preserves complete pairs roles reservations and unknowns", () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), lines = [], pairs = [];
+  for (const [id, select] of [["sdk_stream_provider_error", [true, false]], ["sdk_partial_abort", [false, true]]]) {
+    const parts = reportingParts(id, true);
+    parts[0].reaction = [1_000_000, 1_000_000, 1_000_000, 1_000_000, 1_000_000, 3, 1_000_000, 2, 1];
+    parts[0].invocation = [1_000_000, 1_000_000, 1_000_000, "registered", 1_000_000, 1_000_000, 2, 1_000_000, true, Array(12).fill(true)];
+    pairs.push(...proof.witness(proof.record("sdk", id, "join", undefined, "chat"), select, parts));
+  }
+  const roles = ["streamSimple", "stream"].map(api => proof.roles({ api, outcomes: Array(4).fill(null) }));
+  proof.emit([...pairs, ...roles, proof.child({ code: 1 }).envelope, proof.boundary("REPORT_WITNESS", undefined)], line => lines.push(line)); proof.flush(line => lines.push(line));
+  const decoded = reportingDecode(proof, lines); assert.deepEqual(decoded.filter(r => r.witness), pairs); assert.deepEqual(decoded.filter(r => r.roles), roles);
+  assert.ok(decoded.some(r => r.phase === "child_result")); assert.ok(decoded.some(r => r.phase === "reporting"));
+  assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const altered = structuredClone(pairs[0]); altered.witness.data.invocation = null; assert.deepEqual(proof.validate(altered), altered);
+});
+test("invocation reporting preserves undefined primary and independent writer failure", async () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), pair = reportingPair(proof);
+  pair[0].witness.data.invocation = [4, 25, 1, "registered", 1, 1, 2, 4, true, Array(12).fill(null)];
+  pair[0].witness.data.reaction = [1, 1, 20, 21, 30, 3, 27, 1, 0];
+  const retained = structuredClone(pair);
+  await assert.rejects(withFailureEnvelope(async ({ emit }) => { emit(pair); throw undefined; }, proof, () => { throw undefined; }),
+    error => { const errors = reportingLeaves(error); return errors.length >= 2 && errors.every(value => value === undefined); });
+  assert.deepEqual(pair, retained); assert.equal(pair[0].witness.data.invocation[6], 2); assert.equal(pair[0].witness.data.reaction[5], 3);
+});
+test("invocation wire rejects malformed snapshots without observing hostile getters", () => {
+  const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), pair = reportingPair(proof);
+  const valid = [4, 25, 0, "registered", 1, 1, 2, 4, true, Array(12).fill(null)];
+  const modes = [undefined, [], [...valid, 1], [4, 25, -1, ...valid.slice(3)], [4, 25, 0, "none", ...valid.slice(4)], [...valid.slice(0, 6), 9, ...valid.slice(7)]];
+  for (const invalid of modes) { const row = structuredClone(pair[0]); row.witness.data.invocation = invalid; assert.equal(proof.validate(row), null); }
+  let reads = 0; const row = structuredClone(pair[0]); Object.defineProperty(row.witness.data, "invocation", { enumerable: true, get() { reads++; throw undefined; } });
+  assert.equal(proof.validate(row), null); assert.equal(reads, 0);
+});
 // BEGIN read-return pure comparisons.
 // Exact inert excerpts: @vitest/spy 5.0.5 dist/index.js createMock, and the
 // cbbd SDK read implementation. No Vitest import, SDK, or native hook executes.
@@ -1174,7 +1264,7 @@ test("success envelope primary undefined and independent validation failures bot
 // Pure closed-data fixtures: no SDK, Worker, stream, or transport execution.
 function reportingParts(id = "sdk_provider_error", max = false) {
   const parts = [
-    { at: "original_drain", body: "fulfilled", caseId: id, role: "chat", control: "provider_error", api: "streamSimple", ids: [1, 1, 1, 1], g: [4, 4, 80], op: "read", pred: "none", ctx: ["same", true, true, true, true, true, 4, true], time: [25, 26, 53, 1, 0], life: [46, 49, 54, 55, 58, 1, 1], counts: [18, 0, 15, 3], failures: 0, source: "unknown", reaction: null },
+    { at: "original_drain", body: "fulfilled", caseId: id, role: "chat", control: "provider_error", api: "streamSimple", ids: [1, 1, 1, 1], g: [4, 4, 80], op: "read", pred: "none", ctx: ["same", true, true, true, true, true, 4, true], time: [25, 26, 53, 1, 0], life: [46, 49, 54, 55, 58, 1, 1], counts: [18, 0, 15, 3], failures: 0, source: "unknown", reaction: null, invocation: null },
     { ids: [1, 1, 1, 1], acquisition: null, originals: [[5, "rejected", 25, 26, 53, true, "object", false, true, true], [4, "rejected", 20, 21, 52, true, "object", false, true, true], [7, "rejected", 45, 47, 51, true, "object", false, true, true]], same: [true, true, true], signals: [[false, true, true], [false, true, true], [false, true, true]], cancel: ["undefined", false, false, false], input: [[false, null, 0], [false, null, 0], [false, null, 0]], output: [[false, null, 0], [true, "object", 44], [true, "object", 43]], release: "fulfilled", locked: false, eof: false, otherRejected: 0, abortOperand: "unknown" },
   ];
   if (max) {
@@ -1200,7 +1290,7 @@ function reportingLeaves(value) {
 
 test("reporting repair exact 769-byte regression roundtrips all facts", () => {
   const proof = litellmDiagnostics(cases.map(row => row.id), nodeTypes.isProxy), pair = reportingPair(proof), lines = [];
-  const historical = structuredClone(pair); delete historical[0].witness.data.reaction;
+  const historical = structuredClone(pair); delete historical[0].witness.data.reaction; delete historical[0].witness.data.invocation;
   assert.deepEqual(historical.map(r => Buffer.byteLength("::error title=LiteLLM typed contract::" + JSON.stringify(r) + "\n")), [554, 769]);
   proof.emit(pair, line => lines.push(line)); assert.deepEqual(reportingDecode(proof, lines), pair);
   assert.deepEqual(proof.parse(pair.map(r => proof.prefix + proof.json(r)).join("\n")), pair);
