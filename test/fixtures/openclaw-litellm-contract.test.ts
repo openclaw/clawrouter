@@ -11,11 +11,62 @@ const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
 
 type Operation = { kind: string; promise: Promise<unknown>; state?: "pending" | "fulfilled" | "rejected"; reasonDefined?: boolean };
 // BEGIN shared proof functions. These observe originals; they grant no disposition.
+// Observer derivatives have their own generation-bound ledger. Registering one
+// never calls remember() or subscribes to the original read again.
+function litellmObserverLedger(generation: number) {
+  const rows: any[] = [], faults: unknown[] = [], lateFaults: unknown[] = [], known = new WeakSet<object>(); let sealed = false;
+  const append = (owner: number, event: unknown, kind: string, promise: Promise<unknown>) => {
+    if (sealed || owner !== generation || known.has(promise)) { const error = new Error("invalid observer derivative registration"); faults.push(error); if (sealed) lateFaults.push(error); }
+    known.add(promise); const row: any = { generation: owner, event, kind, promise, state: "pending", observer: true }; rows.push(row); return row;
+  };
+  return {
+    rows, faults, lateFaults,
+    append(owner: number, event: unknown, kind: string, promise: Promise<unknown>) { append(owner, event, kind, promise); return promise; },
+    terminal(owner: number, event: unknown, kind: string, promise: Promise<unknown>) {
+      const row = append(owner, event, kind, promise);
+      // Observe this terminal derivative immediately, including rejection with
+      // undefined. The guard is retained once; its handlers do not throw.
+      const guard = promise.then(() => { row.state = "fulfilled"; }, error => { row.state = "rejected"; row.error = error; });
+      append(owner, row, "settlement_guard", guard); return promise;
+    },
+    seal() { if (sealed) faults.push(new Error("duplicate observer seal")); sealed = true; },
+  };
+}
+function litellmFixedPoint(sources: Array<() => Array<{promise: Promise<unknown>}>>, before: () => void) {
+  const cursors = sources.map(() => 0), seen = new WeakSet<object>(), settled = new WeakMap<object, PromiseSettledResult<unknown>>(), joins = new WeakSet<object>();
+  const mark = (row: any, result: PromiseSettledResult<unknown>) => {
+    if (row.observer === true) { row.state = result.status; if (result.status === "rejected") row.error = result.reason; }
+  };
+  const run = async () => {
+    const errors: unknown[] = [];
+    while (true) {
+      try { before(); } catch (error) { errors.push(error); }
+      const batch: Promise<unknown>[] = [], pendingRows: any[] = [];
+      sources.forEach((source, index) => {
+        const rows = source();
+        for (; cursors[index] < rows.length; cursors[index]++) {
+          const row = rows[cursors[index]], p = row.promise;
+          if (joins.has(p)) { errors.push(new Error("observer drain cannot join itself")); continue; }
+          const prior = settled.get(p); if (prior) mark(row, prior); else pendingRows.push(row);
+          if (!seen.has(p)) { seen.add(p); batch.push(p); }
+        }
+      });
+      if (!batch.length) return errors;
+      const results = await Promise.allSettled(batch);
+      results.forEach((result, i) => { settled.set(batch[i], result); if (result.status === "rejected") errors.push(result.reason); });
+      for (const row of pendingRows) { const result = settled.get(row.promise); if (result) mark(row, result); }
+    }
+  };
+  return () => { const pending = run(); joins.add(pending); return pending; };
+}
+async function litellmAttemptAll(checks: Array<[string, () => unknown]>, failed: (phase: string, error: unknown) => void) {
+  for (const [phase, check] of checks) try { await check(); } catch (error) { failed(phase, error); }
+}
 function litellmOwnership(storage: any, generation = 0) {
-  const witness = litellmWitness(generation);
+  const observers = litellmObserverLedger(generation), witness = litellmWitness(generation, observers);
   const tokens = new WeakSet<object>(), guards = new WeakSet<object>(), responses = new WeakMap<object, any>(), bodies = new WeakMap<object, any>(), readers = new WeakMap<object, any>();
   const faults: unknown[] = [], transports: any[] = [], reactions: Promise<unknown>[] = [], signals: any[] = [];
-  let active = true;
+  let active = true, publicOpen = true;
   let firstFault = "none", relation: Array<boolean | null> = [null, null, null, null];
   const invalid = (code: string, observed: Array<boolean | null> = [null, null, null, null]) => {
     if (firstFault === "none") { firstFault = code; relation = observed; }
@@ -67,8 +118,9 @@ function litellmOwnership(storage: any, generation = 0) {
       facts: Object.freeze([checks.every(Boolean), first, reaction.matches, "unknown", "unknown", Object.freeze(checks)]) };
   }
   return {
-    faults, transports, signals, witness, generation,
+    faults, transports, signals, witness, generation, observers, reactions,
     invoke(owner: any, fn: Function, receiver: unknown, args: any[]) {
+      if (!publicOpen) { invalid("invoke"); return Reflect.apply(fn, receiver, args); }
       if (!active || !["catalog", "chat"].includes(owner.role) || args[owner.role === "catalog" ? 0 : 2]?.signal !== owner.signal) invalid("invoke");
       const token = Object.freeze({ owner: Object.freeze({ ...owner }), fn, receiver, args: Object.freeze([...args]), caller: signal(owner.signal) });
       tokens.add(token); witness.token(token);
@@ -106,7 +158,9 @@ function litellmOwnership(storage: any, generation = 0) {
         if (prior || priorBody) { if (prior) prior.unique = false; if (priorBody) priorBody.unique = false; invalid("response_unique"); return; }
         responses.set(response, t); if (t.body) bodies.set(t.body, t); t.unique = true; witness.response(t);
       }, (reason: unknown) => { t.state = "rejected"; t.reasonPresent = true; t.reason = reason; });
-      reactions.push(reaction.catch((error: unknown) => { faults.push(error); })); return pending;
+      observers.append(generation, t, "ownership_response", reaction);
+      const terminal = reaction.catch((error: unknown) => { faults.push(error); });
+      observers.terminal(generation, t, "ownership_response_catch", terminal); reactions.push(terminal); return pending;
     },
     attach(a: any, result: any) { if (a.result) invalid("attach_duplicate"); a.result = result; if (!bound(a)) invalid("attach_bound", [guards.has(a), !!a.transport, a.transport ? a.transport.acquisition === a : null, a.transport ? a.result?.response === a.transport.response : null]); return bound(a); },
     reader(body: object, reader: object, receiver: unknown, captured?: any, methods?: any) {
@@ -192,7 +246,8 @@ function litellmOwnership(storage: any, generation = 0) {
     reactionHooks: entry.hooks,
     setReactionObserver(observe: (q: Promise<unknown>) => void) { if (reactionObserver) invalid("reaction"); else reactionObserver = observe; },
     setReactionHook(stop: () => void) { if (stopHook) invalid("reaction"); else stopHook = stop; },
-    closeRegistration() { entry.drain(); },
+    closeRegistration() { publicOpen = false; },
+    prepareDrain() { entry.drain(); },
     bodyCancel(body: object, receiver: unknown, captured?: any, operand?: unknown, method?: Function, args?: unknown[]) {
       const t = bodies.get(body), raw = storage.getStore();
       const trusted = !!raw && tokens.has(raw.token), c = active && trusted ? raw : undefined;
@@ -215,11 +270,11 @@ function litellmOwnership(storage: any, generation = 0) {
         transports: [transports.length, ...["invoke", "fulfilled", "rejected", "sync_throw"].map(state => transports.filter(t => t.state === state).length)].map(n => Math.min(n, 1_000_000)),
         defined: rejected ? rejected.reason !== undefined : null };
     },
+    settledFailures() { return [...faults, ...transports.filter(t => t.state === "sync_throw").map(t => t.reason)]; },
     async join() {
-      let at = 0;
-      while (at < transports.length) { const batch = transports.slice(at); at += batch.length; await Promise.allSettled(batch.flatMap(t => t.pending ? [t.pending] : [])); }
-      await Promise.all(reactions);
-      return [...faults, ...transports.filter(t => ["rejected", "sync_throw"].includes(t.state)).map(t => t.reason)];
+      const drain = litellmFixedPoint([() => transports.filter(t => t.pending).map(t => ({promise: t.pending})), () => reactions.map(promise => ({promise})), () => observers.rows], () => entry.drain());
+      const errors = await drain();
+      return [...this.settledFailures(), ...observers.faults, ...errors];
     },
     restore() {
       if (!active) throw new Error("duplicate LiteLLM ownership restoration"); active = false; witness.restored();
@@ -408,7 +463,7 @@ function litellmReactionVector(cap: any) {
 // rejection present/reason kind + caller/guard-input/native-fetch aborted states.
 // Signal equality is Object.is at the original reaction, not cause attribution.
 // "unknown" callsite/abort operand and otherRejected must not be filled by inference.
-function litellmWitness(generation: number) {
+function litellmWitness(generation: number, observers = litellmObserverLedger(generation)) {
   const bodyTransports = new WeakMap<object, any>();
   const tokenIds = new WeakMap<object, number>(), acquisitionIds = new WeakMap<object, number>(), transportIds = new WeakMap<object, number>(), readerIds = new WeakMap<object, any>();
   const observerFailures: unknown[] = [], faultEvents: any[] = [], lifetime = { restore: 0 };
@@ -436,7 +491,10 @@ function litellmWitness(generation: number) {
   }
   function promise(event: any, original: Promise<unknown>) {
     event.promise = original; event.returned = tick(); event.state = "pending";
-    void original.then(() => settle(event, "fulfilled"), error => settle(event, "rejected", error)).catch(error => { observerFailures.push(error); });
+    const derived = original.then(() => settle(event, "fulfilled"), error => settle(event, "rejected", error));
+    observers.append(generation, event, "witness_settle", derived);
+    const terminal = derived.catch(error => { observerFailures.push(error); });
+    observers.terminal(generation, event, "witness_settle_catch", terminal);
   }
   function projection(this: any, at: string, body: string, currentGeneration: number, counts: number[], failureCount: number, originals: Operation[] = []) {
     const fault = faultEvents[0] ?? operations.find(op => op.context && op.context.predicate !== "none");
@@ -499,7 +557,12 @@ function litellmWitness(generation: number) {
     begin(reader: object, kind: string, operand: unknown, context: any, invoked?: number) { const row = readerIds.get(reader); const event = begin(row, kind, operand, context, invoked); if (row && kind === "releaseLock") { row.unlockInvoke = event.invoke; row.unlockCount++; } return event; },
     beginBody(t: any, operand: unknown, context: any, invoked?: number) { return begin({ t, id: 0 }, "body_cancel", operand, context, invoked); },
     closed(reader: object, original: Promise<unknown>) { const event = begin(readerIds.get(reader), "closed", undefined, null); promise(event, original); },
-    promise(event: any, original: Promise<unknown>) { promise(event, original); if (event.kind === "read") void original.then((chunk: any) => { if (event.row && chunk && typeof chunk === "object" && !nodeTypes.isProxy(chunk) && Object.getOwnPropertyDescriptor(chunk, "done")?.value === true) event.row.eof = true; }, () => {}).catch(error => { observerFailures.push(error); }); },
+    promise(event: any, original: Promise<unknown>) { promise(event, original); if (event.kind === "read") {
+      const derived = original.then((chunk: any) => { if (event.row && chunk && typeof chunk === "object" && !nodeTypes.isProxy(chunk) && Object.getOwnPropertyDescriptor(chunk, "done")?.value === true) event.row.eof = true; }, () => {});
+      observers.append(generation, event, "witness_eof", derived);
+      const terminal = derived.catch(error => { observerFailures.push(error); });
+      observers.terminal(generation, event, "witness_eof_catch", terminal);
+    } },
     returned(event: any) { event.returned = tick(); settle(event, "fulfilled"); if (event.row && event.kind === "releaseLock") { event.row.unlockReturn = event.returned; event.row.unlockReturned++; } },
     threw(event: any, error: unknown) { settle(event, "sync_throw", error); },
     release(a: object, reader?: object, invoked?: number) { const event = begin((reader && readerIds.get(reader)) || { t: (a as any).transport, id: 0 }, "release", undefined, null, invoked); releases.set(a, event); return event; },
@@ -1163,6 +1226,7 @@ const originalChatGuard = chatGuard.fetchWithProviderHttpGuard;
 type Acquisition = { kind: "catalog" | "chat"; promise: Promise<unknown>; releases: number; released: Promise<void>; markReleased: () => void };
 const operations: Operation[] = [], acquisitions: Acquisition[] = [], failures: unknown[] = [];
 const readRestores: Array<() => void> = [];
+const retiredObservers: Array<ReturnType<typeof litellmObserverLedger>> = [];
 const bodies = new Set<ReadableStream<Uint8Array>>();
 const readers: Array<{ body: ReadableStream<Uint8Array>; unlocks: number }> = [];
 const closes: Array<{ depth: number; original?: Promise<unknown>; threw: boolean; error?: unknown }> = [];
@@ -1195,7 +1259,8 @@ function flushSdk() {
 }
 function remember<T extends Promise<unknown>>(kind: string, promise: T): T {
   const record: Operation = { kind, promise, state: "pending" }; operations.push(record);
-  void promise.then(() => { record.state = "fulfilled"; }, error => { record.state = "rejected"; record.reasonDefined = error !== undefined; }); return promise;
+  const derived = promise.then(() => { record.state = "fulfilled"; }, error => { record.state = "rejected"; record.reasonDefined = error !== undefined; });
+  ownership.observers.terminal(ownership.generation, record, "original_bookkeeping", derived); return promise;
 }
 function raise(errors: unknown[]): void {
   if (errors.length === 1) throw errors[0];
@@ -1303,7 +1368,7 @@ function observeLease(kind: Acquisition["kind"], fn: Function, receiver: unknown
     ownership.releaseBinding(record, result, release);
     vi.spyOn(result, "release").mockImplementation(function (this: any, ...values: unknown[]) {
       record.releases++; const event = ownership.releaseEntry(record, result, release, this, values, captured);
-      try { const value = Reflect.apply(release, this, values); captured.witness.promise(event, value); remember("release", value); void value.then(markReleased, markReleased); return value; }
+      try { const value = Reflect.apply(release, this, values); captured.witness.promise(event, value); remember("release", value); const notification = value.then(markReleased, markReleased); captured.observers.terminal(captured.generation, record, "release_notification", notification); return value; }
       catch (error) { captured.witness.threw(event, error); failures.push(error); markReleased(); throw error; }
     });
     } catch (error) { failures.push(error); markReleased(); throw error; }
@@ -1348,58 +1413,54 @@ beforeEach(() => {
 });
 afterEach(async () => {
   const errors: unknown[] = [];
-  let checkpoint = "release_wait", failedCheckpoint: string | undefined;
-  try {
-    ownership.closeRegistration();
-    // A fulfilled response is not release completion. Follow each original
-    // guard through its consumed release before draining dynamically added work.
-    await Promise.all(acquisitions.map(row => row.released));
-    checkpoint = "original_drain";
-    await drainOriginals(operations);
-    checkpoint = "release_count";
-    for (const row of acquisitions) { expect(row.releases).toBe(1); }
-    checkpoint = "acquisition_count";
-    expect(acquisitions.length).toBe(requests.length);
-    checkpoint = "reader_unlock";
-    for (const reader of readers) expect(reader.unlocks).toBe(1);
-    checkpoint = "body_unlocked";
-    for (const body of bodies) expect(body.locked).toBe(false);
-    const external = closes.filter(row => row.depth === 0);
-    checkpoint = "dispatcher_count";
-    expect(external).toHaveLength(dispatchers.size);
-    for (const row of external) {
-      checkpoint = "dispatcher_throw"; expect(row.threw).toBe(false);
-      checkpoint = "dispatcher_original"; expect(row.original).toBeDefined();
-      checkpoint = "dispatcher_result"; expect(await row.original).toBeNull();
-    }
-    checkpoint = "dispatcher_destroyed";
-    for (const dispatcher of dispatchers) expect(Reflect.get(dispatcher, "destroyed")).toBe(true);
-    // Inference owns a pooled request lease, never the global pool lifetime.
-  } catch (error) { failedCheckpoint = checkpoint; errors.push(error); }
-  try { const ownedErrors = await ownership.join(); if (ownedErrors.length) failedCheckpoint ??= "ownership"; errors.push(...ownedErrors); } catch (error) { failedCheckpoint ??= "ownership"; errors.push(error); }
-  errors.push(...failures, ...ownership.witness.observerFailures);
-  let join: ReturnType<typeof litellmJoinFacts> | undefined;
-  if (errors.length) try { join = litellmJoinFacts(failedCheckpoint ?? "original_observer", bodyOutcome, operations, acquisitions, readers, bodies, failures, ownership); } catch (error) { errors.push(error); }
-  for (const error of errors) try { reportSdk("join", error, join); } catch (reportError) { errors.push(reportError); break; }
-  for (const restore of [...readRestores, () => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()]) {
-    try { restore(); } catch (error) { errors.push(error); try { reportSdk("restore", error); } catch (reportError) { errors.push(reportError); } }
+  let failedCheckpoint: string | undefined;
+  const failed = (phase: string, error: unknown) => { failedCheckpoint ??= phase; errors.push(error); };
+  try { ownership.closeRegistration(); } catch (error) { failed("release_wait", error); }
+  const drain = litellmFixedPoint([
+    () => acquisitions.map(row => ({promise: row.released})), () => operations,
+    () => ownership.reactions.map(promise => ({promise})), () => ownership.observers.rows,
+  ], () => ownership.prepareDrain());
+  try { for (const error of await drain()) failed("original_drain", error); } catch (error) { failed("original_drain", error); }
+  const checks: Array<[string, () => unknown]> = [];
+  for (const row of acquisitions) checks.push(["release_count", () => expect(row.releases).toBe(1)]);
+  checks.push(["acquisition_count", () => expect(acquisitions.length).toBe(requests.length)]);
+  for (const reader of readers) checks.push(["reader_unlock", () => expect(reader.unlocks).toBe(1)]);
+  for (const body of bodies) checks.push(["body_unlocked", () => expect(body.locked).toBe(false)]);
+  const external = closes.filter(row => row.depth === 0);
+  checks.push(["dispatcher_count", () => expect(external).toHaveLength(dispatchers.size)]);
+  for (const row of external) {
+    checks.push(["dispatcher_throw", () => expect(row.threw).toBe(false)]);
+    checks.push(["dispatcher_original", () => expect(row.original).toBeDefined()]);
+    checks.push(["dispatcher_result", async () => { if (!row.original) throw new Error("missing original dispatcher result"); expect(await row.original).toBeNull(); }]);
   }
-  if (errors.length) try {
+  for (const dispatcher of dispatchers) checks.push(["dispatcher_destroyed", () => expect(Reflect.get(dispatcher, "destroyed")).toBe(true)]);
+  await litellmAttemptAll(checks, failed);
+  // Inference owns a pooled request lease, never the global pool lifetime.
+  await litellmAttemptAll([...readRestores, () => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()].map(restore => ["restore", restore]), failed);
+  try { for (const error of await drain()) failed("original_drain", error); } catch (error) { failed("original_drain", error); }
+  ownership.observers.seal(); retiredObservers.push(ownership.observers);
+  for (const error of ownership.settledFailures()) failed("ownership", error);
+  for (const error of [...failures, ...ownership.observers.faults, ...ownership.witness.observerFailures]) failed("original_observer", error);
+  // Snapshot before reporting; reporter failures cannot grow this iteration.
+  const failureSnapshot = [...errors];
+  let join: ReturnType<typeof litellmJoinFacts> | undefined;
+  if (failureSnapshot.length) try { join = litellmJoinFacts(failedCheckpoint ?? "original_observer", bodyOutcome, operations, acquisitions, readers, bodies, failures, ownership); } catch (error) { errors.push(error); }
+  for (const error of failureSnapshot) try { reportSdk("join", error, join); } catch (reportError) { errors.push(reportError); }
+  if (failureSnapshot.length) try {
     const [drain, owned] = litellmSelectWitness(selectedWitness, failedCheckpoint, ownership.faults.length);
     if (drain || owned) {
       const parts = ownership.witness.projection(failedCheckpoint ?? "original_observer", bodyOutcome, observerGeneration,
         [operations.length, operations.filter(op => op.state === "pending").length, operations.filter(op => op.state === "fulfilled").length, operations.filter(op => op.state === "rejected").length], failures.length, operations);
       const pair = diagnostic.witness(diagnostic.record("sdk", parts[0].caseId, "join", undefined, parts[0].role), [drain, owned], parts);
-      // Both complete parts precede old fragments; failure reporting grants no acceptance.
       diagnosticRecords.unshift(...pair); selectedWitness.drain ||= drain; selectedWitness.ownership ||= owned;
     }
-  } catch (error) { errors.push(error); diagnosticRecords.push(diagnostic.boundary("REPORT_WITNESS", error)); }
+  } catch (error) { errors.push(error); try { diagnosticRecords.push(diagnostic.boundary("REPORT_WITNESS", error)); } catch (reportError) { errors.push(reportError); } }
   try { flushSdk(); } catch (error) { errors.push(error); }
   try { roleEvidence.complete(roleTicket, ownership, errors, operations); } catch (error) { errors.push(error); }
   raise(errors);
 });
 afterAll(() => {
-  const errors: unknown[] = [];
+  const errors: unknown[] = retiredObservers.flatMap(ledger => ledger.lateFaults);
   for (const facts of roleEvidence.snapshot()) try { process.stdout.write(diagnostic.prefix + diagnostic.json(diagnostic.roles(facts)) + "\n"); } catch (error) { errors.push(error); }
   if (errors.length) try { process.stdout.write(diagnostic.prefix + diagnostic.json(diagnostic.boundary("REPORT_FLUSH", errors[0])) + "\n"); } catch (error) { errors.push(error); }
   raise(errors);
