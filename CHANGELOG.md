@@ -370,6 +370,7 @@
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
+- Add separate Qwen China standard and global/China Coding Plan Chat contracts with scoped credentials, finite current model inventory and retired-ID rejection; validate selected Coding Plan key shape and raw controls before formatting, with native/manifest Worker isolation and settlement fixtures.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add the frozen MiniMax M3 Chat identity with primary-sourced context and input facts, retaining unknown output/pricing bounds and existing M2.7 behavior.
