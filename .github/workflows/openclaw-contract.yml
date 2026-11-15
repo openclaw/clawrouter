@@ -33,7 +33,7 @@ jobs:
   consumer:
     needs: consumer-changes
     if: ${{ !cancelled() && (needs.consumer-changes.result != 'success' || needs.consumer-changes.outputs.required != 'false') }}
-    name: consumer (${{ matrix.consumer }})
+    name: ${{ matrix.consumer == 'litellm' && 'consumer (litellm wrapper controls only)' || format('consumer ({0})', matrix.consumer) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -207,11 +207,12 @@ jobs:
           pnpm install --frozen-lockfile
           node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
           pnpm --version
-      - name: Actual consumer through workerd and SQLite
+      - name: ${{ matrix.consumer == 'litellm' && 'LiteLLM wrapper controls only — no product qualification' || 'Actual consumer through workerd and SQLite' }}
         run: node --test "$CONTRACT_TEST"
         env:
           CONTRACT_TEST: ${{ matrix.test }}
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
+          CLAWROUTER_LITELLM_MODE: ${{ matrix.consumer == 'litellm' && 'control-only' || 'product' }}
 
 
   search-consumer:
