@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts.
+- Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts; require matching native terminal IDs and retain the target failure when diagnostic buffers fill.
 
 - Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
 

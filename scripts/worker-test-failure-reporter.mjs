@@ -73,7 +73,7 @@ export function annotation(record, level) {
 // BEGIN observation native event binding (pure; final stream ownership only).
 export function createObservationRelay(tracked) {
   const registrations = [], terminals = [], diagnostics = [];
-  let active = false, overflow = false, diagnosticEvents = 0;
+  let active = false, overflow = false, diagnosticEvents = 0, reservedTargetFailure = null;
   const coordinate = data => {
     const fields = ["entryFile", "file", "line", "column", "nesting"].map(key => own(data, key).value);
     const [entryFile, file, line, column, nesting] = fields;
@@ -99,28 +99,35 @@ export function createObservationRelay(tracked) {
         diagnosticEvents = Math.min(1000000, diagnosticEvents + 1);
         let record; try { record = parseObservationDiagnostic(text); } catch { /* closed incomplete, never raw text */ }
         append(diagnostics, { key, record });
-      } else append(terminals, { key, target: name === searchObservationContract.name, id, type, failure });
+      } else {
+        const target = name === searchObservationContract.name;
+        // Reserve the original sanitized identity before either bounded buffer can drop it.
+        // This retention is not evidence that diagnostic ownership is complete.
+        if (target && type === "test:fail" && reservedTargetFailure === null) reservedTargetFailure = failure ?? null;
+        append(terminals, { key, child, target, id, type, failure });
+      }
     },
     finish() {
       if (!active) return { active: false, records: [], targetFailure: null, omitted: 0 };
       const candidates = registrations.filter(r => r.target), target = candidates[0];
-      let reason = "complete", terminal, targetFailure = null;
+      let reason = "complete", terminal, targetFailure = reservedTargetFailure;
       if (overflow) reason = "bounded_overflow";
       else if (candidates.length !== 1 || !target.key || target.id === null) reason = "registration_incomplete";
       else if (registrations.filter(r => r.key === target.key).length !== 1) reason = "ambiguous_coordinates";
       else if (registrations.filter(r => r.child === target.child && r.id === target.id).length !== 1) reason = "ambiguous_identity";
       else {
         const matching = terminals.filter(r => r.key === target.key);
-        if (matching.length !== 1 || !matching[0].target || (matching[0].id.present && matching[0].id.value !== target.id)) reason = "terminal_incomplete";
-        else { terminal = matching[0]; targetFailure = terminal.failure ?? null; }
+        const sameIdentity = terminals.filter(r => r.child === target.child && r.id.present && r.id.value === target.id);
+        if (matching.length !== 1 || !matching[0].target || !matching[0].id.present
+          || !Number.isSafeInteger(matching[0].id.value) || matching[0].id.value <= 0 || matching[0].id.value !== target.id
+          || sameIdentity.length !== 1 || sameIdentity[0] !== matching[0]) reason = "terminal_incomplete";
+        else { terminal = matching[0]; targetFailure = terminal.failure ?? reservedTargetFailure; }
       }
       const owned = target?.key ? diagnostics.filter(r => r.key === target.key) : [];
       if (reason === "complete" && (owned.length !== 2 || owned.some(r => !r.record) || diagnostics.length !== owned.length)) reason = "diagnostics_incomplete";
       const boundary = owned.find(r => r.record?.kind === "boundary")?.record, cleanup = owned.find(r => r.record?.kind === "cleanup")?.record;
       if (reason === "complete" && (!boundary || !cleanup || (terminal.type === "test:pass" && (boundary.failurePresent || !cleanup.registered || cleanup.dispose === "rejected" || cleanup.remove === "rejected" || cleanup.recorderFailures)))) reason = "diagnostics_conflict";
       if (reason === "complete" && (cleanup.dispose === "pending" || cleanup.remove === "pending")) reason = "cleanup_incomplete";
-      // Even an incomplete channel must preserve the actual target's failure identity.
-      if (!targetFailure) targetFailure = terminals.find(r => r.target && r.type === "test:fail")?.failure ?? null;
       const records = reason === "complete" ? [boundary, cleanup] : [{ v: 1, kind: "observation_delivery", state: "incomplete", reason }];
       return { active: true, records, targetFailure, omitted: reason === "complete" ? 0 : diagnosticEvents };
     },

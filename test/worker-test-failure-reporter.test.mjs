@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, before, test } from "node:test";
+import { types } from "node:util";
 import { parse } from "yaml";
 import { annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
 import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
@@ -256,7 +257,7 @@ const observationBoundary = (overrides = {}) => ({ v: 1, kind: "boundary", case:
 const observationCleanup = (overrides = {}) => ({ v: 1, kind: "cleanup", case: "variants", registered: true, dispose: "fulfilled", disposeDefined: null, remove: "fulfilled", removeDefined: null, recorderFailures: 0, recorderFirstDefined: null, ...overrides });
 function observationEvents() {
   const location = { entryFile: searchObservationContract.file, file: searchObservationContract.file, line: 257, column: 1, nesting: 0 };
-  return { location, enqueue: { ...location, name: searchObservationContract.name, testId: 9 }, terminal: { ...location, name: searchObservationContract.name },
+  return { location, enqueue: { ...location, name: searchObservationContract.name, testId: 9 }, terminal: { ...location, name: searchObservationContract.name, testId: 9 },
     failure: { v: 1, kind: "failure", file: searchObservationContract.file, line: 257, failureType: "testCodeFailure", errorClass: "unknown", code: "ERR_TEST_FAILURE" } };
 }
 function inertObservationRelay() { return createObservationRelay(value => value === searchObservationContract.file ? value : null); }
@@ -401,5 +402,72 @@ test("inert observation relay rejects late reused child IDs and foreign terminal
     relay.observe(type, type === "test:enqueue" ? { ...e.enqueue, line: 999, name: "other" } : { ...e.terminal, name: "other" }, e.failure);
     assert.equal(relay.finish().records[0].state, "incomplete");
   }
+});
+test("inert terminal P2 missing or non-positive own native ID never completes binding", () => {
+  for (const value of [undefined, 0, -1, 1.5, "9"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    if (value === undefined) delete e.terminal.testId; else e.terminal.testId = value;
+    feedObservation(relay, e);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const e = observationEvents(), relay = inertObservationRelay(); let getters = 0;
+  Object.defineProperty(e.terminal, "testId", { get() { getters++; throw undefined; } });
+  feedObservation(relay, e); assert.equal(relay.finish().records[0].state, "incomplete"); assert.equal(getters, 0);
+});
+test("inert terminal P2 late same-child native ID at different coordinates is conflicting", () => {
+  for (const type of ["test:pass", "test:fail"]) {
+    const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+    relay.observe(type, { ...e.terminal, line: e.terminal.line + 1, name: "other native case" }, e.failure);
+    const result = relay.finish(); assert.equal(result.records[0].state, "incomplete"); assert.equal(result.targetFailure, e.failure);
+  }
+});
+async function inertWorkerIdentityRows(events) {
+  // Exercise the actual map/budget/summary loop with an inert tracked-file predicate.
+  // No native runner, Git discovery, file fixtures, child or event serialization runs.
+  const source = readFileSync(reporter, "utf8");
+  const constants = source.slice(source.indexOf("const failureTypes"), source.indexOf("// Do not inspect"));
+  const ownSource = source.slice(source.indexOf("function own("), source.indexOf("function trackedTestFiles("));
+  const failureSource = source.slice(source.indexOf("function failureRecord("), source.indexOf("export function annotation("));
+  const loop = source.slice(source.indexOf("export async function* workerFailureReport("), source.indexOf("export default workerFailureReport;"));
+  const run = new Function("types", "trackedTestFiles", "annotation", "createObservationRelay", "selectFailureRecords",
+    constants + ownSource + failureSource + loop.replace("export ", "") + "return workerFailureReport;")(types,
+    () => file => file === searchObservationContract.file || /^test\/earlier-[0-9]+\.test\.mjs$/.test(file) ? file : null,
+    annotation, createObservationRelay, selectFailureRecords);
+  const commands = [];
+  for await (const line of run(events)) commands.push(line);
+  assert.ok(commands.length <= 10); assert.ok(Buffer.byteLength(commands.join("")) <= 8192);
+  for (const line of commands) assert.ok(Buffer.byteLength(line) <= 768);
+  return commands.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+}
+test("inert terminal P2 both buffers full before target still retain its original identity", async () => {
+  const e = observationEvents(), events = [{ type: "test:enqueue", data: e.enqueue }];
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { ...e.terminal, entryFile: `test/earlier-${i}.test.mjs`, file: `test/earlier-${i}.test.mjs`, name: "earlier", testId: 100 + i } });
+  for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, line: 1000 + i, name: "other", testId: 1000 + i } });
+  for (const row of [observationBoundary(), observationCleanup()]) events.push({ type: "test:diagnostic", data: { ...e.location, message: observationDiagnosticText(row) } });
+  events.push({ type: "test:fail", data: { ...e.terminal, details: { error: undefined } } });
+  const rows = await inertWorkerIdentityRows(events), failures = rows.filter(r => r.kind === "failure"), summary = rows.at(-1);
+  assert.equal(failures[0].file, searchObservationContract.file); assert.equal(failures[0].line, e.terminal.line);
+  assert.equal(failures[0].errorClass, "undefined"); assert.equal(rows.find(r => r.kind === "observation_delivery").reason, "bounded_overflow");
+  assert.equal(rows.some(r => r.kind === "boundary"), false);
+  assert.equal(summary.failureEvents, 10); assert.equal(summary.reported, 8); assert.equal(summary.omittedEvents, 2);
+  assert.equal(summary.diagnosticsReported, 1); assert.equal(summary.diagnosticsOmitted, 2);
+});
+test("inert terminal P2 buffers filling after target preserve identity without complete credit", async () => {
+  const e = observationEvents(), events = [{ type: "test:enqueue", data: e.enqueue }, { type: "test:fail", data: e.terminal }];
+  for (const row of [observationBoundary(), observationCleanup()]) events.push({ type: "test:diagnostic", data: { ...e.location, message: observationDiagnosticText(row) } });
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { ...e.terminal, entryFile: `test/earlier-${i}.test.mjs`, file: `test/earlier-${i}.test.mjs`, name: "later", testId: 100 + i } });
+  for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, line: 1000 + i, name: "other", testId: 1000 + i } });
+  const rows = await inertWorkerIdentityRows(events);
+  assert.equal(rows[0].file, searchObservationContract.file); assert.equal(rows[0].line, e.terminal.line);
+  assert.equal(rows.find(r => r.kind === "observation_delivery").reason, "bounded_overflow");
+  assert.equal(rows.some(r => r.kind === "boundary"), false); assert.equal(rows.at(-1).failureEvents, 10);
+  assert.equal(rows.at(-1).reported, 8); assert.equal(rows.at(-1).omittedEvents, 2);
+});
+test("inert terminal P2 absent target keeps the actual reporter loop output unchanged", async () => {
+  const rows = await inertWorkerIdentityRows([{ type: "test:fail", data: { file: "test/earlier-0.test.mjs", line: 1, details: { error: undefined } } }]);
+  assert.deepEqual(rows, [
+    { v: 1, kind: "failure", file: "test/earlier-0.test.mjs", line: 1, failureType: "unknown", errorClass: "undefined", code: "unknown" },
+    { v: 1, kind: "summary", failureEvents: 1, reported: 1, omittedEvents: 0, unknownFiles: 0, countsSaturated: false },
+  ]);
 });
 // END inert observation diagnostic tests.
