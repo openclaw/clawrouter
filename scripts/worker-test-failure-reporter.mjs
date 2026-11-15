@@ -6,7 +6,7 @@ import { types } from "node:util";
 
 const failureTypes = new Set(["testCodeFailure", "subtestsFailed", "testTimeoutFailure", "cancelledByParent", "parentAlreadyFinished", "hookFailed", "testAborted"]);
 const codes = new Set(["ERR_TEST_FAILURE", "ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_INVALID_ARG_TYPE"]);
-const filePattern = /^worker\/test\/[A-Za-z0-9][A-Za-z0-9._-]*\.test\.mjs$/;
+const filePattern = /^(?:worker\/)?test\/[A-Za-z0-9][A-Za-z0-9._-]*\.test\.mjs$/;
 const limit = 1_000_000;
 
 // Do not inspect names, messages, causes, aggregate members or accessors.
@@ -16,18 +16,28 @@ function own(value, key) {
   return descriptor && Object.hasOwn(descriptor, "value") ? { present: true, value: descriptor.value } : { present: false };
 }
 
-function trackedWorkerFiles(cwd) {
+function trackedTestFiles(cwd) {
   try {
     const git = args => execFileSync("git", args, { cwd, encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] });
     const root = realpathSync(git(["rev-parse", "--show-toplevel"]).trim());
-    const files = new Set(git(["ls-files", "--cached", "-z", "--", ":(top)worker/test"]).split("\0").filter(file => file.length <= 240 && filePattern.test(file)));
+    const lexicalRoot = resolve(cwd, relative(realpathSync(cwd), root));
+    const files = new Set(git(["ls-files", "--stage", "-z", "--", ":(top)worker/test", ":(top)test"]).split("\0")
+      .map(entry => /^(?:100644|100755) [0-9a-f]{40,64} 0\t(.+)$/.exec(entry)?.[1])
+      .filter(file => file && file.length <= 240 && filePattern.test(file)));
     return value => {
-      if (typeof value !== "string") return null;
+      if (typeof value !== "string" || /[\\\x00-\x1f\x7f]/.test(value) || /^[A-Za-z]:/.test(value)
+        || value.replace(/%2e/gi, ".").split("/").includes("..")) return null;
       try {
-        const path = value.startsWith("file:") ? fileURLToPath(value) : isAbsolute(value) ? value : resolve(cwd, value);
+        let path;
+        if (value.startsWith("file:")) {
+          const url = new URL(value);
+          if (url.hostname || url.search || url.hash || url.username || url.password) return null;
+          path = fileURLToPath(url);
+        } else path = isAbsolute(value) ? value : resolve(cwd, value);
+        const file = [lexicalRoot, root].map(base => relative(base, path).split(sep).join("/")).find(file => files.has(file));
+        if (!file) return null;
         if (!lstatSync(path).isFile()) return null;
-        const canonical = realpathSync(path), file = relative(root, canonical).split(sep).join("/");
-        if (!files.has(file) || canonical !== resolve(root, file)) return null;
+        if (realpathSync(path) !== resolve(root, file)) return null;
         return file;
       } catch { return null; }
     };
@@ -62,7 +72,7 @@ function annotation(record, level) {
 // Buffer only nine leaf and nine parent identities. Parent summaries cannot
 // crowd out later leaf failures, and presentation never changes runner verdicts.
 export async function* workerFailureReport(source, { cwd = process.cwd() } = {}) {
-  const tracked = trackedWorkerFiles(cwd), leaves = new Map(), parents = new Map();
+  const tracked = trackedTestFiles(cwd), leaves = new Map(), parents = new Map();
   let failures = 0, unknownFiles = 0;
   for await (const event of source) {
     if (own(event, "type").value !== "test:fail") continue;

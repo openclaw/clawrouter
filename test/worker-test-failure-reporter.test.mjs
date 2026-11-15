@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -18,8 +18,8 @@ let scratch;
 before(async () => { scratch = await mkdtemp(join(tmpdir(), "worker-reporter-controls-")); });
 after(async () => { await rm(scratch, { recursive: true, force: true }); });
 
-async function fixture(source, tracked = true) {
-  const cwd = await mkdtemp(join(scratch, "case-")), file = "worker/test/control.test.mjs";
+async function fixture(source, tracked = true, file = "worker/test/control.test.mjs") {
+  const cwd = await mkdtemp(join(scratch, "case-"));
   await mkdir(dirname(join(cwd, file)), { recursive: true });
   await writeFile(join(cwd, file), source);
   const git = (...args) => execFileSync("git", args, { cwd, stdio: "ignore" });
@@ -107,6 +107,48 @@ test("untracked native input remains unknown rather than acquiring a repository 
   assert.notEqual(result.status, 0);
   assert.ok(result.rows.filter(row => row.kind === "failure").every(row => row.file === null && row.line === null));
   assert.ok(result.rows.at(-1).unknownFiles > 0);
+});
+
+for (const [name, source, status] of [
+  ["success", prelude + "test('success',()=>assert.equal(1,1));", 0],
+  ["undefined", prelude + "test('failure',()=>{throw undefined});", 1],
+  ["import", `import './${marker}.mjs';`, 1],
+]) test(`native root script ${name} retains its real exit and tracked identity`, async () => {
+  const f = await fixture(source, true, "test/control.test.mjs"), result = run(f);
+  assert.equal(result.status, status);
+  const failures = result.rows.filter(row => row.kind === "failure");
+  assert.equal(failures.length > 0, status !== 0);
+  assert.ok(failures.every(row => row.file === f.file && row.line > 0));
+});
+
+test("root script allowlist accepts only exact tracked regular paths and local file URLs", async () => {
+  const f = await fixture("", true, "test/control.test.mjs"), file = resolve(f.cwd, f.file);
+  const outside = await fixture("", true, "test/control.test.mjs");
+  await mkdir(join(f.cwd, "test/nested"));
+  await writeFile(join(f.cwd, "test/nested/hidden.test.mjs"), "");
+  await writeFile(join(f.cwd, "test/untracked.test.mjs"), "");
+  await symlink(file, join(f.cwd, "test/link.test.mjs"));
+  await symlink(join(f.cwd, "test"), join(f.cwd, "alias"));
+  execFileSync("git", ["add", "--", "test/nested/hidden.test.mjs", "test/link.test.mjs", "alias"], { cwd: f.cwd, stdio: "ignore" });
+  const valid = await collect([f.file, file, pathToFileURL(file).href].map((value, i) => fail(value, i + 1, undefined)), f.cwd);
+  assert.equal(valid.filter(row => row.kind === "failure" && row.file === f.file).length, 3);
+  const bad = [
+    "test/untracked.test.mjs", "test/nested/hidden.test.mjs", "test/link.test.mjs", "alias/control.test.mjs",
+    "test/nested/../control.test.mjs", file.replace("/test/", "/test/nested/../"),
+    pathToFileURL(file).href.replace("/test/", "/test/%2e%2e/test/"),
+    pathToFileURL(file).href + "?private=value", pathToFileURL(file).href + "#private",
+    "file://foreign.invalid" + file, "C:\\private\\test\\control.test.mjs", "C:/private/test/control.test.mjs",
+    "\\\\foreign\\test\\control.test.mjs", resolve(outside.cwd, outside.file), "/private/" + marker,
+  ];
+  for (const value of bad) {
+    const rows = await collect([fail(value, 1, undefined)], f.cwd);
+    assert.equal(rows[0].file, null); assert.equal(rows[0].line, null); assert.equal(rows.at(-1).unknownFiles, 1);
+  }
+  // A regular working copy must not promote an index entry that is a symlink.
+  await rm(join(f.cwd, "test/link.test.mjs"));
+  await writeFile(join(f.cwd, "test/link.test.mjs"), "");
+  const replaced = await collect([fail("test/link.test.mjs", 1, undefined)], f.cwd);
+  assert.equal(replaced[0].file, null); assert.equal(replaced.at(-1).unknownFiles, 1);
 });
 
 test("more than nine native failures emit nine identities and one bounded count record", async () => {
@@ -199,5 +241,11 @@ test("workflow preserves typecheck order, the full default-concurrency glob and 
   assert.equal(job.steps[index + 3].run, "pnpm provider:smoke-plan");
   for (const step of job.steps.slice(index, index + 4)) assert.equal(step.if, undefined);
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["worker:check"], "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs");
+  const scripts = workflow.jobs["script-tests"], step = scripts.steps.find(step => step.name === "Script tests with bounded failure identities");
+  assert.equal(scripts["timeout-minutes"], 10);
+  assert.equal(step.run, "node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs");
+  assert.equal(step.if, undefined);
+  assert.equal(scripts.steps.at(-1), step);
+  assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:scripts"], "node --test test/*.test.mjs");
   for (const file of ["scripts/worker-test-failure-reporter.mjs", "test/worker-test-failure-reporter.test.mjs", ".github/workflows/ci.yml"]) assert.equal(affectsOpenClawContract(file), false);
 });
