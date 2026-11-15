@@ -2,12 +2,153 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { types as nodeTypes } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import * as guardedFetch from "../../src/infra/net/fetch-guard.js";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+
+// BEGIN audio diagnostic protocol. Executed unchanged by the outer validator.
+function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
+  type Data = Record<string, string | number | boolean | null>;
+  const pin = "6de028c4e960db91bdf87882989cb6756a6429c3", prefix = "AUDIO813_SDK_V1 ";
+  const scenarios = ["success", "unpriced", "denied", "stale", "malformed", "partial", "error", "redirect", "truncated", "rotation", "missing_key", "unsafe_headers", "preabort", "abort", "invalid_input"];
+  const ids = new Set(["groq", "mistral"].flatMap(provider => scenarios.map(scenario => provider + "_" + scenario)));
+  const phases = ["module", "setup", "execute", "body", "original_join", "worker_join", "state_scope", "runtime_restore", "case_outcome", "helper", "worker_abort", "worker_retirement", "upstream_sqlite", "worker_dispose", "scratch_cleanup", "report", "capacity"];
+  const keys = ["v", "pin", "source", "caseId", "phase", "role", "outcome", "failurePresent", "reasonDefined", "reasonType", "partialDelivery", "records", "invalid", "suppressed"];
+  function own(value: unknown, key: string): unknown {
+    if (!value || typeof value !== "object" || isProxy(value)) return;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  }
+  function validate(value: unknown): Data | undefined {
+    if (!value || typeof value !== "object" || isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return;
+    const found = Reflect.ownKeys(value), data: Data = {};
+    if (found.length > keys.length) return;
+    for (const key of found) {
+      if (typeof key !== "string" || !keys.includes(key)) return;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) return;
+      data[key] = descriptor.value;
+    }
+    if (data.v !== 1 || data.pin !== pin || !["sdk", "outer"].includes(data.source as string)
+      || !(ids.has(data.caseId as string) || data.caseId === null && (data.source === "outer" || data.phase === "module"))
+      || !phases.includes(data.phase as string) || !["progress", "primary", "cleanup", "summary"].includes(data.role as string)
+      || !["entered", "fulfilled", "rejected", "unknown"].includes(data.outcome as string)
+      || typeof data.failurePresent !== "boolean" || data.partialDelivery !== null) return;
+    if (data.failurePresent) {
+      if (!["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"].includes(data.reasonType as string)
+        || data.reasonDefined !== (data.reasonType !== "undefined") || data.outcome !== "rejected") return;
+    } else if (data.reasonDefined !== null || data.reasonType !== "none" || data.outcome === "rejected") return;
+    for (const key of ["records", "invalid", "suppressed"]) if (Object.hasOwn(data, key)
+      && !(Number.isSafeInteger(data[key]) && Number(data[key]) >= 0 && Number(data[key]) <= 65535)) return;
+    if (new TextEncoder().encode(JSON.stringify(data)).length > 640) return;
+    return data;
+  }
+  function record(context: Data, failed = false, error?: unknown): Data {
+    const value = validate({ v: 1, pin, ...context, failurePresent: failed, reasonDefined: failed ? error !== undefined : null,
+      reasonType: failed ? error === null ? "null" : typeof error : "none", partialDelivery: null });
+    if (!value) throw new Error("invalid audio diagnostic");
+    return value;
+  }
+  function parse(text: unknown, accept: (value: Data) => void) {
+    let records = 0, invalid = 0;
+    if (text === undefined) return { records, invalid };
+    if (typeof text !== "string" || text.length > 2 * 1024 * 1024) return { records, invalid: 1 };
+    for (const line of text.split("\n")) {
+      if (!line.startsWith(prefix)) continue;
+      if (records + invalid >= 512 || line.length > prefix.length + 640) { invalid = Math.min(65535, invalid + 1); continue; }
+      let value;
+      try { value = validate(JSON.parse(line.slice(prefix.length))); } catch { /* invalid closed record */ }
+      if (!value || value.source !== "sdk") { invalid++; continue; }
+      accept(value); records++;
+    }
+    return { records, invalid };
+  }
+  const keyFor = (row: Data) => [row.source, row.caseId, row.phase, row.role, row.reasonType].join("/");
+  const priority = (row: Data) => row.source === "sdk" && row.role === "primary" ? 0
+    : row.source === "sdk" && row.phase === "original_join" ? 1
+    : row.source === "outer" && row.phase === "worker_retirement" && row.caseId === "groq_abort" ? 2
+    : row.source === "outer" && row.phase === "worker_retirement" && row.caseId === "mistral_abort" ? 3
+    : row.failurePresent && row.reasonDefined === false ? 4 : row.phase === "report" ? 5
+    : row.role === "primary" ? 6 : row.failurePresent ? 7 : 8;
+  function emitter(write: (line: string) => unknown) {
+    const records = new Map<string, Data>(), essential = new Map<string, Data>(), emitted = new Set<string>();
+    let suppressed = 0, failed = false, finished = false, bytes = 0;
+    const suppress = () => { suppressed = Math.min(65535, suppressed + 1); };
+    function command(row: Data) {
+      const line = "::error title=Audio contract diagnostic::" + JSON.stringify(row) + "\n";
+      const size = new TextEncoder().encode(line).length;
+      if (size > 768 || bytes + size > 8192) throw new Error("audio annotation budget");
+      bytes += size; emitted.add(keyFor(row)); write(line);
+    }
+    function put(value: unknown) {
+      const row = validate(value); if (!row) throw new Error("invalid audio annotation");
+      failed ||= row.failurePresent === true;
+      const groups = [row.source === "sdk" && row.role === "primary" ? "sdk_primary" : null,
+        row.source === "sdk" && row.phase === "original_join" ? "sdk_join" : null,
+        row.source === "outer" && row.phase === "worker_retirement" && ["groq_abort", "mistral_abort"].includes(row.caseId as string) ? row.caseId as string : null,
+        row.failurePresent && row.reasonDefined === false ? "undefined" : null, row.phase === "report" ? "report" : null,
+        row.source === "outer" && row.role === "primary" ? "outer_primary" : null, row.role === "cleanup" && row.failurePresent ? "cleanup" : null];
+      for (const group of groups) if (group) {
+        const previous = essential.get(group);
+        if (!previous || !previous.failurePresent) essential.set(group, row);
+      }
+      const key = keyFor(row), old = records.get(key);
+      if (old) { if (JSON.stringify(old) === JSON.stringify(row)) return; if (old.failurePresent) { suppress(); return; } }
+      if (!old && records.size >= 256) {
+        const disposable = [...records].sort((a, b) => priority(b[1]) - priority(a[1]))[0]!;
+        suppress(); if (priority(disposable[1]) <= priority(row)) return; records.delete(disposable[0]);
+      }
+      records.set(key, row);
+    }
+    return { put, checkpoint() {
+      // One early record survives a later original cleanup stall; no retry.
+      if (!failed || emitted.size || finished) return;
+      const row = essential.get("sdk_primary") ?? essential.get("outer_primary");
+      if (row) command(row);
+    }, flush() {
+      if (finished) return; finished = true; if (!failed) return;
+      const sorted = [...records.values()].sort((a, b) => priority(a) - priority(b)), selected: Data[] = [];
+      // Reserve a representative for each essential failure/retirement family.
+      const selectedKeys = new Set(emitted);
+      for (const row of [...essential.values(), ...sorted]) if (!selectedKeys.has(keyFor(row))) {
+        if (selectedKeys.size < 9) { selected.push(row); selectedKeys.add(keyFor(row)); } else suppress();
+      }
+      if (suppressed) selected.push(record({ source: "outer", caseId: null, phase: "capacity", role: "summary", outcome: "unknown", suppressed }));
+      const failures: unknown[] = [];
+      for (const row of selected) {
+        try { command(row); } catch (error) { failures.push(error); }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length) throw new AggregateError(failures, "audio annotation delivery failed");
+    } };
+  }
+  return { prefix, pin, ids, own, validate, record, parse, emitter };
+}
+// END audio diagnostic protocol.
+const audioProtocol = audioDiagnosticProtocol(nodeTypes.isProxy);
+let audioRecordCount = 0;
+function audioCaseDiagnostics(caseId: string) {
+  const failures: unknown[] = [], observers: Promise<unknown>[] = [];
+  function mark(phase: string, role: string, outcome: string, failed = false, error?: unknown) {
+    try {
+      if (++audioRecordCount > 512) throw new Error("audio child diagnostic capacity");
+      const value = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome }, failed, error);
+      process.stdout.write("\n" + audioProtocol.prefix + JSON.stringify(value) + "\n");
+    } catch (failure) { failures.push(failure); }
+  }
+  function track<T>(phase: string, start: () => T): T {
+    let original: T;
+    try { original = start(); } catch (error) { mark(phase, "cleanup", "rejected", true, error); throw error; }
+    if (original instanceof Promise) observers.push(original.then(() => { mark(phase, "cleanup", "fulfilled"); }, error => { mark(phase, "cleanup", "rejected", true, error); }));
+    else mark(phase, "cleanup", "fulfilled");
+    return original;
+  }
+  return { mark, track, async join() { await Promise.all(observers); await finishOwned(failures, []); } };
+}
 
 type Case = { id: string; provider: "groq" | "mistral"; model: string; route: string; scenario: string };
 const sourceHead = "6de028c4e960db91bdf87882989cb6756a6429c3";
@@ -67,6 +208,8 @@ function wav(): Buffer {
 }
 
 async function runCase(row: Case): Promise<void> {
+  const diagnostic = audioCaseDiagnostics(row.id);
+  diagnostic.mark("setup", "progress", "entered");
   const failures: unknown[] = [], transports: Transport[] = [], unexpected: unknown[] = [];
   let callbackFailure: { error: unknown } | undefined;
   try {
@@ -142,6 +285,7 @@ async function runCase(row: Case): Promise<void> {
         const provider = cfg.models!.providers!.clawrouter!, model = cfg.tools!.media!.models![0]!;
         const params = { cfg, filePath, agentDir, mime: "audio/wav", language: "en", ...(row.provider === "groq" ? { prompt: "Synthetic café 東京" } : {}) };
         const call = () => transcribeAudioFile(params, { signal: caller.signal, assertCurrent: () => caller.signal.throwIfAborted() });
+        diagnostic.mark("execute", "progress", "entered");
         if (row.scenario === "success") {
           await upsertAuthProfileAsync({ agentDir, profileId: "clawrouter:audio", credential: { type: "api_key", provider: "clawrouter", key: token(row) } });
           await upsertAuthProfileAsync({ agentDir, profileId: `${row.provider}:audio`, credential: { type: "api_key", provider: row.provider, key: "must-not-fallback" } });
@@ -176,14 +320,14 @@ async function runCase(row: Case): Promise<void> {
         const uploads = transports.filter(value => value.path === row.route);
         expect(uploads).toHaveLength(["success", "rotation", "stale", "malformed", "partial", "error", "redirect", "truncated", "abort"].includes(row.scenario) ? 1 : 0);
         if (row.scenario === "stale") expect(uploads[0]?.status).toBe(403);
-      } catch (error) { bodyFailures.push(error); }
+      } catch (error) { bodyFailures.push(error); diagnostic.mark("body", "primary", "rejected", true, error); }
       try {
         await finishOwned(bodyFailures, [
           () => { if (!caller.signal.aborted) caller.abort(callerReason); },
           () => row.scenario === "abort" && control("abort", row),
           async () => { if (pending) { const result = await pending; expect("error" in result).toBe(true); } },
-          ...transports.map(transport => () => joinOriginal(transport)),
-          () => control("join", row),
+          ...transports.map(transport => () => diagnostic.track("original_join", () => joinOriginal(transport))),
+          () => diagnostic.track("worker_join", () => control("join", row)),
           () => { if (unexpected.length) throw new AggregateError(unexpected, "unexpected transport"); },
         ]);
       } catch (error) { callbackFailure = { error }; throw error; }
@@ -191,8 +335,15 @@ async function runCase(row: Case): Promise<void> {
   } catch (error) {
     if (callbackFailure && error !== callbackFailure.error) failures.push(callbackFailure.error);
     failures.push(error);
+    diagnostic.mark("state_scope", "cleanup", "rejected", true, error);
   }
-  await finishOwned(failures, [() => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs()]);
+  let finalFailure: { error: unknown } | undefined;
+  try {
+    await finishOwned(failures, [() => diagnostic.track("runtime_restore", () => vi.restoreAllMocks()),
+      () => diagnostic.track("runtime_restore", () => vi.unstubAllGlobals()), () => diagnostic.track("runtime_restore", () => vi.unstubAllEnvs())]);
+    diagnostic.mark("case_outcome", "summary", "fulfilled");
+  } catch (error) { finalFailure = { error }; diagnostic.mark("case_outcome", "summary", "rejected", true, error); }
+  await finishOwned(finalFailure ? [finalFailure.error] : [], [() => diagnostic.join()]);
 }
 
 describe("registered native Groq/Mistral transcription against shipping Worker", () => {

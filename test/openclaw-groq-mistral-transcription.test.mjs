@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { types as nodeTypes } from "node:util";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
@@ -29,6 +32,218 @@ const token = (row, rotated = false) => `clawrouter-live-${row.id}-${rotated ? "
 const manifests = readdirSync("providers").filter(path => path.endsWith(".provider.yaml")).sort().map(path => parse(readFileSync(`providers/${path}`, "utf8")));
 // Actual compilation precedes every Worker evaluation; never inject snapshot cards.
 assert.deepEqual(compileProviderSnapshot(manifests), snapshot);
+
+const audioSdkText = readFileSync(new URL("./fixtures/openclaw-groq-mistral-transcription-contract.test.ts", import.meta.url), "utf8");
+const audioProtocolStart = audioSdkText.indexOf("// BEGIN audio diagnostic protocol."), audioProtocolEnd = audioSdkText.indexOf("// END audio diagnostic protocol.");
+assert.ok(audioProtocolStart >= 0 && audioProtocolEnd > audioProtocolStart);
+const audioProtocol = new Function(stripTypeScriptTypes(audioSdkText.slice(audioProtocolStart, audioProtocolEnd)) + "; return audioDiagnosticProtocol;")()(nodeTypes.isProxy);
+assert.deepEqual([...audioProtocol.ids], cases.map(row => row.id));
+assert.equal(audioProtocol.pin, sourceHead);
+
+function audioDiagnosticSession(write = line => process.stdout.write(line)) {
+  const emitter = audioProtocol.emitter(write), failures = [], observers = [];
+  function mark(phase, caseId, role, outcome, failed = false, error, counts = {}) {
+    try { emitter.put(audioProtocol.record({ source: "outer", caseId, phase, role, outcome, ...counts }, failed, error)); }
+    catch (failure) { failures.push(failure); }
+  }
+  function rejected(error) {
+    mark("helper", null, "primary", "rejected", true, error);
+    const visited = new Set(), pending = [error]; let records = 0, invalid = 0, inputBytes = 0;
+    // The helper's AggregateError owns an errors array. Do not walk prototypes,
+    // getters, arbitrary messages or a speculative cause/serialization graph.
+    while (pending.length) {
+      const current = pending.pop();
+      if (!current || typeof current !== "object" || nodeTypes.isProxy(current) || !nodeTypes.isNativeError(current) || visited.has(current)) continue;
+      if (visited.size >= 32) { invalid++; break; }
+      visited.add(current);
+      for (const key of ["stdout", "stderr"]) {
+        const text = audioProtocol.own(current, key);
+        if (typeof text === "string") inputBytes += Buffer.byteLength(text);
+        if (inputBytes > 4 * 1024 * 1024) { invalid++; continue; }
+        const parsed = audioProtocol.parse(text, row => {
+          if (records >= 512) { invalid++; return; }
+          emitter.put(row); records++;
+        });
+        invalid += parsed.invalid;
+      }
+      const children = audioProtocol.own(current, "errors");
+      if (!children || nodeTypes.isProxy(children) || !Array.isArray(children)) continue;
+      const length = audioProtocol.own(children, "length");
+      if (!Number.isSafeInteger(length) || length < 0 || length > 32) { invalid++; continue; }
+      for (let i = 0; i < length; i++) {
+        const descriptor = Object.getOwnPropertyDescriptor(children, String(i));
+        if (!descriptor || !("value" in descriptor)) { invalid++; continue; }
+        if (pending.length >= 32) { invalid++; break; }
+        pending.push(descriptor.value);
+      }
+    }
+    if (invalid) failures.push(new Error("incomplete audio child diagnostics"));
+    mark("report", null, "summary", invalid ? "rejected" : records ? "fulfilled" : "unknown", invalid > 0, undefined,
+      { records, invalid: Math.min(65535, invalid) });
+    emitter.checkpoint();
+  }
+  function observe(phase, caseId, start) {
+    let original;
+    try { original = start(); } catch (error) { mark(phase, caseId, "cleanup", "rejected", true, error); throw error; }
+    if (original instanceof Promise) observers.push(original.then(
+      () => { mark(phase, caseId, "cleanup", "fulfilled"); },
+      error => { mark(phase, caseId, "cleanup", "rejected", true, error); },
+    ));
+    else mark(phase, caseId, "cleanup", "fulfilled");
+    return original;
+  }
+  return { mark, observe, rejected(error) { try { rejected(error); } catch (failure) { failures.push(failure); } }, async finish() {
+    await Promise.all(observers);
+    await finishOwned(failures, [() => emitter.flush()]);
+  } };
+}
+
+const audioDiagnosticContext = (changes = {}) => ({ source: "sdk", caseId: "groq_success", phase: "body", role: "primary", outcome: "rejected", ...changes });
+test("audio closed diagnostics validate exact source, identities, fields and primitive bounds", async t => {
+  const good = audioProtocol.record(audioDiagnosticContext(), true, undefined);
+  assert.equal(audioProtocol.ids.size, 30); assert.equal(good.failurePresent, true);
+  assert.equal(good.reasonDefined, false); assert.equal(good.reasonType, "undefined");
+  let getters = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["name", "message", "stack", "stdout", "stderr", "cause"].map(key => [key, { get() { getters++; throw undefined; } }])));
+  assert.equal(audioProtocol.record(audioDiagnosticContext(), true, hostile).reasonType, "object");
+  for (const key of ["stdout", "stderr", "cause"]) assert.equal(audioProtocol.own(hostile, key), undefined);
+  const proxy = new Proxy({}, { getPrototypeOf() { getters++; throw undefined; }, ownKeys() { getters++; throw undefined; }, getOwnPropertyDescriptor() { getters++; throw undefined; } });
+  assert.equal(audioProtocol.validate(proxy), undefined); assert.equal(audioProtocol.own(proxy, "stdout"), undefined);
+  assert.equal(audioProtocol.validate(Object.defineProperty({ ...good }, "phase", { get() { getters++; throw undefined; } })), undefined);
+  assert.equal(getters, 0);
+  const invalid = [{ pin: "wrong" }, { source: "worker" }, { caseId: "groq_other" }, { caseId: null },
+    { phase: "foreign" }, { role: "foreign" }, { outcome: "fulfilled" }, { reasonType: "Error" }, { reasonDefined: true },
+    { partialDelivery: true }, { records: -1 }, { records: 65536 }, { records: Infinity }, { records: "1" },
+    { message: "private" }, { url: "private" }, { stack: "private" }, { arbitrary: true }];
+  for (const [index, changes] of invalid.entries()) await t.test(String(index), () => assert.equal(audioProtocol.validate({ ...good, ...changes }), undefined));
+  assert.ok(audioProtocol.validate({ ...good, records: 65535, invalid: 0, suppressed: 1 }));
+});
+
+test("audio closed diagnostics parse only complete column-zero child records", () => {
+  const row = audioProtocol.record(audioDiagnosticContext(), true, undefined), accepted = [];
+  const line = audioProtocol.prefix + JSON.stringify(row);
+  const result = audioProtocol.parse("private prose\n # " + line + "\n\u001b[31m" + line + "\n" + line + "\n", value => accepted.push(value));
+  assert.deepEqual(result, { records: 1, invalid: 0 }); assert.deepEqual(accepted, [row]);
+  for (const value of ["{", JSON.stringify({ ...row, source: "outer" }), JSON.stringify({ ...row, pin: "wrong" }), "x".repeat(641)]) {
+    assert.equal(audioProtocol.parse(audioProtocol.prefix + value + "\n", () => assert.fail()).invalid, 1);
+  }
+  assert.equal(audioProtocol.parse("x".repeat(2 * 1024 * 1024 + 1), () => assert.fail()).invalid, 1);
+  assert.deepEqual(audioProtocol.parse((line + "\n").repeat(513), () => {}), { records: 512, invalid: 1 });
+});
+
+test("audio closed diagnostics preserve original AggregateError, undefined and cleanup outcomes", async () => {
+  const lines = [], session = audioDiagnosticSession(line => lines.push(line));
+  const record = audioProtocol.record(audioDiagnosticContext(), true, undefined);
+  const child = Object.assign(new Error("private child"), { stdout: audioProtocol.prefix + JSON.stringify(record) + "\n", stderr: "private unrelated bytes" });
+  let getters = 0;
+  for (const key of ["message", "stack", "cause"]) Object.defineProperty(child, key, { get() { getters++; throw undefined; } });
+  const cleanup = new Error("private cleanup"), aggregate = new AggregateError([child, cleanup, undefined], "private aggregate");
+  aggregate.errors.push(aggregate, child);
+  session.rejected(aggregate);
+  const outcome = Promise.reject(undefined);
+  assert.equal(session.observe("worker_retirement", "groq_abort", () => outcome), outcome);
+  const later = Promise.resolve(); assert.equal(session.observe("worker_retirement", "mistral_abort", () => later), later);
+  const failures = [aggregate];
+  let caught;
+  try { await finishOwned(failures, [() => outcome, () => session.finish()]); } catch (error) { caught = error; }
+  assert.ok(caught instanceof AggregateError); assert.equal(caught.errors[0], aggregate); assert.equal(caught.errors[1], undefined);
+  assert.equal(getters, 0); assert.ok(lines.every(line => !line.includes("private")));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length)));
+  assert.equal(records.filter(row => row.source === "sdk" && row.caseId === "groq_success").length, 1);
+  assert.ok(records.some(row => row.phase === "worker_retirement" && row.caseId === "groq_abort" && row.failurePresent && !row.reasonDefined));
+  assert.ok(records.some(row => row.phase === "worker_retirement" && row.caseId === "mistral_abort" && row.outcome === "fulfilled"));
+  const unchanged = audioDiagnosticSession(() => {});
+  unchanged.rejected(aggregate);
+  await assert.rejects(finishOwned([aggregate], [() => unchanged.finish()]), error => error === aggregate);
+});
+
+test("audio closed diagnostics never invoke child getters or walk unbounded error graphs", async () => {
+  let getters = 0; const error = new Error("private");
+  for (const key of ["stdout", "stderr", "errors", "cause"]) Object.defineProperty(error, key, { get() { getters++; throw undefined; } });
+  const session = audioDiagnosticSession(() => {}); session.rejected(error); await session.finish(); assert.equal(getters, 0);
+  const cyclic = new AggregateError([], "private"); cyclic.errors.push(cyclic);
+  const cycleSession = audioDiagnosticSession(() => {}); cycleSession.rejected(cyclic); await cycleSession.finish();
+  const tooMany = new AggregateError(Array.from({ length: 33 }, () => new Error("private")), "private");
+  const limited = audioDiagnosticSession(() => {}); limited.rejected(tooMany); await assert.rejects(limited.finish(), /incomplete audio/);
+  const malformed = audioDiagnosticSession(() => {}); malformed.rejected(Object.assign(new Error(), { stdout: audioProtocol.prefix + "{}\n" }));
+  await assert.rejects(malformed.finish(), /incomplete audio/);
+});
+
+function fillAudioDiagnosticBudget(emitter) {
+  for (const caseId of audioProtocol.ids) {
+    emitter.put(audioProtocol.record(audioDiagnosticContext({ caseId }), true, undefined));
+    emitter.put(audioProtocol.record(audioDiagnosticContext({ caseId, phase: "original_join", role: "cleanup" }), true, new Error()));
+  }
+  for (const caseId of ["groq_abort", "mistral_abort"]) emitter.put(audioProtocol.record(audioDiagnosticContext({ source: "outer", caseId, phase: "worker_retirement", role: "cleanup", outcome: "fulfilled" })));
+  emitter.put(audioProtocol.record(audioDiagnosticContext({ source: "outer", caseId: null, phase: "report", role: "summary" }), true, undefined));
+}
+test("audio closed diagnostics reserve essential families within the step quota and deduplicate", () => {
+  const lines = [], emitter = audioProtocol.emitter(line => lines.push(line));
+  fillAudioDiagnosticBudget(emitter); emitter.flush(); emitter.flush();
+  assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => line.startsWith("::error title=Audio contract diagnostic::") && Buffer.byteLength(line) <= 768 && line.split("\n").length === 2));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length)));
+  assert.ok(records.every(row => audioProtocol.validate(row)));
+  assert.ok(records.some(row => row.source === "sdk" && row.role === "primary"));
+  assert.ok(records.some(row => row.source === "sdk" && row.phase === "original_join"));
+  for (const caseId of ["groq_abort", "mistral_abort"]) assert.ok(records.some(row => row.phase === "worker_retirement" && row.caseId === caseId));
+  assert.ok(records.some(row => row.phase === "report")); assert.equal(records.at(-1).phase, "capacity");
+  const repeated = [], duplicate = audioProtocol.emitter(line => repeated.push(line));
+  const row = audioProtocol.record(audioDiagnosticContext(), true, undefined);
+  for (let i = 0; i < 20; i++) duplicate.put(row);
+  duplicate.flush(); assert.equal(repeated.length, 1);
+  const early = [], checkpoint = audioProtocol.emitter(line => early.push(line));
+  checkpoint.put(audioProtocol.record(audioDiagnosticContext(), true, new Error())); checkpoint.checkpoint();
+  assert.equal(early.length, 1);
+  fillAudioDiagnosticBudget(checkpoint); checkpoint.flush();
+  assert.ok(early.length <= 10);
+  const earlyRows = early.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length)));
+  assert.ok(earlyRows.some(row => row.failurePresent && row.reasonDefined === false));
+  for (const caseId of ["groq_abort", "mistral_abort"]) assert.ok(earlyRows.some(row => row.phase === "worker_retirement" && row.caseId === caseId));
+});
+
+test("audio closed diagnostics retain delivery failure without masking original undefined", async () => {
+  let attempts = 0; const session = audioDiagnosticSession(() => { attempts++; throw undefined; });
+  session.rejected(undefined);
+  let caught;
+  try { await finishOwned([undefined], [() => session.finish()]); } catch (error) { caught = error; }
+  assert.ok(caught instanceof AggregateError); assert.equal(caught.errors[0], undefined); assert.ok(caught.errors.length > 1); assert.ok(attempts > 0);
+  const passing = []; const pass = audioDiagnosticSession(line => passing.push(line));
+  await pass.observe("worker_retirement", "groq_abort", () => Promise.resolve()); await pass.finish(); assert.deepEqual(passing, []);
+});
+
+test("audio closed diagnostics SDK observer returns originals and retains reporter failures", async () => {
+  const start = audioSdkText.indexOf("function audioCaseDiagnostics("), end = audioSdkText.indexOf("\ntype Case =", start);
+  assert.ok(start >= 0 && end > start);
+  const create = new Function("audioProtocol", "process", "finishOwned", "let audioRecordCount = 0;\n" + stripTypeScriptTypes(audioSdkText.slice(start, end)) + ";return audioCaseDiagnostics;");
+  const lines = [], diagnostic = create(audioProtocol, { stdout: { write(line) { lines.push(line); } } }, finishOwned)("groq_success");
+  const original = Promise.reject(undefined); assert.equal(diagnostic.track("original_join", () => original), original);
+  await assert.rejects(original, error => error === undefined); await diagnostic.join();
+  const rows = []; for (const line of lines) audioProtocol.parse(line, row => rows.push(row));
+  assert.equal(rows[0].reasonDefined, false); assert.equal(rows[0].failurePresent, true);
+  const token = {}; assert.equal(diagnostic.track("runtime_restore", () => token), token);
+  let syncThrown = false; try { diagnostic.track("runtime_restore", () => { throw undefined; }); } catch (error) { syncThrown = true; assert.equal(error, undefined); }
+  assert.equal(syncThrown, true); await diagnostic.join();
+  const failing = create(audioProtocol, { stdout: { write() { throw undefined; } } }, finishOwned)("groq_success");
+  const value = Promise.resolve(); assert.equal(failing.track("original_join", () => value), value);
+  let present = false; try { await failing.join(); } catch (error) { present = true; assert.equal(error, undefined); } assert.equal(present, true);
+});
+
+test("audio diagnostic reporter subprocess", { skip: process.env.AUDIO813_REPORTER_TEST !== "1" }, () => {
+  const emitter = audioProtocol.emitter(line => process.stdout.write(line)); fillAudioDiagnosticBudget(emitter); emitter.flush();
+});
+test("audio closed diagnostics survive the real Node24 reporter at column zero", { skip: process.env.AUDIO813_REPORTER_TEST === "1", timeout: 20000 }, async () => {
+  assert.equal(process.version, "v24.22.1");
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const stdout = await new Promise((resolve, reject) => execFile(process.execPath,
+    ["--test", "--test-name-pattern=^audio diagnostic reporter subprocess$", fileURLToPath(import.meta.url)],
+    { env: { ...env, AUDIO813_REPORTER_TEST: "1" }, timeout: 15000, maxBuffer: 64 * 1024 },
+    (error, value) => { if (error) reject(new Error("audio reporter subprocess failed")); else resolve(value); }));
+  const prefix = "::error title=Audio contract diagnostic::", lines = stdout.split(/\r?\n/).filter(line => line.includes(prefix));
+  assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix) && Buffer.byteLength(line) <= 768));
+  assert.ok(lines.every(line => audioProtocol.validate(JSON.parse(line.slice(prefix.length)))));
+  assert.ok(Buffer.byteLength(lines.join("\n")) <= 8192);
+});
 
 function wav() {
   const bytes = Buffer.alloc(2048, 42);
@@ -758,15 +973,19 @@ for (const row of cases.filter(row => row.scenario === "abort")) test(`typed ori
 
 test("registered OpenClaw Groq/Mistral native transcription through Worker and SQLite", { skip: !source, timeout: 300000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-openclaw-transcription-")); let mf, origin; const failures = [];
+  const diagnostics = audioDiagnosticSession();
   try {
     ({ mf, origin } = await setup(temporary));
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-groq-mistral-transcription-contract.test.ts", import.meta.url), testPath: "extensions/clawrouter/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases), CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead } });
-  } catch (error) { failures.push(error); }
+  } catch (error) { failures.push(error); diagnostics.rejected(error); }
   await finishOwned(failures, [
-    ...cases.filter(row => row.scenario === "abort").map(row => () => origin && control(origin, "abort", row.id)),
-    ...cases.map(row => () => origin && control(origin, "join", row.id)),
-    () => origin && verify(origin, cases), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true }),
+    ...cases.filter(row => row.scenario === "abort").map(row => () => origin && diagnostics.observe("worker_abort", row.id, () => control(origin, "abort", row.id))),
+    ...cases.map(row => () => origin && diagnostics.observe("worker_retirement", row.id, () => control(origin, "join", row.id))),
+    () => origin && diagnostics.observe("upstream_sqlite", null, () => verify(origin, cases)),
+    () => mf && diagnostics.observe("worker_dispose", null, () => mf.dispose()),
+    () => diagnostics.observe("scratch_cleanup", null, () => rm(temporary, { recursive: true, force: true })),
+    () => diagnostics.finish(),
   ]);
 });
 
