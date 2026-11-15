@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -469,11 +469,42 @@ export function parseImageBuildReceipt(text, contextHash) {
   check(lines.length === 1 && Buffer.byteLength(lines[0]) <= 8192, "image-attestation-count");
   return validateNativeIdentity(JSON.parse(lines[0].slice("EDGE_IMAGE_V2 ".length)), { contextHash });
 }
-export async function observeImageBuild(operation, readImageId, parseReceipt, report) {
+export function parseImageBuildStages(result, identity) {
+  const unknown = (reason, records = null) => ({ v: 4, phase: "image_build_internal", state: "observed", stage: null, status: null, records, reason });
+  const field = (object, key) => object && typeof object === "object" && Object.hasOwn(object, key) ? own(object, key) : null;
+  if (!identity || !hashPattern.test(identity.contextHash) || !hashPattern.test(identity.nonce) || field(result, "closed") !== true) return unknown("capture_unavailable");
+  const summary = field(result, "outputSummary");
+  let total = 0;
+  for (const channel of ["stdout", "stderr"]) {
+    const text = field(result, channel), captured = field(summary, channel);
+    if (typeof text !== "string" || field(captured, "complete") !== true || !Number.isSafeInteger(field(captured, "bytes")) || field(captured, "bytes") < 0 || !hashPattern.test(field(captured, "sha256"))) return unknown("capture_unavailable");
+    const bytes = Buffer.from(text, "utf8"); total += bytes.length;
+    // close/complete alone does not prove that bounded capture retained its tail.
+    if (bytes.length !== field(captured, "bytes") || hash(bytes) !== field(captured, "sha256") || total > 1024 * 1024) return unknown("capture_mismatch");
+  }
+  const prefix = "EDGE_BUILD_STAGE_V1 "; let count = 0, failed;
+  for (const line of field(result, "stdout").split("\n")) {
+    if (!line.includes("EDGE_BUILD_STAGE_V1")) continue;
+    if (!line.startsWith(prefix) || Buffer.byteLength(line) > 512 || /[\x00-\x1f\x7f-\x9f]/.test(line) || count === 20 || failed) return unknown("invalid");
+    let row;
+    try { row = JSON.parse(line.slice(prefix.length)); } catch { return unknown("invalid"); }
+    if (!row || Object.getPrototypeOf(row) !== Object.prototype || Object.keys(row).join() !== "v,context,nonce,seq,stage,event,status" || JSON.stringify(row) !== line.slice(prefix.length)) return unknown("invalid");
+    const terminal = count % 2 === 1;
+    if (row.v !== 1 || row.context !== identity.contextHash || row.nonce !== identity.nonce || row.seq !== count + 1 || row.stage !== imageBuildStages[Math.floor(count / 2)] || row.event !== (terminal ? "terminal" : "entered") || (terminal ? !Number.isInteger(row.status) || row.status < 0 || row.status > 255 : row.status !== null)) return unknown("invalid");
+    count++;
+    if (terminal && row.status !== 0) failed = row;
+  }
+  if (failed && field(result, "code") === 0) return unknown("invalid");
+  if (failed) return { v: 4, phase: "image_build_internal", state: "rejected", stage: failed.stage, status: failed.status, records: count, reason: "validated_failure" };
+  if (count === 20) return { v: 4, phase: "image_build_internal", state: "observed", stage: "native_prepare", status: 0, records: count, reason: "complete" };
+  return unknown(count ? "incomplete" : "no_records", count);
+}
+export async function observeImageBuild(operation, readImageId, parseReceipt, report, stageIdentity) {
   let built, available = false;
   const errors = [];
   try { built = await operation(); available = true; } catch (error) { errors.push(error); }
   try { report.process(built, available, errors[0]); } catch (error) { errors.push(error); }
+  if (available) try { report.internal(parseImageBuildStages(built, stageIdentity)); } catch (error) { errors.push(error); }
   if (available) try { requireProcessSuccess(built); } catch (error) { errors.unshift(error); }
   raiseContainerFailures(errors);
   const observe = async (phase, original) => {
@@ -581,7 +612,7 @@ async function hostContainerRun(report) {
     const args = ["build", "--platform=linux/amd64", "--pull=false", "--no-cache", "--iidfile", iidFile, "--build-arg", `HOST_UID=${identity.uid[0]}`, "--build-arg", `HOST_GID=${identity.gid[0]}`, "--build-arg", `CONTEXT_HASH=${context.contextHash}`, "--build-arg", `TASK_NONCE=${nonce}`, context.context];
     ({ imageId, native } = await observeImageBuild(() => runOriginal(args, 480000), async () => {
       const id = (await readFile(iidFile, "utf8")).trim(); check(imagePattern.test(id), "image-build-result"); return id;
-    }, stdout => parseImageBuildReceipt(stdout, context.contextHash), report));
+    }, stdout => parseImageBuildReceipt(stdout, context.contextHash), report, { contextHash: context.contextHash, nonce }));
   });
   const image = await report.step("image", async () => validateImage(await inspect("image", imageId), { derived: true, identity, id: imageId, contextHash: context.contextHash }));
   check(image.Config.Labels?.["org.openclaw.edge.nonce"] === nonce, "image-invocation");

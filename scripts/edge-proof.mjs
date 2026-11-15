@@ -519,10 +519,26 @@ async function offlineCi(report) {
   const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
-const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_build_internal", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+export const imageBuildStages = ["node_version", "node_abi", "architecture", "git_executable", "pnpm_bootstrap", "pnpm_version", "input_directories", "input_ownership", "frozen_install", "native_prepare"];
 const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
 const processDiagnosticFields = ["v", "phase", "state", "defined", "available", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors", "stdoutComplete", "stderrComplete"];
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 4) {
+    const fields = ["v", "phase", "state", "stage", "status", "records", "reason"];
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("container-internal-keys");
+    const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+    if (row.phase !== "image_build_internal" || !["capture_unavailable", "capture_mismatch", "no_records", "incomplete", "invalid", "validated_failure", "complete"].includes(row.reason) || !(row.records === null || Number.isInteger(row.records) && row.records >= 0 && row.records <= 20)) refuse("container-internal-enum");
+    if (row.reason === "validated_failure") {
+      if (row.state !== "rejected" || !Number.isInteger(row.status) || row.status < 1 || row.status > 255 || row.records < 2 || row.records % 2 || row.stage !== imageBuildStages[row.records / 2 - 1]) refuse("container-internal-failure");
+    } else if (row.reason === "complete") {
+      if (row.state !== "observed" || row.stage !== "native_prepare" || row.status !== 0 || row.records !== 20) refuse("container-internal-complete");
+    } else {
+      if (row.state !== "observed" || row.stage !== null || row.status !== null) refuse("container-internal-unknown");
+      if (row.reason === "no_records" ? row.records !== 0 : row.reason === "incomplete" ? !(row.records >= 1 && row.records < 20) : row.records !== null) refuse("container-internal-count");
+    }
+    return row;
+  }
   if (value && typeof value === "object" && ownData(value, "v") === 3) {
     if (Object.getOwnPropertyNames(value).sort().join() !== [...processDiagnosticFields].sort().join()) refuse("container-process-keys");
     const row = Object.fromEntries(processDiagnosticFields.map(key => [key, ownData(value, key)]));
@@ -537,7 +553,7 @@ export function validateContainerDiagnostic(value) {
   }
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== ["v", "phase", "state", "defined", "exit", "signal"].sort().join()) refuse("container-diagnostic-keys");
   const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, ownData(value, key)]));
-  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || row.phase === "image_build_process" || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
+  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || ["image_build_process", "image_build_internal"].includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
   if (![null, true, false].includes(row.defined) || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255)) refuse("container-diagnostic-outcome");
   return row;
 }
@@ -575,7 +591,7 @@ export function emitContainerFailure(records, writer = line => process.stdout.wr
 export function createContainerDiagnostics() {
   const records = [];
   const mark = (phase, state, reason) => records.push(validateContainerDiagnostic({ v: 2, phase, state, defined: state === "rejected" ? reason !== undefined : null, exit: null, signal: null }));
-  return { records, mark, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); },
+  return { records, mark, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); }, internal(row) { records.push(validateContainerDiagnostic(row)); },
     sync(phase, operation) { mark(phase, "entered"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
     async step(phase, operation) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
   };

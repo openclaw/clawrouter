@@ -5,10 +5,10 @@ import { spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, runOwnedProcess } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -293,7 +293,7 @@ async function pureCliModuleSources() {
   const names = backImport.split("{", 2)[1].split("}", 1)[0].trim().split(", ");
   const tail = entry.slice(entry.indexOf("const containerDiagnosticPhases ="));
   assert.ok(tail.includes('launchCli(process.argv.slice(2));'));
-  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
+  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
   // Actual dispatch and CLI functions, including their back-import. Only the
   // container operation is replaced by a closed, inert return value.
   const prefix = 'import { pathToFileURL } from "node:url"; import { resolve } from "node:path";\n' + pureHelpers + '\nconst refuse = code => { throw new Error(code); };\n' + entry.slice(entry.indexOf("function ownData("), entry.indexOf("export function validatePackagingDiagnostic("));
@@ -381,7 +381,7 @@ test("image build diagnostics retain undefined spawn and operation failures plus
   assert.equal(row.errors, 1); assert.equal(row.undefinedErrors, 1); assert.equal(row.spawnErrors, 1); assert.equal(row.undefinedSpawnErrors, 1); assert.equal(row.closed, false);
   assert.deepEqual(original.errors, [undefined]); assert.deepEqual(original.spawnErrors, [undefined]);
   const observerError = new Error("private observer failure");
-  const report = { process() { throw observerError; }, mark() { throw new Error("must not reach ID"); } };
+  const report = { process() { throw observerError; }, internal() {}, mark() { throw new Error("must not reach ID"); } };
   await assert.rejects(observeImageBuild(() => { throw undefined; }, () => {}, () => {}, report), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === observerError);
   await assert.rejects(observeImageBuild(() => original, () => {}, () => {}, report), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] instanceof AggregateError && error.errors[0].errors.includes(undefined) && error.errors[1] === observerError);
   await assert.rejects(observeImageBuild(() => processResult(), () => {}, () => {}, report), error => error === observerError);
@@ -419,4 +419,92 @@ test("image build failure packet reserves terminal and original process facts be
   assert.throws(() => emitContainerFailure([terminal, process], () => { throw undefined; }), error => error === undefined);
   const maximum = { ...process, exit: 2147483647, errors: Number.MAX_SAFE_INTEGER, undefinedErrors: Number.MAX_SAFE_INTEGER, spawnErrors: Number.MAX_SAFE_INTEGER, undefinedSpawnErrors: Number.MAX_SAFE_INTEGER };
   const capped = []; emitContainerFailure([terminal, maximum], line => capped.push(line)); assert.ok(capped.every(line => Buffer.byteLength(line) <= 768));
+});
+
+async function actualStageShells() {
+  const file = await readFile(new URL("../config/edge-proof/Dockerfile", import.meta.url), "utf8");
+  const runs = file.replace(/\\\n\s*/g, " ").split("\n").filter(line => line.startsWith("RUN "));
+  assert.equal(runs.length, 2); assert.ok(!file.includes("EDGE_BUILD_STAGE_V1 "));
+  const first = runs[0].slice(4, runs[0].indexOf("node_version()"));
+  const second = runs[1].slice(4, runs[1].indexOf("frozen_install()"));
+  assert.equal(first.replace("edge_seq=0", "edge_seq=16"), second);
+  assert.match(runs[0], /node_version\(\) \{ test "\$\(\/usr\/local\/bin\/node --version\)" = v24\.22\.1; \}/);
+  assert.match(runs[0], /pnpm_bootstrap\(\) \{ \/usr\/local\/bin\/npm install --global --ignore-scripts pnpm@11\.28\.4; \}/);
+  assert.match(runs[1], /frozen_install\(\) \{ HOME=\/opt\/build-home \/usr\/local\/bin\/pnpm install --frozen-lockfile; \}/);
+  assert.match(runs[1], /native_prepare\(\) \{ HOME=\/opt\/build-home \/usr\/local\/bin\/node scripts\/edge-proof\.mjs container-prepare "\$CONTEXT_HASH"; \}/);
+  assert.deepEqual(runs.flatMap(run => [...run.matchAll(/(?:;|&&)\s*edge_stage (\w+) (\w+)/g)].map(match => { assert.equal(match[1], match[2]); return match[1]; })), imageBuildStages);
+  return [first, second];
+}
+function harmlessShell(script) {
+  const result = spawnSync("/bin/sh", ["-c", script], { env: { PATH: "/usr/bin:/bin", HOME: "/owned-fixture-home", CONTEXT_HASH: other, TASK_NONCE: hex }, encoding: "utf8", timeout: 3000, maxBuffer: 65536 });
+  assert.equal(result.error, undefined); assert.equal(result.signal, null); return result;
+}
+async function actualStageCapture(failedStage = null, status = 23) {
+  const shells = await actualStageShells(); let stdout = "", stderr = "", code = 0;
+  for (const [index, shell] of shells.entries()) {
+    const stages = index ? imageBuildStages.slice(8) : imageBuildStages.slice(0, 8);
+    const commands = stages.map(stage => `edge_stage ${stage} proof_op ${stage}`).join(" && ");
+    const result = harmlessShell(shell + `proof_op() { [ "$1" != "${failedStage ?? "none"}" ] || return ${status}; }; ` + commands);
+    stdout += result.stdout; stderr += result.stderr; code = result.status; if (code) break;
+  }
+  return capturedStageResult(stdout, stderr, code);
+}
+function capturedStageResult(stdout, stderr = "", code = 1) {
+  return { ...processResult(stdout), stderr, code, spawnErrors: [], outputSummary: Object.fromEntries(Object.entries({ stdout, stderr }).map(([key, text]) => [key, { bytes: Buffer.byteLength(text), sha256: createHash("sha256").update(text).digest("hex"), complete: true }])) };
+}
+const stageIdentity = { contextHash: other, nonce: hex };
+test("internal build actual shell markers preserve both RUN sequences and all original command statuses", async () => {
+  const complete = await actualStageCapture(); assert.equal(complete.code, 0);
+  assert.deepEqual(parseImageBuildStages(complete, stageIdentity), { v: 4, phase: "image_build_internal", state: "observed", stage: "native_prepare", status: 0, records: 20, reason: "complete" });
+  for (const stage of imageBuildStages) {
+    const result = await actualStageCapture(stage, 23), row = parseImageBuildStages(result, stageIdentity);
+    assert.equal(result.code, 23); assert.equal(row.stage, stage); assert.equal(row.status, 23); assert.equal(row.reason, "validated_failure"); assert.equal(row.records, 2 * (imageBuildStages.indexOf(stage) + 1)); validateContainerDiagnostic(row);
+  }
+});
+test("internal build shell entry precedes command substitution and keeps argv HOME and failure priority", async () => {
+  const [shell] = await actualStageShells();
+  const substitution = harmlessShell(shell + 'proof_op() { test "$(printf "SUBSTITUTION\\n" >&3; printf expected)" = expected; }; edge_stage node_version proof_op 3>&1');
+  assert.equal(substitution.status, 0); const lines = substitution.stdout.trimEnd().split("\n"); assert.match(lines[0], /"event":"entered"/); assert.equal(lines[1], "SUBSTITUTION"); assert.match(lines[2], /"event":"terminal","status":0/);
+  for (const [subcommand, expectedStatus] of [["printf expected; exit 29", 0], ["printf different; exit 0", 1]]) {
+    const result = harmlessShell(shell + `proof_op() { test "$( ${subcommand} )" = expected; }; edge_stage node_version proof_op`);
+    assert.equal(result.status, expectedStatus); assert.equal(JSON.parse(result.stdout.trimEnd().split("\n").at(-1).slice("EDGE_BUILD_STAGE_V1 ".length)).status, expectedStatus);
+  }
+  const operands = harmlessShell(shell + 'proof_op() { [ "$#" -eq 2 ] && [ "$1" = "space argument" ] && [ "$2" = "literal*$" ] && [ "$HOME" = /owned-command-home ]; }; HOME=/owned-command-home edge_stage node_version proof_op "space argument" \'literal*$\'');
+  assert.equal(operands.status, 0);
+  for (const commandStatus of [0, 23, 127]) {
+    const inject = shell.replace('edge_emit() {', 'edge_original_emit() {') + `edge_emit() { if [ "$2" = terminal ]; then return 71; fi; edge_original_emit "$@"; }; proof_op() { return ${commandStatus}; }; edge_stage node_version proof_op`;
+    const result = harmlessShell(inject); assert.equal(result.status, commandStatus || 70); assert.equal(parseImageBuildStages(capturedStageResult(result.stdout, result.stderr, result.status), stageIdentity).reason, "incomplete");
+  }
+  const before = harmlessShell(shell + 'edge_emit() { return 71; }; proof_op() { printf FORBIDDEN; }; edge_stage node_version proof_op'); assert.equal(before.status, 70); assert.equal(before.stdout, "");
+});
+test("internal build parser refuses discarded tails despite complete flags and verifies BOTH original hashes", async () => {
+  const original = await actualStageCapture("frozen_install");
+  const valid = parseImageBuildStages(original, stageIdentity); assert.equal(valid.reason, "validated_failure");
+  assert.deepEqual(parseImageBuildStages(capturedStageResult(original.stdout, "unclassified private output", original.code), stageIdentity), valid);
+  const changes = [r => r.stdout = r.stdout.split("\n").slice(0, 2).join("\n") + "\n", r => r.outputSummary.stdout.sha256 = hex, r => r.outputSummary.stdout.bytes++, r => { r.stderr = "stored prefix"; r.outputSummary.stderr = { bytes: 22, sha256: createHash("sha256").update("stored prefix plus tail").digest("hex"), complete: true }; }, r => r.outputSummary.stderr.sha256 = hex];
+  for (const change of changes) { const result = structuredClone(original); change(result); const row = parseImageBuildStages(result, stageIdentity); assert.equal(row.reason, "capture_mismatch"); assert.equal(row.records, null); assert.equal(row.stage, null); validateContainerDiagnostic(row); }
+  for (const change of [r => r.closed = false, r => delete r.outputSummary, r => r.outputSummary.stderr.complete = false]) { const result = structuredClone(original); change(result); assert.equal(parseImageBuildStages(result, stageIdentity).reason, "capture_unavailable"); }
+  const splitUtf8 = structuredClone(original); splitUtf8.stderr = "\ufffd\ufffd"; splitUtf8.outputSummary.stderr = { bytes: 2, sha256: createHash("sha256").update(Buffer.from([0xc3, 0xa9])).digest("hex"), complete: true }; assert.equal(parseImageBuildStages(splitUtf8, stageIdentity).reason, "capture_mismatch");
+});
+test("internal build parser rejects echoed source foreign duplicate reordered ANSI and malformed frames", async () => {
+  const original = await actualStageCapture("node_version"), lines = original.stdout.trimEnd().split("\n");
+  const invalid = ["Step 1 : RUN printf '" + lines[0] + "'\n", lines.concat(lines[1]).join("\n") + "\n", [...lines].reverse().join("\n") + "\n", original.stdout.replace(other, hex), original.stdout.replace(hex, other), original.stdout.replace('"stage":"node_version"', '"stage":"foreign"'), "\x1b[31m" + original.stdout, original.stdout.replace('"v":1', '"v":1,"v":1'), original.stdout.replace('"seq":1', '"seq":99'), original.stdout.replace('"event":"entered"', '"event":"foreign"')];
+  for (const stdout of invalid) { const row = parseImageBuildStages(capturedStageResult(stdout), stageIdentity); assert.equal(row.reason, "invalid"); assert.equal(row.stage, null); assert.equal(row.status, null); validateContainerDiagnostic(row); }
+  assert.equal(parseImageBuildStages(capturedStageResult("", original.stdout), stageIdentity).reason, "no_records");
+  assert.equal(parseImageBuildStages(capturedStageResult(lines[0] + "\n"), stageIdentity).reason, "incomplete");
+  assert.equal(parseImageBuildStages({ ...original, code: 0 }, stageIdentity).reason, "invalid");
+  const all = await actualStageCapture(); assert.equal(parseImageBuildStages(capturedStageResult(all.stdout + lines[0] + "\n"), stageIdentity).reason, "invalid");
+});
+test("internal build observations cannot override original failure and reserve terminal stage plus CLI outcome", async () => {
+  const original = await actualStageCapture("pnpm_bootstrap", 23), report = createContainerDiagnostics(); let later = false;
+  const work = report.step("image_build", () => observeImageBuild(() => original, () => { later = true; }, () => { later = true; }, report, stageIdentity));
+  await assert.rejects(work); assert.equal(later, false); assert.equal(original.code, 23);
+  const context = ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base"].map(phase => ({ v: 2, phase, state: "fulfilled", defined: null, exit: null, signal: null }));
+  const output = []; emitContainerFailure([...context, ...report.records], line => output.push(line));
+  const packet = output.map(line => validateContainerDiagnostic(JSON.parse(line.slice(line.indexOf("::", 2) + 2))));
+  assert.equal(packet[0].reason, "validated_failure"); assert.equal(packet[0].stage, "pnpm_bootstrap"); assert.equal(packet[1].phase, "image_build_process"); assert.equal(packet[1].exit, 23); assert.equal(packet.length, 10);
+  assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192); assert.ok(!output.join("").includes(other)); assert.ok(!output.join("").includes(hex));
+  const failedReport = createContainerDiagnostics(); failedReport.internal = () => { throw undefined; };
+  await assert.rejects(observeImageBuild(() => original, () => {}, () => {}, failedReport, stageIdentity), error => error instanceof AggregateError && error.errors[0] instanceof AggregateError && error.errors[1] === undefined);
+  const unknown = parseImageBuildStages({}, stageIdentity); for (const change of [r => r.stage = "pnpm_bootstrap", r => r.status = 1, r => r.records = 0, r => r.message = "private", r => r.reason = "foreign"]) { const invalid = { ...unknown }; change(invalid); assert.throws(() => validateContainerDiagnostic(invalid)); }
 });
