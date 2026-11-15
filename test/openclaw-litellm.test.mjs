@@ -792,10 +792,11 @@ test("reporting repair compact decoder rejects hostile fields without getters", 
 function registerWrapperControlConsumer() {
   test("isolated D8 original wrapper continuation entry only", { timeout: 250000 }, async () => {
     const wire = litellmControlWire(), records = [], errors = [];
+    const delivery = wire.delivery();
     let helperFulfilled = false, code = null;
     try {
       assert.ok(process.env.CLAWROUTER_OPENCLAW_CHECKOUT, "control-only mode requires the genuine CI checkout");
-      await runOpenClawConsumer({ diagnostic(value) { records.push(...wire.parse(value)); } }, {
+      await runOpenClawConsumer({ diagnostic(value) { records.push(...wire.parse(value, delivery)); } }, {
         source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT,
         sourceHead: "d8bb939408aa4d2be7df0161748edb52ebf3b1fb",
         fixture: "test/fixtures/openclaw-litellm-contract.test.ts",
@@ -804,7 +805,7 @@ function registerWrapperControlConsumer() {
       });
       helperFulfilled = true;
     } catch (error) {
-      errors.push(error); const child = wire.child(error); code = child.code; records.push(...child.records);
+      errors.push(error); const child = wire.child(error, delivery); code = child.code; records.push(...child.records);
     }
     const report = wire.collect(records);
     try {
@@ -818,7 +819,7 @@ function registerWrapperControlConsumer() {
         records: report.records.length, missing: report.missing.length, invalid: report.invalid.length,
         undefinedFailure: errors.some(error => error === undefined) };
       try { process.stdout.write("::error title=LiteLLM wrapper helper::" + JSON.stringify(summary) + "\n"); } catch (error) { errors.push(error); }
-      try { wire.emit(records, text => process.stdout.write(text)); } catch (error) { errors.push(error); }
+      try { wire.emit([...records, delivery], text => process.stdout.write(text)); } catch (error) { errors.push(error); }
     }
     if (errors.length === 1) throw errors[0];
     if (errors.length) throw new AggregateError(errors, "wrapper control consumer and reporting failed");
@@ -883,7 +884,7 @@ test("wrapper pure current wire retains child undefined and rejects hostile data
   assert.equal(wire.decode(hostile), null); assert.equal(getters, 0);
   assert.equal(wire.decode(new Proxy(row, { ownKeys() { throw undefined; } })), null);
   assert.deepEqual(wire.child(undefined), { records: [], code: null, undefinedFailure: true });
-  assert.deepEqual(wire.child({ code: 1, stdout: wire.prefix + JSON.stringify(row), stderr: "" }).records, [row]);
+  assert.deepEqual(wire.child({ code: 1, stdout: wire.prefix + JSON.stringify(row) + "\n", stderr: "" }).records, [row]);
   assert.deepEqual(wire.parse("\x1b" + wire.prefix + JSON.stringify(row)), []);
   assert.deepEqual(wire.parse("x".repeat(769)), []);
 });
@@ -908,12 +909,84 @@ test("wrapper pure helper failure survives records and API order", () => {
   assert.deepEqual(wire.collect([...rows, helper]), wire.collect([helper, ...rows].reverse()));
   assert.equal(wire.collect([helper]).helper.helperFulfilled, false);
   assert.equal(wire.collect([helper, helper]).invalid.includes("duplicate_helper"), true);
-  assert.deepEqual(wire.parse(JSON.stringify(helper)), [helper]);
+  assert.deepEqual(wire.decode(JSON.parse(JSON.stringify(helper))), helper);
+  assert.deepEqual(wire.parse(JSON.stringify(helper) + "\n"), []);
 });
 test("wrapper pure two registered reactions cannot overlap", () => {
   const c = controlBinding(), p2 = {}, q2 = {}; c.register();
   c.witness.registering(p2, c.then, p2, c.handlers); c.witness.init(q2, p2); c.witness.registered(q2);
   c.witness.before(c.q); c.witness.before(q2); c.witness.after(q2); c.witness.after(c.q);
   const result = c.witness.finish(); assert.ok(result.faults.includes("entry")); assert.ok(result.faults.includes("boundary"));
+});
+test("wrapper delivery actual emitter helper relay and callback retain clean multiline and chunks", () => {
+  const sdk = readFileSync("test/fixtures/openclaw-litellm-contract.test.ts", "utf8");
+  const helper = readFileSync("test/helpers/openclaw-consumer.mjs", "utf8");
+  const outer = readFileSync("test/openclaw-litellm.test.mjs", "utf8");
+  const emitterLine = sdk.split("\n").find(line => line.includes("process.stdout.write(wire.prefix + JSON.stringify(record)"));
+  const relayLine = helper.split("\n").find(line => line.includes("t.diagnostic(`OpenClaw"));
+  const callback = outer.match(/await runOpenClawConsumer\(\{ diagnostic\(value\) \{ records\.push\(\.\.\.wire\.parse\(value, delivery\)\); \} \}/)?.[0];
+  assert.ok(emitterLine && relayLine && callback);
+  const emit = new Function("wire", "record", "process", emitterLine.slice(emitterLine.indexOf("process.stdout.write"), emitterLine.lastIndexOf(";") + 1));
+  const relay = new Function("t", "result", "sourceHead", "started", "performance", relayLine);
+  const wire = litellmControlWire(), rows = wrapperRecords(wire); let stdout = "";
+  for (const row of rows) emit(wire, row, { stdout: { write: text => { stdout += text; } } });
+  for (const banner of ["runner banner\n", "\x1b[32mrunner banner\x1b[0m\n"]) {
+    const records = [], delivery = wire.delivery();
+    const sink = new Function("records", "wire", "delivery", "return (" + callback.slice("await runOpenClawConsumer(".length) + ");")(records, wire, delivery);
+    const text = banner + stdout + "runner end\n", chunks = [text.slice(0, 23), text.slice(23, 91), text.slice(91)];
+    // execFile supplies one complete stdout string, not individual pipe chunks.
+    relay(sink, { stdout: chunks.join("") }, "synthetic-source", 0, { now: () => 1 });
+    assert.deepEqual(records, rows);
+    assert.deepEqual(delivery, { ...wire.delivery(), recognized: 5, absent: 3 });
+  }
+});
+test("wrapper delivery rejects altered prefix bare JSON and unterminated candidate", () => {
+  const wire = litellmControlWire(), row = wrapperRecords(wire)[0], line = wire.prefix + JSON.stringify(row);
+  for (const text of [" " + line + "\n", "noise " + line + "\n", JSON.stringify(row) + "\n", "\x1b[32m" + line + "\n"]) {
+    const counts = wire.delivery(); assert.deepEqual(wire.parse(text, counts), []); assert.equal(counts.absent, 1);
+  }
+  const counts = wire.delivery(); assert.deepEqual(wire.parse(line, counts), []); assert.equal(counts.unterminated, 1);
+  assert.deepEqual(wire.parse(line + "\r\n"), [row]);
+  assert.deepEqual(wire.decode(JSON.parse(JSON.stringify(row))), row);
+});
+test("wrapper delivery rejects candidate ESC malformed oversized schema and mode", () => {
+  const wire = litellmControlWire(), row = wrapperRecords(wire)[0];
+  for (const bare of [JSON.stringify(row) + "\x1b", "{", "x".repeat(769), JSON.stringify({ ...row, id: "foreign" }), JSON.stringify(wire.delivery()), JSON.stringify({ ...row, extra: true })]) {
+    const counts = wire.delivery(); assert.deepEqual(wire.parse(wire.prefix + bare + "\n", counts), []); assert.equal(counts.rejected, 1);
+  }
+  const counts = wire.delivery();
+  assert.deepEqual(wire.parse("x".repeat(2 * 1024 * 1024 + 1), counts), []);
+  assert.deepEqual(wire.parse(undefined, counts), []); assert.equal(counts.inputsRejected, 2);
+});
+test("wrapper delivery preserves duplicates and child undefined failures", () => {
+  const wire = litellmControlWire(), row = wrapperRecords(wire)[0], line = wire.prefix + JSON.stringify(row) + "\n", counts = wire.delivery();
+  const child = wire.child({ code: 1, stdout: "\x1b[32mnoise\x1b[0m\n" + line, stderr: line }, counts);
+  assert.equal(child.code, 1); assert.equal(child.records.length, 2); assert.equal(counts.recognized, 2);
+  assert.deepEqual(wire.collect(child.records).invalid, ["duplicate"]);
+  assert.equal(wire.child(undefined).undefinedFailure, true);
+});
+test("wrapper delivery counters remain bounded closed and annotation compatible", () => {
+  const wire = litellmControlWire(), counts = wire.delivery(); counts.absent = 99999;
+  wire.parse("one\ntwo\nthree\n", counts); assert.equal(counts.absent, 100000);
+  assert.deepEqual(wire.decode(JSON.parse(JSON.stringify(counts))), counts);
+  for (const bad of [{ ...counts, absent: -1 }, { ...counts, recognized: 100001 }, { ...counts, rejected: null }, { ...counts, extra: 1 }]) assert.equal(wire.decode(bad), null);
+  let gets = 0; const hostile = { ...counts }; Object.defineProperty(hostile, "absent", { get() { gets++; return 0; } });
+  assert.equal(wire.decode(hostile), null); assert.equal(gets, 0);
+  assert.deepEqual(wire.collect([counts, counts]).invalid, ["duplicate_delivery"]);
+  assert.deepEqual(wire.collect([counts]).delivery, counts);
+  assert.equal(wire.collect([counts]).missing.length, 5);
+});
+test("wrapper delivery annotation and helper fit existing quota and retain reporting failure", () => {
+  const wire = litellmControlWire(), delivery = wire.delivery();
+  for (const key of ["recognized", "rejected", "absent", "unterminated", "inputsRejected"]) delivery[key] = 100000;
+  const rows = wrapperRecords(wire).map(row => ({ ...row, ok: false, settled: 1000, rejected: 1000, entries: 1000, adoptions: 1000, faults: 1000, sameContext: 1000, absentContext: 1000, cancels: 1000, unlocks: 1000 }));
+  const helper = { v: 1, mode: "wrapper-control", helperFulfilled: false, code: 255, records: 100000, missing: 100000, invalid: 100000, undefinedFailure: true };
+  const lines = ["::error title=LiteLLM wrapper helper::" + JSON.stringify(helper) + "\n"];
+  wire.emit([...rows, delivery], text => lines.push(text));
+  assert.equal(lines.length, 7); assert.ok(lines.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const decoded = lines.map(line => wire.decode(JSON.parse(line.slice(line.indexOf("::", 2) + 2))));
+  const report = wire.collect(decoded.reverse()); assert.deepEqual(report.delivery, delivery); assert.deepEqual(report.helper, helper); assert.equal(report.records.length, 5);
+  let thrown = false; try { wire.emit([delivery], () => { throw undefined; }); } catch (error) { thrown = true; assert.equal(error, undefined); }
+  assert.equal(thrown, true);
 });
 // END wrapper pure comparisons.

@@ -540,9 +540,18 @@ function litellmContinuation(owner: any) {
 function litellmControlWire() {
   const ids = ["eof", "source_error", "source_undefined", "held_cleanup", "cleanup_undefined"];
   const prefix = "LITELLM_WRAPPER_V1 ", keys = ["v", "id", "ok", "settled", "rejected", "entries", "adoptions", "faults", "restored", "sameContext", "absentContext", "cancels", "unlocks"];
+  const deliveryKeys = ["recognized", "rejected", "absent", "unterminated", "inputsRejected"] as const;
+  const delivery = () => ({ v: 1, mode: "wrapper-delivery", recognized: 0, rejected: 0, absent: 0, unterminated: 0, inputsRejected: 0 });
   function decode(value: unknown): any {
     try {
       if (!value || typeof value !== "object" || nodeTypes.isProxy(value)) return null;
+      if (Object.getOwnPropertyDescriptor(value, "mode")?.value === "wrapper-delivery") {
+        const fields = ["v", "mode", ...deliveryKeys], r: any = {};
+        if (Reflect.ownKeys(value).length !== fields.length) return null;
+        for (const key of fields) { const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null; r[key] = d.value; }
+        if (r.v !== 1 || deliveryKeys.some(key => !Number.isSafeInteger(r[key]) || r[key] < 0 || r[key] > 100000)) return null;
+        return r;
+      }
       if (Object.getOwnPropertyDescriptor(value, "mode")?.value === "wrapper-control") {
         const fields = ["v", "mode", "helperFulfilled", "code", "records", "missing", "invalid", "undefinedFailure"], r: any = {};
         if (Reflect.ownKeys(value).length !== fields.length) return null;
@@ -560,26 +569,34 @@ function litellmControlWire() {
       return r;
     } catch { return null; }
   }
-  const parse = (text: unknown) => {
-    if (typeof text !== "string" || Buffer.byteLength(text) > 2 * 1024 * 1024 || text.includes("\x1b")) return [];
+  const parse = (text: unknown, counts?: ReturnType<typeof delivery>) => {
+    const count = (key: typeof deliveryKeys[number]) => { if (counts) counts[key] = Math.min(100000, counts[key] + 1); };
+    if (typeof text !== "string" || Buffer.byteLength(text) > 2 * 1024 * 1024) { count("inputsRejected"); return []; }
     const records: any[] = [];
-    for (const line of text.split(/\r?\n/)) {
-      const bare = line.startsWith(prefix) ? line.slice(prefix.length) : line;
-      if (Buffer.byteLength(bare) > 768) continue;
-      try { const r = decode(JSON.parse(bare)); if (r) records.push(r); } catch {}
+    const lines = text.split(/\r?\n/), tail = lines.pop();
+    if (tail) count("unterminated");
+    for (const line of lines) {
+      if (!line.startsWith(prefix)) { count("absent"); continue; }
+      const bare = line.slice(prefix.length);
+      if (line.includes("\x1b") || Buffer.byteLength(bare) > 768) { count("rejected"); continue; }
+      let record;
+      try { record = decode(JSON.parse(bare)); } catch {}
+      if (record && ids.includes(record.id)) { records.push(record); count("recognized"); }
+      else count("rejected");
     }
     return records;
   };
   function collect(records: unknown[]) {
-    const found = new Map<string, any>(), invalid: string[] = []; let helper: any = null;
+    const found = new Map<string, any>(), invalid: string[] = []; let helper: any = null, delivery: any = null;
     for (const value of records) { const r = decode(value); if (!r) { invalid.push("schema"); continue; }
+      if (r.mode === "wrapper-delivery") { if (delivery) invalid.push("duplicate_delivery"); else delivery = r; continue; }
       if (r.mode === "wrapper-control") { if (helper) invalid.push("duplicate_helper"); else helper = r; continue; }
       if (found.has(r.id)) invalid.push("duplicate"); else found.set(r.id, r); }
-    return { records: ids.flatMap(id => found.has(id) ? [found.get(id)] : []), missing: ids.filter(id => !found.has(id)), invalid, helper };
+    return { records: ids.flatMap(id => found.has(id) ? [found.get(id)] : []), missing: ids.filter(id => !found.has(id)), invalid, helper, delivery };
   }
   function emit(records: unknown[], write: (s: string) => unknown) {
     const result = collect(records); let bytes = 0;
-    for (const r of result.records) {
+    for (const r of [...(result.delivery ? [result.delivery] : []), ...result.records]) {
       if (r.ok) continue;
       const text = "::error title=LiteLLM wrapper control::" + JSON.stringify(r).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A") + "\n";
       bytes += Buffer.byteLength(text); if (Buffer.byteLength(text) > 768 || bytes > 8192) throw new Error("wrapper reporting quota");
@@ -587,13 +604,13 @@ function litellmControlWire() {
     }
     return result;
   }
-  function child(error: unknown) {
+  function child(error: unknown, counts?: ReturnType<typeof delivery>) {
     const data = (key: string) => { try { return error && typeof error === "object" && !nodeTypes.isProxy(error) ? Object.getOwnPropertyDescriptor(error, key)?.value : undefined; } catch { return undefined; } };
     const code = data("code"), stdout = data("stdout"), stderr = data("stderr");
-    return { records: [...parse(stdout), ...parse(stderr)], code: Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
+    return { records: [...parse(stdout, counts), ...parse(stderr, counts)], code: Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
       undefinedFailure: error === undefined };
   }
-  return { ids, prefix, decode, parse, collect, emit, child };
+  return { ids, prefix, decode, parse, collect, emit, child, delivery };
 }
 // END isolated wrapper proof.
 
