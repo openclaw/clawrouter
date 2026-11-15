@@ -224,9 +224,9 @@ beforeEach(() => {
 
 afterEach(() => { vi.restoreAllMocks(); expect(unexpected).toEqual([]); });
 
-async function join(name: string, evidence: ReturnType<typeof failureProtocol.owner>) {
+async function join(name: string, evidence?: ReturnType<typeof failureProtocol.owner>) {
   const selected = observations.filter(row => row.credential.startsWith(`Bearer clawrouter-live-ds_${name}-`));
-  evidence.select(selected);
+  evidence?.select(selected);
   const transport = selected.map(async row => {
     const completion = await row.done;
     // Join every original close/cancel before checking the observation contract.
@@ -234,7 +234,7 @@ async function join(name: string, evidence: ReturnType<typeof failureProtocol.ow
       Promise.allSettled(row.closes.map(entry => entry.result)),
       Promise.allSettled(row.cancels),
     ]);
-    evidence.transport(row, closures, cancellations);
+    evidence?.transport(row, closures, cancellations);
     expect(row.dispatcher).toBeDefined();
     expect(row.closes).toHaveLength(1);
     expect(row.closes[0].receiver).toBe(row.dispatcher);
@@ -258,13 +258,13 @@ async function join(name: string, evidence: ReturnType<typeof failureProtocol.ow
   // Attempt every original transport and the Worker join before any one
   // observation failure can prevent another owned resource's cleanup.
   const results = await Promise.allSettled([...transport, command(`/__deepseek/join/ds_${name}`)]);
-  evidence.worker(results[results.length - 1].status);
+  evidence?.worker(results[results.length - 1].status);
   const failures = results.filter((value): value is PromiseRejectedResult => value.status === "rejected").map(value => value.reason);
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Search transport or Worker join failed");
   const worker = results.at(-1);
   if (worker?.status !== "fulfilled" || typeof worker.value !== "string") throw new Error("missing Worker join result");
-  evidence.at("worker_receipt");
+  evidence?.at("worker_receipt");
   const state = JSON.parse(worker.value);
   expect(selected.map(row => row.path)).toEqual(state.paths);
   expect(state).toMatchObject({ retired: true, charged: 0 });

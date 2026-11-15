@@ -160,6 +160,13 @@ test("DS actual fixture catches retain original undefined plus cleanup and repor
   release(); const error = await pending;
   assert.equal(error.errors.length, 3); assert.equal(error.errors[0], undefined); assert.equal(error.errors[1], cleanup); assert.equal(error.errors[2], report);
   assert.deepEqual(order, ["join", "retire", "report"]);
+  const earlyLines = []; let bodyReached = false;
+  const earlyScope = { ...scope, loadBundledPluginFacade: async () => { throw undefined; }, process: { stdout: { write(line) { earlyLines.push(line); } } } };
+  const early = new Function(...Object.keys(earlyScope), body + "; return fixture;")(...Object.values(earlyScope));
+  let caught = false;
+  try { await early("abort", async () => { bodyReached = true; }); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); assert.equal(bodyReached, false);
+  assert.equal(ds.parse(earlyLines[0])[0].phase, "plugin_load"); assert.equal(ds.parse(earlyLines[0])[0].close, null);
 });
 test("DS missing fixture entry uses startup evidence; SDK capsule outranks cleanup noise within quota", async () => {
   const h = harness(); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
@@ -188,9 +195,16 @@ test("DS original join retains its command and subscriptions and does not credit
     toMatchObject() { throw receiptFailure; }, toHaveBeenCalledOnce() { throw new Error("no reader expected"); } });
   const joinOriginal = new Function("observations", "expect", "command", body + "; return join;")([row], expect,
     async path => { calls++; assert.equal(path, "/__deepseek/join/ds_abort"); return JSON.stringify({ paths: ["/inert"], retired: false }); });
+  // Reproduce the reviewed old required-hook regression from this actual body.
+  let oldCommands = 0;
+  const oldJoin = new Function("observations", "expect", "command", body.replaceAll("evidence?.", "evidence.") + "; return join;")([row], expect, async () => { oldCommands++; });
+  await assert.rejects(oldJoin("abort"), TypeError); assert.equal(oldCommands, 0);
   const lines = [], evidence = ds.owner("abort", line => lines.push(line)); evidence.at("join");
   await assert.rejects(joinOriginal("abort", evidence), error => { assert.equal(error, receiptFailure); evidence.failed(error); return true; });
   evidence.finish(); const record = ds.parse(lines[0])[0];
   assert.equal(calls, 1); assert.deepEqual(thenCalls, { close: 1, cancel: 1 }); assert.equal(record.workerCommand, "fulfilled");
+  // Existing scenario bodies call join(name) directly, before the fixture-owned join.
+  await assert.rejects(joinOriginal("abort"), error => error === receiptFailure);
+  assert.equal(calls, 2); assert.deepEqual(thenCalls, { close: 2, cancel: 2 });
   assert.equal(record.phase, "worker_receipt"); assert.equal(record.failurePresent, true); assert.deepEqual(record.close, [1, 0]);
 });

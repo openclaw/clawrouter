@@ -1,6 +1,6 @@
 # Changelog
 
-- Bind the DeepSeek native runner to its exact SDK revision, fixture and agents-tools project. Retain a bounded first-failure capsule from existing SDK catches and joins, preserving original errors and independent cleanup without changing Search outcomes.
+- Bind the DeepSeek native runner to its exact SDK revision, fixture and agents-tools project. Retain a bounded first-failure capsule from existing SDK catches and joins, preserving original errors and independent cleanup without changing Search outcomes. Keep direct scenario-level joins unchanged when no diagnostic owner is supplied.
 
 - Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
 

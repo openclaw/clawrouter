@@ -20,7 +20,7 @@ const scenarios = [...successful, ...uncertain, ...denied];
 const query = "site:example.com synthetic search";
 
 // Decode only the fixture's closed, source-owned records. Ordinary runner output stays private.
-const fixtureSha256 = "ab2441ddee15225ce452eeae807d7ed7761b6d212f4fa2f9723f488a5959513f", reporterSha256 = "71189036a0b33a2b9e709254d36ab71919e63e928b5f8e4f5b8717eee503637d";
+const fixtureSha256 = "83214f47b280b563f350306bf8e9654c34fd0a25559a788777a27926adae9f5b", reporterSha256 = "71189036a0b33a2b9e709254d36ab71919e63e928b5f8e4f5b8717eee503637d";
 const sdkText = readFileSync(new URL("./fixtures/openclaw-deepseek-search-contract.test.ts", import.meta.url), "utf8");
 const protocolStart = sdkText.indexOf("// BEGIN DeepSeek failure capsule."), protocolEnd = sdkText.indexOf("// END DeepSeek failure capsule.");
 assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
