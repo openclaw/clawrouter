@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -510,7 +510,7 @@ test("worker abort original pure: foreign missing stale and synchronous outcomes
 });
 test("worker abort original pure: actual ledger relay preserves old schema and all original evidence", async () => {
   const c = await captureWorkerOperation("cancel", undefined), proof = workerAbortEvidence(); proof.stage(14); proof.failed({});
-  proof.observation(15, { status: "fulfilled", value: { operations: c.ledger[0], syncFailures: c.ledger[2], checks: c.r.retireChecks.snapshot(), ledger: c.ledger } });
+  proof.observation(15, { status: "fulfilled", value: { operations: c.ledger[0], syncFailures: c.ledger[2], checks: c.r.retireChecks.snapshot(), ledger: c.ledger.slice(0, 11) } });
   proof.observation(16, { status: "fulfilled", value: { calls: [{}], active: 0, canceled: 0, aborted: 0, expired: 1, finished: 1 } });
   let frame; assert.deepEqual(proof.report({ diagnostic(value) { frame = value; } }), []);
   const record = parseWorkerAbortDiagnostic(frame.slice(workerAbortPrefix.length)); assert.deepEqual(record.worker[3], c.tuple);
@@ -536,6 +536,185 @@ test("worker abort original pure: max width canonical envelope remains closed an
   for (const change of [[1,true,null,tuple[3],0,0,1],[1,true,2,null,0,0,1],[1,false,2,tuple[3],0,0,null],
     [1,true,2,[0,4,2,2,3,4,false,false,1,2],0,0,1], [1,true,2,[0,4,2,2,3,4,true,null,1,2],0,0,1]]) assert.equal(decodeWorkerAbortOperation(change), null);
   for (const text of [wire.replace('{"v":1,','{"v":0,"v":1,'), wire+' ', wire+'é']) assert.equal(parseWorkerAbortDiagnostic(text), null);
+});
+
+async function workerRelationCase({ reason = {}, undefinedReason = false } = {}) {
+  const c = workerOperationCase(), h = pureWorkerRetirement(), calls = [];
+  const error = undefinedReason ? undefined : reason;
+  for (const kind of ["handler", "fetch", "acquisition_observer"]) h.observeLiteLLMOperation(c.r, kind, () => Promise.resolve({}), { token: c.token });
+  const details = { input: c.input, reader: c.reader, receiverIdentity: true, signalAborted: false };
+  const closed = Promise.reject(error), read = Promise.reject(error), cancel = Promise.reject(error);
+  c.reader.closed = closed;
+  const call = (kind, promise, extra = {}) => h.observeLiteLLMOperation(c.r, kind, () => { calls.push(kind); return promise; }, { ...details, ...extra });
+  assert.equal(call("closed", closed), closed); assert.equal(call("read", read), read);
+  const derivative = read.then(value => value);
+  assert.equal(call("read_observer", derivative, { originalRead: read }), derivative);
+  assert.equal(call("cancel", cancel, { argc: 1, operandPresent: true, reason: error }), cancel);
+  c.input.abortSequence = ++c.r.sequence; c.input.callerAbortedAtAbort = false;
+  c.input.noEarlierFailure = true; c.input.pendingAtAbort = [c.r.operations[4]];
+  c.reader.unlockInvoke = ++c.r.sequence; c.reader.unlockSequence = ++c.r.sequence;
+  let failure;
+  try { await h.litellmWorkerDrain(c.r, c.scope, () => assert.fail()); } catch (value) { failure = value; }
+  assert.deepEqual(failure.errors, [error, error, error, error]);
+  const project = () => {
+    const ledger = h.litellmWorkerLedger(c.r, c.scope);
+    return JSON.parse(JSON.stringify({ operations: ledger[0], syncFailures: ledger[2], checks: c.r.retireChecks.snapshot(), ledger,
+      ingress: [true], inputs: [{ signalAborted: true }], readers: [{ unlocks: 1, locked: false }] }));
+  };
+  return { ...c, h, calls, error, failure, closed, read, derivative, cancel, project };
+}
+function workerRelationFrames(observation, { reportFault = -1 } = {}) {
+  const proof = workerAbortEvidence(), frames = []; proof.stage(14); proof.failed(undefined);
+  proof.observation(15, { status: "fulfilled", value: observation });
+  proof.observation(16, { status: "fulfilled", value: { calls: [{}], active: 0, canceled: 0, aborted: 0, expired: 1, finished: 1, producer: [1, 0, 0, 0, 0] } });
+  const errors = proof.report({ diagnostic(frame) { if (frames.length === reportFault) throw undefined; frames.push(frame); } });
+  return { frames, errors };
+}
+function workerRelationEvents(frames, reverse = false) {
+  const events = workerAbortNativeEvents(frames[0]), diagnostics = frames.map(frame => ({ ...events[2], data: { ...events[2].data, message: frame } }));
+  return reverse ? [events[0], ...diagnostics.reverse(), events[1]] : [...events.slice(0, 2), ...diagnostics];
+}
+const relationRecords = rows => rows.filter(row => row.kind === "worker_abort_relation");
+test("worker abort relational pure: actual ledger preserves four originals private identities and all eight parts", async () => {
+  for (const undefinedReason of [false, true]) {
+    const c = await workerRelationCase({ undefinedReason }), observation = c.project(), projected = observation.ledger[11];
+    assert.deepEqual(c.calls, ["closed", "read", "read_observer", "cancel"]);
+    assert.equal(c.r.operations[3].pending, c.closed); assert.equal(c.r.operations[4].pending, c.read);
+    assert.equal(c.r.operations[5].pending, c.derivative); assert.equal(c.r.operations[5].originalRead, c.read);
+    assert.equal(c.r.operations[6].pending, c.cancel); assert.deepEqual(projected.coverage.slice(0,4), [4,4,0,false]);
+    assert.deepEqual(projected.rows.map(row=>row.slice(7,9)), Array(4).fill([true,!undefinedReason]));
+    assert.deepEqual(projected.resource.slice(5), [true,true]); assert.deepEqual(projected.relations.slice(0,2),[63,0]);
+    assert.deepEqual(projected.relations.slice(2,7),Array(5).fill(true));
+    const { frames, errors } = workerRelationFrames(observation); assert.deepEqual(errors, []); assert.equal(frames.length,8);
+    const parts = frames.map(frame=>parseWorkerAbortPart(frame.slice(workerAbortRelationalPrefix.length)));
+    assert.deepEqual(validateWorkerAbortGroup(parts),parts);
+    for (const reverse of [false,true]) {
+      const result = await workerAbortPipeline(workerRelationEvents(frames,reverse));
+      assert.equal(relationRecords(result.rows).length,8); assert.equal(result.rows.length,10);
+      assert.deepEqual(result.rows.at(-1).relational,[8,8,0,0,false,255,0,0,false]);
+      assert.equal(result.rows[0].kind,"failure"); assert.equal(relationRecords(result.rows).find(row=>row.part==="coverage").data[17],null);
+    }
+  }
+});
+test("worker abort relational pure: missing duplicate conflicting mixed and foreign parts invalidate the entire group", async () => {
+  const c=await workerRelationCase(), {frames}=workerRelationFrames(c.project());
+  const mutate=(index,fn)=>frames.map((frame,i)=>{if(i!==index)return frame;const part=JSON.parse(frame.slice(workerAbortRelationalPrefix.length));fn(part);return workerAbortRelationalPrefix+JSON.stringify(part);});
+  const bad=[];
+  for(let i=0;i<8;i++){bad.push(frames.filter((_,j)=>j!==i));bad.push([...frames,frames[i]]);bad.push(mutate(i,part=>part.ref[0]++));}
+  bad.push(mutate(2,part=>part.data[0][0]=part.data[1][0]));
+  for(let i=1;i<=4;i++)bad.push(mutate(3,part=>part.data[i][0]=99));
+  bad.push(mutate(6,part=>{part.data[7]=2;part.data[8].push([...part.data[8][0]]);}));
+  bad.push(mutate(3,part=>part.data[3][0]++)); bad.push(mutate(3,part=>part.data[5]=false));
+  bad.push(mutate(3,part=>part.data[6]=false)); bad.push(mutate(4,part=>part.data[0]=0));
+  bad.push(mutate(5,part=>part.data[0][0]++)); bad.push(mutate(6,part=>part.data[8][0][1]++));
+  bad.push(mutate(7,part=>part.data[0]++)); bad.push(mutate(7,part=>part.data[3]=true));
+  bad.push([...frames,(await abortDiagnosticCase({fault:"retire"})).frames[0]]);
+  for(const input of bad) {
+    const result=await workerAbortPipeline(workerRelationEvents(input));
+    assert.equal(relationRecords(result.rows).length,0); assert.equal(result.rows[0].kind,"failure");
+    assert.equal(result.rows.at(-1).relational[1],0); assert.equal(result.rows.some(row=>row.kind==="worker_abort_unbound"),true);
+  }
+});
+test("worker abort relational pure: every component needs native ownership through the complete census", async () => {
+  const {frames}=workerRelationFrames((await workerRelationCase()).project());
+  for(let i=0;i<8;i++)for(const key of ["entryFile","file","line","column","nesting"]){
+    const events=workerRelationEvents(frames); delete events[i+2].data[key];
+    const result=await workerAbortPipeline(events); assert.equal(relationRecords(result.rows).length,0);assert.equal(result.rows[0].kind,"failure");
+  }
+  for(const change of [events=>delete events[0].data.parentId,events=>delete events[1].data.parentId,
+    events=>events.push({...events[0],data:{...events[0].data,testId:88,name:"foreign"}}),
+    events=>events.push({...events[0],data:{...events[0].data,line:900,name:"id reuse"}})]){
+    const events=workerRelationEvents(frames);change(events);assert.equal(relationRecords((await workerAbortPipeline(events)).rows).length,0);
+  }
+  assert.equal(relationRecords((await workerAbortPipeline(workerRelationEvents(frames),{complete:false})).rows).length,0);
+  const unrelated=[8,9].map(testId=>({type:"test:enqueue",data:{...workerRelationEvents(frames)[0].data,testId,name:"parameterized",line:999}}));
+  assert.equal(relationRecords((await workerAbortPipeline([...workerRelationEvents(frames),...unrelated])).rows).length,8);
+});
+test("worker abort relational pure: stale foreign missing and overflow retained data never manufactures completeness", async () => {
+  const mutations=[c=>c.reader.closed={},c=>c.r.operations[5].originalRead={},c=>c.input.response={},c=>c.reader.transport={},
+    c=>c.token.generation=undefined,c=>c.r.requests.push(c.r.requests[0]),c=>c.input.pendingAtAbort=[{}],
+    c=>c.r.operations[3].state="fulfilled",c=>c.r.operations[3].invoke=1000001,c=>c.r.operations[3].settle=1000001,
+    c=>c.token.id=1000001,c=>c.r.operations.push({...c.r.operations[6],ordinal:7}),c=>delete c.r.operations[3].pending];
+  for(const mutate of mutations){const c=await workerRelationCase();mutate(c);const {frames}=workerRelationFrames(c.project());
+    if(frames.length)assert.equal(relationRecords((await workerAbortPipeline(workerRelationEvents(frames))).rows).length,0);
+  }
+  const c=await workerRelationCase();const first=c.r.retireChecks.operation(c.r);await assert.rejects(c.h.litellmWorkerDrain(c.r,c.scope,()=>assert.fail()));
+  assert.equal(c.r.retireChecks.operation(c.r),first);assert.equal(c.project().ledger[11].ref[4],first.operation.ordinal);
+});
+test("worker abort relational pure: absent pending undefined and false have distinct closed meanings", async () => {
+  const c=await workerRelationCase({undefinedReason:true}); delete c.input.abortSequence;delete c.input.callerAbortedAtAbort;
+  delete c.input.noEarlierFailure;delete c.input.pendingAtAbort; delete c.r.operations[3].signalAborted;
+  const source=c.project().ledger[11]; assert.deepEqual(source.abort,[false,null,false,null,false,null,false,null,[],null,null]);
+  assert.deepEqual(source.signals[0].slice(1,3),[false,null]);assert.deepEqual(source.signals[0].slice(3),[true,false,true,false]);
+  const {frames}=workerRelationFrames(c.project());assert.equal(validateWorkerAbortGroup(frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefix.length))))!==null,true);
+  const part=JSON.parse(frames[1].slice(workerAbortRelationalPrefix.length));part.data[0][2]=0;part.data[0][7]=false;part.data[0][8]=null;part.data[0][10]=null;
+  assert.ok(decodeWorkerAbortPart(part));part.data[0][8]=false;assert.equal(decodeWorkerAbortPart(part),null);
+  const sync=await captureWorkerOperation("read",undefined);assert.equal(sync.r.retireChecks.snapshot()[0],4);
+});
+test("worker abort relational pure: canonical schema rejects getters ambiguous JSON and hostile nested fields", async () => {
+  const {frames}=workerRelationFrames((await workerRelationCase()).project());let getters=0;
+  for(const frame of frames){const wire=frame.slice(workerAbortRelationalPrefix.length),part=JSON.parse(wire);
+    for(const key of Object.keys(part)){const hostile={...part};Object.defineProperty(hostile,key,{get(){getters++;throw undefined;}});assert.equal(decodeWorkerAbortPart(hostile),null);}
+    for(const text of [' '+wire,wire+' ',wire+'é',wire+'\n',wire.replace('{"v":2,','{"v":2,"v":2,'),wire.replace('"v":2','"\\u0076":2'),JSON.stringify({...part,extra:true})])assert.equal(parseWorkerAbortPart(text),null);
+    const hostile=structuredClone(part);Object.defineProperty(hostile.ref,"0",{get(){getters++;throw undefined;}});assert.equal(decodeWorkerAbortPart(hostile),null);
+  }assert.equal(getters,0);
+});
+test("worker abort relational pure: failed reporting and saturation preserve coarse failure without partial evidence", async () => {
+  const observation=(await workerRelationCase()).project();
+  for(let i=0;i<8;i++){const {frames,errors}=workerRelationFrames(observation,{reportFault:i});assert.deepEqual(errors,[undefined]);
+    const events=workerRelationEvents(frames);const result=await workerAbortPipeline(events);assert.equal(relationRecords(result.rows).length,0);assert.equal(result.rows[0].kind,"failure");
+  }
+  const {frames}=workerRelationFrames(observation),events=workerRelationEvents(frames);
+  const result=await workerAbortPipeline([...events,...Array(33).fill(events[2])]);assert.equal(relationRecords(result.rows).length,0);assert.equal(result.rows.at(-1).relational[4],true);
+  const more=Array.from({length:12},(_,i)=>({type:"test:fail",data:{file:"worker/test/other.test.mjs",entryFile:"worker/test/other.test.mjs",line:i+1,details:{error:{failureType:"testCodeFailure"}}}}));
+  const full=await workerAbortPipeline([...more,...events]);assert.equal(relationRecords(full.rows).length,8);assert.equal(full.rows.at(-1).omittedEvents,12);assert.equal(full.rows.length,10);
+});
+async function workerRelationMaximum() {
+  const c=await workerRelationCase(),observation=c.project(),source=observation.ledger[11],max=1000000;
+  const remap=x=>max-6+x;
+  source.ref=[max,max,max,max,remap(3)]; source.rows.forEach(row=>{row[0]=remap(row[0]);row.splice(3,4,max,max,max,max);row[9]=max;row[10]=max;});
+  source.signals.forEach(row=>row[0]=remap(row[0]));source.resource.slice(1,5).forEach(row=>{row[0]=remap(row[0]);row[3]=max;row[4]=max;});
+  source.relations[13]=max;source.relations[14]=max;source.relations[15]=max;source.relations[16]=max;
+  source.abort=[true,max,true,false,true,false,true,4,Array.from({length:4},(_,i)=>[max-i,max]),0,true];
+  source.coverage.splice(4,5,max,max,max,max,max);observation.operations=max;observation.syncFailures=max;
+  const {frames,errors}=workerRelationFrames(observation);assert.deepEqual(errors,[]);
+  const maximal=frames.map(frame=>{const p=JSON.parse(frame.slice(workerAbortRelationalPrefix.length));
+    if(p.part==="retire"){p.data[1]=Array(3).fill(max);p.data[2]=[29,max,max,max,false];}
+    if(p.part==="coverage"){p.data.splice(9,3,max,max,max);for(let i=13;i<=15;i++)p.data[i]=[true,false];p.data[16]=Array(5).fill(max);p.data[18]=Array(6).fill(max);}
+    if(p.part==="relations"){p.data[1]=63;for(let i=2;i<13;i++)p.data[i]=false;}
+    return workerAbortRelationalPrefix+JSON.stringify(p);});
+  const events=workerRelationEvents(maximal);for(const e of events){e.data.line=max;e.data.column=max;e.data.nesting=max;}
+  const result=await workerAbortPipeline(events);assert.equal(relationRecords(result.rows).length,8);assert.equal(result.lines.length,10);
+  const sizes={records:result.rows.map(row=>Buffer.byteLength(JSON.stringify(row))),commands:result.lines.map(line=>Buffer.byteLength(line)),packet:Buffer.byteLength(result.lines.join(""))};
+  assert.ok(Math.max(...sizes.records)<=512);assert.ok(Math.max(...sizes.commands)<=768);assert.ok(sizes.packet<=8192);
+  assert.deepEqual(result.rows.map(row=>parseWorkerReporterRecord(JSON.stringify(row))),result.rows);
+  return { ...result, sizes };
+}
+test("worker abort relational pure: maximum actual canonical eight part envelope fits all unchanged caps", workerRelationMaximum);
+
+
+test("worker abort relational pure: comparison state is not overwritten by later observation", async () => {
+  const c=await workerRelationCase();
+  c.r.retireChecks=c.h.litellmPredicateFacts();c.r.retireChecks.note(4,false,c.r,c.r.operations[3],"pending");
+  const observation=c.project();assert.equal(observation.ledger[10][1],false);
+  const {frames}=workerRelationFrames(observation),result=await workerAbortPipeline(workerRelationEvents(frames));
+  assert.equal(relationRecords(result.rows).length,8);
+  assert.equal(relationRecords(result.rows).find(r=>r.part==="retire").data[4],0);
+  assert.equal(relationRecords(result.rows).find(r=>r.part==="bad_a").data[0][2],2);
+});
+
+test("worker abort relational pure: nonfulfilled resource roles must belong to the complete bad census", async () => {
+  const c=await workerRelationCase(),{frames}=workerRelationFrames(c.project());
+  const parts=frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefix.length)));
+  for(let i=1;i<=4;i++){
+    const changed=structuredClone(parts);changed[3].data[i][0]=999;
+    assert.equal(validateWorkerAbortGroup(changed),null);
+  }
+  // A fulfilled original need not appear in the bad census; its retained
+  // distinct ordinal still belongs to the same resource binding.
+  const positive=structuredClone(parts),cancel=positive[3].data[4];cancel[0]=999;cancel[1]=1;cancel[2]=0;
+  const last=positive[2].data[1];last[1]=9;last[5]=null;last[6]=null;
+  assert.ok(validateWorkerAbortGroup(positive));
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.

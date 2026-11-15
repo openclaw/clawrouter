@@ -175,7 +175,7 @@ export function litellmWorkerResource(r, scope) {
 }
 export function litellmWorkerLedger(r, scope) {
   const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
-  const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, 2);
+  const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, r.id === "native_abort" ? 4 : 2);
   const captured = r.id === "native_abort" ? r.retireChecks?.operation(r) : null, associations = [];
   const data = (value, key) => value && Object.getOwnPropertyDescriptor(value, key)?.value;
   const projected = selected.map(op => {
@@ -187,13 +187,14 @@ export function litellmWorkerLedger(r, scope) {
       const owner = input ?? transport;
       const requests = token ? r.requests.filter(q => data(q, "token") === token) : [];
       const request = requests.length === 1 ? requests[0] : undefined;
-      const same = r.operations[row[0]] === op && row[2] === ["pending", "fulfilled", "rejected", "threw"].indexOf(captured.state)
+      const binding = r.operations[row[0]] === op
         && request !== undefined && data(token,"scenario") === r && data(token,"request") === data(request,"request")
         && Number.isSafeInteger(data(token,"generation")) && data(token,"generation") > 0
         && (!input || !transport || input === transport)
         && (!owner || r.inputs.includes(owner) && data(owner, "request") === data(token, "request"))
         && (!reader || r.readers.includes(reader) && data(reader, "transport") === owner);
-      associations.push({ same, row, generation: same ? data(token,"generation") : null });
+      const same = binding && row[2] === ["pending", "fulfilled", "rejected", "threw"].indexOf(captured.state);
+      associations.push({ same, binding, row, generation: same ? data(token,"generation") : null });
     }
     return row;
   });
@@ -206,6 +207,54 @@ export function litellmWorkerLedger(r, scope) {
     const matched = associations.length === 1 ? associations[0] : null;
     const state = captured ? ["pending", "fulfilled", "rejected", "threw"].indexOf(captured.state) : null;
     ledger[10] = [1, captured ? matched?.same === true : null, state, matched?.same ? matched.row : null, ledger[1], ledger[6], matched?.generation ?? null];
+    // Private retained data only: no native signal/body/reader accessor is read here.
+    // The existing observation supplies final signal/lock snapshots separately.
+    const own = (o, k) => o == null ? undefined : Object.getOwnPropertyDescriptor(o, k);
+    const has = (o, k) => Object.hasOwn(own(o, k) ?? {}, "value");
+    const value = (o, k) => own(o, k)?.value;
+    const number = n => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000 ? n : null;
+    const flag = (o, k) => [has(o, k), typeof value(o, k) === "boolean" ? value(o, k) : null];
+    const reader = captured?.operation.reader, input = captured?.operation.input ?? captured?.operation.transport;
+    const token = input?.token ?? captured?.operation.token;
+    const ref = [number(value(token, "generation")), number(value(token, "id")), number(value(input, "id")), number(value(reader, "id")), number(captured?.operation.ordinal)];
+    const resource = ledger[8];
+    const originals = resource?.[2].map(row => row ? r.operations[row[0]] : null) ?? [null, null, null, null];
+    const exact = originals.map((op, i) => !!op && op.ordinal === resource?.[2][i]?.[0] && op.reader === reader && op.input === input);
+    const c0 = exact[2] && has(originals[2], "pending") && originals[2].pending === value(reader, "closed");
+    const derived = exact[0] && exact[1] && has(originals[0], "pending") && originals[1].originalRead === originals[0].pending;
+    let promiseKnown = 0, promiseEqual = 0, bit = 1;
+    for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++, bit *= 2) {
+      if (exact[a] && exact[b] && has(originals[a], "pending") && has(originals[b], "pending")) {
+        promiseKnown |= bit;
+        if (Object.is(originals[a].pending, originals[b].pending)) promiseEqual |= bit;
+      }
+    }
+    const rows = selected.map((op, i) => {
+      const t = op.input?.token ?? op.transport?.token ?? op.token;
+      return [number(op.ordinal), ...projected[i].slice(1, 3), number(value(t, "generation")), number(value(t, "id")),
+        number(op.input?.id ?? op.transport?.id), number(op.reader?.id), ...projected[i].slice(6, 8), number(op.invoke), number(op.settle)];
+    });
+    const signals = selected.map(op => [number(op.ordinal), ...flag(op, "signalAborted"), ...flag(op, "abortedAtSettle"), ...flag(op, "sameSignalReasonAtSettle")]);
+    const pending = value(input, "pendingAtAbort"), pendingArray = Array.isArray(pending);
+    const pendingRows = pendingArray ? pending.slice(0, 4).map(op => [number(op?.ordinal), number(op?.reader?.id)]) : [];
+    const pendingBound = pendingArray ? pending.every(op => r.operations[op.ordinal] === op && op.kind === "read" && op.input === input && op.reader === reader) : null;
+    const requestIndex = r.requests.findIndex(q => q.token === token && q.request === value(token, "request"));
+    const inputIndex = r.inputs.indexOf(input), readerIndex = r.readers.indexOf(reader);
+    const associated = matched?.binding === true && ref.every(n => n !== null) && captured?.operation.kind === "closed"
+      && exact.every(Boolean) && resource[0].every((n, i) => n === ref[i]) && resource[2][2][0] === ref[4] && c0 && derived;
+    const overflow = bad.length > 4 || rows.some(row => [row[0], row[3], row[9]].some(n => n === null))
+      || ref.some(n => n === null) || pendingArray && (pending.length > 4 || pendingRows.some(row => row.some(n => n === null)));
+    ledger[11] = {
+      v: 2, ref, associated, rows, signals,
+      resource: resource ? [resource[1], ...resource[2], c0, derived] : null,
+      relations: resource ? [promiseKnown, promiseEqual, ...resource[3], resource[4], ...resource[5], resource[6]] : null,
+      abort: [has(input, "abortSequence"), number(value(input, "abortSequence")), ...flag(input, "callerAbortedAtAbort"), ...flag(input, "noEarlierFailure"),
+        has(input, "pendingAtAbort"), pendingArray ? number(pending.length) : null, pendingRows, pendingArray ? Math.max(0, pending.length - pendingRows.length) : null, pendingBound],
+      coverage: [number(bad.length), rows.length, number(Math.max(0, bad.length - rows.length)), overflow,
+        number(r.operations.filter(op => op.state === "pending").length), number(r.failures.length), number(r.observerFailures.length), ledger[4], ledger[5],
+        number(r.requests.length), number(r.inputs.length), number(r.readers.length)],
+      positions: [requestIndex, inputIndex, readerIndex],
+    };
   }
   return ledger;
 }

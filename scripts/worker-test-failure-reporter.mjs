@@ -29,7 +29,7 @@ export const workerAbortStages = Object.freeze([
 
 export function workerAbortEvidence() {
   let current = [1, 0], first = null, failures = 0, undefinedFailures = 0;
-  let step = 0, failedStep = -1, worker = null, upstream = null;
+  let step = 0, failedStep = -1, worker = null, upstream = null, relational = null, observation = null, producer = null;
   const reporting = [];
   const attempt = fn => { try { return fn(); } catch (error) { reporting.push(error); } };
   const count = value => Number.isSafeInteger(value) && value >= 0 && value <= limit ? value : null;
@@ -56,9 +56,11 @@ export function workerAbortEvidence() {
           worker = [count(own(value, "operations").value), count(own(value, "syncFailures").value),
             closedDiagnosticTuple(checks, 5, x => x === null || typeof x === "boolean" || count(x) !== null)];
           const ledger = own(value, "ledger").value, original = own(ledger, "10");
+          const retained = own(ledger, "11"); if (retained.present) { relational = retained.value; observation = value; }
           if (original.present) { const decoded = decodeWorkerAbortOperation(original.value); if (!decoded) throw new Error("invalid original operation projection"); worker.push(decoded); }
         } else if (stage === 16) {
           const calls = own(value, "calls").value;
+          producer = closedDiagnosticTuple(own(value, "producer").value, 5, x => x === null || count(x) !== null);
           upstream = [Array.isArray(calls) && !types.isProxy(calls) ? count(calls.length) : null,
             ...["active", "canceled", "aborted", "expired", "finished"].map(key => count(own(value, key).value))];
         } else throw new Error("invalid diagnostic stage");
@@ -66,6 +68,12 @@ export function workerAbortEvidence() {
     },
     report(context) {
       attempt(() => {
+        if (relational !== null) {
+          const parts = buildWorkerAbortParts(relational, observation, first, [failures, undefinedFailures, reporting.length], worker?.[2] ?? null, worker?.[0] ?? null, upstream, producer);
+          const frames = parts.map(part => workerAbortRelationalPrefix + JSON.stringify(part));
+          for (const frame of frames) context.diagnostic(frame);
+          return;
+        }
         const record = { v: 1, kind: "worker_abort_stage", first, failures, undefinedFailures,
           worker, upstream, reportingFailures: reporting.length };
         if (!validateWorkerAbortDiagnostic(record)) throw new Error("invalid diagnostic projection");
@@ -147,6 +155,117 @@ export function decodeWorkerAbortDiagnostic(record) {
 }
 export function validateWorkerAbortDiagnostic(record) { return decodeWorkerAbortDiagnostic(record) !== null; }
 
+// Fixed semantic components. Payload references are consistency checks, never
+// authority for a native case. The reporter binds every part independently.
+export const workerAbortParts = Object.freeze(["retire", "bad_a", "bad_b", "resource", "relations", "signals", "abort", "coverage"]);
+export const workerAbortRelationalPrefix = "LITELLM_WORKER_ABORT_V2 ";
+function relationData(part, data) {
+  const n = x => Number.isSafeInteger(x) && x >= 0 && x <= limit;
+  const optional = x => x === null || n(x), boolean = x => x === null || typeof x === "boolean";
+  const tuple = (x, size, check = () => true) => closedDiagnosticTuple(x, size, check);
+  const pair = x => { const p = tuple(x, 2, (v, i) => i ? boolean(v) : typeof v === "boolean"); return p && (p[0] || p[1] === null) ? p : null; };
+  if (data === null && ["resource", "relations"].includes(part)) return null;
+  let d;
+  if (part === "retire") {
+    d = tuple(data, 5); if (!d) return undefined;
+    const stage = d[0] === null ? null : tuple(d[0], 3, (v, i) => i === 0 ? n(v) && v >= 1 && v <= 24 : i === 1 ? v === 0 || v === 1 : typeof v === "boolean");
+    const counts = tuple(d[1], 3, n), checks = d[2] === null ? null : tuple(d[2], 5, v => boolean(v) || n(v));
+    if (d[0] !== null && !stage || !counts || counts[1] > counts[0] || d[2] !== null && !checks || !optional(d[3]) || ![null, 0, 2, 3].includes(d[4])) return undefined;
+    return [stage, counts, checks, d[3], d[4]];
+  }
+  if (part === "bad_a" || part === "bad_b") {
+    d = tuple(data, 2); if (!d) return undefined;
+    const rows = d.map(x => x === null ? null : tuple(x, 11, (v, i) => i === 7 ? typeof v === "boolean" : i === 8 ? boolean(v) : [3,4,5,6,10].includes(i) ? optional(v) : n(v)));
+    if (rows.some((row, i) => d[i] !== null && (!row || row[1] > 10 || ![0,2,3].includes(row[2]) || (row[7] ? typeof row[8] !== "boolean" : row[8] !== null)))) return undefined;
+    return rows;
+  }
+  if (part === "resource") {
+    d = tuple(data, 7); if (!d || !n(d[0]) || d[0] > 63 || typeof d[5] !== "boolean" || typeof d[6] !== "boolean") return undefined;
+    const rows = d.slice(1,5).map(x => x === null ? null : tuple(x, 5, optional));
+    if (rows.some((row, i) => d[i+1] !== null && (!row || !n(row[0]) || ![0,1,2,3].includes(row[1]) || !n(row[2]) || row[2] > 7 || (row[2]&6) && !(row[2]&1) || row[2]&4 && !(row[2]&2)))) return undefined;
+    return [d[0], ...rows, d[5], d[6]];
+  }
+  if (part === "relations") {
+    d = tuple(data, 18, (v, i) => i < 2 ? n(v) && v <= 63 : i >= 13 && i <= 16 ? optional(v) : boolean(v));
+    return d && (d[1] & ~d[0]) === 0 ? d : undefined;
+  }
+  if (part === "signals") {
+    d = tuple(data, 4); if (!d) return undefined;
+    const rows = d.map(x => { if (x === null) return null; const row = tuple(x,7); if (!row || !n(row[0])) return undefined;
+      const pairs = [pair(row.slice(1,3)),pair(row.slice(3,5)),pair(row.slice(5,7))]; return pairs.every(Boolean) ? [row[0],...pairs.flat()] : undefined; });
+    return rows.some(x => x === undefined) ? undefined : rows;
+  }
+  if (part === "abort") {
+    d = tuple(data,11); if (!d || ![0,2,4,6].every(i => typeof d[i] === "boolean") || ![1,7,9].every(i => optional(d[i])) || ![3,5,10].every(i => boolean(d[i]))) return undefined;
+    const size = own(d[8],"length").value, rows = Number.isInteger(size) && size >= 0 && size <= 4 ? tuple(d[8],size) : null;
+    const refs = rows?.map(x => tuple(x,2,optional));
+    if (!refs || refs.some(x => !x) || !d[0] && d[1] !== null || !d[2] && d[3] !== null || !d[4] && d[5] !== null
+      || !d[6] && (d[7] !== null || refs.length || d[9] !== null || d[10] !== null)
+      || d[7] !== null && (d[9] === null || d[7] !== refs.length+d[9])) return undefined;
+    return [...d.slice(0,8),refs,...d.slice(9)];
+  }
+  if (part === "coverage") {
+    d = tuple(data,19); if (!d || !d.slice(0,12).every((v,i) => i === 3 ? typeof v === "boolean" : optional(v)) || typeof d[12] !== "boolean") return undefined;
+    const states = d.slice(13,16).map(pair), producer = d[16] === null ? null : tuple(d[16],5,optional), upstream = d[18] === null ? null : tuple(d[18],6,optional);
+    if (states.some(x => !x) || d[16] !== null && !producer || d[17] !== null || d[18] !== null && !upstream) return undefined;
+    return [...d.slice(0,13),...states,producer,null,upstream];
+  }
+  return undefined;
+}
+export function decodeWorkerAbortPart(record) {
+  const keys=["v","kind","part","ref","data"];
+  if (!record || typeof record !== "object" || types.isProxy(record) || Reflect.ownKeys(record).length !== keys.length || keys.some(k=>!own(record,k).present)
+    || own(record,"v").value !== 2 || own(record,"kind").value !== "worker_abort_part") return null;
+  const part=own(record,"part").value, ref=closedDiagnosticTuple(own(record,"ref").value,5,v=>v===null||Number.isSafeInteger(v)&&v>=0&&v<=limit);
+  if (!workerAbortParts.includes(part)||!ref) return null;
+  const data=relationData(part,own(record,"data").value); if(data===undefined)return null;
+  const result={v:2,kind:"worker_abort_part",part,ref,data};return Buffer.byteLength(JSON.stringify(result))<=512?result:null;
+}
+export function parseWorkerAbortPart(payload) { return parseCanonicalWorkerRecord(payload,decodeWorkerAbortPart); }
+export function validateWorkerAbortGroup(parts) {
+  if (!Array.isArray(parts)||types.isProxy(parts)||parts.length!==8)return null;
+  const decoded=closedDiagnosticTuple(parts,8,()=>true)?.map(decodeWorkerAbortPart);
+  if(!decoded||decoded.some(x=>!x)||new Set(decoded.map(x=>x.part)).size!==8)return null;
+  const ordered=workerAbortParts.map(name=>decoded.find(x=>x.part===name)),ref=ordered[0].ref;
+  if(ref.some((v,i)=>!Number.isSafeInteger(v)||v<(i===4?0:1))||ordered.some(x=>!sameStrings(x.ref,ref)))return null;
+  const [retire,a,b,resource,relations,signals,abort,coverage]=ordered.map(x=>x.data),rows=[...a,...b];
+  if(rows.some(x=>!x)||new Set(rows.map(x=>x[0])).size!==4||coverage[0]!==4||coverage[1]!==4||coverage[2]!==0||coverage[3]||!coverage[12]
+    ||rows.some(row=>row[3]!==ref[0]||row[4]!==ref[1]||row[5]!==null&&row[5]!==ref[2]||row[6]!==null&&row[6]!==ref[3])
+    ||rows.some((row,i)=>i&&row[0]<=rows[i-1][0])||rows[0][0]!==ref[4]||![0,2,3].includes(retire[4])
+    ||!resource||!relations||resource.slice(1,5).some(x=>!x)||!resource[5]||!resource[6]||resource[3][0]!==ref[4]
+    ||signals.some((row,i)=>!row||row[0]!==rows[i][0])
+    ||rows.some(row=>row[2]===0 ? row[7]||row[10]!==null : !row[7]||row[10]===null))return null;
+  // Check every shared ordinal, not a guessed list of four failing kinds.
+  for(let i=0;i<4;i++){
+    const role=resource[i+1], bad=rows.find(row=>row[0]===role[0]);
+    if(!bad){if(role[1]!==1)return null;continue;}
+    const expectedKind=[4,5,6,7][i];
+    if(bad[1]!==expectedKind||bad[2]!==role[1]||bad[5]!==ref[2]||bad[6]!==ref[3]||bad[9]!==role[3]||bad[10]!==role[4]
+      ||bad[7]!==!!(role[2]&1)||bad[8]!==((role[2]&1)?!!(role[2]&2):null))return null;
+  }
+  if(new Set(resource.slice(1,5).map(x=>x[0])).size!==4||resource[0]!==63||rows[0][1]!==6
+    ||relations[0]!==63||new Set(abort[8].map(row=>row[0])).size!==abort[8].length||abort[8].some(row=>row[0]===null||row[1]!==ref[3])||abort[9]>0||abort[6]&&abort[10]!==true)return null;
+  return ordered;
+}
+function buildWorkerAbortParts(source, observation, first, counts, checks, operations, upstream, producer) {
+  const get=k=>own(source,k).value, ref=get("ref"), tuple=(v,n)=>closedDiagnosticTuple(v,n,()=>true);
+  const size=own(get("rows"),"length").value, rows=Number.isInteger(size)&&size<=4?tuple(get("rows"),size):null;
+  const signalSize=own(get("signals"),"length").value, signals=signalSize===size?tuple(get("signals"),size):null;
+  const coverage=tuple(get("coverage"),12),positions=tuple(get("positions"),3);
+  if(own(source,"v").value!==2||!rows||!signals||!coverage||!positions)throw new Error("invalid retained relation source");
+  const state=(key,index,field)=>{const list=own(observation,key).value,n=own(list,"length").value;
+    if(!Array.isArray(list)||types.isProxy(list)||!Number.isInteger(index)||index<0||index>=n)return [false,null];
+    const item=own(list,String(index)),stored=field?own(item.value,field):item;
+    return [stored.present,typeof stored.value==="boolean"?stored.value:null];};
+  const associated=get("associated")===true&&own(own(observation,"ingress").value,"length").value===coverage[9]
+    &&own(own(observation,"inputs").value,"length").value===coverage[10]&&own(own(observation,"readers").value,"length").value===coverage[11];
+  const parts=[ [first,counts,checks,operations,own(own(own(observation,"ledger").value,"10").value,"2").value??null],
+    [rows[0]??null,rows[1]??null],[rows[2]??null,rows[3]??null],get("resource"),get("relations"),
+    [signals[0]??null,signals[1]??null,signals[2]??null,signals[3]??null],get("abort"),
+    [...coverage,associated,state("ingress",positions[0]),state("inputs",positions[1],"signalAborted"),state("readers",positions[2],"locked"),producer,null,upstream] ];
+  return workerAbortParts.map((part,i)=>{const result=decodeWorkerAbortPart({v:2,kind:"worker_abort_part",part,ref,data:parts[i]});if(!result)throw new Error("invalid relational component");return result;});
+}
+
 // The frozen Worker CI command expands multiple files, once each. Qualification
 // is deliberately narrower than Node's CLI: unknown modes/options stay unbound.
 export function workerAbortInvocation(runtime, cwd) {
@@ -182,7 +301,7 @@ export function workerAbortAdmission(tracked, invocation) {
   const wrappers = new Map(), parentIds = new Map(), ids = new Map(), coordinates = new Map(), diagnostics = [];
   const expected = new Set(invocation?.files ?? []);
   let census = 0, childEvents = 0, overflow = false, recognized = 0, rejected = 0, targetFailure = null;
-  let parentInvalid = false, childInvalid = false, diagnosticInvalid = false, first = null, evaluated = 0, failed = 0, phase = 0;
+  let parentInvalid = false, childInvalid = false, diagnosticInvalid = false, relationalSeen = false, first = null, evaluated = 0, failed = 0, phase = 0;
   let fields = [0, 0, 0];
   const gate = (site, ok) => {
     const bit = 2 ** site; evaluated |= bit; if (!ok) failed |= bit;
@@ -201,7 +320,7 @@ export function workerAbortAdmission(tracked, invocation) {
       const eventIndex = ["test:enqueue", "test:fail", "test:pass", "test:complete", "test:diagnostic"].indexOf(type);
       if (eventIndex < 0) return;
       const message = type === "test:diagnostic" ? own(data, "message").value : null;
-      if (type === "test:diagnostic" && (typeof message !== "string" || !message.startsWith(workerAbortPrefix))) return;
+      if (type === "test:diagnostic" && (typeof message !== "string" || !message.startsWith(workerAbortPrefix) && !message.startsWith(workerAbortRelationalPrefix))) return;
       phase = eventIndex + 1;
       const f = keys.map(key => own(data, key));
       const [entry, sourceFile, line, column, nesting, id, parent, name] = f;
@@ -215,7 +334,8 @@ export function workerAbortAdmission(tracked, invocation) {
       const at = file && validity[2] && validity[3] && validity[4] ? [file, line.value, column.value, nesting.value] : null;
       if (type === "test:diagnostic") {
         recognized = Math.min(limit, recognized + 1);
-        const record = parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
+        const relational = message.startsWith(workerAbortRelationalPrefix); relationalSeen ||= relational;
+        const record = relational ? parseWorkerAbortPart(message.slice(workerAbortRelationalPrefix.length)) : parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
         if (!gate(18, record !== null)) { rejected = Math.min(limit, rejected + 1); return; }
         if (diagnostics.length >= 32) { overflow = true; gate(2, false); return; }
         if (!gate(19, entry.present && entryFile === targetFile && at !== null && file === targetFile)) {
@@ -282,22 +402,34 @@ export function workerAbortAdmission(tracked, invocation) {
       bound = gate(22, row !== null && !childInvalid) && bound;
       bound = gate(23, row !== null && coordinates.get(JSON.stringify(row.at)).length === 1) && bound;
       bound = gate(24, row !== null && row.failure !== null) && bound;
-      bound = gate(25, matches.length === 1 && diagnostics.length === 1 && rejected === 0 && !diagnosticInvalid) && bound;
-      let record = null;
-      if (bound) {
+      let partMask = 0, duplicateMask = 0;
+      for (const candidate of diagnostics) if (candidate.record.v === 2) {
+        const bit = 2 ** workerAbortParts.indexOf(candidate.record.part); if (partMask & bit) duplicateMask |= bit; partMask |= bit;
+      }
+      const group = relationalSeen ? validateWorkerAbortGroup(matches.map(x => x.record)) : null;
+      const groupMismatch = relationalSeen && (!group || duplicateMask !== 0 || matches.length !== 8 || diagnostics.length !== 8);
+      bound = gate(25, (relationalSeen ? !groupMismatch : matches.length === 1 && diagnostics.length === 1)
+        && rejected === 0 && !diagnosticInvalid) && bound;
+      let record = null, records = [];
+      if (bound && relationalSeen) {
+        records = group.map(part => ({ v: 2, kind: "worker_abort_relation", at: row.at, part: part.part, ref: part.ref, data: part.data }));
+        if (!gate(26, records.every(value => decodeWorkerReporterRecord(value) !== null))) records = [];
+      } else if (bound) {
         const data = matches[0].record;
         record = { v: 1, kind: "worker_abort", at: row.at, stage: data.first,
           counts: [data.failures, data.undefinedFailures, data.reportingFailures], worker: data.worker, upstream: data.upstream };
         if (!gate(26, Buffer.byteLength(JSON.stringify(record)) <= 512)) record = null;
       }
-      const admitted = record !== null;
+      const admitted = record !== null || records.length === 8;
       if (!admitted && recognized) {
         record = { v: 1, kind: "worker_abort_unbound", reason: first?.reason ?? null, gates: first?.gates ?? [0, 0], fields: first?.fields ?? [0, 0, 0],
           census: [expected.size, wrappers.size, childEvents, ids.size, rows.length, matches.length],
           scope: [Boolean(invocation), !parentInvalid, Boolean(complete), !childInvalid, true] };
       }
-      return { failure: recognized ? row?.failure ?? targetFailure : null, record,
-        diagnostics: recognized ? [recognized, admitted ? 1 : 0, rejected, recognized - rejected - (admitted ? 1 : 0), overflow] : null };
+      return { failure: recognized ? row?.failure ?? targetFailure : null, record, records,
+        diagnostics: !relationalSeen && recognized ? [recognized, admitted ? 1 : 0, rejected, recognized - rejected - (admitted ? 1 : 0), overflow] : null,
+        relational: relationalSeen ? [recognized, records.length, rejected, recognized - rejected - records.length, overflow, partMask, 255 ^ partMask, duplicateMask, groupMismatch] : null };
+
     },
   };
 }
@@ -309,6 +441,25 @@ export function decodeWorkerReporterRecord(value) {
   const get = key => own(value, key).value;
   const exact = keys => Reflect.ownKeys(value).length === keys.length && keys.every(key => own(value, key).present);
   const count = n => Number.isSafeInteger(n) && n >= 0 && n <= limit;
+  if (get("v") === 2) {
+    let result;
+    if (get("kind") === "worker_abort_relation") {
+      if (!exact(["v","kind","at","part","ref","data"])) return null;
+      const at = closedDiagnosticTuple(get("at"),4,(v,i)=>i===0?v==="worker/test/litellm-model-discovery.test.mjs":count(v)&&(i===3||v>0));
+      const part = decodeWorkerAbortPart({v:2,kind:"worker_abort_part",part:get("part"),ref:get("ref"),data:get("data")});
+      if(!at||!part)return null;
+      result={v:2,kind:"worker_abort_relation",at,part:part.part,ref:part.ref,data:part.data};
+    } else if(get("kind")==="summary") {
+      const keys=["v","kind","failureEvents","reported","omittedEvents","unknownFiles","countsSaturated","relational"];
+      if(!exact(keys))return null;
+      const old=decodeWorkerReporterRecord(Object.fromEntries(keys.slice(0,-1).map(k=>[k,k==="v"?1:get(k)])));
+      const r=closedDiagnosticTuple(get("relational"),9,(v,i)=>[4,8].includes(i)?typeof v==="boolean":count(v));
+      if(!old||!r||![0,8].includes(r[1])||r[0]!==r[1]+r[2]+r[3]||r.slice(5,8).some(v=>v>255)||r[6] !== (255 ^ r[5])
+        ||(r[7]&~r[5])!==0||r[1]===8&&(r[4]||r[5]!==255||r[6]||r[7]||r[8]))return null;
+      result={...old,v:2,relational:r};
+    } else return null;
+    return Buffer.byteLength(JSON.stringify(result))<=512?result:null;
+  }
   if (get("v") !== 1) return null;
   let result;
   if (get("kind") === "failure") {
@@ -423,14 +574,17 @@ export async function* workerFailureReport(source, { cwd = process.cwd() } = {})
     if (bucket.has(key) || bucket.size < 9) bucket.set(key, record);
   }
   const evidence = admission.finish();
-  const prioritized = [...(evidence.failure ? [evidence.failure] : []), ...(evidence.record ? [evidence.record] : [])];
+  const prioritized = [...(evidence.failure ? [evidence.failure] : []), ...(evidence.records.length ? evidence.records : evidence.record ? [evidence.record] : [])];
   const selected = [...prioritized, ...[...leaves.values(), ...parents.values()].filter(record => !evidence.failure || JSON.stringify(record) !== JSON.stringify(evidence.failure))].slice(0, 9);
-  for (const record of selected) yield annotation(record, "error");
   const identities = selected.filter(record => record.kind === "failure").length;
-  // Zero observed failures is not a success verdict; Node owns the exit code.
-  yield annotation({ v: 1, kind: "summary", failureEvents: failures, reported: identities,
+  // Construct every command before yielding. A relational group is all eight or
+  // none; native failure identities and the summary never depend on its validity.
+  const summary = { v: evidence.relational ? 2 : 1, kind: "summary", failureEvents: failures, reported: identities,
     omittedEvents: Math.max(0, failures - identities), unknownFiles, countsSaturated: failures === limit,
-    ...(evidence.diagnostics ? { diagnostics: evidence.diagnostics } : {}) }, failures ? "error" : "notice");
+    ...(evidence.diagnostics ? { diagnostics: evidence.diagnostics } : {}), ...(evidence.relational ? { relational: evidence.relational } : {}) };
+  const commands = [...selected.map(record => annotation(record, "error")), annotation(summary, failures ? "error" : "notice")];
+  if (commands.length > 10 || commands.reduce((n,line)=>n+Buffer.byteLength(line),0)>8192) throw new Error("worker diagnostic group exceeds quota");
+  for (const command of commands) yield command;
 }
 
 export default workerFailureReport;

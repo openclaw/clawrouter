@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; reject incomplete or inconsistent sets without changing retirement checks.
+
 - Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
 
 - Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
