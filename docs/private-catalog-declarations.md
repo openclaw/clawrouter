@@ -21,7 +21,8 @@ Native and manifest callers use bodyless, query-free GETs:
 The actual runtime requires the original selected **owner-backed API-key grant**.
 An environment key, OAuth access token, bundle, replacement account or caller
 header cannot satisfy that authority. It rechecks the caller and original
-credential owner immediately before dispatch. Declaration metadata does not
+credential owner immediately before dispatch and again after complete private
+metadata input retirement, before publication. Declaration metadata does not
 create a credential, entitlement or new authority field.
 
 Results retain the native `{data:[...]}` envelope and exact upstream IDs. Empty
@@ -47,21 +48,35 @@ UsageLedger; this is not a hosted queue-delivery claim. Original fetch, response
 read, cancellation, reader-closed and Worker continuation outcomes are joined
 independently before fixture disposal.
 
-## Publication-authority witness
+## Publication authority
 
-A bounded Baseten response delivers a nonempty JSON prefix, then the fixture
-narrows the actual durable caller policy to an empty model allowlist before
-completing the original upstream response. The current runtime still returns
-HTTP 200 with the previously allowed model. Its pre-dispatch owner check does
-not refresh the policy after the complete private response is read. The witness
-records this behavior; it does not treat a successful transport or zero-cost
-receipt as proof of current publication authority.
+After a complete, validated native response reaches EOF and releases its reader,
+the Worker reads current caller authority and inspects the same selected grant's
+metadata. It retains the admitted model permissions before asynchronous work and
+intersects them with current permissions. Narrowing can produce HTTP 200 with an
+empty native envelope; broadening cannot expose models outside the original
+admission. There is no grant reselection, secret rematerialization, environment
+fallback or second upstream request.
 
-The existing [runtime contract](keyed-model-discovery-runtime.md) promises a
-fresh owner/caller check immediately before dispatch. The stronger post-read
-publication requirement needs an explicit runtime review before this activation
-is published. No runtime change, new revocation guarantee or vulnerability
-cause is claimed here.
+Revoked, disabled, expired or newly ineligible owners cannot publish inventory.
+Caller revocation, policy disablement, stale policy generation and provider
+removal retain their canonical denial responses. Upstream errors remain sanitized
+even for unrestricted callers. The original post-read authority task is awaited
+through settlement when cancellation occurs; cancellation is not a substitute
+for completion of that task.
+
+Real Workerd/SQLite cases cover all three providers over native and manifest
+routes. A nonempty upstream prefix precedes an actual durable policy or owner
+mutation; the original producer then completes its response. The witness checks
+EOF/unlock before the production authority snapshot, mutation before refresh,
+and refresh before publication, separately from verifier reads. It also checks
+original operation outcomes, producer completion without expiry, one upstream
+GET and one zero-inference-cost metadata event per dispatched case.
+
+These are sequential authority observations, not atomic revocation through
+client delivery or across separate stores. This extends the earlier
+[pre-dispatch contract](keyed-model-discovery-runtime.md); the previous witness
+was not proof of a violation of that narrower contract.
 
 The existing contracts are [Baseten](baseten-models-schema.md),
 [Arcee](arcee-models-schema.md) and [Novita](novita-models-schema.md). Registered
