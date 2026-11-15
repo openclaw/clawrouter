@@ -191,7 +191,7 @@ describe("registered LiteLLM live inventory and native inference", () => {
       const result = await events.result();
       if (id === "sdk_eof") expect(result.stopReason).toBe("stop");
       else if (id === "sdk_provider_error") { expect(controller.signal.aborted).toBe(false); expect(result.stopReason).toBe("error"); }
-      else { expect(controller.signal.aborted).toBe(true); expect(["aborted", "error"]).toContain(result.stopReason); }
+      else { expect(controller.signal.aborted).toBe(true); expect(result.stopReason).toBe(id === "sdk_preabort" ? "error" : "aborted"); }
       if (id === "sdk_partial_abort") expect(partial).toBe(true);
     });
   }, 120_000);
