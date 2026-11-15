@@ -615,6 +615,15 @@ function cgroupMapping(rows, recorder) {
 const cgroupStamp = async (link, prefix) => ({ mnt: await link(prefix + "/ns/mnt"), cgroup: await link(prefix + "/ns/cgroup") });
 const validCgroupStamp = value => /^mnt:\[\d+\]$/.test(value.mnt) && /^cgroup:\[\d+\]$/.test(value.cgroup);
 const physicalDirectory = value => value.isDirectory() && typeof value.dev === "bigint" && typeof value.ino === "bigint" && value.dev >= 0n && value.ino > 0n;
+// glibc-2.36 c804cd1c, bits/sysmacros.h cd764724: GNU 64-bit dev_t
+// major/minor encoding, compatible with Linux; not a runtime libc-version claim.
+export function matchesLinuxDevice(dev, device) {
+  if (typeof dev !== "bigint" || dev < 0n || dev > 0xffffffffffffffffn || typeof device !== "string" || device.length > 21) return false;
+  const pair = /^(0|[1-9]\d*):(0|[1-9]\d*)$/.exec(device);
+  if (!pair) return false;
+  const major = BigInt(pair[1]), minor = BigInt(pair[2]);
+  return major <= 0xffffffffn && minor <= 0xffffffffn && major === ((dev & 0xfff00n) >> 8n | (dev & 0xfffff00000000000n) >> 32n) && minor === ((dev & 0xffn) | (dev & 0xffffff00000n) >> 12n);
+}
 export function sameCgroupBinding(a, b) {
   return a.path === b.path && a.mountDev === b.mountDev && a.mountIno === b.mountIno && a.dev === b.dev && a.ino === b.ino && a.parentDev === b.parentDev && a.parentIno === b.parentIno;
 }
@@ -627,6 +636,7 @@ async function bindCgroup(target, cid, recorder, token, io) {
   const inode = await io.stat(path, { bigint: true }), parent = await io.stat(dirname(path), { bigint: true });
   const mount = await io.stat(view.mapping.target, { bigint: true });
   cgroupCheck(recorder, 51, physicalDirectory(inode) && physicalDirectory(parent) && physicalDirectory(mount) && inode.dev === parent.dev && inode.dev === mount.dev);
+  cgroupCheck(recorder, 54, matchesLinuxDevice(mount.dev, view.mapping.device));
   parentSource(recorder, "cgroup_limits_group");
   validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await io.read(join(path, name), "utf8")]))), (parentSource(recorder, "cgroup_limits"), recorder));
   return { path, dev: inode.dev, ino: inode.ino, parentDev: parent.dev, parentIno: parent.ino, mountDev: mount.dev, mountIno: mount.ino };
@@ -676,11 +686,11 @@ export async function retiredCgroup(bound, { read = readFile, link = readlink, s
     check(same(cgroupMapping(parseMounts(await read("/proc/self/mountinfo", "utf8"), false)), view.mapping), "retirement-mapping-drift");
   };
   await snapshot();
-  const mount = await statPath(view.mapping.target, { bigint: true }); check(physicalDirectory(mount) && mount.dev === bound.mountDev && mount.ino === bound.mountIno, "cgroup-mapping-replaced");
-  const parent = await statPath(dirname(bound.path), { bigint: true }); check(physicalDirectory(parent) && parent.dev === bound.parentDev && parent.ino === bound.parentIno, "cgroup-parent-replaced");
+  const mount = await statPath(view.mapping.target, { bigint: true }); check(physicalDirectory(mount) && matchesLinuxDevice(mount.dev, view.mapping.device) && mount.dev === bound.mountDev && mount.ino === bound.mountIno, "cgroup-mapping-replaced");
+  const parent = await statPath(dirname(bound.path), { bigint: true }); check(physicalDirectory(parent) && matchesLinuxDevice(parent.dev, view.mapping.device) && parent.dev === bound.parentDev && parent.ino === bound.parentIno, "cgroup-parent-replaced");
   let disposition;
   try {
-    const current = await statPath(bound.path, { bigint: true }); check(physicalDirectory(current) && current.dev === bound.dev && current.ino === bound.ino, "cgroup-replaced");
+    const current = await statPath(bound.path, { bigint: true }); check(physicalDirectory(current) && matchesLinuxDevice(current.dev, view.mapping.device) && current.dev === bound.dev && current.ino === bound.ino, "cgroup-replaced");
     check((await read(join(bound.path, "cgroup.procs"), "utf8")).trim() === "" && /^populated 0$/m.test(await read(join(bound.path, "cgroup.events"), "utf8")), "cgroup-descendants-live"); disposition = "empty";
   } catch (error) { if (error?.code === "ENOENT") { try { await lstatPath(bound.path, { bigint: true }); } catch (missing) { if (missing?.code === "ENOENT") disposition = "removed"; else throw missing; } } if (!disposition) throw error; }
   await snapshot(); return disposition;

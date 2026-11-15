@@ -1576,7 +1576,7 @@ async function parentAdmissionFactory(overrides = {}) {
   const contractSource = cut("export const containerContract =", "export const harnessInputs =");
   const bindings = { createHash, join, dirname, relative, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validateMountDetail, validateMaskDetail, initGuardTags, initSourcePhases, mountTargets, mountFilesystems,
     readFile: async () => { throw undefined; }, readlink: async () => { throw undefined; }, realpath: async () => { throw undefined; }, stat: async () => { throw undefined; }, lstat: async () => { throw undefined; }, ...overrides };
-  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness,createParentCgroupAdmission,sameCgroupBinding,retiredCgroup};")(...Object.values(bindings));
+  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness,createParentCgroupAdmission,sameCgroupBinding,matchesLinuxDevice,retiredCgroup};")(...Object.values(bindings));
 }
 const parentAdmissionPackets = [];
 test("parent admission actual predicates preserve short circuit getters original throws and fixed first evidence", async () => {
@@ -1736,5 +1736,28 @@ test("same observer cgroup actual failure cleanup still stops and joins without 
     const execute=new Function(...Object.keys(bindings),'return async()=>{let disposition="retained";'+code+';return disposition;}')(...Object.values(bindings));
     const pending=execute().then(x=>{finished=true;return x;});for(let i=0;i<10;i++)await Promise.resolve();assert.equal(stops,1);assert.equal(finished,false);original.resolve(result);assert.equal(await pending,"retained");assert.equal(joins,1);assert.equal(removes,0);assert.ok(failures.length);if(stopFailure)assert.ok(failures[0].errors.includes(undefined));
   }
+});
+test("same observer cgroup Linux device encoding rejects consistent stat mismatch on both visits and retirement",async()=>{
+  const api=await parentAdmissionFactory();
+  const vectors=[[0n,"0:0"],[99n,"0:99"],[0xfff00n,"4095:0"],[0xfffff00000000000n,"4294963200:0"],[0xffffff00000n,"0:4294967040"],[0xffffffffffffffffn,"4294967295:4294967295"]];
+  // Fixed vectors exercise both low and high fields; no Number conversion.
+  for(const [dev,device] of vectors)assert.equal(api.matchesLinuxDevice(dev,device),true);
+  for(const [dev,device] of [[-1n,"0:0"],[1n<<64n,"0:0"],[99,"0:99"],[null,"0:99"],[99n,"00:99"],[99n,"0:099"],[99n,"0:99\n"],[99n,"-1:99"],[99n,"0:4294967296"],[99n,"4294967296:0"],[99n,"0/99"],[99n,{}],[100n,"0:99"]])assert.equal(api.matchesLinuxDevice(dev,device),false);
+  for(const visit of [1,2]){
+    let dev=99n;const f=await cgroupFixture(({io})=>{const stat=io.stat;io.stat=async(...a)=>({...await stat(...a),dev});});
+    let first;if(visit===2)first=await f.admission.observe(123,1);dev=100n;
+    const ledger=f.api.createParentAdmissionLedger();ledger.visit(visit);let reason;
+    try{await f.admission.observe(123,visit,ledger);assert.fail("must reject");}catch(error){reason=error;}
+    const detail=ledger.finish(true,reason);assert.equal(detail.detail[4],54);assert.equal(detail.detail[1],36);assert.doesNotThrow(()=>validateContainerDiagnostic(detail));
+    const report=createContainerDiagnostics();report.mark("entry","rejected",reason);report.internal(detail);const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);const commands=[];emitContainerFailure(report.records,x=>commands.push(x));assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(""))<=8192);parentAdmissionPackets.push(commands.map(x=>JSON.parse(x.slice(x.indexOf("::",2)+2).trimEnd())));
+    if(first)await assert.rejects(f.retire(first.bound));
+  }
+  for(const dev of [0n,99n,0xfff00n,0xfffff00000000000n,0xffffff00000n,0xffffffffffffffffn]){
+    const device=vectors.find(x=>x[0]===dev)[1],f=await cgroupFixture(({state,io})=>{state.parentRows[1].device=device;const stat=io.stat;io.stat=async(...a)=>({...await stat(...a),dev});});
+    const one=await f.admission.observe(123,1),two=await f.admission.observe(123,2);assert.equal(await f.retire(two.bound),"empty");
+    const stat=f.io.stat;f.io.stat=async(...a)=>({...await stat(...a),dev:dev^1n});await assert.rejects(f.retire(two.bound));f.state.removed=true;await assert.rejects(f.retire(two.bound));
+  }
+  for(const device of ["00:99","0:099","0:4294967296","4294967296:0","0/99"]){const f=await cgroupFixture(({state})=>state.parentRows[1].device=device);await assert.rejects(f.admission.observe(123,1));}
+  for(const role of ["owned","parent","mapping"]){const f=await cgroupFixture(({io})=>{const stat=io.stat;io.stat=async(...a)=>{const row=await stat(...a),which=a[0].endsWith(hex)?"owned":a[0]==="/sys/fs/cgroup"?"mapping":"parent";return which===role?{...row,dev:100n}:row;};});await assert.rejects(f.admission.observe(123,1));}
 });
 // END attach diagnostic pure tests.
