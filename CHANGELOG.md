@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Deliver Private SDK callback and first-failure evidence before teardown, and observe the original E2 runner outcome after verifying the exclusively copied fixture; retain independent reporting and removal failures without changing test acceptance.
+
 - Preserve the first observed Private SDK failure boundary and exact receipt-assertion evidence with bounded producer/accounting availability, without changing original rejection or financial acceptance.
 
 - Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.

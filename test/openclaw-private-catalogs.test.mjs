@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { promisify, types as privateNodeTypes } from "node:util";
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -80,7 +81,8 @@ export function privateCheckpointFunctions(){
  const start="export function validatePrivateCheckpoint(",end="const checkpoints=createPrivateCheckpointReporter(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validatePrivateCheckpoint,createPrivateCheckpointReporter,finishPrivateCheckpointCase,privateCheckpointCaseIndex})",{},{timeout:1000});
+ const functions=runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validatePrivateCheckpoint,createPrivateCheckpointReporter,finishPrivateCheckpointCase,privateCheckpointCaseIndex})",{},{timeout:1000});
+ return {...functions,fixtureSha256:createHash("sha256").update(source).digest("hex"),fixtureBytes:Buffer.byteLength(source)};
 }
 export function privateCheckpointRecords(error){
  const {validatePrivateCheckpoint}=privateCheckpointFunctions();
@@ -97,8 +99,23 @@ export async function withPrivateNativeDiagnostics(run,emit){
   for(const collect of [privateCheckpointRecords,privateNativeDiagnosticRecords])try{for(const record of collect(error))emit(record);}catch(reportError){reporting.push(reportError);}
   if(reporting.length)throw new AggregateError([error,...reporting],"native child and diagnostic delivery failed");throw error;}
 }
+// The expected digest uses the existing source extraction. The helper independently
+// verifies the exclusively copied target before invoking the original command.
+export function privateExecObservation(source,reporter){
+ let seen=false;const token=Object.freeze({});
+ return {token,fixtureSha256:source.fixtureSha256,fixtureBytes:source.fixtureBytes,onOutcome(outcome){
+  assert.equal(seen,false);seen=true;const b=outcome.binding;
+  assert.ok(Object.isFrozen(b));assert.equal(b.token,token);assert.equal(b.sourceHead,privateCatalogPin);
+  assert.equal(b.testPath,'extensions/baseten/clawrouter-private-catalogs-contract.test.ts');
+  assert.equal(b.fixtureSha256,source.fixtureSha256);assert.equal(b.fixtureBytes,source.fixtureBytes);assert.equal(b.command,'pnpm');
+  assert.deepEqual([...b.args],['test',b.testPath,'--maxWorkers=1']);
+  assert.equal(outcome.errorPresent,outcome.state!=='fulfilled');
+  reporter.execOutcome({v:3,pin:privateCatalogPin,lane:'outer',kind:'exec',phase:outcome.phase,state:outcome.state,defined:outcome.errorDefined,fields:outcome.fields});
+ }};
+}
 export async function runPrivateReported(body,cleanups,emit){
- const reporter=privateCheckpointFunctions().createPrivateCheckpointReporter("outer",emit);
+ const functions=privateCheckpointFunctions(),reporter=functions.createPrivateCheckpointReporter("outer",emit);
+ reporter.privateExec=privateExecObservation(functions,reporter);
  reporter.mark(null,"setup","enter");reporter.flush(null);
  return finishPrivateOwned(()=>body(reporter),[...cleanups.map(cleanup=>()=>cleanup(reporter)),async()=>{
   await reporter.drain();reporter.flush(null);reporter.finish();
@@ -467,6 +484,13 @@ export function reportPrivateReceiptFailure(report,row,index,proof,evidence,witn
  if(failures.length===1)throw error;throw new AggregateError(failures,'Private receipt and diagnostic failures');
 }
 // Inert dependencies for exact extracted fixture callbacks; no Worker or stream runtime.
+export function privateExecFunctions(){
+ const source=readFileSync(new URL('./helpers/openclaw-consumer.mjs',import.meta.url),'utf8');
+ const start=source.indexOf('export function validatePrivateExecRequest('),end=source.indexOf('export function validateRunnerRequest(');
+ const code=source.slice(start,end)+source.slice(source.indexOf('export async function withCopiedConsumerFixture('));
+ return new Function('assert','Buffer','constants','types','sha256',code.replace(/^export /gm,'')+';return {validatePrivateExecRequest,readCopiedPrivateFixture,privateExecProcessFields,observePrivateExec,withCopiedConsumerFixture};')(
+  assert,Buffer,{O_RDONLY:0,O_NOFOLLOW:1},privateNodeTypes,bytes=>createHash('sha256').update(bytes).digest('hex'));
+}
 export function privateInertOwner(){
  const s={id:'inert',row:{provider:'baseten',scenario:'eof'},generation:Object.freeze({}),restores:[],calls:[],timeline:[],sequence:0,prefix:false,mutated:false,authority:[],inspections:[]};
  const context={value:undefined,getStore(){return this.value;},run(token,fn){const previous=this.value;this.value=token;try{return fn();}finally{this.value=previous;}}};
@@ -487,6 +511,108 @@ export async function privateInertReader(read,closed=Promise.resolve()){
  const actual=s.ownership.run(token,()=>response.body.getReader());return {s,context,token,request,body,reader:actual,calls};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ // BEGIN Private early runner inert regressions
+ test('Private copied target verification precedes the one original exec and removal',async()=>{
+  const h=privateExecFunctions(),bytes=Buffer.from('fixture'),order=[],records=[],report=privateCheckpointFunctions().createPrivateCheckpointReporter('outer',r=>records.push(r));
+  const opts=privateExecObservation({fixtureSha256:createHash('sha256').update(bytes).digest('hex'),fixtureBytes:bytes.length},report);
+  let original=Promise.resolve({stdout:'closed'}),actual;const publish=opts.onOutcome;opts.onOutcome=o=>{actual=o;order.push('observe');publish(o);};
+  const value=await h.withCopiedConsumerFixture(()=>order.push('copy'),()=>h.observePrivateExec({sourceHead:privateCatalogPin,testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:opts},()=>{order.push('read');return bytes;},()=>{order.push('exec');return original;}),()=>order.push('remove'));
+  assert.equal(value.stdout,'closed');assert.equal(actual.original,original);assert.equal(actual.binding.token,opts.token);assert.deepEqual(order,['copy','read','exec','observe','remove']);assert.equal(records[0].kind,'exec');assert.equal(records[0].defined,null);
+ });
+ test('Private read failure mismatch and foreign pin never execute but always remove owned copy',async()=>{
+  const h=privateExecFunctions();for(const mode of ['read','mismatch','size','pin']){let calls=0,removes=0;const facts=[],bytes=Buffer.from('fixture'),options={sourceHead:privateCatalogPin,testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:{token:Object.freeze({}),fixtureBytes:bytes.length,fixtureSha256:createHash('sha256').update(bytes).digest('hex'),onOutcome:o=>facts.push(o)}};
+   if(mode==='pin')options.sourceHead='foreign';
+   await assert.rejects(h.withCopiedConsumerFixture(()=>{},()=>h.observePrivateExec(options,()=>{if(mode==='read')throw undefined;return mode==='mismatch'?Buffer.from('changed'):Buffer.alloc(0);},()=>{calls++;}),()=>{removes++;}));
+   assert.equal(calls,0);assert.equal(removes,1);assert.equal(facts.length,mode==='pin'?0:1);if(mode==='read')assert.equal(facts[0].errorDefined,false);
+  }
+ });
+ test('Private bounded snapshot closes after short reads and preserves read plus close undefined',async()=>{
+  const h=privateExecFunctions(),bytes=Buffer.from('fixture');for(const mode of ['ok','read','close','both','oversize']){let reads=0,closed=0,offset=0;
+   const file={stat:async()=>({isFile:()=>true,size:mode==='oversize'?999:bytes.length}),read:async(buffer,at,count)=>{reads++;if(['read','both'].includes(mode))throw undefined;const n=Math.min(2,bytes.length-offset,count);bytes.copy(buffer,at,offset,offset+n);offset+=n;return {bytesRead:n};},close:async()=>{closed++;if(['close','both'].includes(mode))throw undefined;}};
+   const pending=h.readCopiedPrivateFixture('owned',bytes.length,async()=>file);
+   if(mode==='ok')assert.deepEqual(await pending,bytes);else await assert.rejects(pending,e=>mode==='both'?e.errors.length===2&&e.errors.every(x=>x===undefined):mode==='oversize'||e===undefined);
+   assert.equal(closed,1);if(mode==='oversize')assert.equal(reads,0);
+  }
+ });
+ test('Private original exec undefined observation and removal failures remain independent',async()=>{
+  const h=privateExecFunctions(),bytes=Buffer.from('fixture'),order=[];let calls=0;
+  const options={sourceHead:privateCatalogPin,testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:{token:Object.freeze({}),fixtureBytes:bytes.length,fixtureSha256:createHash('sha256').update(bytes).digest('hex'),onOutcome:o=>{order.push('observe');assert.equal(o.errorDefined,false);throw undefined;}}};
+  await assert.rejects(h.withCopiedConsumerFixture(()=>{},()=>h.observePrivateExec(options,()=>bytes,()=>{calls++;return Promise.reject(undefined);}),()=>{order.push('remove');throw undefined;}),e=>e.errors[0].errors.length===2&&e.errors[0].errors.every(x=>x===undefined)&&e.errors[1]===undefined);
+  assert.equal(calls,1);assert.deepEqual(order,['observe','remove']);
+  options.privateExec.onOutcome=o=>{assert.equal(o.state,'threw');assert.equal(o.original,undefined);};await assert.rejects(h.observePrivateExec(options,()=>bytes,()=>{throw undefined;}),e=>e===undefined);
+ });
+ test('Private parent process projection never calls getters or proxy traps',()=>{
+  const h=privateExecFunctions();let getters=0,traps=0;const error={};for(const key of ['code','signal','killed','message','stack','stdout','stderr'])Object.defineProperty(error,key,{get(){getters++;throw undefined;}});
+  assert.deepEqual(h.privateExecProcessFields(error),[[3,null],[3,null],[3,null]]);assert.equal(getters,0);
+  assert.throws(()=>h.privateExecProcessFields(new Proxy({}, {getOwnPropertyDescriptor(){traps++;throw undefined;}})));assert.equal(traps,0);
+  assert.deepEqual(h.privateExecProcessFields({code:1,signal:null,killed:false}),[[2,1],[2,null],[2,false]]);
+  assert.deepEqual(h.privateExecProcessFields({code:undefined,signal:'private',killed:9}),[[1,null],[4,null],[4,null]]);assert.equal(h.privateExecProcessFields(undefined),null);
+ });
+ test('Private observer rejects foreign token digest and duplicate outcome',async()=>{
+  const h=privateExecFunctions(),bytes=Buffer.from('fixture'),source={fixtureSha256:createHash('sha256').update(bytes).digest('hex'),fixtureBytes:bytes.length};let captured;
+  const report={execOutcome:o=>{captured=o;}},opt=privateExecObservation(source,report);let raw;
+  await h.observePrivateExec({sourceHead:privateCatalogPin,testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:{...opt,onOutcome:o=>{raw=o;}}},()=>bytes,()=>Promise.resolve());
+  for(const change of [{token:Object.freeze({})},{fixtureSha256:'0'.repeat(64)},{sourceHead:'foreign'}]){const owned=privateExecObservation(source,report);assert.throws(()=>owned.onOutcome({...raw,binding:Object.freeze({...raw.binding,...change})}));}
+  opt.onOutcome(raw);assert.equal(captured.state,'fulfilled');assert.throws(()=>opt.onOutcome(raw));
+ });
+ test('Private actual registration reports synchronous undefined and never confuses return with invocation',()=>{
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const pre=source.slice(source.indexOf('checkpoints.registration("afterAll","enter")'),source.indexOf('function checkpointCase('));
+  const suite=source.slice(source.indexOf('checkpoints.registration("describe","enter")'));
+  const code=stripTypeScriptTypes(pre+suite,{mode:'strip'});
+  for(const fail of ['afterAll','describe','it','none']){const out=[],checkpoints=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x));let registrations=0;
+   const run=()=>new Function('checkpoints','afterAll','describe','it','providers','groups','throwFailures',code)(checkpoints,()=>{if(fail==='afterAll')throw undefined;}, {sequential(_name,fn){if(fail==='describe')throw undefined;fn();}},()=>{if(fail==='it'&&registrations===9)throw undefined;registrations++;},privateProviders,Object.keys(privateGroups),()=>{});
+   if(fail==='none')run();else assert.throws(run,e=>e===undefined);
+   assert.equal(out.some(r=>r.point==='callback'),false);
+   if(fail==='none'){assert.equal(registrations,66);assert.deepEqual([...out.find(r=>r.point==='describe_return').registration],[2,2,1,66,66,65]);assert.equal(out.some(r=>r.v===2),false);}
+   else {const primary=out.find(r=>r.v===2),entry=out.find(r=>r.point==='registration_failure');assert.equal(primary.phase,'registration');assert.equal(primary.defined,false);assert.equal(entry.registration[3],fail==='it'?10:0);assert.equal(entry.registration[4],fail==='it'?9:0);}
+  }
+ });
+ test('Private callback entry and first primary are delivered while original postlude stays pending',async()=>{
+  const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>records.push(x));
+  for(let i=0;i<20;i++){r.mark(i,'module','fulfilled');r.flush(i);}r.mark(null,'callback','enter',undefined,null,null,24);r.bindCase(24,24);
+  let release;const held=new Promise(resolve=>{release=resolve;});r.observe(24,'original_join',()=>held,undefined,[]);
+  const reason={};const p=Promise.reject(reason);assert.equal(r.observe(24,'body',()=>p,undefined,[]),p);await assert.rejects(p,e=>e===reason);await Promise.resolve();
+  const cap=records.find(x=>x.v===2);assert.equal(cap.phase,'body');assert.equal(cap.owner,null);assert.equal(cap.stages[5],1);assert.equal(records.filter(x=>x.point==='callback').length,1);assert.equal(records.some(x=>x.phase==='final'),false);
+  release();await r.drain();r.finish();assert.equal(records.filter(x=>x.v===2).length,1);assert.equal(records.length,9);
+ });
+ test('Private early emitter failures are retained without retry or replacing original',()=>{
+  let attempts=0;const r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',()=>{attempts++;throw undefined;});
+  r.mark(null,'callback','enter',undefined,null,null,0);assert.throws(()=>r.observe(null,'selection',()=>{throw undefined;},undefined,[],0),e=>e===undefined);
+  const before=attempts;r.finish();assert.equal(attempts,before+1);assert.ok(r.failures.length>=3);assert.ok(r.failures.every(x=>x===undefined));
+ });
+ test('Private proxy inspection failure keeps original exec reason and still observes before cleanup',async()=>{
+  const h=privateExecFunctions(),bytes=Buffer.from('fixture'),reason=new Proxy({},{}),order=[],options={sourceHead:privateCatalogPin,testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:{token:Object.freeze({}),fixtureBytes:bytes.length,fixtureSha256:createHash('sha256').update(bytes).digest('hex'),onOutcome:o=>{order.push('observe');assert.equal(o.fields,null);throw undefined;}}};
+  await assert.rejects(h.withCopiedConsumerFixture(()=>{},()=>h.observePrivateExec(options,()=>bytes,()=>Promise.reject(reason)),()=>order.push('remove')),e=>e.errors[0]===reason&&e.errors.length===3&&e.errors[2]===undefined);
+  assert.deepEqual(order,['observe','remove']);let removed=0;await assert.rejects(h.withCopiedConsumerFixture(()=>{throw undefined;},()=>{throw Error('must not run');},()=>{removed++;}),e=>e===undefined);assert.equal(removed,0);
+ });
+ test('Private actual command and callback source keeps the original E2 runner bounds',()=>{
+  const helper=readFileSync(new URL('./helpers/openclaw-consumer.mjs',import.meta.url),'utf8');
+  const branch=helper.slice(helper.indexOf('    if (privateExec !== undefined) {'),helper.indexOf('    const result = await promisify(execFile)'));
+  assert.equal((branch.match(/promisify\(execFile\)/g)||[]).length,1);assert.ok(branch.includes('["test", testPath, "--maxWorkers=1"]'));
+  assert.ok(branch.includes('timeout: 240_000, maxBuffer: 2 * 1024 * 1024'));assert.ok(branch.indexOf('readCopiedPrivateFixture')<branch.indexOf('promisify(execFile)'));
+  assert.doesNotMatch(branch,/withNativeRunnerReport|extraArgs|runnerReport/);
+ });
+ test('Private complete early SDK and parent outcome fit saturated shared annotation budget',()=>{
+  const commands=[],emit=privateAnnotationEmitter(x=>commands.push(x)),create=privateCheckpointFunctions().createPrivateCheckpointReporter;
+  for(const row of privateNativeControls)emit({v:1,pin:privateCatalogPin,p:row.provider,a:row.api,r:row.control,q:false,vect:false,worker:false,restore:false,rejects:1024,pending:1024});
+  for(const lane of ['sdk','outer']){const r=create(lane,emit);for(let i=0;i<108;i++){r.mark(i,'body','rejected',undefined);r.flush(i);}
+   if(lane==='sdk')r.mark(null,'callback','enter',undefined,null,null,65);
+   else r.execOutcome({v:3,pin:privateCatalogPin,lane,kind:'exec',phase:'exec',state:'rejected',defined:true,fields:[[2,-2147483648],[2,'SIGTERM'],[2,false]]});r.finish();}
+  for(let i=0;i<4;i++)emit({v:1,pin:privateCatalogPin,lane:'outer',case:107,phase:'observer',state:'rejected',defined:false,acq:4095,op:4095,count:65535});
+  assert.equal(commands.length,46);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(''))<=16384);
+ });
+ test('Private deferred suite registration failure delivers before any test callback or afterAll',()=>{
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const suite=stripTypeScriptTypes(source.slice(source.indexOf('checkpoints.registration("describe","enter")')),{mode:'strip'});
+  for(const reason of [undefined,{}]){const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x));let deferred,attempts=0;
+   new Function('checkpoints','describe','it','providers','groups',suite)(r,{sequential(_name,fn){deferred=fn;return Object.freeze({});}},()=>{if(attempts++===3)throw reason;},privateProviders,Object.keys(privateGroups));
+   assert.equal(attempts,0);const returned=out.find(x=>x.point==='describe_return');assert.deepEqual([...returned.registration],[0,2,0,0,0,null]);assert.equal(out.some(x=>x.v===2),false);
+   assert.throws(()=>deferred(),e=>e===reason);assert.equal(attempts,4);const cap=out.find(x=>x.v===2),entry=out.find(x=>x.point==='registration_failure');
+   assert.equal(cap.phase,'registration');assert.equal(cap.defined,reason!==undefined);assert.equal(cap.decl,3);assert.deepEqual([...entry.registration],[0,2,1,4,3,3]);assert.equal(out.some(x=>x.point==='callback'),false);assert.equal(out.some(x=>x.phase==='final'),false);
+  }
+ });
+ // END Private early runner inert regressions
  // BEGIN Private primary and receipt inert regressions
  function receiptFixture(){const row={id:'inert',provider:'baseten',scenario:'stream_abort'},p={id:'inert',retired:true,operations:[{state:'fulfilled'}],readers:[{unlocks:1,locked:false}],charged:0,
   source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:1,canceled:1,settled:1,census:[{producer:true,cancels:1,finished:true,explicitRelease:false}]},
@@ -507,7 +633,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    assert.equal(r.observe(24,phase,original,receiver,args),p);await p.catch(()=>{});await r.drain();
    r.mark(24,phase,'fulfilled');
    if(phase==='body'){r.mark(24,'original_join','fulfilled');r.joinedOwner(24,[2,1,0,1,1,0]);r.mark(24,'postlude','rejected',reason);}
-   r.finish();const cap=records.find(x=>x.v===2);assert.equal(cap.phase,phase);assert.equal(cap.stages[phase==='setup'?2:4],3);assert.equal(cap.case,24);assert.equal(cap.decl,24);assert.equal(cap.stages[3],phase==='body'?2:0);assert.equal(cap.owner!==null,phase==='body');}
+   r.finish();const cap=records.find(x=>x.v===2);assert.equal(cap.phase,phase);assert.equal(cap.stages[phase==='setup'?2:4],3);assert.equal(cap.case,24);assert.equal(cap.decl,24);assert.equal(cap.stages[3],phase==='body'?2:0);assert.equal(cap.owner,null);assert.equal(cap.stages[5],0);}
  });
  test('Private first primary survives saturation with an independent later receipt',async()=>{
   const out=[],report=privateCheckpointFunctions().createPrivateCheckpointReporter('outer',r=>out.push(r));
@@ -516,7 +642,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const {row,p}=receiptFixture(),w=createPrivateReceiptWitness();p.source.canceled=0;
   let primary;try{assertPrivateReceipt(row,p,w);}catch(e){primary=e;}
   assert.throws(()=>reportPrivateReceiptFailure(report,row,2,p,()=>p,w,primary),e=>e===primary);await report.drain();report.finish();
-  assert.equal(out.length,9);const cap=out.find(r=>r.v===2);assert.equal(cap.phase,'child');assert.equal(cap.defined,false);assert.equal(cap.case,null);assert.equal(cap.receipt[0],2);assert.deepEqual([...cap.receipt[1]],[29,null,0,true]);
+  assert.equal(out.length,8);const cap=out.find(r=>r.v===2);assert.equal(cap.phase,'child');assert.equal(cap.defined,false);assert.equal(cap.case,null);assert.equal(cap.receipt[0],2);assert.deepEqual([...cap.receipt[1]],[29,null,0,true]);
   const commands=[],emit=privateAnnotationEmitter(x=>commands.push(x));out.forEach(emit);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));
  });
  test('Private exact receipt checks preserve first leaf, ordinal and short circuit',()=>{
@@ -579,10 +705,10 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   for(const row of privateNativeControls)whole({v:1,pin:privateCatalogPin,p:row.provider,a:row.api,r:row.control,q:false,vect:false,worker:false,restore:false,rejects:1024,pending:1024});
   for(const lane of ['outer','sdk']){const r=createPrivateCheckpointReporter(lane,whole);for(let i=0;i<108;i++){r.mark(i,'body','rejected',undefined);r.flush(i);}r.finish();}
   for(let i=0;i<4;i++)whole({v:1,pin:privateCatalogPin,lane:'outer',case:107,phase:'read',state:'rejected',defined:false,acq:4095,op:4095,count:65535});
-  assert.equal(commands.length,46);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(''))<=16384);
+  assert.equal(commands.length,44);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(''))<=16384);
  });
  test('Private actual registered callback selection is observed before any fixture call',async()=>{
-  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8'),start=source.indexOf('describe.sequential("registered private catalogs');
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8'),start=source.indexOf('checkpoints.registration("describe","enter")');
   assert.ok(start>0);const callbacks=[],records=[],checkpoints=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>records.push(r));let invoked=0;
   const providers=['baseten','arcee','novita'],groups=Object.keys(privateGroups),expect=value=>({toHaveLength:n=>assert.equal(value.length,n),toBeGreaterThan:n=>assert.ok(value>n)});
   const code=stripTypeScriptTypes(source.slice(start),{mode:'strip'});
@@ -795,7 +921,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const {createPrivateCheckpointReporter,validatePrivateCheckpoint}=privateCheckpointFunctions(),records=[];
   const r=createPrivateCheckpointReporter("sdk",v=>records.push(v));
   for(let i=0;i<108;i++){r.mark(i,"body","rejected",{});r.flush(i);}r.finish();
-  assert.equal(records.length,9);assert.equal(records.at(-2).phase,"overflow");assert.equal(records.at(-2).count,102);assert.equal(records.at(-1).phase,"final");
+  assert.equal(records.length,8);assert.equal(records.at(-2).phase,"overflow");assert.equal(records.at(-2).count,103);assert.equal(records.at(-1).phase,"final");
   const commands=[],emit=privateAnnotationEmitter(v=>commands.push(v));for(const record of records)emit(record);
   assert.ok(commands.every(v=>Buffer.byteLength(v)<=768));assert.ok(Buffer.byteLength(commands.join(""))<16384);
   for(const change of [{pin:"foreign"},{case:108},{phase:"unknown_module_name"},{op:-1},{acq:4096},{defined:null},{message:"private"}])
@@ -846,7 +972,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    for(let i=2;i<108;i++){report.mark(i,"worker_retirement","rejected",{});report.flush(i);}report.finish();
    assert.equal(report.failures.length,0);
   }
-  assert.equal(commands.length,42);assert.ok(Buffer.byteLength(commands.join(""))<=16384);assert.ok(commands.every(line=>Buffer.byteLength(line)<=768));
+  assert.equal(commands.length,40);assert.ok(Buffer.byteLength(commands.join(""))<=16384);assert.ok(commands.every(line=>Buffer.byteLength(line)<=768));
   assert.equal(commands.filter(line=>line.includes('"phase":"final"')).length,2);
  });
 
@@ -1097,7 +1223,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    f=await report.observe(null,"setup",startPrivateCatalogFixture,undefined,[]);
    for(const [index,row]of all.entries()){await report.observe(index,"case_setup",f.setup,f,[row]);created.push(row);}
    report.mark(null,"child","enter");report.flush(null);
-   await withPrivateNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}]),emit);
+   await withPrivateNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:report.privateExec,env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}]),emit);
   },[...all.map((row,index)=>async report=>{if(!created.includes(row))return;
    let proof;try{proof=await report.observe(index,"worker_retirement",f.join,f,[row]);}catch(primary){
     reportPrivateJoinFailure(report,row,index,()=>f.evidence(row),saved=>{for(const record of privateWorkerCheckpointRecords(saved,row,index)){if(workerDiagnosticCount>=4)break;workerDiagnosticCount++;emit(record);}},primary);}
