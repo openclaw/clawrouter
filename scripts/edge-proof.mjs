@@ -669,7 +669,7 @@ export const mountPredicates = Object.freeze([
   ["required_target", 1], ["root", 3], ["nearest_parent", 2], ["automatic", 8], ["metadata", 2],
   ["readonly_proc", 7], ["null_mask", 5], ["directory_mask", 6], ["automatic_devices", 1],
   ["task_size", 1], ["dev_size_mode", 2], ["shm_size", 1],
-  ["directory_mask_group", 6], ["mask_empty", 1], ["parent_cgroup_automatic", 8],
+  ["directory_mask_group", 6], ["mask_empty", 1], ["parent_cgroup_automatic", 8], ["parent_root_field", 4],
 ]);
 export const mountTargets = Object.freeze(["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
 export const mountFilesystems = Object.freeze(["tmpfs", "proc", "devpts", "mqueue", "sysfs", "cgroup2", "overlay", "ext4", "xfs"]);
@@ -699,10 +699,11 @@ export function validateMountDetail(value, source) {
   if (roles[predicate] && !roles[predicate].includes(role)) refuse("mount-detail-role");
   for (const n of [count, distinct]) if (!(n === null || Number.isInteger(n) && n >= 0 && n <= 4095)) refuse("mount-detail-count");
   if (!Number.isInteger(overflow) || overflow < 0 || overflow > 3 || overflow & 1 && count !== 4095 || overflow & 2 && distinct !== 4095) refuse("mount-detail-saturation");
-  if (fs !== null && ![5, 16, 18, 19, 20, 21, 22, 27, 29].includes(predicate) || root !== null && ![1, 16, 18, 20, 21, 22, 27, 29].includes(predicate)) refuse("mount-detail-unobserved-field");
+  if (fs !== null && ![5, 16, 18, 19, 20, 21, 22, 27, 29].includes(predicate) || root !== null && ![1, 16, 18, 20, 21, 22, 27, 29, 30].includes(predicate)) refuse("mount-detail-unobserved-field");
   if (predicate === 16 && (leaf < 3 && fs !== null || leaf < 2 && root !== null) || [18,29].includes(predicate) && leaf < 2 && root !== null || [20, 21, 22, 27].includes(predicate) && leaf < 3 && root !== null || predicate === 1 && root !== null && role !== null) refuse("mount-detail-unreached-field");
   if (count !== null && ![3, 6, 7, 9, 10, 11, 23].includes(predicate) || distinct !== null && ![6, 7, 9, 23].includes(predicate) || [6, 7].includes(predicate) && leaf < 4 && distinct !== null) refuse("mount-detail-unobserved-count");
   if ([2, 3, 4, 9, 10, 11, 12, 13, 23].includes(predicate) && role !== null) refuse("mount-detail-unobserved-role");
+  if (predicate === 30 && (role !== null || fs !== null || count !== null || distinct !== null || overflow !== 0 || (leaf === 1 ? root !== null : root !== 3))) refuse("parent-root-detail");
   const relation = (id, result) => { if (result !== null && seen & 2 ** (id - 1) && Boolean(passed & 2 ** (id - 1)) !== result) refuse("mount-detail-value-comparison"); };
   const fsIs = names => fs === null ? null : names.includes(mountFilesystems[fs - 2]);
   const rootIs = expected => root === null ? null : root === expected;
@@ -756,7 +757,7 @@ export function validateInitDetail(value) {
     }
   }
   if (row.m?.[1] === 28 && !row.e) refuse("mask-detail-missing-close");
-  if (row.m?.[1] === 29) refuse("init-parent-only-mount");
+  if ([29,30].includes(row.m?.[1])) refuse("init-parent-only-mount");
   return row;
 }
 export function createInitDiagnostics(writer = text => {
@@ -815,7 +816,7 @@ export function validateParentAdmission(value) {
     if (predicate === 21) { relation(1, count > 0); if (count === 1) relation(2, true); }
     if (predicate === 43) relation(2, count === 1);
   }
-  if (Object.hasOwn(row,"m")) { if (![17,19,28,29,31].includes(source) || kind !== 1 || predicate) refuse("parent-admission-mount"); const mountPredicate = ownData(row.m, "1"); if (mountPredicate === 29 && source !== 19) refuse("parent-cgroup-source"); row.m = validateMountDetail(row.m, mountPredicate >= 10 && mountPredicate <= 13 ? "mount_parse" : "mount_validate"); }
+  if (Object.hasOwn(row,"m")) { if (![17,19,28,29,31].includes(source) || kind !== 1 || predicate) refuse("parent-admission-mount"); const mountPredicate = ownData(row.m, "1"); if (mountPredicate === 29 && source !== 19) refuse("parent-cgroup-source"); if (mountPredicate === 30 && ![28,29].includes(source)) refuse("parent-root-source"); row.m = validateMountDetail(row.m, mountPredicate >= 10 && mountPredicate <= 13 ? "mount_parse" : "mount_validate"); }
   else if (kind === 1 && !predicate) refuse("parent-admission-missing-predicate");
   return row;
 }

@@ -390,6 +390,36 @@ function mountTable(rows, recorder) {
   { const m = createMountObservation(recorder, 9); m.check(m.leaf(1, m.value("distinct", new Set(rows.map(row => row.id)).size) === m.value("count", rows.length)) && m.leaf(2, m.value("distinct", new Set(rows.map(row => row.target)).size) === m.value("count", rows.length)), "mount-overmount"); }
   return rows;
 }
+// Linux e8f897f4 fs/namespace.c delegates show_path; fs/nsfs.c can emit
+// nonabsolute filesystem roots. Only parent snapshots admit these as data;
+// selected path authorities and every child/target root remain strict.
+function parentMountRoot(root, recorder) {
+  const m = createMountObservation(recorder, 30); m.value("root", root);
+  m.check(m.leaf(1, typeof root === "string") && m.leaf(2, root.length > 0) && m.leaf(3, root.length < 128 * 1024) && m.leaf(4, !/[\x00-\x1f\x7f]/.test(root)), "parent-mount-root-field");
+  return root;
+}
+function decodeParentMountRoot(field, recorder) {
+  parentMountRoot(field, recorder);
+  const m = createMountObservation(recorder, 2);
+  m.check(m.leaf(1, !/\\(?!040|011|012|134)/.test(field)), "mount-escape");
+  return parentMountRoot(field.replace(/\\(040|011|012|134)/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))), recorder);
+}
+function parentMountTable(rows, recorder) {
+  { const m = createMountObservation(recorder, 3); m.check(m.leaf(1, Array.isArray(rows)) && m.leaf(2, m.value("count", rows.length) > 0) && m.leaf(3, m.value("count", rows.length) < 4096), "mount-capacity"); }
+  for (const row of rows) {
+    { const m = createMountObservation(recorder, 4); m.check(m.leaf(1, Number.isSafeInteger(row.id)) && m.leaf(2, row.id > 0) && m.leaf(3, Number.isSafeInteger(row.parentId)) && m.leaf(4, row.parentId >= 0) && m.leaf(5, /^(0|[1-9]\d*):(0|[1-9]\d*)$/.test(row.device)), "mount-identity"); }
+    const target = canonicalMountPath(row.target, recorder, "role"); parentMountRoot(row.root, recorder);
+    { const m = createMountObservation(recorder, 5, target); m.check(m.leaf(1, typeof m.value("fs", row.fs) === "string") && m.leaf(2, /^[a-zA-Z0-9._-]+$/.test(m.value("fs", row.fs))), "mount-filesystem"); }
+    let channel = 0;
+    for (const options of [row.options, row.superOptions]) {
+      const m = createMountObservation(recorder, 6 + channel++, target);
+      m.check(m.leaf(1, Array.isArray(options)) && m.leaf(2, m.value("count", options.length) > 0) && m.leaf(3, options.every(value => typeof value === "string" && value.length > 0)) && m.leaf(4, m.value("distinct", new Set(options).size) === m.value("count", options.length)) && m.leaf(5, options.filter(value => value === "rw" || value === "ro").length === 1), "mount-options");
+    }
+    { const m = createMountObservation(recorder, 8, target); m.check(m.leaf(1, Array.isArray(row.optional)), "mount-optional"); }
+  }
+  { const m = createMountObservation(recorder, 9); m.check(m.leaf(1, m.value("distinct", new Set(rows.map(row => row.id)).size) === m.value("count", rows.length)) && m.leaf(2, m.value("distinct", new Set(rows.map(row => row.target)).size) === m.value("count", rows.length)), "mount-overmount"); }
+  return rows;
+}
 const containsMountPath = (parent, path) => parent === "/" || path === parent || path.startsWith(parent + "/");
 const mountTuple = row => ({ id: row.id, parentId: row.parentId, target: row.target, root: row.root, device: row.device, fs: row.fs, options: [...row.options].sort(), superOptions: [...row.superOptions].sort(), optional: [...row.optional].sort() });
 export function parseMounts(text, privateView = true, recorder) {
@@ -404,6 +434,18 @@ export function parseMounts(text, privateView = true, recorder) {
     return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4], recorder, "role"), root: decodeMountPath(a[3], recorder, "root"), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
   }), recorder);
 }
+function parseParentMounts(text, recorder) {
+  { const m = createMountObservation(recorder, 10); m.check(m.leaf(1, typeof text === "string") && m.leaf(2, m.value("count", text.length) > 0) && m.leaf(3, m.value("count", text.length) < 128 * 1024), "mount-capacity"); }
+  return parentMountTable(text.replace(/\n$/, "").split("\n").map(line => {
+    const halves = line.split(" - ");
+    { const m = createMountObservation(recorder, 11); m.check(m.leaf(1, m.value("count", halves.length) === 2), "mount-format"); }
+    const a = halves[0].split(" "), b = halves[1].split(" ");
+    { const m = createMountObservation(recorder, 12); m.check(m.leaf(1, a.length >= 6) && m.leaf(2, b.length === 3) && m.leaf(3, [...a, ...b].every(Boolean)) && m.leaf(4, /^[1-9]\d*$/.test(a[0])) && m.leaf(5, /^(0|[1-9]\d*)$/.test(a[1])), "mount-format"); }
+    const optional = a.slice(6);
+    { const m = createMountObservation(recorder, 13); m.check(m.leaf(1, optional.every(value => /^(?:(?:shared|master|propagate_from):[1-9]\d*|unbindable)$/.test(value))) && m.leaf(2, true), "shared-mount"); }
+    return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4], recorder, "role"), root: decodeParentMountRoot(a[3], recorder), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
+  }), recorder);
+}
 export function validateMountFreshness(before, after, recorder) {
   const snapshot = rows => mountTable(rows, recorder).map(mountTuple).sort((a, b) => a.id - b.id);
   // IDs are namespace-local and may be reused after unmount. This compares two
@@ -414,7 +456,7 @@ export function validateMountFreshness(before, after, recorder) {
 // traversal permissions. Never stat Docker's root-owned private storage.
 export function validateMetadataMounts(inspect, targetMounts, parentMounts, daemonRoot, cid, recorder) {
   check(parentEvaluate(recorder, 19, () => parentLeaf(recorder, 1, cidPattern.test(cid))), "daemon-root-identity"); canonicalMountPath(daemonRoot, recorder);
-  mountTable(parentMounts, recorder); mountTable(targetMounts, recorder);
+  parentMountTable(parentMounts, recorder); mountTable(targetMounts, recorder);
   const result = [];
   for (const [key, name] of [["ResolvConfPath", "resolv.conf"], ["HostnamePath", "hostname"], ["HostsPath", "hosts"]]) {
     parentRole(recorder, key); const source = inspect[key];
@@ -427,6 +469,7 @@ export function validateMetadataMounts(inspect, targetMounts, parentMounts, daem
     // namespaces. Overlay/unknown mappings stop here. A symlink alias whose
     // resolved root differs cannot be certified by lexical normalization.
     check(parentEvaluate(recorder, 23, () => parentLeaf(recorder, 1, ["ext4", "xfs"].includes(parent.fs))), "daemon-metadata-filesystem-unqualified");
+    canonicalMountPath(parent.root, recorder, "root");
     const target = matches[0], root = join(parent.root, relative(parent.target, source));
     check(parentEvaluate(recorder, 24, () => parentLeaf(recorder, 1, target.root === root) && parentLeaf(recorder, 2, target.device === parent.device) && parentLeaf(recorder, 3, target.fs === parent.fs) && parentLeaf(recorder, 4, target.options.includes("ro"))), "daemon-metadata-mount-identity");
     // Keep each namespace's IDs separately, including selected parent ancestry.
@@ -603,7 +646,7 @@ function ownedMembership(text, cid, recorder) {
   return match[1];
 }
 function cgroupMapping(rows, recorder) {
-  mountTable(rows);
+  parentMountTable(rows);
   const found = rows.filter(row => row.target === "/sys/fs/cgroup");
   cgroupCheck(recorder, 48, found.length === 1 && found[0].fs === "cgroup2" && found[0].root === "/");
   const mapping = found[0];
@@ -655,7 +698,7 @@ export function createParentCgroupAdmission(cid, parentNamespaces, identity, sup
       const before = await cgroupStamp(io.link, "/proc/self");
       cgroupCheck(recorder, 45, validCgroupStamp(before) && before.mnt === parentNamespaces.mnt);
       const target = await io.evidence(pid, { read: io.read, link: io.link, recorder, cgroup: true });
-      parentSource(recorder, "parent_mount_read"); const parentMounts = parseMounts(await io.read("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder));
+      parentSource(recorder, "parent_mount_read"); const parentMounts = parseParentMounts(await io.read("/proc/self/mountinfo", "utf8"), (parentSource(recorder, "parent_mount_parse"), recorder));
       parentSource(recorder, "cgroup_relation");
       const targetNs = { mnt: target.namespaces.mnt, cgroup: target.namespaces.cgroup };
       cgroupCheck(recorder, 46, validCgroupStamp(targetNs) && targetNs.cgroup !== before.cgroup && targetNs.mnt !== before.mnt && target.pid === pid);
@@ -683,7 +726,7 @@ export async function retiredCgroup(bound, { read = readFile, link = readlink, s
   check(view && sameCgroupBinding(bound, binding.original) && view.valid && !view.owner.failed && view.owner.complete === view, "retirement-cgroup-unqualified");
   const snapshot = async () => {
     check(same(await cgroupStamp(link, "/proc/self"), view.before), "retirement-observer-drift");
-    check(same(cgroupMapping(parseMounts(await read("/proc/self/mountinfo", "utf8"), false)), view.mapping), "retirement-mapping-drift");
+    check(same(cgroupMapping(parseParentMounts(await read("/proc/self/mountinfo", "utf8"))), view.mapping), "retirement-mapping-drift");
   };
   await snapshot();
   const mount = await statPath(view.mapping.target, { bigint: true }); check(physicalDirectory(mount) && matchesLinuxDevice(mount.dev, view.mapping.device) && mount.dev === bound.mountDev && mount.ino === bound.mountIno, "cgroup-mapping-replaced");

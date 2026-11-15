@@ -1361,9 +1361,9 @@ test("mount diagnostics strict tuple relationships and maximum frames preserve c
 test("mount diagnostics each structural leaf and original unobserved operand relation is exercised", () => {
   const covered = new Set(mountDiagnosticCases.map(detail => `${detail.m[1]}:${detail.m[2]}`));
   for (const [index, [, width]] of mountPredicates.entries()) for (let leaf = 1; leaf <= width; leaf++) {
-    // Parent-only predicate 29 is exercised through qualified views below.
+    // Parent-only predicates 29 and 30 are exercised through actual parent helpers below.
     // A failed OR has both operands false; the first false is not a terminal leaf.
-    if (index + 1 === 22 || index + 1 === 28 || index + 1 === 29 || index + 1 === 14 && leaf === 1) continue;
+    if (index + 1 === 22 || index + 1 === 28 || index + 1 === 29 || index + 1 === 30 || index + 1 === 14 && leaf === 1) continue;
     assert.ok(covered.has(`${index + 1}:${leaf}`), `missing original predicate ${index + 1} leaf ${leaf}`);
   }
   const firstFs = mountDiagnosticCases.find(detail => detail.m[1] === 18 && detail.m[2] === 1).m;
@@ -1576,7 +1576,7 @@ async function parentAdmissionFactory(overrides = {}) {
   const contractSource = cut("export const containerContract =", "export const harnessInputs =");
   const bindings = { createHash, join, dirname, relative, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validateMountDetail, validateMaskDetail, initGuardTags, initSourcePhases, mountTargets, mountFilesystems,
     readFile: async () => { throw undefined; }, readlink: async () => { throw undefined; }, realpath: async () => { throw undefined; }, stat: async () => { throw undefined; }, lstat: async () => { throw undefined; }, ...overrides };
-  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness,createParentCgroupAdmission,sameCgroupBinding,matchesLinuxDevice,retiredCgroup};")(...Object.values(bindings));
+  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness,createParentCgroupAdmission,sameCgroupBinding,matchesLinuxDevice,retiredCgroup,parseMounts,parseParentMounts,parentMountTable,parentMountRoot};")(...Object.values(bindings));
 }
 const parentAdmissionPackets = [];
 test("parent admission actual predicates preserve short circuit getters original throws and fixed first evidence", async () => {
@@ -1759,5 +1759,54 @@ test("same observer cgroup Linux device encoding rejects consistent stat mismatc
   }
   for(const device of ["00:99","0:099","0:4294967296","4294967296:0","0/99"]){const f=await cgroupFixture(({state})=>state.parentRows[1].device=device);await assert.rejects(f.admission.observe(123,1));}
   for(const role of ["owned","parent","mapping"]){const f=await cgroupFixture(({io})=>{const stat=io.stat;io.stat=async(...a)=>{const row=await stat(...a),which=a[0].endsWith(hex)?"owned":a[0]==="/sys/fs/cgroup"?"mapping":"parent";return which===role?{...row,dev:100n}:row;};});await assert.rejects(f.admission.observe(123,1));}
+});
+
+const parentMountText = rows => rows.map(r=>`${r.id} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n")+"\n";
+test("same observer cgroup parent snapshot keeps opaque roots without changing child paths or original IO",async()=>{
+  const api=await parentAdmissionFactory(), rows=[mount(1,0,"/","ext4","8:1",["rw"]),mount(2,1,"/run/held-ns","nsfs","0:101",["rw"],"net:[123]"),mount(3,1,"/run/other","otherfs","0:102",["ro"],"name\\040with\\134slash")];
+  const parsed=api.parseParentMounts(parentMountText(rows));assert.equal(parsed.length,3);assert.equal(parsed[1].root,"net:[123]");assert.equal(parsed[2].root,"name with\\slash");assert.throws(()=>api.parseMounts(parentMountText(rows),false));assert.deepEqual(rows[1].root,"net:[123]");
+  const baseline=await cgroupFixture(),one=await baseline.admission.observe(123,1),two=await baseline.admission.observe(123,2);assert.equal(await baseline.retire(two.bound),"empty");
+  const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,"/run/held-ns","nsfs","0:101",["rw"],"net:[123]"))), first=await f.admission.observe(123,1),second=await f.admission.observe(123,2);
+  assert.equal(first.parentMounts.length,3);assert.equal(first.parentMounts[2].root,"net:[123]");assert.equal(second.parentMounts[2].root,"net:[123]");assert.equal(await f.retire(second.bound),"empty");assert.deepEqual(f.state.calls,baseline.state.calls);
+  f.state.removed=true;assert.equal(await f.retire(second.bound),"removed");
+  f.state.parentRows[1].root="net:[123]";await assert.rejects(f.retire(second.bound));
+});
+test("same observer cgroup selected opaque and noncanonical roots fail before metadata path arithmetic",async()=>{
+  for(const bad of ["net:[123]",".","..","relative/root","/a/../b","/a//b","/a/."]){
+    const f=await cgroupFixture(({state})=>state.parentRows[1].root=bad);await assert.rejects(f.admission.observe(123,1));
+    let badJoins=0;const api=await parentAdmissionFactory({join:(...args)=>{if(args[0]===bad){badJoins++;throw new Error("must not join opaque root");}return join(...args);}}), target=mounts(),root="/var/lib/docker";
+    const inspect={ResolvConfPath:`${root}/containers/${hex}/resolv.conf`,HostnamePath:`${root}/containers/${hex}/hostname`,HostsPath:`${root}/containers/${hex}/hosts`};
+    for(const row of target.filter(r=>r.target.startsWith("/etc/")))row.root=`${root}/containers/${hex}/${row.target.slice(5)}`;
+    assert.throws(()=>api.validateMetadataMounts(inspect,target,[mount(1,0,"/","ext4","8:1",["rw"],bad)],root,hex));assert.equal(badJoins,0);
+  }
+  const api=await parentAdmissionFactory(), target=mounts(),root="/var/lib/docker",inspect={ResolvConfPath:`${root}/containers/${hex}/resolv.conf`,HostnamePath:`${root}/containers/${hex}/hostname`,HostsPath:`${root}/containers/${hex}/hosts`};
+  for(const row of target.filter(r=>r.target.startsWith("/etc/")))row.root=`${root}/containers/${hex}/${row.target.slice(5)}`;
+  const parent=[mount(1,0,"/","ext4","8:1",["rw"]),mount(2,1,"/var/lib/docker-shadow","nsfs","0:101",["rw"],"net:[123]")];
+  assert.equal(api.validateMetadataMounts(inspect,target,parent,root,hex).length,3);assert.ok(api.validateMetadataMounts(inspect,target,parent,root,hex).every(r=>r.parent.length===1));
+  parent[1].target=`${root}/containers`;assert.throws(()=>api.validateMetadataMounts(inspect,target,parent,root,hex));
+});
+test("same observer cgroup opaque rows retain every mountpoint overmount and parser rejection",async()=>{
+  for(const suffix of ["", "/docker", `/docker/${hex}`, `/docker/${hex}/deep`,...['memory.max','memory.swap.max','pids.max','cpu.max'].map(x=>`/docker/${hex}/${x}`)]){
+    const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,2,"/sys/fs/cgroup"+suffix,"nsfs","0:101",["rw"],"net:[123]")));await assert.rejects(f.admission.observe(123,1));
+  }
+  const missing=await cgroupFixture(({state})=>state.parentRows[1].target="/sys/fs/cgroup-shadow");await assert.rejects(missing.admission.observe(123,1));
+  const api=await parentAdmissionFactory(),row=()=>mount(1,0,"/","ext4","8:1",["rw"],"net:[123]");
+  for(const value of [undefined,null,"","\0","a\tb","a\nb","a\rb","a\x7fb","x".repeat(128*1024)])assert.throws(()=>api.parentMountTable([{...row(),root:value}]));
+  for(const value of ["\\000","\\777","\\x20","\\","a\\011b","a\\012b"]){const r=row();r.root=value;assert.throws(()=>api.parseParentMounts(parentMountText([r])));}
+  for(const value of ["relative","/a/../b","/a//b","/a/.","/a/","/a\tb"]){const r=row();r.target=value;assert.throws(()=>api.parentMountTable([r]));}
+  for(const mutate of [r=>r.id=0,r=>r.parentId=-1,r=>r.device="0:01",r=>r.fs="bad fs",r=>r.options=["rw","ro"],r=>r.superOptions=[],r=>r.optional=null]){const r=row();mutate(r);assert.throws(()=>api.parentMountTable([r]));}
+  assert.throws(()=>api.parentMountTable([row(),{...row(),id:2}]));assert.throws(()=>api.parentMountTable([row(),{...row(),target:"/other"}]));
+});
+test("same observer cgroup opaque root evidence stays parent only bounded and preserves undefined failures",async()=>{
+  for(const [bad,leaf] of [[undefined,1],["",2],["x".repeat(128*1024),3],["a\tb",4]]){
+    const api=await parentAdmissionFactory(),ledger=api.createParentAdmissionLedger();ledger.enter("parent_mount_parse");let reason;try{api.parentMountRoot(bad,ledger);}catch(e){reason=e;}
+    const detail=ledger.finish(true,reason);assert.equal(detail.m[1],30);assert.equal(detail.m[2],leaf);validateParentAdmission(detail);assert.throws(()=>validateInitDetail({source:"mount_parse",guard:"mounts",m:detail.m}));
+    for(const mutate of [r=>r.m[5]=1,r=>r.m[5]=2,r=>r.detail[1]=19,r=>r.m[3]=2,r=>r.m[4]=2]){const r=structuredClone(detail);mutate(r);assert.throws(()=>validateParentAdmission(r));}
+    const report=createContainerDiagnostics();report.mark("entry","rejected",reason);report.internal(detail);const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);report.mark("retirement","rejected",undefined);for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment"])report.mark(phase,"fulfilled");
+    const lines=[];emitContainerFailure(report.records,x=>lines.push(x));assert.equal(lines.length,10);assert.ok(lines.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);parentAdmissionPackets.push(lines.map(x=>JSON.parse(x.slice(x.indexOf("::",2)+2).trimEnd())));
+  }
+  const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,"/run/held-ns","nsfs","0:101",["rw"],"bad\\011root"))),ledger=f.api.createParentAdmissionLedger();let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}const detail=ledger.finish(true,reason);assert.equal(detail.detail[1],28);assert.equal(detail.m[1],30);assert.equal(detail.m[2],4);
+  const fail=await cgroupFixture(({io})=>{const read=io.read;io.read=path=>path==="/proc/self/mountinfo"?Promise.reject(undefined):read(path);});let caught=false;try{await fail.admission.observe(123,1);}catch(e){caught=true;assert.equal(e,undefined);}assert.ok(caught);
+  const api=await parentAdmissionFactory(),broken=api.createParentAdmissionLedger();broken.enter("parent_mount_parse");broken.mount=()=>{throw undefined;};assert.throws(()=>api.parentMountRoot("",broken));assert.ok(broken.errors.includes(undefined));
 });
 // END attach diagnostic pure tests.
