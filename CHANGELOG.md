@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
+
 - Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
 
 - Retain bounded metadata caller-abort failure stages alongside native Worker test identities, preserving strict retirement checks and independent cleanup failures.

@@ -55,6 +55,8 @@ export function workerAbortEvidence() {
           const checks = own(value, "checks").value;
           worker = [count(own(value, "operations").value), count(own(value, "syncFailures").value),
             closedDiagnosticTuple(checks, 5, x => x === null || typeof x === "boolean" || count(x) !== null)];
+          const ledger = own(value, "ledger").value, original = own(ledger, "10");
+          if (original.present) { const decoded = decodeWorkerAbortOperation(original.value); if (!decoded) throw new Error("invalid original operation projection"); worker.push(decoded); }
         } else if (stage === 16) {
           const calls = own(value, "calls").value;
           upstream = [Array.isArray(calls) && !types.isProxy(calls) ? count(calls.length) : null,
@@ -92,6 +94,27 @@ function parseCanonicalWorkerRecord(payload, decode) {
 export function parseWorkerAbortDiagnostic(payload) { return parseCanonicalWorkerRecord(payload, decodeWorkerAbortDiagnostic); }
 export function parseWorkerReporterRecord(payload) { return parseCanonicalWorkerRecord(payload, decodeWorkerReporterRecord); }
 
+// v1: association is to the captured comparison and later ledger row only.
+// Error presence and definedness are independent; null never means fulfillment.
+export function decodeWorkerAbortOperation(value) {
+  const count = n => Number.isSafeInteger(n) && n >= 0 && n <= limit;
+  const fields = closedDiagnosticTuple(value, 7, () => true);
+  if (!fields || fields[0] !== 1 || ![null, false, true].includes(fields[1])
+    || !(fields[2] === null || [0, 2, 3].includes(fields[2])) || !count(fields[4]) || !count(fields[5])
+    || !(fields[6] === null || count(fields[6]) && fields[6] > 0)) return null;
+  let row = null;
+  if (fields[3] !== null) {
+    row = closedDiagnosticTuple(fields[3], 10, (x, i) => i === 6 ? typeof x === "boolean" : i === 7 ? x === null || typeof x === "boolean"
+      : [3, 4, 5, 9].includes(i) ? x === null || count(x) : count(x));
+    if (!row || row[1] > 10 || ![0, 2, 3].includes(row[2]) || row[2] !== fields[2]
+      || (row[6] ? typeof row[7] !== "boolean" : row[7] !== null)
+      || fields[1] !== true || fields[6] === null || row[3] === null || row[3] === 0) return null;
+  }
+  if (fields[1] === true && row === null || fields[1] !== true && (row !== null || fields[6] !== null)
+    || fields[1] === null && fields[2] !== null || fields[1] !== null && fields[2] === null) return null;
+  return [1, fields[1], fields[2], row, fields[4], fields[5], fields[6]];
+}
+
 export function decodeWorkerAbortDiagnostic(record) {
   if (!record || typeof record !== "object" || types.isProxy(record)) return null;
   const keys = ["v", "kind", "first", "failures", "undefinedFailures", "worker", "upstream", "reportingFailures"];
@@ -106,11 +129,13 @@ export function decodeWorkerAbortDiagnostic(record) {
     || (first === null) !== (get("failures") === 0)) return null;
   let worker = null, upstream = null;
   if (get("worker") !== null) {
-    const fields = closedDiagnosticTuple(get("worker"), 3, (x, i) => i === 2 || x === null || count(x));
+    const value = get("worker"), width = own(value, "length").value;
+    const fields = [3, 4].includes(width) ? closedDiagnosticTuple(value, width, (x, i) => i >= 2 || x === null || count(x)) : null;
     if (!fields) return null;
     const checks = fields[2] === null ? null : closedDiagnosticTuple(fields[2], 5, x => x === null || typeof x === "boolean" || count(x));
     if (fields[2] !== null && !checks) return null;
     worker = [fields[0], fields[1], checks];
+    if (fields.length === 4) { const original = decodeWorkerAbortOperation(fields[3]); if (!original) return null; worker.push(original); }
   }
   if (get("upstream") !== null) {
     upstream = closedDiagnosticTuple(get("upstream"), 6, x => x === null || count(x));

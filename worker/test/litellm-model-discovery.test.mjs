@@ -54,13 +54,14 @@ export async function collectLiteLLMOperations(s) {
 }
 // BEGIN request-owned fixture functions.
 export function litellmPredicateFacts() {
-  let first = null, evaluated = 0, passed = 0, failed = 0, undefinedFailure = null;
+  let first = null, evaluated = 0, passed = 0, failed = 0, undefinedFailure = null, firstOperation = null;
   const begin = id => { if (!Number.isInteger(id) || id < 0 || id > 29) throw new Error("invalid predicate id"); evaluated |= 2 ** id; };
   const fault = (id, error) => { failed |= 2 ** id; if (first === null) { first = id; undefinedFailure = error === undefined; } };
   return {
     run(id, action) { begin(id); try { const value = action(); passed |= 2 ** id; return value; } catch (error) { fault(id, error); throw error; } },
     async wait(id, action) { begin(id); try { const value = await action(); passed |= 2 ** id; return value; } catch (error) { fault(id, error); throw error; } },
-    note(id, ok) { begin(id); if (ok) passed |= 2 ** id; else { failed |= 2 ** id; if (first === null) first = id; } return ok; },
+    note(id, ok, owner, operation, state) { begin(id); if (ok) passed |= 2 ** id; else { failed |= 2 ** id; if (first === null) first = id; if (id === 4 && firstOperation === null && owner !== undefined) firstOperation = Object.freeze({ owner, operation, state }); } return ok; },
+    operation(owner) { return firstOperation?.owner === owner ? firstOperation : null; },
     snapshot() { return [first, evaluated, passed & ~failed, failed, undefinedFailure]; },
   };
 }
@@ -175,11 +176,38 @@ export function litellmWorkerResource(r, scope) {
 export function litellmWorkerLedger(r, scope) {
   const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
   const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, 2);
-  return [cap(r.operations.length), cap(r.operations.filter(op => op.state === "pending").length), cap(r.failures.length), cap(r.observerFailures.length),
+  const captured = r.id === "native_abort" ? r.retireChecks?.operation(r) : null, associations = [];
+  const data = (value, key) => value && Object.getOwnPropertyDescriptor(value, key)?.value;
+  const projected = selected.map(op => {
+    const input = op.input, transport = op.transport, reader = op.reader, token = input?.token ?? transport?.token ?? op.token;
+    const row = [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
+      input?.token?.id ?? transport?.token?.id ?? op.token?.id ?? null, input?.id ?? transport?.id ?? null, reader?.id ?? null,
+      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)];
+    if (captured?.operation === op) {
+      const owner = input ?? transport;
+      const requests = token ? r.requests.filter(q => data(q, "token") === token) : [];
+      const request = requests.length === 1 ? requests[0] : undefined;
+      const same = r.operations[row[0]] === op && row[2] === ["pending", "fulfilled", "rejected", "threw"].indexOf(captured.state)
+        && request !== undefined && data(token,"scenario") === r && data(token,"request") === data(request,"request")
+        && Number.isSafeInteger(data(token,"generation")) && data(token,"generation") > 0
+        && (!input || !transport || input === transport)
+        && (!owner || r.inputs.includes(owner) && data(owner, "request") === data(token, "request"))
+        && (!reader || r.readers.includes(reader) && data(reader, "transport") === owner);
+      associations.push({ same, row, generation: same ? data(token,"generation") : null });
+    }
+    return row;
+  });
+  const ledger = [cap(r.operations.length), cap(r.operations.filter(op => op.state === "pending").length), cap(r.failures.length), cap(r.observerFailures.length),
     cap(r.readers.filter(reader => reader.body.locked).length), cap(r.readers.filter(reader => reader.unlocks !== 1).length), cap(Math.max(0, bad.length - selected.length)),
-    selected.map(op => [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
-      op.input?.token?.id ?? op.transport?.token?.id ?? op.token?.id ?? null, op.input?.id ?? op.transport?.id ?? null, op.reader?.id ?? null,
-      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r,scope),...(r.workerDataDisposition?[r.workerDataDisposition]:[])];
+    projected, litellmWorkerResource(r,scope),...(r.workerDataDisposition?[r.workerDataDisposition]:[])];
+  // This optional native-role diagnostic reuses the existing ledger operands.
+  // It does not authorize a data disposition or identify the rejection's cause.
+  if (r.id === "native_abort") {
+    const matched = associations.length === 1 ? associations[0] : null;
+    const state = captured ? ["pending", "fulfilled", "rejected", "threw"].indexOf(captured.state) : null;
+    ledger[10] = [1, captured ? matched?.same === true : null, state, matched?.same ? matched.row : null, ledger[1], ledger[6], matched?.generation ?? null];
+  }
+  return ledger;
 }
 // Only the two authored partial-abort roles may receive this post-join DATA partition.
 export function litellmPartialRole(r) {
@@ -257,7 +285,7 @@ export async function litellmWorkerDrain(r, scope, loadSource) {
   checks.note(2,r.failures.length===0);checks.note(3,r.observerFailures.length===0);
   if(litellmPartialRole(r)&&!litellmProducerRetired(r,source))failures.push(new Error("original producer did not retire"));
   const pair=failures.length===0?litellmJoinedReadData(r,scope,source):null;
-  for(const op of r.operations)if(!checks.note(4,op.state==="fulfilled")&&!pair?.includes(op))failures.push(op.error);
+  for(const op of r.operations){const state=op.state;if(!checks.note(4,state==="fulfilled",r.id==="native_abort"?r:undefined,op,state)&&!pair?.includes(op))failures.push(op.error);}
   for(const reader of r.readers)if(!checks.note(5,reader.unlocks===1&&!reader.body.locked))failures.push(new Error("original reader remained owned"));
   if(!checks.note(6,!r.bodies.some(body=>body.locked)))failures.push(new Error("original body locked"));
   const raw=r.operations.filter(op=>op.state==="rejected"||op.state==="threw").length;

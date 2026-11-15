@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -416,6 +416,126 @@ test("worker abort diagnostic pure: default coarse output is byte exact and host
   assert.equal(disabled.rows.length, 2);
   assert.equal(result.lines.join(""), '::error title=Worker test identity::{"v":1,"kind":"failure","file":"worker/test/other.test.mjs","line":4,"failureType":"unknown","errorClass":"missing","code":"unknown"}\n'
     + '::error title=Worker test identity::{"v":1,"kind":"summary","failureEvents":1,"reported":1,"omittedEvents":0,"unknownFiles":0,"countsSaturated":false}\n');
+});
+function pureWorkerRetirement() {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const original = source.slice(source.indexOf("export function observeLiteLLMOperation("), source.indexOf("// BEGIN request-owned fixture functions."));
+  const helpers = source.slice(source.indexOf("export function litellmPredicateFacts("), source.indexOf("// END request-owned fixture functions."));
+  return new Function((original + helpers).replace(/^export /gm, "") + ";return {observeLiteLLMOperation,litellmWorkerDrain,litellmWorkerLedger,litellmPredicateFacts};")();
+}
+function workerOperationCase() {
+  const r = { id: "native_abort", mode: "held", operations: [], roots: [], inputs: [], readers: [], bodies: [], requests: [], failures: [], observerFailures: [], calls: [], sequence: 0 };
+  const request = {}, token = { id: 2, generation: 1, request, scenario: r }, response = {}, body = { locked: false };
+  const input = { token, request, id: 3, response }, reader = { id: 4, transport: input, response, body, reader: {}, unlocks: 1, eof: false, bound: true };
+  r.requests.push({ token, request }); r.inputs.push(input); r.readers.push(reader); r.bodies.push(body);
+  return { r, token, input, reader, scope: { matchesResponse: () => true, retains: () => true } };
+}
+async function captureWorkerOperation(kind, reason, errorPresent = true) {
+  const helper = pureWorkerRetirement(), fixture = workerOperationCase(), { r, input, reader, token, scope } = fixture;
+  const pending = errorPresent ? Promise.reject(reason) : new Promise(() => {});
+  const details = kind === "handler" ? { token } : { input, reader, signal: undefined, receiverIdentity: true };
+  if (errorPresent) helper.observeLiteLLMOperation(r, kind, () => pending, details);
+  else r.operations.push({ ...details, kind, ordinal: 0, invoke: ++r.sequence, state: "pending", pending });
+  let failed = false, failure;
+  try { await helper.litellmWorkerDrain(r, scope, () => { throw new Error("unexpected source proof"); }); }
+  catch (error) { failed = true; failure = error; }
+  const ledger = helper.litellmWorkerLedger(r, scope);
+  return { ...fixture, helper, pending, failed, failure, ledger, tuple: ledger[10] };
+}
+test("worker abort original pure: first evaluated operation retains kind state bindings and undefined", async () => {
+  for (const kind of ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"]) {
+    for (const reason of [undefined, {}]) {
+      const result = await captureWorkerOperation(kind, reason);
+      assert.equal(result.failed, true); assert.equal(result.failure.errors[0], reason);
+      assert.equal(result.r.operations[0].pending, result.pending);
+      assert.equal(result.tuple[1], true); assert.equal(result.tuple[2], 2);
+      assert.equal(result.tuple[3][1], ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"].indexOf(kind) + 1);
+      assert.deepEqual(result.tuple[3].slice(6, 8), [true, reason !== undefined]);
+      assert.deepEqual(decodeWorkerAbortOperation(result.tuple), result.tuple);
+      assert.equal(result.r.workerDataDisposition[0], 1);
+    }
+  }
+  const pending = await captureWorkerOperation("read", undefined, false);
+  assert.equal(pending.failed, true); assert.deepEqual(pending.tuple[3].slice(6, 8), [false, null]);
+  assert.equal(pending.tuple[2], 0); assert.equal(pending.tuple[4], 1);
+  assert.deepEqual(decodeWorkerAbortOperation(pending.tuple), pending.tuple);
+});
+test("worker abort original pure: original comparison captures first identity once across repeated retirement", async () => {
+  const c = await captureWorkerOperation("read", undefined);
+  const first = c.r.retireChecks.operation(c.r), op = c.r.operations[0];
+  c.helper.observeLiteLLMOperation(c.r, "cancel", () => Promise.reject({ later: true }), { input: c.input, reader: c.reader });
+  await assert.rejects(c.helper.litellmWorkerDrain(c.r, c.scope, () => assert.fail()));
+  assert.equal(c.r.retireChecks.operation(c.r), first); assert.equal(first.operation, op); assert.equal(first.state, "rejected");
+  assert.deepEqual(c.helper.litellmWorkerLedger(c.r, c.scope)[10].slice(0, 4), c.tuple.slice(0, 4));
+  assert.equal(c.r.retireChecks.operation({}), null);
+  assert.equal(c.r.retireChecks.snapshot()[0], 4);
+  op.state = "fulfilled";
+  const stale = c.helper.litellmWorkerLedger(c.r, c.scope)[10];
+  assert.equal(stale[1], false); assert.equal(stale[2], 2); assert.equal(stale[3], null);
+});
+test("worker abort original pure: original drain waits held work and captures evaluation order not rejection chronology", async () => {
+  const h = pureWorkerRetirement(), c = workerOperationCase(); let rejectHeld, getters = 0, done = false;
+  const reason = Object.defineProperty({}, "message", { get() { getters++; throw undefined; } });
+  const held = new Promise((resolve, reject) => { rejectHeld = reject; });
+  h.observeLiteLLMOperation(c.r, "handler", () => Promise.resolve({}), { token: c.token });
+  assert.equal(h.observeLiteLLMOperation(c.r, "read", () => held, { input: c.input, reader: c.reader }), held);
+  h.observeLiteLLMOperation(c.r, "cancel", () => Promise.reject(undefined), { input: c.input, reader: c.reader });
+  const joined = h.litellmWorkerDrain(c.r, c.scope, () => assert.fail()).then(() => { done = true; return null; }, error => { done = true; return error; });
+  await Promise.resolve(); assert.equal(done, false); rejectHeld(reason);
+  const failure = await joined; assert.deepEqual(failure.errors, [reason, undefined]);
+  const first = c.r.retireChecks.operation(c.r); assert.equal(first.operation, c.r.operations[1]);
+  assert.ok(c.r.operations[2].settle < c.r.operations[1].settle);
+  const ledger = h.litellmWorkerLedger(c.r, c.scope); assert.equal(ledger[10][3][0], 1); assert.equal(ledger[10][3][1], 4);
+  const evidence = workerAbortEvidence(); evidence.stage(14); evidence.failed(failure);
+  evidence.observation(15, { status: "fulfilled", value: { operations: ledger[0], syncFailures: ledger[2], checks: c.r.retireChecks.snapshot(), ledger } });
+  assert.deepEqual(evidence.report({ diagnostic() {} }), []); assert.equal(getters, 0);
+  const foreign = workerOperationCase(); foreign.r.retireChecks = c.r.retireChecks;
+  assert.equal(h.litellmWorkerLedger(foreign.r, foreign.scope)[10][1], null);
+});
+test("worker abort original pure: foreign missing stale and synchronous outcomes never invent ownership", async () => {
+  for (const mutate of [c => c.r.inputs.splice(0), c => c.r.readers.splice(0), c => c.r.requests.splice(0),
+    c => c.token.scenario = {}, c => c.token.request = {}, c => c.token.generation = undefined,
+    c => c.r.operations[0].ordinal = 7, c => c.r.requests.push(c.r.requests[0]),
+    c => c.input.request = {}, c => c.reader.transport = {}, c => c.r.operations[0].transport = {},
+    c => c.r.retireChecks = c.helper.litellmPredicateFacts()]) {
+    const c = await captureWorkerOperation("read", undefined); mutate(c);
+    const tuple = c.helper.litellmWorkerLedger(c.r, c.scope)[10];
+    assert.notEqual(tuple[1], true); assert.equal(tuple[3], null); assert.deepEqual(decodeWorkerAbortOperation(tuple), tuple);
+  }
+  const c = workerOperationCase(), h = pureWorkerRetirement(); let caught = false;
+  try { h.observeLiteLLMOperation(c.r, "read", () => { throw undefined; }, { input: c.input, reader: c.reader }); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); await assert.rejects(h.litellmWorkerDrain(c.r, c.scope, () => assert.fail()));
+  const tuple = h.litellmWorkerLedger(c.r, c.scope)[10]; assert.equal(tuple[2], 3); assert.deepEqual(tuple[3].slice(6, 8), [true, false]);
+  assert.deepEqual(c.r.failures, [undefined]); assert.equal(c.r.retireChecks.snapshot()[0], 2);
+});
+test("worker abort original pure: actual ledger relay preserves old schema and all original evidence", async () => {
+  const c = await captureWorkerOperation("cancel", undefined), proof = workerAbortEvidence(); proof.stage(14); proof.failed({});
+  proof.observation(15, { status: "fulfilled", value: { operations: c.ledger[0], syncFailures: c.ledger[2], checks: c.r.retireChecks.snapshot(), ledger: c.ledger } });
+  proof.observation(16, { status: "fulfilled", value: { calls: [{}], active: 0, canceled: 0, aborted: 0, expired: 1, finished: 1 } });
+  let frame; assert.deepEqual(proof.report({ diagnostic(value) { frame = value; } }), []);
+  const record = parseWorkerAbortDiagnostic(frame.slice(workerAbortPrefix.length)); assert.deepEqual(record.worker[3], c.tuple);
+  for (const order of [[0, 1, 2], [0, 2, 1]]) {
+    const events = workerAbortNativeEvents(frame), result = await workerAbortPipeline(order.map(i => events[i]));
+    assert.deepEqual(result.rows.find(row => row.kind === "worker_abort").worker[3], c.tuple);
+  }
+  const broken = workerAbortEvidence(); broken.stage(14); broken.failed(undefined);
+  broken.observation(15, { status: "fulfilled", value: { operations: 1, syncFailures: 0, checks: [4,127,111,16,null], ledger: { 10: [1] } } });
+  let invalid; broken.report({ diagnostic(value) { invalid = value; } });
+  const projected = parseWorkerAbortDiagnostic(invalid.slice(workerAbortPrefix.length));
+  assert.deepEqual(projected.first, [14,0,false]); assert.equal(projected.reportingFailures, 1);
+  const reporting = proof.report({ diagnostic() { throw undefined; } }); assert.deepEqual(reporting, [undefined]);
+});
+test("worker abort original pure: max width canonical envelope remains closed and bounded", async () => {
+  const tuple = [1,true,2,[1000000,10,2,1000000,1000000,1000000,true,false,1000000,1000000],1000000,1000000,1000000];
+  assert.deepEqual(decodeWorkerAbortOperation(tuple), tuple);
+  const record = { v:1,kind:"worker_abort_stage",first:[14,0,false],failures:1000000,undefinedFailures:1000000,
+    worker:[1000000,1000000,[4,127,111,16,null],tuple],upstream:Array(6).fill(1000000),reportingFailures:1000000 };
+  const wire = JSON.stringify(record); assert.ok(Buffer.byteLength(wire) <= 512); assert.deepEqual(parseWorkerAbortDiagnostic(wire), record);
+  const events = workerAbortNativeEvents(workerAbortPrefix + wire), result = await workerAbortPipeline(events);
+  assert.equal(result.rows[1].kind, "worker_abort");
+  for (const change of [[1,true,null,tuple[3],0,0,1],[1,true,2,null,0,0,1],[1,false,2,tuple[3],0,0,null],
+    [1,true,2,[0,4,2,2,3,4,false,false,1,2],0,0,1], [1,true,2,[0,4,2,2,3,4,true,null,1,2],0,0,1]]) assert.equal(decodeWorkerAbortOperation(change), null);
+  for (const text of [wire.replace('{"v":1,','{"v":0,"v":1,'), wire+' ', wire+'é']) assert.equal(parseWorkerAbortDiagnostic(text), null);
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.
