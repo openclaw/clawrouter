@@ -14,6 +14,8 @@ import { buildQwenProvider } from "./api.js";
 import plugin from "./index.js";
 
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
+const entryWitness = createQwenEntryWitness(value => console.log("QWEN_ENTRY_V1 " + JSON.stringify(value)));
+entryWitness.moduleEvaluated();
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 type Row = { id: string; provider: string; model: string; simple: boolean; mode: string };
 type Operation = { kind: string; pending: Promise<unknown>; state: string; reason?: unknown };
@@ -195,19 +197,111 @@ function qwenClosedRecord(id: string, phase: string, op: string, state: string, 
   for (const value of Object.values(counts)) if (!Number.isSafeInteger(value) || value < 0 || value > 65535) throw new Error("Qwen diagnostic count exceeded");
   return { v: 1, case: id, phase, op, state, operations: counts.operations, rejected: counts.rejected, pending: counts.pending };
 }
+
+// These witnesses describe observed entry and completion, never native acceptance.
+function qwenEntryRecord(input: unknown): Record<string, any> {
+  const invalid = (): never => { throw new Error("invalid closed Qwen entry witness"); };
+  if (!input || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype) invalid();
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const value: Record<string, any> = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string") return invalid();
+    if (!Object.hasOwn(descriptors[key], "value")) return invalid();
+    Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  const keys = ["v", "kind", "pin"];
+  if (value.kind === "registration") keys.push("registered", "complete", "failurePresent", "reasonDefined");
+  else if (value.kind === "case_enter" || value.kind === "case_complete") keys.push("case", "index");
+  else if (value.kind !== "module_evaluated") invalid();
+  if (value.kind === "case_complete") keys.push("stage", "state", "failurePresent", "reasonDefined", "operations", "rejected", "pending");
+  if (Object.keys(value).sort().join(",") !== keys.sort().join(",") || value.v !== 1
+    || value.pin !== "d8bb939408aa4d2be7df0161748edb52ebf3b1fb") invalid();
+  const rows = qwenRegionCases();
+  if (value.kind === "registration") {
+    if (!Number.isSafeInteger(value.registered) || value.registered < 0 || value.registered > rows.length
+      || value.complete !== (value.registered === rows.length && value.failurePresent === false)) invalid();
+  }
+  if (value.kind === "case_enter" || value.kind === "case_complete") {
+    if (!Number.isSafeInteger(value.index) || value.index < 0 || value.index >= rows.length
+      || typeof value.case !== "string" || rows[value.index].id !== value.case) invalid();
+  }
+  if (value.kind === "registration" || value.kind === "case_complete") {
+    if (typeof value.failurePresent !== "boolean" || typeof value.reasonDefined !== "boolean"
+      || (!value.failurePresent && value.reasonDefined)) invalid();
+  }
+  if (value.kind === "case_complete") {
+    if (!["ledger", "ownership", "loader", "guard_hooks", "source_pin", "register_provider", "provider_lookup", "provider_catalog", "normalize", "select", "history_state", "history_policy", "history_sanitize", "convert", "wrap", "caller", "body_assertions", "owned_drain", "ownership_assertions", "restore_ledger", "restore_ownership", "restore_mocks", "restore_globals", "report", "completed"].includes(value.stage)
+      || value.state !== (value.failurePresent ? "failed" : "passed")
+      || (value.stage === "completed") !== !value.failurePresent) invalid();
+    for (const key of ["operations", "rejected", "pending"]) {
+      if (!Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 65535) invalid();
+    }
+    if (value.rejected + value.pending > value.operations) invalid();
+    if (value.state === "passed" && (value.rejected !== 0 || value.pending !== 0)) invalid();
+  }
+  return value;
+}
+
+function createQwenEntryWitness(emit: (value: Record<string, any>) => void) {
+  const rows = qwenRegionCases(), errors: unknown[] = [];
+  let registered = 0;
+  const send = (fields: Record<string, any>) => {
+    try { emit(qwenEntryRecord({ v: 1, pin: "d8bb939408aa4d2be7df0161748edb52ebf3b1fb", ...fields })); }
+    catch (error) { errors.push(error); }
+  };
+  const takeErrors = () => errors.splice(0);
+  return {
+    moduleEvaluated() { send({ kind: "module_evaluated" }); },
+    registered(id: string) {
+      if (rows[registered]?.id !== id) throw new Error("Qwen registration order changed");
+      registered++;
+    },
+    registrationComplete(failure?: { reason: unknown }) {
+      send({ kind: "registration", registered, complete: registered === rows.length && !failure,
+        failurePresent: !!failure, reasonDefined: !!failure && failure.reason !== undefined });
+      const reporting = takeErrors();
+      if (failure && !reporting.length) throw failure.reason;
+      if (failure || reporting.length) throw new AggregateError([...(failure ? [failure.reason] : []), ...reporting], "Qwen registration or witness failed");
+    },
+    enter(id: string) {
+      const index = rows.findIndex(row => row.id === id);
+      send({ kind: "case_enter", case: id, index });
+      let stage = "ledger", first: { stage: string; reason: unknown } | undefined;
+      return {
+        at(next: string) { stage = next; },
+        failed(reason: unknown) { first ??= { stage, reason }; },
+        observe<T>(operationStage: string, original: Promise<T>): Promise<T> {
+          void original.then(() => {}, reason => { first ??= { stage: operationStage, reason }; });
+          return original;
+        },
+        complete(counts: { operations: number; rejected: number; pending: number }) {
+          send({ kind: "case_complete", case: id, index, stage: first?.stage ?? "completed",
+            state: first ? "failed" : "passed", failurePresent: !!first, reasonDefined: !!first && first.reason !== undefined, ...counts });
+        },
+      };
+    },
+    takeErrors,
+  };
+}
 // END shared fixture functions.
 
 const originalProviderGuard = transport.fetchWithProviderHttpGuard;
 const originalGuard = guard.fetchWithSsrFGuard;
-for (const row of qwenRegionCases()) it(`${row.id}: registered Qwen ${row.mode}`, async () => {
+try {
+for (const row of qwenRegionCases()) {
+it(`${row.id}: registered Qwen ${row.mode}`, async () => {
+  const witness = entryWitness.enter(row.id);
   const ledger = createQwenLedger(), failures: unknown[] = [];
   let partial = false, phase = "setup", failedPhase = "setup";
   const controller = new AbortController();
   const key = `clawrouter-live-${row.id}-${row.mode === "invalid_caller" ? "invalid" : "fixture-secret"}`;
   const baseUrl = `${origin}/v1/native/${row.provider}`;
+  witness.at("ownership");
   const ownership = createQwenOwnership(new AsyncLocalStorage(), ledger, { url: `${baseUrl}/chat/completions`, credential: key });
   try {
+    witness.at("loader");
     const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
+    witness.at("guard_hooks");
     vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: ownership.wrapFetch(undici.fetch) });
     vi.spyOn(transport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args: Parameters<typeof originalProviderGuard>) {
       const options = args[0];
@@ -219,12 +313,18 @@ for (const row of qwenRegionCases()) it(`${row.id}: registered Qwen ${row.mode}`
     vi.spyOn(guard, "fetchWithSsrFGuard").mockImplementation(function (this: unknown, ...args: Parameters<typeof originalGuard>) {
       return ownership.guard(originalGuard, this, args);
     });
+    witness.at("source_pin");
     expect(process.env.CLAWROUTER_SDK_SOURCE_HEAD).toBe(sourceHead);
+    witness.at("register_provider");
     const { providers } = await registerProviderPlugin({ plugin, id: "qwen", name: "Qwen Provider" });
+    witness.at("provider_lookup");
     const provider = requireRegisteredProvider(providers, "qwen");
+    witness.at("provider_catalog");
     const catalog = buildQwenProvider({ baseUrl });
     // Loopback is not a coding hostname: eligibility belongs to the real Worker.
+    witness.at("normalize");
     expect(provider.normalizeConfig?.({ providerConfig: catalog } as never)).toBeUndefined();
+    witness.at("select");
     const selected = catalog.models.find(model => model.id === row.model); expect(selected).toBeDefined();
     const model = { ...selected!, provider: provider.id, api: catalog.api, baseUrl } as Model<"openai-completions">;
     const history: AgentMessage[] = [
@@ -234,23 +334,32 @@ for (const row of qwenRegionCases()) it(`${row.id}: registered Qwen ${row.mode}`
       { role: "toolResult", toolCallId: "callfixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: 3 },
       { role: "user", content: `synthetic ${row.id}`, timestamp: 4 },
     ];
-    const messages = await withOpenClawTestState({ label: "qwen-regions" }, async state => {
+    witness.at("history_state");
+    const messages = await witness.observe("history_state", withOpenClawTestState({ label: "qwen-regions" }, async state => {
+      try {
+      witness.at("history_policy");
       const policy = resolveTranscriptPolicy({ provider: model.provider, modelId: row.model, modelApi: model.api, model, runtimeHandle: { provider: model.provider, plugin: provider } });
-      return sanitizeSessionHistory({ provider: model.provider, modelId: row.model, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
-        sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId: row.model })]), messages: history });
-    });
+      witness.at("history_sanitize");
+      return witness.observe("history_sanitize", sanitizeSessionHistory({ provider: model.provider, modelId: row.model, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
+        sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId: row.model })]), messages: history }));
+      } catch (error) { witness.failed(error); throw error; }
+    }));
+    witness.at("convert");
     const context: Context = { messages: convertToLlm(messages), tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
     const reasoning = row.mode === "effort_off" ? "off" : row.mode === "effort_low" ? "low" : row.mode === "effort_medium" ? "medium" : "high";
+    witness.at("wrap");
     const wrap = row.simple ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
     const wrapped = wrap?.({ provider: model.provider, modelId: row.model, model, streamFn: row.simple ? streamSimple : stream, thinkingLevel: reasoning });
     expect(wrapped).toBeDefined();
     if (row.mode === "preabort") controller.abort(new Error("synthetic caller cancellation"));
+    witness.at("caller");
     phase = "caller";
     const output = ownership.invoke(wrapped!, undefined, [model, context, { apiKey: key, maxTokens: 128, reasoning, signal: controller.signal }], Object.freeze({ id: row.id }));
     for await (const event of output) if (row.mode === "partial" && event.type === "text_delta" && event.delta.length && !partial) {
       partial = true; controller.abort(new Error("synthetic caller cancellation"));
     }
     const result = await ledger.observe("caller", output.result());
+    witness.at("body_assertions");
     const success = ["eof", "rotation", "no_usage", "effort_off", "effort_low", "effort_medium"].includes(row.mode);
     expect(result.stopReason).toBe(success ? "stop" : row.mode === "partial" ? "aborted" : "error");
     if (success) {
@@ -259,25 +368,38 @@ for (const row of qwenRegionCases()) it(`${row.id}: registered Qwen ${row.mode}`
     }
     if (row.mode === "partial") { expect(partial).toBe(true); expect(controller.signal.aborted).toBe(true); }
     if (row.mode === "preabort") expect(result.content).toEqual([]);
-  } catch (error) { failedPhase = phase; failures.push(error); }
+  } catch (error) { witness.failed(error); failedPhase = phase; failures.push(error); }
   try {
+    witness.at("owned_drain");
     await ledger.drain();
     // This asserts attachment to the actual runtime graph. Zero observations
     // cannot qualify a successful stream, and no SDK abort disposition exists.
-  } catch (error) { if (!failures.length) failedPhase = "join"; failures.push(error); }
+  } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
   try {
+    witness.at("ownership_assertions");
     ownership.verify(row.mode === "preabort" ? 0 : 1);
     expect(ledger.operations.filter(op => op.kind === "release")).toHaveLength(ownership.acquisitions.size);
     if (ownership.acquisitions.size) expect(ledger.readers.length).toBeGreaterThan(0);
-  } catch (error) { if (!failures.length) failedPhase = "join"; failures.push(error); }
+  } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
+  const restoreStages = ["restore_ledger", "restore_ownership", "restore_mocks", "restore_globals"];
+  let restoreIndex = 0;
   for (const restore of [() => ledger.restore(), () => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals()]) {
-    try { restore(); } catch (error) { if (!failures.length) failedPhase = "restore"; failures.push(error); }
+    witness.at(restoreStages[restoreIndex++]);
+    try { restore(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "restore"; failures.push(error); }
   }
+  witness.at("report");
+  for (const error of entryWitness.takeErrors()) { witness.failed(error); failures.push(error); }
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");
   try {
     console.log("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length })));
-  } catch (error) { failures.push(error); }
+  } catch (error) { witness.failed(error); failures.push(error); }
+  witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length });
+  failures.push(...entryWitness.takeErrors());
   if (failures.length) throw new AggregateError(failures, "Qwen case and original retirement failed");
 }, 60_000);
+entryWitness.registered(row.id);
+}
+} catch (error) { entryWitness.registrationComplete({ reason: error }); throw error; }
+entryWitness.registrationComplete();
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";

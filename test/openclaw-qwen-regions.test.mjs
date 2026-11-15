@@ -20,7 +20,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord };`)();
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, createQwenEntryWitness } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, createQwenEntryWitness };`)();
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -42,7 +42,17 @@ async function finish(body, cleanups) {
 const retainedNativeFailures = new WeakMap();
 function createQwenFailureRelay() {
   const records = new Map(), sdkCases = new Map();
+  let moduleEvaluated = false, registration;
+  const entered = new Map(), completed = new Map();
+  const consistent = (terminal, original) => {
+    if (terminal && original) for (const key of ["state", "operations", "rejected", "pending"]) {
+      assert.equal(terminal[key], original[key], "conflicting terminal census");
+    }
+  };
   function record(value, sdk = false) {
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    assert.ok(Reflect.ownKeys(descriptors).every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "closed data fields required");
+    value = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
     assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending"].sort());
     assert.equal(value.v, 1);
     if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
@@ -54,16 +64,41 @@ function createQwenFailureRelay() {
     records.set(key, encoded);
     if (sdk) {
       if (sdkCases.has(value.case)) assert.equal(sdkCases.get(value.case), encoded, "ambiguous SDK case receipt");
+      consistent(completed.get(value.case), checked);
       sdkCases.set(value.case, encoded);
+    }
+  }
+  function entry(value) {
+    const checked = qwenEntryRecord(value);
+    if (checked.kind === "module_evaluated") {
+      assert.equal(moduleEvaluated, false, "duplicate module witness"); moduleEvaluated = true;
+    } else {
+      assert.equal(moduleEvaluated, true, "missing module witness");
+      if (checked.kind === "registration") {
+        assert.equal(registration, undefined, "duplicate registration witness"); registration = checked;
+      } else {
+        assert.ok(registration && checked.index < registration.registered, "case lacks returned registration");
+        const target = checked.kind === "case_enter" ? entered : completed;
+        if (checked.kind === "case_complete") {
+          assert.ok(entered.has(checked.case), "completion lacks entry");
+          consistent(checked, sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined);
+        }
+        assert.equal(target.has(checked.case), false, "duplicate case witness"); target.set(checked.case, checked);
+      }
     }
   }
   function text(value) {
     assert.equal(typeof value, "string");
     assert.ok(Buffer.byteLength(value) <= 2 * 1024 * 1024, "native output bound exceeded");
     for (const line of value.split("\n")) {
-      if (!line.startsWith("QWEN_SDK_V1 ")) continue;
-      assert.ok(Buffer.byteLength(line) <= 512, "native record bound exceeded");
-      record(JSON.parse(line.slice("QWEN_SDK_V1 ".length)), true);
+      const prefix = ["QWEN_SDK_V1 ", "QWEN_ENTRY_V1 "].find(prefix => line.startsWith(prefix));
+      if (!prefix) continue;
+      assert.ok(Buffer.byteLength(line) <= 768, "native record bound exceeded");
+      const payload = line.slice(prefix.length), parsed = JSON.parse(payload);
+      // Our source emits compact JSON. Exact re-encoding rejects duplicate keys,
+      // trailing material and alternate encodings without recovering raw text.
+      assert.equal(JSON.stringify(parsed), payload, "noncanonical closed JSON");
+      if (prefix === "QWEN_ENTRY_V1 ") entry(parsed); else record(parsed, true);
     }
   }
   function error(original) {
@@ -94,15 +129,33 @@ function createQwenFailureRelay() {
   function output(helper) {
     const failures = [...records.values()].map(value => JSON.parse(value)).filter(value => value.state !== "passed");
     const observed = [...sdkCases.values()].map(value => JSON.parse(value));
-    const result = [{ kind: "helper", pin: sourceHead, state: helper, expectedCases: rows.length, observedCases: observed.length,
-      failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }, ...failures.slice(0, 8)];
-    if (failures.length > 8) result.push({ kind: "overflow", omitted: failures.length - 8 });
+    const firstFailed = [...completed.values()].find(value => value.state === "failed");
+    const unfinished = [...entered.values()].find(value => !completed.has(value.case));
+    const group = firstFailed ? [entered.get(firstFailed.case), firstFailed] : unfinished ? [unfinished] : [];
+    const essential = [{ kind: "entry_summary", pin: sourceHead, moduleEvaluated,
+      registrationObserved: !!registration, registered: registration?.registered ?? null,
+      registrationComplete: registration?.complete ?? false, registrationFailurePresent: registration?.failurePresent ?? null,
+      registrationReasonDefined: registration?.reasonDefined ?? null, enteredCases: entered.size, completedCases: completed.size }, ...group,
+    { kind: "helper", pin: sourceHead, state: helper, expectedCases: rows.length, observedCases: observed.length,
+      failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }];
+    const room = 9 - essential.length, result = [...essential, ...failures.slice(0, room)];
+    if (failures.length > room) result.push({ kind: "overflow", omitted: failures.length - room });
+    assert.ok(result.every(value => Buffer.byteLength(JSON.stringify(value)) <= 768), "closed annotation bound exceeded");
+    assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 8192, "closed packet bound exceeded");
     return result;
   }
-  const complete = () => sdkCases.size === rows.length && [...sdkCases.values()].every(value => {
+  const complete = () => moduleEvaluated && registration?.complete === true && entered.size === rows.length && completed.size === rows.length
+    && [...completed.values()].every(value => value.state === "passed" && value.rejected === 0 && value.pending === 0)
+    && sdkCases.size === rows.length && [...sdkCases.values()].every(value => {
     const row = JSON.parse(value); return row.state === "passed" && row.rejected === 0 && row.pending === 0;
   });
-  return { record, text, error, output, complete };
+  return { record, entry, text, error, output, complete };
+}
+
+function qwenBoundaryAnnotation(record) {
+  const informational = ["entry_summary", "case_enter"].includes(record.kind);
+  const severity = informational || record.state === "passed" ? "notice" : "error";
+  return `::${severity} title=Qwen native boundary::${JSON.stringify(record)}`;
 }
 
 async function withQwenNativeRelay(body, cleanups, emit) {
@@ -462,7 +515,7 @@ test("Qwen failure relay retains setup undefined and joins every cleanup before 
     assert.deepEqual(retainedNativeFailures.get(error), [undefined, cleanupFailure]);
     assert.ok(!Object.hasOwn(error, "cause") && !Object.hasOwn(error, "stdout")); return true;
   });
-  assert.equal(events[1], "restore"); assert.equal(output[0].state, "unrun");
+  assert.equal(events[1], "restore"); assert.equal(output.find(value => value.kind === "helper").state, "unrun");
   assert.ok(output.some(row => row.phase === "setup") && output.some(row => row.phase === "worker"));
 });
 
@@ -473,22 +526,28 @@ test("Qwen failure relay captures child failure and cleanup aggregates without g
   const original = new AggregateError([child, cleanup], "private child error"); original.cause = original;
   const emitted = [];
   await assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => { throw original; }), [], value => emitted.push(value)), error => retainedNativeFailures.get(error)[0] === original);
-  assert.equal(getters, 0); assert.equal(emitted[0].state, "failed"); assert.equal(emitted[0].observedCases, 1);
+  assert.equal(getters, 0); assert.equal(emitted.find(value => value.kind === "helper").state, "failed"); assert.equal(emitted.find(value => value.kind === "helper").observedCases, 1);
   assert.ok(emitted.some(row => row.case === rows[0].id)); assert.doesNotMatch(JSON.stringify(emitted), /private child|stdout|stderr/);
 });
 
-test("Qwen failure relay requires complete receipts, emits helper first and bounds overflow", async () => {
+test("Qwen failure relay requires complete receipts, prioritizes entry groups and bounds overflow", async () => {
   const absent = [];
   await assert.rejects(withQwenNativeRelay(() => {}, [], () => {}));
   await assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => {}), [], row => absent.push(row)));
-  assert.equal(absent[0].state, "incomplete"); assert.equal(absent[0].unknownCases, rows.length);
+  assert.equal(absent[1].state, "incomplete"); assert.equal(absent[1].unknownCases, rows.length);
   const relay = createQwenFailureRelay();
   for (const row of rows.slice(0, 12)) relay.text(closedSDKLine(closedSDKRecord(row.id, "failed")));
-  const output = relay.output("failed"); assert.equal(output[0].kind, "helper"); assert.equal(output.length, 10);
-  assert.deepEqual(output[9], { kind: "overflow", omitted: 4 });
+  const output = relay.output("failed"); assert.equal(output[0].kind, "entry_summary"); assert.equal(output[1].kind, "helper"); assert.equal(output.length, 10);
+  assert.deepEqual(output[9], { kind: "overflow", omitted: 5 });
   const success = [];
-  await withQwenNativeRelay(relay => relay.runChild(sink => sink.diagnostic(rows.map(row => closedSDKLine(closedSDKRecord(row.id))).join(""))), [], row => success.push(row));
-  assert.equal(success.length, 1); assert.equal(success[0].state, "passed"); assert.equal(success[0].unknownCases, 0);
+  await withQwenNativeRelay(relay => relay.runChild(sink => {
+    const witness = createQwenEntryWitness(value => sink.diagnostic(closedEntryLine(value)));
+    witness.moduleEvaluated(); rows.forEach(row => witness.registered(row.id)); witness.registrationComplete();
+    for (const row of rows) { witness.enter(row.id).complete({ operations: 4, rejected: 0, pending: 0 }); sink.diagnostic(closedSDKLine(closedSDKRecord(row.id))); }
+  }), [], row => success.push(row));
+  assert.equal(success.length, 2); assert.equal(success[1].state, "passed"); assert.equal(success[1].unknownCases, 0);
+  assert.equal(success[0].enteredCases, 103); assert.equal(success[0].completedCases, 103);
+  assert.ok(success.every(value => qwenBoundaryAnnotation(value).startsWith("::notice title=Qwen native boundary::")));
 });
 
 test("Qwen failure relay rejects malformed, foreign, conflicting and oversized records", () => {
@@ -512,7 +571,7 @@ test("Qwen failure relay capacity errors cannot prevent independent cleanup", as
   }, [{ phase: "worker", run: () => { cleaned.push("worker"); throw undefined; } },
     { phase: "restore", run: () => { cleaned.push("restore"); } }], row => emitted.push(row)), error => retainedNativeFailures.get(error).includes(undefined));
   assert.deepEqual(cleaned, ["worker", "restore"]); assert.equal(emitted.length, 10);
-  assert.deepEqual(emitted.at(-1), { kind: "overflow", omitted: 504 });
+  assert.deepEqual(emitted.at(-1), { kind: "overflow", omitted: 505 });
 });
 
 test("Qwen failure relay parses real failed control response before its strict status assertion", async t => {
@@ -520,6 +579,112 @@ test("Qwen failure relay parses real failed control response before its strict s
   t.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json({ retired: false, operations: [{ kind: "read", state: "rejected" }] }, { status: 500 })));
   await assert.rejects(readControl({ origin: "https://qwen.fixture" }, "/fixture/join/" + row.id, value => records.push(value)));
   assert.equal(records.length, 1); assert.equal(records[0].case, row.id); assert.equal(records[0].rejected, 1); assert.equal(records[0].state, "failed");
+});
+
+const closedEntryLine = value => "QWEN_ENTRY_V1 " + JSON.stringify(value) + "\n";
+const emptyCensus = { operations: 0, rejected: 0, pending: 0 };
+function entryHarness() {
+  const relay = createQwenFailureRelay(), emitted = [];
+  const witness = createQwenEntryWitness(value => { emitted.push(value); relay.text(closedEntryLine(value)); });
+  return { relay, witness, emitted, register() { rows.forEach(row => witness.registered(row.id)); witness.registrationComplete(); } };
+}
+
+test("Qwen entry witnesses distinguish no marker, module only, partial registration and entered without completion", () => {
+  const absent = createQwenFailureRelay().output("failed")[0];
+  assert.equal(absent.moduleEvaluated, false); assert.equal(absent.registered, null); assert.equal(absent.completedCases, 0);
+  const partial = entryHarness(); partial.witness.moduleEvaluated();
+  let summary = partial.relay.output("failed")[0];
+  assert.equal(summary.moduleEvaluated, true); assert.equal(summary.registrationObserved, false);
+  partial.witness.registered(rows[0].id);
+  assert.throws(() => partial.witness.registrationComplete({ reason: undefined }), error => error === undefined);
+  summary = partial.relay.output("failed")[0];
+  assert.equal(summary.registered, 1); assert.equal(summary.registrationComplete, false);
+  assert.equal(summary.registrationFailurePresent, true); assert.equal(summary.registrationReasonDefined, false);
+  const entered = entryHarness(); entered.witness.moduleEvaluated(); entered.register(); entered.witness.enter(rows[0].id);
+  const output = entered.relay.output("failed");
+  assert.equal(output[0].enteredCases, 1); assert.equal(output[0].completedCases, 0);
+  assert.equal(output[1].kind, "case_enter"); assert.equal(entered.relay.complete(), false);
+});
+
+test("Qwen entry witnesses preserve first undefined setup failure and original promise identity through held cleanup", async () => {
+  const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
+  const current = h.witness.enter(rows[0].id), ledger = createQwenLedger();
+  current.at("normalize"); current.failed(undefined); current.at("owned_drain");
+  let release; const held = new Promise(resolve => { release = resolve; });
+  ledger.observe("release", held);
+  const originalDrain = ledger.drain(); assert.equal(current.observe("owned_drain", originalDrain), originalDrain);
+  let settled = false; const final = originalDrain.then(() => { settled = true; current.complete({ operations: 1, rejected: 0, pending: 0 }); });
+  await Promise.resolve(); assert.equal(settled, false); assert.equal(h.relay.output("failed")[0].completedCases, 0);
+  release(); await final;
+  const packet = h.relay.output("failed"), complete = packet.find(value => value.kind === "case_complete");
+  assert.equal(complete.stage, "normalize"); assert.equal(complete.failurePresent, true); assert.equal(complete.reasonDefined, false);
+  assert.equal(packet[1].kind, "case_enter"); assert.equal(packet[2], complete); assert.equal(packet[3].kind, "helper");
+});
+
+test("Qwen entry witnesses distinguish original history rejection from state cleanup rejection without replacing promises", async () => {
+  for (const innerFails of [false, true]) {
+    const h = entryHarness(); h.witness.moduleEvaluated(); h.register(); const current = h.witness.enter(rows[0].id);
+    const failure = {}, inner = innerFails ? Promise.reject(failure) : Promise.resolve([]);
+    assert.equal(current.observe("history_sanitize", inner), inner);
+    const outer = inner.then(() => { throw undefined; });
+    assert.equal(current.observe("history_state", outer), outer);
+    await assert.rejects(outer, reason => innerFails ? reason === failure : reason === undefined);
+    current.at("restore_mocks"); current.failed(new Error("later synthetic failure")); current.complete(emptyCensus);
+    const complete = h.relay.output("failed").find(value => value.kind === "case_complete");
+    assert.equal(complete.stage, innerFails ? "history_sanitize" : "history_state");
+    assert.equal(complete.reasonDefined, innerFails);
+  }
+});
+
+test("Qwen entry reporting failure preserves primary and undefined observer errors", () => {
+  const primary = {}, witness = createQwenEntryWitness(() => { throw undefined; }); witness.moduleEvaluated();
+  assert.throws(() => witness.registrationComplete({ reason: primary }), error => {
+    assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [primary, undefined, undefined]); return true;
+  });
+  const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
+  const current = h.witness.enter(rows[0].id); current.at("caller"); current.failed(primary); current.complete(emptyCensus);
+  const original = {}, emitted = [];
+  // Actual outer relay must retain an emitting failure after its original child failure.
+  return assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => { throw original; }), [], value => {
+    emitted.push(value); throw undefined;
+  }), error => retainedNativeFailures.get(error)[0] === original && retainedNativeFailures.get(error).slice(1).every(value => value === undefined));
+});
+
+test("Qwen entry relay rejects missing groups, duplicate or foreign identities, wrong pin and accessors without getters", () => {
+  const h = entryHarness(); h.witness.moduleEvaluated(); h.register(); h.witness.enter(rows[0].id).complete(emptyCensus);
+  const [module, registration, enter, complete] = h.emitted;
+  for (const item of [registration, enter, complete]) assert.throws(() => createQwenFailureRelay().entry(item));
+  assert.throws(() => h.relay.entry(module)); assert.throws(() => h.relay.entry(enter)); assert.throws(() => h.relay.entry(complete));
+  for (const patch of [{ pin: "foreign" }, { case: rows[1].id }, { index: -1 }, { extra: true }, { stage: "unknown" }, { failurePresent: true }]) {
+    assert.throws(() => qwenEntryRecord({ ...complete, ...patch }));
+  }
+  let getters = 0; const hostile = { ...complete }; Object.defineProperty(hostile, "stage", { get() { getters++; throw undefined; } });
+  assert.throws(() => qwenEntryRecord(hostile)); assert.equal(getters, 0);
+  const dup = JSON.stringify(module).replace('"v":1', '"v":1,"v":1');
+  assert.throws(() => createQwenFailureRelay().text("QWEN_ENTRY_V1 " + dup));
+  assert.throws(() => createQwenFailureRelay().text('QWEN_ENTRY_V1 {"kind":"module_evaluated"}'));
+  assert.throws(() => createQwenFailureRelay().text("QWEN_ENTRY_V1 " + " ".repeat(769)));
+  const prefixed = createQwenFailureRelay(); prefixed.text("not a boundary " + closedEntryLine(module));
+  assert.equal(prefixed.output("failed")[0].moduleEvaluated, false);
+});
+
+test("Qwen entry relay keeps the complete first observed failure group before bounded overflow", () => {
+  const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
+  for (const row of rows.slice(0, 12)) {
+    const current = h.witness.enter(row.id); current.at("loader"); current.failed(undefined); current.complete({ operations: 4, rejected: 1, pending: 0 });
+    h.relay.text(closedSDKLine(closedSDKRecord(row.id, "failed")));
+  }
+  const packet = h.relay.output("failed");
+  assert.equal(packet.length, 10); assert.equal(packet[1].case, rows[0].id); assert.equal(packet[2].case, rows[0].id);
+  assert.equal(packet[2].kind, "case_complete"); assert.equal(packet[3].kind, "helper");
+  assert.deepEqual(packet[9], { kind: "overflow", omitted: 7 });
+  assert.ok(packet.every(value => Buffer.byteLength(JSON.stringify(value)) <= 768));
+  assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 8192);
+  for (const [index, record] of packet.entries()) {
+    const annotation = qwenBoundaryAnnotation(record), prefix = index < 2 ? "::notice" : "::error";
+    assert.ok(annotation.startsWith(prefix + " title=Qwen native boundary::"));
+    assert.deepEqual(JSON.parse(annotation.slice(annotation.indexOf("::", 2) + 2)), record);
+  }
 });
 
 test("Qwen fixture syntax bundles SDK and Worker observer routes without executing them", async () => {
@@ -545,7 +710,7 @@ test("registered Qwen regional SDK through shipping Worker and SQLite", { skip: 
     const failures = [];
     for (const row of rows) try { assertProof(row, await readControl(f, "/fixture/join/" + row.id, report)); } catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, "Qwen Worker cases and retirement failed");
-  } }, { phase: "restore", run: () => f?.close() }], record => console.log(`::${record.state === "passed" ? "notice" : "error"} title=Qwen native boundary::` + JSON.stringify(record)));
+  } }, { phase: "restore", run: () => f?.close() }], record => console.log(qwenBoundaryAnnotation(record)));
 });
 
 test("shipping regional Worker reaches each original origin and joins positive metadata-free streams", { timeout: 60_000 }, async () => {
