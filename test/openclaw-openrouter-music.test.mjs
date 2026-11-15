@@ -103,6 +103,7 @@ function observeBody(response, signal, owner) {
   const body = response.body;
   if (!body) throw new Error("original response body missing");
   const rows = [], getReader = body.getReader;
+  owner.readerRows = rows; owner.body = body;
   body.getReader = function(...args) {
     const reader = Reflect.apply(getReader, this, args);
     const row = { reader, closed: reader.closed, operations: [], errors: [], unlocks: 0, returned: 0 };
@@ -136,9 +137,11 @@ function observeBody(response, signal, owner) {
         const batch = row.operations.slice(cursor); cursor = row.operations.length;
         const results = await Promise.allSettled(batch.map(operation => operation.pending));
         for (const [index, result] of results.entries()) {
-          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) { failures.push(result.reason); owner.failureCounts?.add(batch[index].kind); }
+          batch[index].outcome = result;
+          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) { batch[index].strictFailure = true; failures.push(result.reason); owner.failureCounts?.add(batch[index].kind); }
         }
         closed = await Promise.allSettled([row.closed]);
+        row.closedOutcome = closed[0];
       } while (cursor < row.operations.length);
       if (closed[0].status === "rejected") { failures.push(closed[0].reason); owner.failureCounts?.add("closed"); }
       failures.push(...row.errors); for (const _ of row.errors) owner.failureCounts?.add("observer_exception");
@@ -147,6 +150,58 @@ function observeBody(response, signal, owner) {
     if (failures.length) throw new AggregateError(failures, "original Worker body retirement failed");
     return { readers: rows.length, operations: rows.reduce((n, row) => n + row.operations.length, 0), unlocked: !body.locked };
   };
+}
+
+// Read only already-observed original outcomes. These records never classify a
+// rejection or supply retirement evidence. Identity comparisons are at join time.
+function retirementObservation(inputs, counts, errors, route) {
+  const records = [{ v: 1, layer: "outer", route, caseId: "none", phase: "worker_summary", role: "cleanup", outcome: "rejected", category: "none", rejected: errors.length, ...counts }];
+  let omitted = 0;
+  const add = (input, inputIndex, reader, readerIndex, operation, operationIndex, result) => {
+    if (records.length >= 4) { omitted++; return; }
+    const signal = input.effective?.signal;
+    const closed = reader?.closedOutcome;
+    const cancelOperation = reader?.operations.find(row => row.kind === "cancel");
+    const cancel = cancelOperation?.outcome;
+    const rejected = result?.status === "rejected";
+    records.push({ v: 1, layer: "outer", route, caseId: input.binding?.row.id ?? "none", phase: "worker_original", role: "cleanup", outcome: result?.status ?? "unknown", category: "none",
+      operation, inputIndex, readerIndex, operationIndex, responsePresent: input.response !== undefined, readerPresent: !!reader,
+      reasonDefined: rejected ? result.reason !== undefined : null,
+      signalAbortedAtJoin: signal ? signal.aborted : null,
+      sameSignalReasonAtJoin: rejected && signal ? result.reason === signal.reason : null,
+      sameClosedReason: rejected && closed?.status === "rejected" ? result.reason === closed.reason : null,
+      sameCancelReason: rejected && cancel?.status === "rejected" ? result.reason === cancel.reason : null,
+      closedOutcome: reader ? closed?.status ?? "unknown" : "absent", cancelOutcome: cancelOperation ? cancel?.status ?? "unknown" : "absent",
+      bodyLockedAtJoin: input.body ? input.body.locked : null,
+      releases: reader?.unlocks ?? null, returned: reader?.returned ?? null });
+  };
+  for (const [i, input] of inputs.entries()) {
+    if (input.retirementRejected && input.originalOutcome?.status === "rejected") add(input, i, undefined, null, "acquisition", null, input.originalOutcome);
+    for (const [r, reader] of (input.readerRows ?? []).entries()) {
+      for (const [o, operation] of reader.operations.entries()) if (operation.strictFailure && operation.outcome?.status === "rejected") add(input, i, reader, r, operation.kind, o, operation.outcome);
+      if (reader.closedOutcome?.status === "rejected") add(input, i, reader, r, "closed", null, reader.closedOutcome);
+    }
+  }
+  records[0].suppressed = omitted;
+  return { records, observerFailed: false };
+}
+
+async function reportRetirementObservation(origin, expectedRoute, fetchOriginal = fetch, protocol = musicProtocol, diagnostics = musicDiagnostics, failures = musicDiagnosticFailures) {
+  try {
+    const response = await fetchOriginal(origin + "/fixture/retirement-observation");
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.ok(Buffer.byteLength(text) <= 3072);
+    const snapshot = JSON.parse(text);
+    assert.deepEqual(Object.keys(snapshot).sort(), ["observerFailed", "records"]);
+    assert.equal(snapshot.observerFailed, false);
+    assert.ok(Array.isArray(snapshot.records) && snapshot.records.length > 0 && snapshot.records.length <= 4);
+    for (const value of snapshot.records) {
+      const record = protocol.validate(value);
+      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original"].includes(record.phase));
+      diagnostics.put(record);
+    }
+  } catch (error) { failures.push(error); }
 }
 
 // These functions are used unchanged by the Worker and the local oracle tests.
@@ -253,12 +308,14 @@ async function waitForSourceAbort(signal, call) {
   finally { signal.removeEventListener("abort", listener); call.waiterListenerRemoved = true; }
 }
 
-function routerScript() {
+function routerScript(route = "native") {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
 const originalFetch = globalThis.fetch;
+let retirementSnapshot = { records: [], observerFailed: false };
 ${createMusicFailureCounts.toString()}
+${retirementObservation.toString()}
 const failureCounts = musicFailureCounts();
 let sequence = 0; const tick = () => ++sequence;
 ${[observeBody, effectiveFetch, sameJson, bindAcquisition, observeAcquisition, acquisitionSnapshot, provisionalHeaderDisposition].map(fn => fn.toString()).join("\n")}
@@ -280,12 +337,13 @@ async function retire() {
       let failureKind = "acquisition";
       try {
         const [original] = await Promise.allSettled([input.pending]);
+        input.originalOutcome = original;
         failureKind = "acquisition_observer"; await input.observed;
         failureKind = "body_join";
         errors.push(...input.observerErrors); for (const _ of input.observerErrors) failureCounts.add("observer_exception");
         if (original.status === "rejected") {
           const snapshot = acquisitionSnapshot(input, inputs, ingresses);
-          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else { errors.push(original.reason); failureCounts.add("acquisition"); }
+          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else { input.retirementRejected = true; errors.push(original.reason); failureCounts.add("acquisition"); }
         } else {
           if (!input.join) throw new Error("acquired input unobserved");
           joined.push(await input.join());
@@ -298,7 +356,11 @@ async function retire() {
     || ingresses.filter(ingress => ingress.id === candidate.id).length !== 1) { errors.push(new Error("duplicate disposition binding")); failureCounts.add("binding"); }
   for (const ingress of ingresses) { ingress.signal.removeEventListener("abort", ingress.listener); ingress.listenerRemoved = true; }
   errors.push(...failures);
-  if (errors.length) throw new AggregateError(errors, "original Worker operations failed");
+  if (errors.length) {
+    try { retirementSnapshot = retirementObservation(inputs, failureCounts.snapshot(), errors, ${JSON.stringify(route)}); }
+    catch { retirementSnapshot = { records: [], observerFailed: true }; }
+    throw new AggregateError(errors, "original Worker operations failed");
+  }
   return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
 }
 export default { ...handler, async fetch(request, env, context) {
@@ -309,6 +371,7 @@ export default { ...handler, async fetch(request, env, context) {
   }
   if (path === "/fixture/revoke") { const id = new URL(request.url).searchParams.get("id"); if (!rows.some(row => row.id === id)) return new Response(null, { status: 400 }); await revokeGrantCredentials(env, "oauth/orm_" + id + "/openrouter"); return new Response(null, { status: 204 }); }
   if (path === "/fixture/retire") return Response.json(await retire());
+  if (path === "/fixture/retirement-observation") return Response.json(retirementSnapshot);
   if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
   if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
@@ -528,7 +591,7 @@ async function start(route, audio) {
   try {
     const require = createRequire(import.meta.resolve("wrangler/package.json"));
     let replacements = 0;
-    const bundle = await require("esbuild").build({ stdin: { contents: routerScript(), resolveDir: root, sourcefile: "openrouter-music-fixture.ts", loader: "ts" },
+    const bundle = await require("esbuild").build({ stdin: { contents: routerScript(route), resolveDir: root, sourcefile: "openrouter-music-fixture.ts", loader: "ts" },
       write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
       plugins: [{ name: "validated-music-snapshot", setup(build) { build.onLoad({ filter: /provider-snapshot\.json$/ }, args => {
         if (args.path !== snapshotPath) return; replacements++; return { contents: JSON.stringify(snapshot), loader: "json" };
@@ -564,9 +627,13 @@ async function start(route, audio) {
   }
 }
 
-async function retirement(origin) {
-  const response = await fetch(origin + "/fixture/retire", { method: "POST" });
-  assert.equal(response.status, 200, "original work must retire before disposal");
+async function retirement(origin, route, fetchOriginal = fetch, report = reportRetirementObservation) {
+  const response = await fetchOriginal(origin + "/fixture/retire", { method: "POST" });
+  try { assert.equal(response.status, 200, "original work must retire before disposal"); }
+  catch (error) {
+    try { await report(origin, route); } catch (reportError) { musicDiagnosticFailures.push(reportError); }
+    throw error;
+  }
   const result = await response.json();
   assert.ok(result.joined.every(row => row.readers > 0 && row.operations > 0 && row.unlocked));
   return result;
@@ -577,7 +644,7 @@ async function usage(origin, id) {
 }
 async function cleanup(f, failures) {
   musicOuter("worker_retirement", f.route);
-  try { await retirement(f.origin); musicOuter("worker_retirement", f.route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_retirement", f.route, "none", "rejected", "cleanup", true, error); failures.push(error); }
+  try { await retirement(f.origin, f.route); musicOuter("worker_retirement", f.route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_retirement", f.route, "none", "rejected", "cleanup", true, error); failures.push(error); }
   try { await f.close(); } catch (error) { failures.push(error); }
   musicOuter("final_cleanup", f.route, "none", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { rejected: failures.length });
   if (failures.length) throw new AggregateError(failures, "music contract and cleanup failed");
@@ -610,7 +677,7 @@ for (const route of ["native", "manifest"]) {
         const request = body(row);
         const response = await fetch(f.origin + path, { method: "POST", headers: headers(row.id), body: JSON.stringify(route === "native" ? request : { body: { ...request, model: `openrouter/${row.model}` } }) });
         assert.equal(response.status, 200); const wire = await response.text(); assert.match(wire, /data: \[DONE\]/); assert.match(wire, /café/);
-        await retirement(f.origin);
+        await retirement(f.origin, f.route);
         const receipt = await usage(f.origin, row.id), [event] = receipt.usage.events;
         assert.equal(receipt.usage.events.length, 1); assert.equal(receipt.budget.spentMicros, 700);
         assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 700); assert.equal(event.status, "success");
@@ -648,7 +715,7 @@ test("actual registered OpenRouter music client through both real configurations
       } catch (error) { observer.rejection(error); throw error; }
       helperState = "fulfilled"; observer.fulfilled();
       diagnosticPhase = "worker_retirement"; musicOuter(diagnosticPhase, route);
-      const physical = await retirement(f.origin);
+      const physical = await retirement(f.origin, f.route);
       musicOuter(diagnosticPhase, route, "none", "fulfilled");
       diagnosticPhase = "upstream_state"; musicOuter(diagnosticPhase, route);
       const calls = await (await fetch(f.origin + "/fixture/state")).json();
@@ -681,6 +748,105 @@ test("actual registered OpenRouter music client through both real configurations
     await cleanup(f, failures);
   }
   } catch (error) { musicOuter(diagnosticPhase, diagnosticRoute, diagnosticCase, "rejected", "primary", true, error); throw error; }
+});
+
+test("retirement observation retains strict original read cancel and closed failures including undefined", async () => {
+  for (const reason of [new Error("controlled stored error"), undefined]) {
+    const signal = new AbortController().signal;
+    const response = new Response(new ReadableStream({ start(controller) { controller.error(reason); } }));
+    const counts = createMusicFailureCounts(), input = { response, effective: { signal }, binding: { row: { id: "error" } }, failureCounts: counts };
+    observeBody(response, signal, input);
+    const reader = response.body.getReader(), read = reader.read(), cancel = reader.cancel();
+    const outcomes = await Promise.allSettled([read, cancel]); reader.releaseLock();
+    assert.ok(outcomes.every(row => row.status === "rejected" && row.reason === reason));
+    let failure;
+    try { await input.join(); } catch (error) { failure = error; }
+    assert.ok(failure instanceof AggregateError); assert.ok(failure.errors.every(error => error === reason));
+    assert.equal(input.readerRows[0].operations[0].pending, read);
+    assert.equal(input.readerRows[0].operations[1].pending, cancel);
+    const snapshot = retirementObservation([input], counts.snapshot(), failure.errors, "native");
+    assert.equal(snapshot.records.length, 4); assert.equal(snapshot.observerFailed, false);
+    assert.deepEqual(snapshot.records.slice(1).map(row => row.operation), ["read", "cancel", "closed"]);
+    for (const record of snapshot.records.slice(1)) {
+      assert.equal(record.reasonDefined, reason !== undefined); assert.equal(record.sameClosedReason, true); assert.equal(record.sameCancelReason, true);
+      assert.equal(record.signalAbortedAtJoin, false); assert.equal(record.bodyLockedAtJoin, false);
+      assert.equal(record.closedOutcome, "rejected"); assert.equal(record.cancelOutcome, "rejected");
+      assert.equal(record.releases, 1); assert.equal(record.returned, 1); assert.ok(musicProtocol.validate(record));
+    }
+  }
+});
+
+test("retirement observation is captured before the original serialized Worker rejection", async () => {
+  const script = routerScript("native"), begin = script.indexOf("async function retire() {"), end = script.indexOf("\nexport default", begin);
+  const create = new Function("inputs", "tasks", "ingresses", "failures", "failureCounts", "retirementObservation", "acquisitionSnapshot", "provisionalHeaderDisposition",
+    'let retirementSnapshot = { records: [], observerFailed: false }; const requests = [];\n' + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
+  for (const reason of [new Error("controlled acquisition"), undefined]) {
+    for (const snapshotFails of [false, true]) {
+      const pending = deferredOriginal(), proof = { effective: { signal: null, headers: new Headers() }, observerErrors: [], observed: Promise.resolve(), state: "rejected", reason };
+      proof.pending = pending.pending;
+      const fixture = create([proof], [], [], [], createMusicFailureCounts(), snapshotFails ? () => { throw undefined; } : retirementObservation, acquisitionSnapshot, provisionalHeaderDisposition);
+      let settled = false; const originalRetirement = fixture.retire();
+      void originalRetirement.then(() => { settled = true; }, () => { settled = true; });
+      await Promise.resolve(); assert.equal(settled, false); assert.deepEqual(fixture.snapshot().records, []);
+      pending.reject(reason);
+      await assert.rejects(originalRetirement, error => error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === reason);
+      assert.equal(proof.pending, pending.pending); assert.equal(proof.originalOutcome.reason, reason);
+      const snapshot = fixture.snapshot(); assert.equal(snapshot.observerFailed, snapshotFails);
+      if (!snapshotFails) {
+        assert.equal(snapshot.records[0].f_acquisition, 1); assert.equal(snapshot.records[1].operation, "acquisition");
+        assert.equal(snapshot.records[1].reasonDefined, reason !== undefined); assert.equal(snapshot.records[1].responsePresent, false);
+        assert.ok(snapshot.records.every(row => musicProtocol.validate(row)));
+      }
+    }
+  }
+});
+
+test("retirement observation schema is closed bounded and preserves separate original operations", () => {
+  const reason = new Proxy({}, { get() { throw new Error("must not inspect reason"); } });
+  const input = { effective: { signal: null }, originalOutcome: { status: "rejected", reason }, retirementRejected: true };
+  const snapshot = retirementObservation(Array(12).fill(input), { f_acquisition: 12 }, Array(12).fill(reason), "manifest");
+  assert.equal(snapshot.records.length, 4); assert.equal(snapshot.records[0].suppressed, 9);
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) <= 3072);
+  for (const value of snapshot.records) assert.ok(musicProtocol.validate(value));
+  const record = snapshot.records[1];
+  for (const fields of [{ operation: "foreign" }, { reasonDefined: "true" }, { inputIndex: -1 }, { closedOutcome: "pending" }, { message: "forbidden" }]) {
+    assert.equal(musicProtocol.validate({ ...record, ...fields }), undefined);
+  }
+  const lines = [], diagnostics = musicProtocol.emitter(line => lines.push(line));
+  diagnostics.fail(musicProtocol.record(musicDiagnosticContext("manifest"), true, undefined));
+  for (const value of snapshot.records) diagnostics.put(value);
+  for (const id of musicProtocol.ids) diagnostics.put(musicProtocol.record(musicDiagnosticContext("native", id, "body_assert"), true, undefined));
+  diagnostics.flush(); assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => Buffer.byteLength(line) <= 768 && line.startsWith("::error ")));
+  const decoded = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(decoded.filter(row => row.phase === "worker_original").length, 3);
+});
+
+test("retirement observation reporting cannot replace the original status or undefined acquisition rejection", async () => {
+  const reporting = [], lines = [], failures = [], diagnostics = musicProtocol.emitter(line => lines.push(line));
+  const snapshot = retirementObservation([], { f_task: 1 }, [undefined], "native");
+  await reportRetirementObservation("https://fixture.invalid", "native", async url => {
+    assert.equal(url, "https://fixture.invalid/fixture/retirement-observation"); return Response.json(snapshot);
+  }, musicProtocol, diagnostics, failures);
+  assert.deepEqual(failures, []); diagnostics.flush(); assert.deepEqual(lines, [], "observations alone cannot emit an error");
+  for (const invalid of [{ ...snapshot, observerFailed: true }, { ...snapshot, extra: true }, { ...snapshot, records: snapshot.records.map(row => ({ ...row, route: "manifest" })) }]) {
+    const errors = [];
+    await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(invalid), musicProtocol, musicProtocol.emitter(() => {}), errors);
+    assert.equal(errors.length, 1);
+  }
+  await assert.rejects(retirement("https://fixture.invalid", "native", async () => new Response(null, { status: 500 }), async () => { reporting.push(true); }),
+    error => error.code === "ERR_ASSERTION" && error.actual === 500 && error.expected === 200);
+  assert.deepEqual(reporting, [true]);
+  let caught = false;
+  try { await retirement("https://fixture.invalid", "native", () => Promise.reject(undefined), () => { assert.fail("no response to observe"); }); }
+  catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+  const before = musicDiagnosticFailures.length;
+  try {
+    await assert.rejects(retirement("https://fixture.invalid", "native", async () => new Response(null, { status: 500 }), async () => { throw undefined; }),
+      error => error.code === "ERR_ASSERTION" && error.actual === 500);
+    assert.deepEqual(musicDiagnosticFailures.slice(before), [undefined]);
+  } finally { musicDiagnosticFailures.splice(before); }
 });
 
 test("reader observer joins the original cancel and rejects cleanup failure including undefined", async () => {
@@ -1145,7 +1311,7 @@ test("original native waiter witness before one positive POST coordination", { t
       catch (error) { proof.sse = "rejected"; failures.push(error); }
     }
     try { assert.equal(proof.informative, true, "original waiter entry was not established"); assert.equal(proof.readyStatus, 204); } catch (error) { failures.push(error); }
-    try { await retirement(f.origin); proof.retirement = "fulfilled"; } catch (error) { proof.retirement = "rejected"; failures.push(error); }
+    try { await retirement(f.origin, f.route); proof.retirement = "fulfilled"; } catch (error) { proof.retirement = "rejected"; failures.push(error); }
     emit();
     try {
       const calls = await (await fetch(f.origin + "/fixture/state")).json();
@@ -1194,7 +1360,7 @@ test("request-owned native readiness expiry joins originals without a POST", { t
     assert.equal(state.status, 500); proof.upstream = "fulfilled";
     const receipt = await usage(f.origin, "m0_wav");
     assert.equal(receipt.usage.events.length, 0); assert.equal(receipt.budget.spentMicros, 0); proof.sqlite = "fulfilled";
-    await retirement(f.origin); proof.retirement = "fulfilled";
+    await retirement(f.origin, f.route); proof.retirement = "fulfilled";
   } catch (reason) { failures.push(reason); }
   finally {
     try { await f.close(); proof.dispose = proof.scratch = "fulfilled"; } catch (reason) { failures.push(reason); }

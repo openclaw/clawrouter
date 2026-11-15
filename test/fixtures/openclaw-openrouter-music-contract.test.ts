@@ -36,10 +36,10 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   type Data = Record<string, string | number | boolean | null>;
   const prefix = "CLAWROUTER_MUSIC_DIAGNOSTIC_V1 ";
   const ids = new Set(["none", "m0_wav", "m0_mp3", "m1_wav", "m1_mp3", "reference", "options", "preabort", "missing", "foreign", "revoked", "unpriced", "stalegrant", "empty", "eof", "json", "utf8", "base64", "ambiguous", "partial", "error", "redirect", "wire", "audio", "transcript", "abort_headers", "abort_body", "deadline_body"]);
-  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
+  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "worker_summary", "worker_original", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
   const names = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "unknown"]);
   const codes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_REQUIRE_ESM", "ABORT_ERR", "ECONNRESET", "ETIMEDOUT"]);
-  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", "observedOutcome", "d_retirements", "d_promises", "d_fulfilled", "d_rejected", "d_pending", "d_violations", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
+  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", "operation", "closedOutcome", "cancelOutcome", "inputIndex", "readerIndex", "operationIndex", "responsePresent", "readerPresent", "reasonDefined", "signalAbortedAtJoin", "sameSignalReasonAtJoin", "sameClosedReason", "sameCancelReason", "bodyLockedAtJoin", "observedOutcome", "d_retirements", "d_promises", "d_fulfilled", "d_rejected", "d_pending", "d_violations", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
   const own = (value: unknown, key: string): unknown => {
     if (!value || typeof value !== "object" || isProxy(value)) return undefined;
     try { const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined; } catch { return undefined; }
@@ -57,6 +57,10 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         || !["none", "error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"].includes(out.category as string)) return;
       for (const key of found as string[]) {
         if (keys.indexOf(key) < 8) continue;
+        if (["closedOutcome", "cancelOutcome"].includes(key)) { if (!["absent", "unknown", "fulfilled", "rejected"].includes(out[key] as string)) return; continue; }
+        if (["inputIndex", "readerIndex", "operationIndex"].includes(key)) { if (out[key] !== null && (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 1_000_000_000)) return; continue; }
+        if (["responsePresent", "readerPresent", "reasonDefined", "signalAbortedAtJoin", "sameSignalReasonAtJoin", "sameClosedReason", "sameCancelReason", "bodyLockedAtJoin"].includes(key)) { if (out[key] !== null && typeof out[key] !== "boolean") return; continue; }
+        if (key === "operation") { if (!["acquisition", "read", "cancel", "closed"].includes(out[key] as string)) return; continue; }
         if (key === "observedOutcome") { if (![null, "pending", "fulfilled", "rejected"].includes(out[key] as string | null)) return; continue; }
         if (key.startsWith("d_")) { if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 1_000_000_000) return; continue; }
         if (key.startsWith("f_")) { if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 65535) return; continue; }
@@ -94,12 +98,12 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
     }
     return { records, invalid, observedCode };
   }
-  const keyFor = (r: Data) => [r.layer, r.route, r.caseId, r.phase, r.role].join("/");
+  const keyFor = (r: Data) => [r.layer, r.route, r.caseId, r.phase, r.role, ...(r.phase === "worker_original" ? [r.operation, r.inputIndex, r.readerIndex, r.operationIndex] : [])].join("/");
   function emitter(write: (line: string) => unknown) {
     const records = new Map<string, Data>(), emitted = new Set<string>();
     let suppressed = 0, failed = false, finished = false, bytes = 0;
-    const priority = (r: Data) => r.phase === "helper" ? 0 : r.role === "primary" ? 1 : r.role === "cleanup" && r.category !== "none" ? 2
-      : r.phase === "final_cleanup" ? 3 : r.phase === "worker_retirement" ? 4 : r.phase === "upstream_assert" ? 5 : r.phase === "sqlite_assert" ? 6 : 7;
+    const priority = (r: Data) => r.phase === "helper" ? 0 : r.phase === "worker_summary" ? 1 : r.phase === "worker_original" ? 2 : r.role === "primary" ? 3 : r.role === "cleanup" && r.category !== "none" ? 4
+      : r.phase === "final_cleanup" ? 5 : r.phase === "worker_retirement" ? 6 : r.phase === "upstream_assert" ? 7 : r.phase === "sqlite_assert" ? 8 : 9;
     const put = (value: unknown) => {
       const r = validate(value); if (!r) throw new Error("invalid music diagnostic");
       const key = keyFor(r), old = records.get(key);
