@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.
+
 - Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
 
 - Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.

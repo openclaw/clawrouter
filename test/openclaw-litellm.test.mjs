@@ -57,8 +57,8 @@ async function withFailureEnvelope(run, proof = diagnostic, write = text => proc
   if (errors.length) throw new AggregateError(errors, "LiteLLM original and reporting failures");
 }
 // BEGIN retirement observation boundary.
-async function litellmRetireSnapshot(control, id, capture, attempted = () => {}) {
-  try { return await control("retire", id); }
+async function litellmRetireSnapshot(control, id, capture, attempted = () => {}, invoke = start => start()) {
+  try { return await invoke(() => control("retire", id)); }
   catch (primary) {
     const errors = [primary];
     try { attempted(); const observation = await control("observation", id); capture(observation.ledger, observation.checks ?? null); }
@@ -136,7 +136,7 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
       let observationAttempted = false, workerChecks = null, state;
       const captureLedger = (ledger, facts) => { diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), [...observed.slice(0, 8), ledger]); observed[8] = ledger; workerChecks = facts; };
       try {
-        const proof = await checks.wait(0, () => litellmRetireSnapshot(f.control, row.id, captureLedger, () => { observationAttempted = true; }));
+        const proof = await litellmRetireSnapshot(f.control, row.id, captureLedger, () => { observationAttempted = true; }, start => checks.wait(0, start));
         checks.run(1, () => { observed[0] = proof.retired; assert.equal(proof.retired, true); }); checks.run(2, () => { observed[1] = proof.unlocked; assert.equal(proof.unlocked, true); });
         state = await checks.wait(3, () => f.state(row.id));
         checks.run(3, () => { [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; });
@@ -1719,6 +1719,50 @@ test("waiter public D8 adapter fulfills unavailable without replacing the acquis
   assert.equal((await runLiveProviderCatalog({providerId:"litellm",profileId:"case",run:()=>Promise.reject(new LiveModelCatalogHttpError("litellm",401))})).outcomes[0].status,"auth-rejected");
 });
 // END waiter Worker predicate pure tests.
+
+// BEGIN retire primary definedness pure tests.
+function retirePrimaryFunctions(outer = readFileSync("test/openclaw-litellm.test.mjs", "utf8")) {
+  const body = outer.split("// BEGIN retirement observation boundary.")[1].split("// END retirement observation boundary.")[0];
+  const helper = new Function(body + ";return litellmRetireSnapshot;")();
+  const invocation = outer.split("\n").find(line => line.trim().startsWith("const proof = await") && line.includes("litellmRetireSnapshot(f.control"));
+  assert.ok(invocation);
+  const call = new Function("checks", "f", "row", "captureLedger", "litellmRetireSnapshot", "return (async () => { let observationAttempted=false;" + invocation + ";return {proof,observationAttempted}; })();");
+  return {call: (checks, control, capture) => call(checks, {control}, {id:"sdk_partial_abort"}, capture, helper), helper};
+}
+async function retirePrimaryScenario(primary, secondary, captureFails = false, outer) {
+  const checks = waiterWorkerFunctions()(), calls = [], {call} = retirePrimaryFunctions(outer);
+  let failure, rejected = false;
+  const control = async (action, id) => { calls.push([action,id]); if(action === "retire") throw primary; if(!captureFails) throw secondary; return {ledger:[],checks:null}; };
+  try { await call(checks,control,()=>{throw secondary;}); } catch(error) { rejected=true;failure=error; }
+  assert.equal(rejected,true);assert.deepEqual(calls,[["retire","sdk_partial_abort"],["observation","sdk_partial_abort"]]);
+  assert.ok(failure instanceof AggregateError);assert.equal(failure.errors.length,2);assert.equal(failure.errors[0],primary);assert.equal(failure.errors[1],secondary);
+  return {checks:checks.snapshot(),failure};
+}
+test("retire primary undefined survives observation and capture aggregation", async () => {
+  for(const captureFails of [false,true]) for(const secondary of [undefined,{}]) {
+    const {checks}=await retirePrimaryScenario(undefined,secondary,captureFails);
+    assert.deepEqual(checks,[0,1,0,1,true]);
+  }
+  const primary={};assert.deepEqual((await retirePrimaryScenario(primary,undefined)).checks,[0,1,0,1,false]);
+});
+test("retire primary fulfillment preserves result and avoids observation", async () => {
+  const checks=waiterWorkerFunctions()(), result={}, calls=[], {call}=retirePrimaryFunctions();
+  const value=await call(checks,(...args)=>{calls.push(args);return Promise.resolve(result);},()=>{throw undefined;});
+  assert.equal(value.proof,result);assert.equal(value.observationAttempted,false);assert.deepEqual(calls,[["retire","sdk_partial_abort"]]);assert.deepEqual(checks.snapshot(),[null,1,1,0,null]);
+});
+test("retire primary full envelope retains original undefined and independent reporting failures", async () => {
+  for(const full of [false,true]) {
+    const {checks}=await retirePrimaryScenario(undefined,{},true), proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy), lines=[];
+    const worst=maximumWorkerFailure(proof);const failure=proof.workerFailure("sdk_partial_abort",checks,worst.retire[2],worst.retire[3],worst.retire[4]);
+    const pairs=full?[...reportingPair(proof,"sdk_provider_error",[true,false],true),...reportingPair(proof,"sdk_partial_abort",[false,true],true)]:[];
+    const roles=full?roleRecords(proof,true):[], helper=proof.child({code:1}).envelope, stage=proof.record("sdk","sdk_waiter_abort","waiter_mutation",undefined,"catalog");
+    proof.emit([...pairs,...roles,helper,stage,failure,proof.boundary("REPORT_WORKER",undefined)],line=>lines.push(line));proof.flush(line=>lines.push(line));
+    const decoded=reportingDecode(proof,lines);assert.deepEqual(decoded.find(r=>r.phase==="child_result").retire[1],[0,1,0,1,true]);assert.ok(decoded.some(r=>r.phase==="reporting"&&r.kind==="undefined"));
+    assert.equal(decoded.filter(r=>r.witness).length,full?4:0);assert.equal(decoded.filter(r=>r.roles).length,full?2:0);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(lines.length<=10);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+    const writer=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy);assert.throws(()=>writer.emit([helper,failure],()=>{throw undefined;}),error=>reportingLeaves(error).every(value=>value===undefined));
+  }
+});
+// END retire primary definedness pure tests.
 
 // BEGIN ingress scope pure tests.
 function ingressPureFunctions() {
