@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, before, test } from "node:test";
 import { types } from "node:util";
 import { parse } from "yaml";
-import { annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
+import { createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
 import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
@@ -80,7 +80,7 @@ for (const [name, body] of [
 
 test("a native child exercises the actual reporter without invoking hostile getters", async () => {
   const f = await fixture(prelude + `
-    import { annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
+    import { createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
     test('getter isolation', async () => {
       let reads = 0;
       const error = Object.defineProperties({}, Object.fromEntries(
@@ -431,7 +431,7 @@ async function inertWorkerIdentityRows(events) {
   const loop = source.slice(source.indexOf("export async function* workerFailureReport("), source.indexOf("export default workerFailureReport;"));
   const run = new Function("types", "trackedTestFiles", "annotation", "createObservationRelay", "selectFailureRecords",
     constants + ownSource + failureSource + loop.replace("export ", "") + "return workerFailureReport;")(types,
-    () => file => file === searchObservationContract.file || /^test\/earlier-[0-9]+\.test\.mjs$/.test(file) ? file : null,
+    () => file => (file === searchObservationContract.file || file === realtimeObservationContract.file) || /^test\/earlier-[0-9]+\.test\.mjs$/.test(file) ? file : null,
     annotation, createObservationRelay, selectFailureRecords);
   const commands = [];
   for await (const line of run(events)) commands.push(line);
@@ -471,3 +471,126 @@ test("inert terminal P2 absent target keeps the actual reporter loop output unch
   ]);
 });
 // END inert observation diagnostic tests.
+
+// BEGIN inert realtime diagnostic tests (no native runner or fixture import).
+const realtimeBoundary = (caseId = "r01", extra = {}) => ({ v: 1, kind: "realtime_boundary", case: caseId, operation: "assert_elapsed", failurePresent: true, reasonDefined: false, unreportedCases: 0, ...extra });
+const realtimeCleanup = (caseId = "r01", extra = {}) => ({ v: 1, kind: "realtime_cleanup", case: caseId, registered: true, outcomes: "ffuffffff", recorderFailures: 0, recorderFirstDefined: null, unreportedCases: 0, ...extra });
+function realtimeEvents(index = 0) {
+  const location = { entryFile: realtimeObservationContract.file, file: realtimeObservationContract.file, line: 500 + index, column: 1, nesting: 0 };
+  const native = { ...location, name: realtimeObservationContract.names[index], testId: index + 1 };
+  return { location, enqueue: native, terminal: { ...native }, failure: { v: 1, kind: "failure", file: location.file, line: location.line, failureType: "testCodeFailure", errorClass: "undefined", code: "ERR_TEST_FAILURE" } };
+}
+function inertRealtimeRelay() { return createObservationRelay(file => [searchObservationContract.file, realtimeObservationContract.file].includes(file) ? file : null, true); }
+function feedRealtime(relay, e, rows, failed = true) {
+  relay.observe("test:enqueue", e.enqueue); relay.observe(failed ? "test:fail" : "test:pass", e.terminal, failed ? e.failure : undefined);
+  for (const row of rows) relay.observe("test:diagnostic", { ...e.location, message: realtimeDiagnosticText(row) });
+}
+test("inert realtime all twelve pairs bind separately and select first native failure", () => {
+  const relay = inertRealtimeRelay();
+  for (let i = 0; i < 12; i++) {
+    const id = `r${String(i + 1).padStart(2, "0")}`;
+    feedRealtime(relay, realtimeEvents(i), [realtimeBoundary(id, { failurePresent: i >= 3, reasonDefined: i >= 3 ? false : null }), realtimeCleanup(id)], i >= 3);
+  }
+  const result = relay.finish(); assert.equal(result.records.length, 2);
+  assert.equal(result.records[0].case, "r04"); assert.equal(result.records[0].unreportedCases, 11); assert.equal(result.omitted, 22); assert.equal(result.targetFailure.line, 503);
+});
+test("inert realtime missing failing pair never substitutes a later complete success", () => {
+  const relay = inertRealtimeRelay(); feedRealtime(relay, realtimeEvents(), []);
+  feedRealtime(relay, realtimeEvents(1), [realtimeBoundary("r02", { failurePresent: false, reasonDefined: null }), realtimeCleanup("r02")], false);
+  assert.equal(relay.finish().records[0].reason, "diagnostics_incomplete"); assert.equal(relay.finish().targetFailure.line, 500);
+});
+test("inert realtime shared coordinates and late foreign-name or child-ID reuse deny binding", () => {
+  for (const type of ["test:enqueue", "test:pass", "test:fail"]) {
+    const relay = inertRealtimeRelay(), e = realtimeEvents(); feedRealtime(relay, e, [realtimeBoundary(), realtimeCleanup()]);
+    relay.observe(type, { ...e.terminal, name: "unselected", file: searchObservationContract.file, line: 900 }, e.failure);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const relay = inertRealtimeRelay();
+  for (let i = 0; i < 12; i++) { const e = realtimeEvents(i); e.enqueue.line = e.terminal.line = e.location.line = 368; feedRealtime(relay, e, [realtimeBoundary(`r${String(i + 1).padStart(2, "0")}`), realtimeCleanup(`r${String(i + 1).padStart(2, "0")}`)]); }
+  assert.equal(relay.finish().records[0].reason, "ambiguous_coordinates");
+});
+test("inert realtime missing native fields and wrong payload labels stay incomplete", () => {
+  for (const field of ["testId", "entryFile", "file", "line", "column", "nesting"]) {
+    const e = realtimeEvents(), relay = inertRealtimeRelay(); delete e.terminal[field]; feedRealtime(relay, e, [realtimeBoundary(), realtimeCleanup()]);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const e = realtimeEvents(), relay = inertRealtimeRelay(); feedRealtime(relay, e, [realtimeBoundary("r02"), realtimeCleanup("r02")]);
+  assert.equal(relay.finish().records[0].reason, "diagnostics_conflict");
+});
+test("inert realtime exact schema rejects unsafe values, duplicate JSON and bounds", () => {
+  let touched = 0;
+  for (const value of [new Proxy({}, { ownKeys() { touched++; } }), Object.defineProperty({}, "kind", { get() { touched++; } }), realtimeBoundary({ toString() { touched++; } })]) assert.throws(() => realtimeDiagnosticText(value));
+  assert.equal(touched, 0);
+  const text = realtimeDiagnosticText(realtimeBoundary());
+  for (const bad of [text.replace('"v":1', '"v":1,"v":1'), "prefix" + text, text + " ", text.replace('"r01"', '"é"'), text + "x".repeat(641)]) assert.throws(() => parseRealtimeDiagnostic(bad));
+  assert.throws(() => realtimeDiagnosticText({ ...realtimeBoundary(), unknown: true }));
+});
+test("inert realtime original cleanup preserves undefined primary and every independent failure", async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const run = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  const out = [], order = [], reasons = Array.from({ length: 8 }, () => ({}));
+  const ledger = createRealtimeLedger("r01", text => out.push(parseRealtimeDiagnostic(text))); ledger.registered(); ledger.body(true, undefined);
+  const fail = (label, reason) => { order.push(label); throw reason; };
+  await assert.rejects(run(ledger, () => fail("release", undefined), [{ close() { fail("socket", reasons[0]); } }], () => fail("drain", reasons[1]), [Promise.resolve({ failed: true, error: reasons[2] })],
+    { dispose() { fail("dispose", reasons[3]); } }, { finish() { fail("observer", reasons[4]); } }, { close(callback) { order.push("server"); callback(reasons[5]); } }, () => fail("remove", reasons[6]), "synthetic", [reasons[7]], true, undefined), error => {
+      assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [undefined, undefined, ...reasons]); return true;
+    });
+  assert.deepEqual(order, ["release", "socket", "drain", "dispose", "observer", "server", "remove"]);
+  assert.equal(out[0].reasonDefined, false); assert.equal(out[1].outcomes, "rdddddddd");
+});
+test("inert realtime throwing recorder cannot interrupt cleanup or erase original reasons", async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8"), cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const run = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  let releases = 0, disposals = 0, removes = 0; const original = {}, ledger = createRealtimeLedger("r01", () => { throw undefined; }); ledger.registered(); ledger.body(true, original);
+  await assert.rejects(run(ledger, () => { releases++; }, [], undefined, [], { dispose() { disposals++; } }, undefined, undefined, () => { removes++; }, "synthetic", [], true, original), error => error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+  assert.deepEqual([releases, disposals, removes], [1, 1, 1]); assert.deepEqual(ledger.failures(), [undefined, undefined]);
+});
+test("inert realtime unregistered cleanup and pending originals cannot be completed evidence", () => {
+  const out = [], ledger = createRealtimeLedger("r01", text => out.push(parseRealtimeDiagnostic(text))); ledger.body(true, undefined); ledger.flush(); ledger.flush();
+  assert.equal(out.length, 2); assert.equal(out[1].registered, false); assert.equal(out[1].outcomes, "uuuuuuuuu");
+  const relay = inertRealtimeRelay(); feedRealtime(relay, realtimeEvents(), [realtimeBoundary(), realtimeCleanup("r01", { outcomes: "fpuffffff" })]);
+  assert.equal(relay.finish().records[0].reason, "cleanup_incomplete");
+});
+test("inert realtime both full buffers retain both original target identities", async () => {
+  const search = observationEvents(), media = realtimeEvents(), events = [];
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { file: `test/earlier-${i}.test.mjs`, line: 1 } });
+  for (const e of [search, media]) {
+    events.push({ type: "test:enqueue", data: e.enqueue });
+    for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, name: "unselected", line: 1000 + i, testId: 1000 + i } });
+    events.push({ type: "test:fail", data: { ...e.terminal, details: { error: undefined } } });
+  }
+  const rows = await inertWorkerIdentityRows(events), failures = rows.filter(r => r.kind === "failure");
+  assert.equal(failures[0].file, searchObservationContract.file); assert.equal(failures[1].file, realtimeObservationContract.file);
+  assert.equal(failures[0].errorClass, "undefined"); assert.equal(failures[1].errorClass, "undefined");
+  assert.equal(rows.find(r => r.kind === "realtime_delivery").reason, "bounded_overflow"); assert.equal(rows.find(r => r.kind === "realtime_delivery").unreportedCases, null);
+  assert.equal(rows.length, 10); assert.equal(rows.at(-1).reported, 7);
+});
+test("inert realtime both pairs reserve five identities plus four diagnostics and summary", async () => {
+  const search = observationEvents(), media = realtimeEvents(), events = [];
+  for (const [e, pair, encode] of [[search, [observationBoundary(), observationCleanup()], observationDiagnosticText], [media, [realtimeBoundary(), realtimeCleanup()], realtimeDiagnosticText]]) {
+    events.push({ type: "test:enqueue", data: e.enqueue }, { type: "test:fail", data: e.terminal });
+    for (const row of pair) events.push({ type: "test:diagnostic", data: { ...e.location, message: encode(row) } });
+  }
+  for (let i = 0; i < 9; i++) events.unshift({ type: "test:fail", data: { file: `test/earlier-${i}.test.mjs`, line: 1 } });
+  const rows = await inertWorkerIdentityRows(events); assert.equal(rows.length, 10); assert.equal(rows.at(-1).reported, 5); assert.equal(rows.at(-1).diagnosticsReported, 4);
+  for (const row of [realtimeBoundary("r12", { unreportedCases: 1000000 }), realtimeCleanup("r12", { outcomes: "ddddddddd", recorderFailures: 1000000, recorderFirstDefined: false, unreportedCases: 1000000 })]) assert.ok(Buffer.byteLength(annotation(row, "notice")) <= 768);
+});
+test("inert realtime literal registrations preserve exact order, names, arguments and timeout", () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const sites = [...source.matchAll(/^test\('bounded media authority ([^']+)', \{ timeout: 15_000 \}, t => authorityVariant\(t, (false|true), '([^']+)', '(r[0-9]{2})'\)\);$/gm)];
+  assert.equal(sites.length, 12); assert.equal(new Set(sites.map(m => source.slice(0, m.index).split("\n").length)).size, 12);
+  assert.deepEqual(sites.map(m => "bounded media authority " + m[1]), [...realtimeObservationContract.names]);
+  for (const [i, m] of sites.entries()) { assert.equal(m[1], `${m[3]}, ASR=${m[2]}`); assert.equal(m[4], `r${String(i + 1).padStart(2, "0")}`); }
+  assert.ok(source.includes("assert.ok(elapsed <= 250,")); assert.ok(source.includes("await sleep(120); const retiredAppends = (await f.stats()).appends.length;"));
+});
+test("inert realtime pre-registration reporting failures preserve primary including undefined", () => {
+  for (const original of [undefined, {}]) {
+    const ledger = createRealtimeLedger("r01", () => { throw undefined; }); ledger.body(true, original);
+    assert.throws(() => ledger.finishUnregistered(true, original), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+    assert.deepEqual(ledger.failures(), [undefined, undefined]);
+  }
+  const ledger = createRealtimeLedger("r01", () => {}); ledger.body(true, undefined);
+  assert.equal(ledger.finishUnregistered(true, undefined), undefined);
+});
+// END inert realtime diagnostic tests.
