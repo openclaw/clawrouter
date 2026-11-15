@@ -538,18 +538,19 @@ test("worker abort original pure: max width canonical envelope remains closed an
   for (const text of [wire.replace('{"v":1,','{"v":0,"v":1,'), wire+' ', wire+'é']) assert.equal(parseWorkerAbortDiagnostic(text), null);
 });
 
-async function workerRelationCase({ reason = {}, undefinedReason = false } = {}) {
+async function workerRelationCase({ reason = {}, undefinedReason = false, nonreader = false } = {}) {
   const c = workerOperationCase(), h = pureWorkerRetirement(), calls = [];
   const error = undefinedReason ? undefined : reason;
   for (const kind of ["handler", "fetch", "acquisition_observer"]) h.observeLiteLLMOperation(c.r, kind, () => Promise.resolve({}), { token: c.token });
   const details = { input: c.input, reader: c.reader, receiverIdentity: true, signalAborted: false };
-  const closed = Promise.reject(error), read = Promise.reject(error), cancel = Promise.reject(error);
+  const closed = Promise.reject(error), read = Promise.reject(error), cancel = nonreader ? Promise.resolve(null) : Promise.reject(error);
   c.reader.closed = closed;
   const call = (kind, promise, extra = {}) => h.observeLiteLLMOperation(c.r, kind, () => { calls.push(kind); return promise; }, { ...details, ...extra });
   assert.equal(call("closed", closed), closed); assert.equal(call("read", read), read);
   const derivative = read.then(value => value);
   assert.equal(call("read_observer", derivative, { originalRead: read }), derivative);
   assert.equal(call("cancel", cancel, { argc: 1, operandPresent: true, reason: error }), cancel);
+  if(nonreader)h.observeLiteLLMOperation(c.r,"wait_until",()=>Promise.reject(error),{token:c.token});
   c.input.abortSequence = ++c.r.sequence; c.input.callerAbortedAtAbort = false;
   c.input.noEarlierFailure = true; c.input.pendingAtAbort = [c.r.operations[4]];
   c.reader.unlockInvoke = ++c.r.sequence; c.reader.unlockSequence = ++c.r.sequence;
@@ -671,12 +672,12 @@ test("worker abort relational pure: failed reporting and saturation preserve coa
 });
 async function workerRelationMaximum() {
   const c=await workerRelationCase(),observation=c.project(),source=observation.ledger[11],max=1000000;
-  const remap=x=>max-6+x;
-  source.ref=[max,max,max,max,remap(3)]; source.rows.forEach(row=>{row[0]=remap(row[0]);row.splice(3,4,max,max,max,max);row[9]=max;row[10]=max;});
-  source.signals.forEach(row=>row[0]=remap(row[0]));source.resource.slice(1,5).forEach(row=>{row[0]=remap(row[0]);row[3]=max;row[4]=max;});
+  const remap=x=>max-7+x;
+  source.ref=[max,max,max,max,remap(3)]; source.rows.forEach(row=>{row[0]=remap(row[0]);row.splice(3,4,max,max,max,max);row[9]=max-100+row[0]-(max-7);row[10]=row[9]+90;});
+  source.signals.forEach(row=>row[0]=remap(row[0]));source.resource.slice(1,5).forEach(row=>{row[0]=remap(row[0]);row[3]=max-100+row[0]-(max-7);row[4]=row[3]+90;});
   source.relations[13]=max;source.relations[14]=max;source.relations[15]=max;source.relations[16]=max;
-  source.abort=[true,max,true,false,true,false,true,4,Array.from({length:4},(_,i)=>[max-i,max]),0,true];
-  source.coverage.splice(4,5,max,max,max,max,max);observation.operations=max;observation.syncFailures=max;
+  source.abort=[true,max-50,true,false,true,false,true,4,[remap(4),max-8,max-9,max-10].map(id=>[id,max]),0,true];
+  source.coverage.splice(4,5,0,max,max,max,max);observation.operations=max;observation.syncFailures=max;
   const {frames,errors}=workerRelationFrames(observation);assert.deepEqual(errors,[]);
   const maximal=frames.map(frame=>{const p=JSON.parse(frame.slice(workerAbortRelationalPrefix.length));
     if(p.part==="retire"){p.data[1]=Array(3).fill(max);p.data[2]=[29,max,max,max,false];}
@@ -710,11 +711,79 @@ test("worker abort relational pure: nonfulfilled resource roles must belong to t
     const changed=structuredClone(parts);changed[3].data[i][0]=999;
     assert.equal(validateWorkerAbortGroup(changed),null);
   }
-  // A fulfilled original need not appear in the bad census; its retained
-  // distinct ordinal still belongs to the same resource binding.
-  const positive=structuredClone(parts),cancel=positive[3].data[4];cancel[0]=999;cancel[1]=1;cancel[2]=0;
-  const last=positive[2].data[1];last[1]=9;last[5]=null;last[6]=null;
-  assert.ok(validateWorkerAbortGroup(positive));
+  // Fulfilled cancellation can be absent from the bad census, but its
+  // ordinal must still name one of the eight actual ledger operations.
+  const valid=workerRelationFrames((await workerRelationCase({nonreader:true})).project()).frames
+    .map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefix.length)));
+  assert.ok(validateWorkerAbortGroup(valid));
+  valid[3].data[4][0]=999;assert.equal(validateWorkerAbortGroup(valid),null);
+});
+
+async function workerRelationRepairCases() {
+  const cases=[];
+  async function add(name, mutate, accepted=false, nonreader=true){
+    const c=await workerRelationCase({nonreader});let observation;
+    if(mutate)observation=mutate(c);observation??=c.project();cases.push({name,observation,accepted});
+  }
+  await add("foreign fourth waiter with equal numeric IDs",c=>{c.r.operations[7].token={...c.token,request:{},scenario:{}};});
+  await add("fulfilled cancel ordinal999 with total8",c=>{const o=c.project();o.ledger[11].resource[4][0]=999;return o;});
+  await add("complete rejected census with pending1",c=>{const o=c.project();o.ledger[11].coverage[4]=1;return o;});
+  await add("first state cannot regress to pending",c=>{const op=c.r.operations[3];op.state="pending";delete op.error;delete op.settle;});
+  await add("synchronous comparison cannot become rejected",c=>{const o=c.project();o.ledger[10][2]=3;return o;});
+  await add("legitimate absent nonreader references",null,true);
+  await add("legitimate explicit undefined nonreader references",c=>{Object.assign(c.r.operations[7],{input:undefined,transport:undefined,reader:undefined});},true);
+  for(const index of [3,4,5,7])for(const field of ["token","request","scenario","transport","reader","ordinal"]){
+    await add(`foreign operation ${index} ${field}`,c=>{
+      const op=c.r.operations[index];
+      if(field==="token")op.token={...c.token};
+      if(field==="request")op.request={};
+      if(field==="scenario")op.token={...c.token,scenario:{}};
+      if(field==="transport")op.transport={...c.input};
+      if(field==="reader")op.reader={...c.reader};
+      if(field==="ordinal")op.ordinal=0;
+    });
+  }
+  await add("duplicate operation object",c=>{c.r.operations.push(c.r.operations[7]);});
+  await add("foreign request registration",c=>{c.r.requests[0].request={};});
+  await add("ambiguous request object",c=>{c.r.requests.push({token:{...c.token},request:c.token.request});});
+  await add("ambiguous transport object",c=>{c.r.inputs.push(c.input);});
+  await add("ambiguous reader object",c=>{c.r.readers.push(c.reader);});
+  for(let role=1;role<=4;role++)for(const field of ["range","state","error","invoke","settle"]){
+    await add(`resource ${role} ${field}`,c=>{const o=c.project(),r=o.ledger[11].resource[role];
+      if(field==="range")r[0]=o.operations;
+      if(field==="state")r[1]=r[1]===1?2:1;
+      if(field==="error")r[2]=r[2]===0?1:0;
+      if(field==="invoke")r[3]=0;
+      if(field==="settle")r[4]=r[3];return o;});
+  }
+  for(const field of ["zero total","null total","small total","bad range","bad kind","bad missing reader","bad missing input","bad absent error","bad missing settle","bad zero invoke","bad sequence","duplicate invoke","duplicate settle","pending range","pending wrong role","pending count","pending late invocation","pending early settlement"]){
+    await add(field,c=>{const o=c.project(),x=o.ledger[11],row=x.rows[1];
+      if(field==="zero total")o.operations=0;if(field==="null total")o.operations=null;if(field==="small total")o.operations=4;
+      if(field==="bad range")row[0]=o.operations;if(field==="bad kind")row[1]=0;
+      if(field==="bad missing reader")row[6]=null;if(field==="bad missing input")row[5]=null;
+      if(field==="bad absent error"){row[7]=false;row[8]=null;}if(field==="bad missing settle")row[10]=null;
+      if(field==="bad zero invoke")row[9]=0;if(field==="bad sequence")row[10]=row[9];
+      if(field==="duplicate invoke"){x.resource[4][3]=x.resource[1][3];}
+      if(field==="duplicate settle"){x.resource[4][4]=x.resource[1][4];}
+      if(field==="pending range")x.abort[8][0][0]=o.operations;
+      if(field==="pending wrong role")x.abort[8][0][0]=x.resource[3][0];
+      if(field==="pending count")x.abort[7]=2;
+      if(field==="pending late invocation")x.abort[1]=x.resource[1][3];
+      if(field==="pending early settlement")x.abort[1]=x.resource[1][4];return o;});
+  }
+  return cases;
+}
+test("worker abort relational repair pure: exact operation owners and complete census reject all three reviewed counterexamples", async()=>{
+  for(const c of await workerRelationRepairCases()){
+    const {frames,errors}=workerRelationFrames(c.observation);
+    if(c.accepted||["foreign fourth waiter with equal numeric IDs","fulfilled cancel ordinal999 with total8","complete rejected census with pending1"].includes(c.name))assert.deepEqual(errors,[],c.name);
+    if(errors.length)assert.equal(c.accepted,false,c.name);
+    for(const reverse of [false,true]){
+      const result=await workerAbortPipeline(workerRelationEvents(frames,reverse));
+      assert.equal(relationRecords(result.rows).length,c.accepted?8:0,c.name);
+      assert.equal(result.rows[0].kind,"failure",c.name);
+    }
+  }
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.

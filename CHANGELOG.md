@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; reject incomplete or inconsistent sets without changing retirement checks.
+- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; validate each operation’s exact owner and complete census references, rejecting inconsistent sets without changing retirement checks.
 
 - Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
 

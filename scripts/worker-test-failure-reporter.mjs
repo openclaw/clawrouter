@@ -235,14 +235,36 @@ export function validateWorkerAbortGroup(parts) {
     ||!resource||!relations||resource.slice(1,5).some(x=>!x)||!resource[5]||!resource[6]||resource[3][0]!==ref[4]
     ||signals.some((row,i)=>!row||row[0]!==rows[i][0])
     ||rows.some(row=>row[2]===0 ? row[7]||row[10]!==null : !row[7]||row[10]===null))return null;
+  const total = retire[3], ordinal = id => Number.isSafeInteger(id) && id >= 0 && id < total;
+  const sequence = (state, errorPresent, invoke, settle) => Number.isSafeInteger(invoke) && invoke > 0
+    && (state === 0 ? !errorPresent && settle === null : Number.isSafeInteger(settle) && settle > invoke
+      && (state === 1 ? !errorPresent : errorPresent));
+  if(!Number.isSafeInteger(total)||total<4||!ordinal(ref[4])
+    ||!(rows[0][2]===retire[4]||retire[4]===0&&rows[0][2]===2)
+    ||coverage[4]!==rows.filter(row=>row[2]===0).length
+    ||rows.some(row=>!ordinal(row[0])||row[1]<1||row[1]>10||!sequence(row[2],row[7],row[9],row[10])
+      ||[2,3,4,5,6,7,8].includes(row[1])&&row[5]!==ref[2]
+      ||[4,5,6,7].includes(row[1])&&row[6]!==ref[3]||row[6]!==null&&row[5]===null)
+    ||resource.slice(1,5).some(row=>!ordinal(row[0])||!sequence(row[1],!!(row[2]&1),row[3],row[4]))
+    ||abort[8].some(row=>!ordinal(row[0])))return null;
+  // One ordinal names one original record. Cross-part aliases may repeat that
+  // record's facts; distinct records cannot reuse its invocation/observer clock.
+  const operations = new Map(rows.map(row=>[row[0],{kind:row[1],state:row[2],invoke:row[9],settle:row[10]}]));
   // Check every shared ordinal, not a guessed list of four failing kinds.
   for(let i=0;i<4;i++){
     const role=resource[i+1], bad=rows.find(row=>row[0]===role[0]);
-    if(!bad){if(role[1]!==1)return null;continue;}
+    if(!bad){if(role[1]!==1)return null;operations.set(role[0],{kind:[4,5,6,7][i],state:role[1],invoke:role[3],settle:role[4]});continue;}
     const expectedKind=[4,5,6,7][i];
     if(bad[1]!==expectedKind||bad[2]!==role[1]||bad[5]!==ref[2]||bad[6]!==ref[3]||bad[9]!==role[3]||bad[10]!==role[4]
       ||bad[7]!==!!(role[2]&1)||bad[8]!==((role[2]&1)?!!(role[2]&2):null))return null;
   }
+  const clocks = new Set();
+  for(const op of operations.values())for(const clock of [op.invoke,op.settle]){
+    if(clock===null)continue;if(clocks.has(clock))return null;clocks.add(clock);
+  }
+  if(abort[6]&&(abort[7]!==abort[8].length||abort[9]!==0)
+    ||abort[8].some(row=>{const op=operations.get(row[0]);return op&&(op.kind!==4
+      ||abort[0]&&abort[1]!==null&&(op.invoke>=abort[1]||op.settle!==null&&op.settle<=abort[1]));}))return null;
   if(new Set(resource.slice(1,5).map(x=>x[0])).size!==4||resource[0]!==63||rows[0][1]!==6
     ||relations[0]!==63||new Set(abort[8].map(row=>row[0])).size!==abort[8].length||abort[8].some(row=>row[0]===null||row[1]!==ref[3])||abort[9]>0||abort[6]&&abort[10]!==true)return null;
   return ordered;

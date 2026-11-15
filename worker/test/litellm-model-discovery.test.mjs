@@ -217,9 +217,29 @@ export function litellmWorkerLedger(r, scope) {
     const reader = captured?.operation.reader, input = captured?.operation.input ?? captured?.operation.transport;
     const token = input?.token ?? captured?.operation.token;
     const ref = [number(value(token, "generation")), number(value(token, "id")), number(value(input, "id")), number(value(reader, "id")), number(captured?.operation.ordinal)];
+    // Numeric IDs are only wire references. Each retained operation must
+    // independently belong to this exact request and its private owner objects.
+    const unique = (list, item) => list.filter(candidate => candidate === item).length === 1;
+    const requests = r.requests.filter(q => value(q, "token") === token);
+    const request = requests.length === 1 ? requests[0] : undefined;
+    const owned = op => {
+      const ordinal = value(op, "ordinal"), localInput = value(op, "input"), transport = value(op, "transport");
+      const localReader = value(op, "reader"), explicitToken = value(op, "token"), owner = localInput ?? transport;
+      const operationToken = value(owner, "token") ?? explicitToken;
+      return Number.isSafeInteger(ordinal) && ordinal >= 0 && r.operations[ordinal] === op && unique(r.operations, op)
+        && operationToken === token && value(token, "scenario") === r && request !== undefined
+        && value(token, "request") === value(request, "request")
+        && r.requests.filter(q => value(q, "request") === value(token, "request")).length === 1
+        && (explicitToken === undefined || explicitToken === token)
+        && (!has(op, "request") || value(op, "request") === value(token, "request"))
+        && (localInput === undefined || localInput === input) && (transport === undefined || transport === input)
+        && (owner === undefined || unique(r.inputs, owner) && value(owner, "token") === token && value(owner, "request") === value(token, "request"))
+        && (localReader === undefined || localReader === reader && unique(r.readers, localReader)
+          && value(localReader, "transport") === owner && owner === input);
+    };
     const resource = ledger[8];
     const originals = resource?.[2].map(row => row ? r.operations[row[0]] : null) ?? [null, null, null, null];
-    const exact = originals.map((op, i) => !!op && op.ordinal === resource?.[2][i]?.[0] && op.reader === reader && op.input === input);
+    const exact = originals.map((op, i) => !!op && owned(op) && op.ordinal === resource?.[2][i]?.[0] && op.reader === reader && op.input === input);
     const c0 = exact[2] && has(originals[2], "pending") && originals[2].pending === value(reader, "closed");
     const derived = exact[0] && exact[1] && has(originals[0], "pending") && originals[1].originalRead === originals[0].pending;
     let promiseKnown = 0, promiseEqual = 0, bit = 1;
@@ -237,11 +257,11 @@ export function litellmWorkerLedger(r, scope) {
     const signals = selected.map(op => [number(op.ordinal), ...flag(op, "signalAborted"), ...flag(op, "abortedAtSettle"), ...flag(op, "sameSignalReasonAtSettle")]);
     const pending = value(input, "pendingAtAbort"), pendingArray = Array.isArray(pending);
     const pendingRows = pendingArray ? pending.slice(0, 4).map(op => [number(op?.ordinal), number(op?.reader?.id)]) : [];
-    const pendingBound = pendingArray ? pending.every(op => r.operations[op.ordinal] === op && op.kind === "read" && op.input === input && op.reader === reader) : null;
+    const pendingBound = pendingArray ? pending.every(op => owned(op) && op.kind === "read" && op.input === input && op.reader === reader) : null;
     const requestIndex = r.requests.findIndex(q => q.token === token && q.request === value(token, "request"));
     const inputIndex = r.inputs.indexOf(input), readerIndex = r.readers.indexOf(reader);
     const associated = matched?.binding === true && ref.every(n => n !== null) && captured?.operation.kind === "closed"
-      && exact.every(Boolean) && resource[0].every((n, i) => n === ref[i]) && resource[2][2][0] === ref[4] && c0 && derived;
+      && selected.every(owned) && exact.every(Boolean) && resource[0].every((n, i) => n === ref[i]) && resource[2][2][0] === ref[4] && c0 && derived;
     const overflow = bad.length > 4 || rows.some(row => [row[0], row[3], row[9]].some(n => n === null))
       || ref.some(n => n === null) || pendingArray && (pending.length > 4 || pendingRows.some(row => row.some(n => n === null)));
     ledger[11] = {
