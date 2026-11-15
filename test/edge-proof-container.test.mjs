@@ -2009,7 +2009,7 @@ async function nativeOwnerFixture(options = {}) {
     const child = new EventEmitter(); child.references = 0;
     child.ref = function() { assert.equal(this, child); calls.push("ref"); this.references++; if (configuration.refFailure) throw configuration.reason; return this; };
     const originalOn = child.on, originalRemove = child.removeListener;
-    child.on = function(event, listener) { assert.equal(this, child); originalOn.call(this, event, listener); if (event === configuration.listenerFailure) throw configuration.reason; return this; };
+    child.on = function(event, listener) { assert.equal(this, child); if (event === configuration.listenerBeforeFailure) throw configuration.reason; originalOn.call(this, event, listener); if (event === configuration.listenerFailure) throw configuration.reason; return this; };
     child.removeListener = function(event, listener) { assert.equal(this, child); originalRemove.call(this, event, listener); if (configuration.removeFailure) throw configuration.reason; return this; };
     publish(child); // Constructor has neither PID nor spawn metadata yet.
     child.launch = () => {
@@ -2031,16 +2031,42 @@ test("native child owner original close stays pending after stop and exit and su
   b.emit("close", 0, null); await drain; assert.equal(done, true);
   assert.deepEqual([...f.subscribers], [f.foreign]); assert.equal(a.listenerCount(errorMonitor), 0); assert.equal(a.listenerCount("error"), 0);
 });
-test("native child owner constructor throw has no invented close and spawn error preserves original reason", async () => {
-  for (const reason of [undefined, Object.freeze({ original: true })]) {
-    const f = await nativeOwnerFixture(); f.construct(); await nativeOwnerFailure(f.owner.drain(false)); assert.deepEqual([...f.subscribers], [f.foreign]);
-    const g = await nativeOwnerFixture(), child = g.construct(); let seen;
-    child.on("error", value => { seen = value; }); child.emit("error", reason); assert.equal(seen, reason);
-    child.emit("close", -1, null); const failure = await nativeOwnerFailure(g.owner.drain(false)); assert.ok(nativeOwnerErrors(failure).includes(reason));
+async function nativeOwnerPending(promise, fixture) {
+  let settled = false; promise.then(() => { settled = true; }, () => { settled = true; });
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+  assert.equal(settled, false); assert.equal(fixture.subscribers.size, 2);
+  assert.equal(fixture.calls.includes("unsubscribe"), false);
+}
+test("native child owner missing PID async spawn error remains pending until original close", async () => {
+  for (const reason of [undefined, Object.freeze({ original: true })]) for (const timing of ["before-drain", "after-drain"]) {
+    const f = await nativeOwnerFixture(), child = f.construct(); let seen = 0;
+    child.on("error", value => { assert.equal(value, reason); seen++; });
+    if (timing === "before-drain") child.emit("error", reason);
+    const pending = f.owner.drain(false); await nativeOwnerPending(pending, f);
+    assert.equal(child.pid, undefined); assert.equal(child.references, 1);
+    if (timing === "after-drain") child.emit("error", reason);
+    await nativeOwnerPending(pending, f); assert.equal(seen, 1);
+    child.emit("close", -1, null);
+    const failure = await nativeOwnerFailure(pending); assert.equal(nativeOwnerErrors(failure).filter(error => error === reason).length, 1);
+    assert.deepEqual([...f.subscribers], [f.foreign]); assert.equal(child.listenerCount(errorMonitor), 0);
   }
-  const h = await nativeOwnerFixture(), child = h.construct(); const original = new Error("inert original");
-  assert.throws(() => child.emit("error", original), error => error === original); // No added error listener.
-  child.emit("close"); assert.ok(nativeOwnerErrors(await nativeOwnerFailure(h.owner.drain(false))).includes(original));
+  const g = await nativeOwnerFixture(), early = g.construct(), reason = new Error("inert original");
+  assert.throws(() => early.emit("error", reason), error => error === reason); // No error listener added.
+  early.emit("close"); assert.ok(nativeOwnerErrors(await nativeOwnerFailure(g.owner.drain(false))).includes(reason));
+  assert.equal(early.references, 0); // Already observed close needs no ref.
+});
+test("native child owner constructor-only and error-without-close have unresolved obligations", async () => {
+  for (const variant of ["unconfirmed", "known-fixture-sync-throw", "error-without-close"]) {
+    const f = await nativeOwnerFixture(), child = f.construct();
+    // The fixture knows its synchronous call threw. The constructor channel does
+    // not carry that operation/reason association, so the owner cannot use it.
+    if (variant === "known-fixture-sync-throw") { let failed = false; try { throw undefined; } catch { failed = true; } assert.equal(failed, true); }
+    if (variant === "error-without-close") { child.on("error", () => {}); child.emit("error", undefined); }
+    const pending = f.owner.drain(false); await nativeOwnerPending(pending, f);
+    assert.equal(child.listenerCount("close"), 1); assert.equal(child.listenerCount(errorMonitor), 1); assert.equal(child.references, 1);
+    // No invented close/cleanup and no timeout fixture. The production owner is
+    // still bounded by the unchanged outer supervisor, not this pure promise.
+  }
 });
 test("native child owner unknown duplicate missing and changed routes deny success without skipping joins", async () => {
   for (const variant of ["foreign", "duplicate-role", "duplicate-object", "missing", "changed"]) {
@@ -2066,11 +2092,51 @@ test("native child owner fixed point includes late acquisitions and independent 
     assert.equal(c.listenerCount("close"), 0); assert.equal(c.listenerCount(errorMonitor), 0);
   }
 });
-test("native child owner capacity and close-listener failure cannot invent completion", async () => {
-  const f = await nativeOwnerFixture(), c = f.construct(0, { listenerFailure: "close", reason: undefined }); c.launch();
-  const failed = await nativeOwnerFailure(f.owner.drain(false)); assert.ok(nativeOwnerErrors(failed).includes(undefined));
-  const g = await nativeOwnerFixture(); for (let i = 0; i < 5; i++) g.construct(); await nativeOwnerFailure(g.owner.drain(false));
-  assert.deepEqual([...g.subscribers], [g.foreign]);
+test("native child owner close listener attach then throw retains ref join and original undefined", async () => {
+  for (const reason of [undefined, Object.freeze({ attachment: true })]) {
+    const f = await nativeOwnerFixture(), child = f.construct(0, { listenerFailure: "close", reason }); child.launch();
+    const pending = f.owner.drain(false); await nativeOwnerPending(pending, f);
+    assert.equal(child.references, 1); assert.equal(child.listenerCount("close"), 1);
+    child.emit("close"); const failure = await nativeOwnerFailure(pending);
+    assert.equal(nativeOwnerErrors(failure).filter(error => error === reason).length, 1);
+    assert.equal(child.listenerCount("close"), 0); assert.deepEqual([...f.subscribers], [f.foreign]);
+  }
+});
+test("native child owner missing close listener and lost capture never retire uncertain obligations", async () => {
+  const f = await nativeOwnerFixture(), child = f.construct(0, { listenerBeforeFailure: "close", reason: undefined }); child.launch();
+  const pending = f.owner.drain(false); await nativeOwnerPending(pending, f); assert.equal(child.references, 1);
+  child.emit("close"); await nativeOwnerPending(pending, f); // Unobserved close is not completion.
+  assert.equal(child.listenerCount(errorMonitor), 1);
+  const g = await nativeOwnerFixture(), known = [];
+  for (let i = 0; i < 4; i++) { const c = g.construct(i % 2); c.launch(); known.push(c); }
+  const drain = g.owner.drain(false);
+  known[0].on("close", () => g.construct()); // Overflow after the first join list was made.
+  for (const c of known) c.emit("close");
+  await nativeOwnerPending(drain, g); assert.equal(known[0].listenerCount(errorMonitor), 1);
+});
+test("native child owner late conflicting spawn still refs and joins original close", async () => {
+  const f = await nativeOwnerFixture(), first = f.construct(); first.launch(); let late;
+  first.on("close", () => { late = f.construct(2); late.launch(); });
+  const pending = f.owner.drain(false); first.emit("close"); await nativeOwnerPending(pending, f);
+  assert.ok(late.references >= 1); late.emit("close"); await nativeOwnerFailure(pending);
+  assert.deepEqual([...f.subscribers], [f.foreign]);
+});
+test("native child owner missing foreign conflicting early metadata and callback faults keep close custody", async () => {
+  for (const variant of ["missing-spawn", "early-metadata", "metadata-throw", "duplicate-spawn", "late-error"]) {
+    const f = await nativeOwnerFixture(), child = f.construct();
+    if (variant === "early-metadata") child.emit("spawn");
+    if (variant === "metadata-throw") Object.defineProperty(child, "spawnfile", { configurable: true, get() { throw undefined; } });
+    if (variant !== "metadata-throw" && variant !== "missing-spawn") child.launch();
+    if (variant === "metadata-throw") child.emit("spawn");
+    if (variant === "duplicate-spawn") child.emit("spawn");
+    const pending = f.owner.drain(false); await nativeOwnerPending(pending, f); assert.equal(child.references, 1);
+    child.emit("close");
+    if (variant === "late-error") { child.on("error", () => {}); child.emit("error", undefined); }
+    const reason = await nativeOwnerFailure(pending);
+    if (variant === "late-error") assert.equal(nativeOwnerErrors(reason).filter(value => value === undefined).length, 1);
+    if (variant === "metadata-throw") assert.ok(nativeOwnerErrors(reason).includes(undefined));
+    assert.deepEqual([...f.subscribers], [f.foreign]);
+  }
 });
 
 // The hash pins the complete function and these two manually audited AST

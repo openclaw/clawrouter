@@ -1521,7 +1521,8 @@ async function qualifyNativeChildRoutes(native, capsule) {
 
 function createNativeChildOwner(routes) {
   const publication = channel("child_process"), rows = [], errors = [];
-  let active = true, subscribed = false, draining = false;
+  let active = true, subscribed = false, draining = false, captureIncomplete = false;
+  const unknownClose = new Promise(() => {});
   const fault = code => errors.push(new Error(code));
   const protect = operation => { try { return operation(); } catch (error) { errors.push(error); } };
   const classify = row => {
@@ -1536,24 +1537,25 @@ function createNativeChildOwner(routes) {
   const subscriber = message => {
     // A diagnostics-channel subscriber exception would be an uncaught exception.
     protect(() => {
-      check(active && rows.length < 4, "native-child-capture-capacity");
-      const child = message.process;
+      if (!active || rows.length >= 4) { captureIncomplete = true; fault("native-child-capture-capacity"); return; }
+      let child;
+      try { child = message.process; } catch (error) { captureIncomplete = true; throw error; }
+      if (!child) { captureIncomplete = true; fault("native-child-missing-object"); return; }
       check(child && !rows.some(row => row.child === child), "native-child-duplicate-object");
       let closed;
-      const row = { child, role: null, spawned: false, exited: false, closed: false, listeningClose: false, listeners: [], close: new Promise(resolve => { closed = resolve; }) };
+      const row = { child, role: null, spawned: false, exited: false, closed: false, listeners: [], close: new Promise(resolve => { closed = resolve; }) };
       rows.push(row);
       const listen = (event, handler) => {
         const callback = (...args) => protect(() => handler(...args));
         row.listeners.push([event, callback]);
-        protect(() => { child.on(event, callback); if (event === "close") row.listeningClose = true; });
+        protect(() => child.on(event, callback));
       };
       // Close never rejects on error. Only the original close event resolves it.
       listen("close", () => { if (row.closed) fault("native-child-duplicate-close"); row.closed = true; closed(); });
       listen(errorMonitor, error => { errors.push(error); });
       listen("exit", () => { if (row.exited) fault("native-child-duplicate-exit"); row.exited = true; });
       listen("spawn", () => {
-        check(!row.spawned, "native-child-duplicate-spawn"); row.spawned = true;
-        classify(row);
+        protect(() => { check(!row.spawned, "native-child-duplicate-spawn"); row.spawned = true; classify(row); });
         if (draining && !row.closed) child.ref();
       });
     });
@@ -1572,15 +1574,17 @@ function createNativeChildOwner(routes) {
           const count = rows.length, joins = [];
           for (const row of rows) {
             if (row.closed) continue;
-            // Constructor publication precedes spawn. A synchronous spawn throw
-            // may have no PID and no future close: fail, never invent closure.
-            const pid = protect(() => row.child.pid);
-            if (!Number.isSafeInteger(pid) || pid <= 0 || !row.listeningClose) { fault("native-child-unconfirmed-close"); continue; }
+            // PID absence includes Node's queued async spawn-error/close route.
+            // Listener installation can also throw after attaching. Neither
+            // observation discharges this constructor's actual-close obligation.
             protect(() => row.child.ref());
             joins.push(row.close);
           }
+          // Lost capture capacity cannot prove that every child has closed.
+          // Keep custody until the existing outer deadline; never invent a join.
+          if (captureIncomplete) joins.push(unknownClose);
           await Promise.all(joins);
-          if (rows.length === count) { stable = true; break; }
+          if (rows.length === count && !captureIncomplete) { stable = true; break; }
         }
         if (!stable) fault("native-child-drain-capacity");
         for (const row of rows) protect(() => {
