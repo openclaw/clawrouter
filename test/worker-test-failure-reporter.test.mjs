@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, workerAbortPrefix } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -169,13 +169,70 @@ test("worker abort diagnostic pure: native identities reject late collisions and
 });
 test("worker abort diagnostic pure: file scoped IDs and parent presence stay distinct", async () => {
   const fixture = await abortDiagnosticCase({ fault: "retire" });
-  for (const parent of [undefined, null, 0, 5]) {
+  for (const parent of [undefined, null, 0, 5, Number.MAX_SAFE_INTEGER]) for (const order of [[0, 1, 2], [0, 2, 1]]) {
     const events = workerAbortNativeEvents(fixture.frames[0]); events[0].data.parentId = parent; events[1].data.parentId = parent;
-    events.push({ type: "test:enqueue", data: { ...events[0].data, file: "worker/test/other.test.mjs" } });
-    assert.equal((await workerAbortPipeline(events)).rows.filter(row => row.kind === "worker_abort").length, 1);
+    const ordered = order.map(index => events[index]);
+    ordered.push({ type: "test:enqueue", data: { ...events[0].data, file: "worker/test/other.test.mjs" } });
+    assert.equal((await workerAbortPipeline(ordered)).rows.filter(row => row.kind === "worker_abort").length, 1);
   }
-  const absent = workerAbortNativeEvents(fixture.frames[0]); delete absent[0].data.parentId; delete absent[1].data.parentId;
-  assert.equal((await workerAbortPipeline(absent)).rows.filter(row => row.kind === "worker_abort").length, 1);
+  for (const parent of [-1, NaN, "0", Number.MAX_SAFE_INTEGER + 1]) {
+    const events = workerAbortNativeEvents(fixture.frames[0]); events[0].data.parentId = parent; events[1].data.parentId = parent;
+    assert.equal((await workerAbortPipeline(events)).rows.some(row => row.kind === "worker_abort"), false);
+  }
+  for (const missing of [[0], [1], [0, 1]]) {
+    const absent = workerAbortNativeEvents(fixture.frames[0]);
+    for (const index of missing) delete absent[index].data.parentId;
+    const result = await workerAbortPipeline(absent);
+    assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+    assert.equal(result.rows.some(row => row.kind === "failure"), true);
+  }
+  let reads = 0;
+  for (const index of [0, 1]) {
+    const events = workerAbortNativeEvents(fixture.frames[0]);
+    Object.defineProperty(events[index].data, "parentId", { get() { reads++; throw undefined; } });
+    assert.equal((await workerAbortPipeline(events)).rows.some(row => row.kind === "worker_abort"), false);
+    events[index].data = new Proxy(events[index].data, { get() { reads++; throw undefined; } });
+    assert.equal((await workerAbortPipeline(events)).rows.some(row => row.kind === "worker_abort"), false);
+  }
+  assert.equal(reads, 0);
+});
+test("worker abort diagnostic pure: only canonical ASCII producer frames admit without normalization", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire", undefinedFault: true });
+  const payload = fixture.frames[0].slice(workerAbortPrefix.length);
+  assert.deepEqual(parseWorkerAbortDiagnostic(payload), fixture.record);
+  const invalid = [
+    payload.replace('{"v":1,', '{"v":0,"v":1,'), payload.replace('{"v":1,', '{"v":1,"v":1,'),
+    payload.replace('"v":1', '"\\u0076":1'), payload.replace('worker_abort_stage', '\\u0077orker_abort_stage'),
+    ' ' + payload, payload + ' ', payload.replace(',', ', '),
+    JSON.stringify({ kind: fixture.record.kind, v: 1, ...Object.fromEntries(Object.entries(fixture.record).slice(2)) }),
+    payload + 'x', payload + '\n', payload + '\x00', payload + '\x1b', payload + 'é',
+    payload.replace('"first":[', '"first":[{"x":0,"x":1},'),
+    payload.replace('"first":[', '"first":[{"x":1,"x":1},'),
+    JSON.stringify({ ...fixture.record, extra: true }), '[' + payload + ']', 'x'.repeat(513),
+  ];
+  for (const value of invalid) {
+    assert.equal(parseWorkerAbortDiagnostic(value), null);
+    for (const order of [[0, 1, 2], [0, 2, 1]]) {
+      const events = workerAbortNativeEvents(workerAbortPrefix + value);
+      const result = await workerAbortPipeline(order.map(index => events[index]));
+      assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+      assert.equal(result.rows.some(row => row.kind === "failure"), true);
+      assert.deepEqual(result.rows.at(-1).diagnostics, [1, 0, 1, 0, false]);
+    }
+  }
+  const result = await workerAbortPipeline(workerAbortNativeEvents(fixture.frames[0]));
+  for (const record of result.rows) {
+    const wire = JSON.stringify(record);
+    assert.deepEqual(parseWorkerReporterRecord(wire), record);
+    for (const text of [wire.replace('{"v":1,', '{"v":0,"v":1,'), wire.replace('{"v":1,', '{"v":1,"v":1,'), ' ' + wire, wire + '\n']) {
+      assert.equal(parseWorkerReporterRecord(text), null);
+    }
+  }
+  let reads = 0;
+  const hostile = { toString() { reads++; throw undefined; } };
+  assert.equal(parseWorkerAbortDiagnostic(hostile), null);
+  assert.equal(parseWorkerReporterRecord(new Proxy(hostile, { get() { reads++; throw undefined; } })), null);
+  assert.equal(reads, 0);
 });
 test("worker abort diagnostic pure: combined quota reserves identity and stage before unrelated leaves", async () => {
   const evidence = workerAbortEvidence(); evidence.stage(24); evidence.failed(undefined); let frame;

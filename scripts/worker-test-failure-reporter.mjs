@@ -80,6 +80,18 @@ function closedDiagnosticTuple(value, length, check) {
   return fields.every((field, i) => field.present && check(field.value, i)) ? fields.map(field => field.value) : null;
 }
 
+// Accept only the exact closed producer serialization. Parsing alone would
+// erase duplicate keys and alternate spellings before schema validation.
+function parseCanonicalWorkerRecord(payload, decode) {
+  if (typeof payload !== "string" || payload.length === 0 || payload.length > 512 || /[^\x20-\x7e]/.test(payload)) return null;
+  try {
+    const record = decode(JSON.parse(payload));
+    return record && JSON.stringify(record) === payload ? record : null;
+  } catch { return null; }
+}
+export function parseWorkerAbortDiagnostic(payload) { return parseCanonicalWorkerRecord(payload, decodeWorkerAbortDiagnostic); }
+export function parseWorkerReporterRecord(payload) { return parseCanonicalWorkerRecord(payload, decodeWorkerReporterRecord); }
+
 export function decodeWorkerAbortDiagnostic(record) {
   if (!record || typeof record !== "object" || types.isProxy(record)) return null;
   const keys = ["v", "kind", "first", "failures", "undefinedFailures", "worker", "upstream", "reportingFailures"];
@@ -131,7 +143,7 @@ export function workerAbortAdmission(tracked) {
   };
   const parent = data => {
     const field = own(data, "parentId");
-    if (!field.present) return [false, undefined];
+    if (!field.present) return null;
     return field.value === undefined || field.value === null || Number.isSafeInteger(field.value) && field.value >= 0 ? [true, field.value] : null;
   };
   const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
@@ -142,10 +154,7 @@ export function workerAbortAdmission(tracked) {
         const message = own(data, "message").value;
         if (typeof message !== "string" || !message.startsWith(workerAbortPrefix)) return;
         recognized = Math.min(limit, recognized + 1);
-        let record = null;
-        if (Buffer.byteLength(message) <= 512 + workerAbortPrefix.length && !message.includes("\x1b")) {
-          try { record = decodeWorkerAbortDiagnostic(JSON.parse(message.slice(workerAbortPrefix.length))); } catch { /* closed invalid frame */ }
-        }
+        const record = parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
         if (!record) { rejected = Math.min(limit, rejected + 1); return; }
         if (diagnostics.length >= 32) { overflow = true; return; }
         diagnostics.push({ at: location(data), record }); return;
