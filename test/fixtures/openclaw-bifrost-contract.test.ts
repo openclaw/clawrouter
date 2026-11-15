@@ -374,7 +374,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
     const store:AuthProfileStore={version:1,profiles:{"bifrost:selected":{type:"api_key",provider:"bifrost",key:row.mode==='profile'?key(row.id):"synthetic-poison-unselected-profile"},"openai:poison":{type:"api_key",provider:"openai",key:"synthetic-unrelated-profile"}}};
     setupBoundary.enter("profile_write");
     await state.writeAuthProfiles(store);
-    const config:OpenClawConfig={models:{providers:{bifrost:{baseUrl:origin+"/v1/native/bifrost/v1",api:"openai-completions",apiKey:row.mode==='profile'?"bifrost:selected":key(row.id),models:[]}}}};
+    const config:OpenClawConfig={models:{providers:{bifrost:{baseUrl:origin+"/v1/native/bifrost/v1",api:"openai-completions",auth:"api-key",apiKey:row.mode==='profile'?"bifrost:selected":key(row.id),models:[]}}}};
     // This frozen discovery resolver prefers the environment key. Inference
     // retains the independently configured credential. The profile arm has
     // no discovery environment key and resolves its explicit profile reference.

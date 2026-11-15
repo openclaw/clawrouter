@@ -717,6 +717,32 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   for(const api of ["stream","simple"])assert.deepEqual(bifrostControls.filter(r=>r.api===api).map(r=>r.control),["eof","preabort","partial","provider_error"]);
   assert.ok(bifrostCases.every(r=>r.control===undefined));
  });
+ function actualBifrostAuthConfiguration(row){
+  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
+  const declarations=["const key = ","    const store:AuthProfileStore=","    const config:OpenClawConfig="].map(prefix=>{
+   const lines=source.split("\n").filter(line=>line.startsWith(prefix));assert.equal(lines.length,1);return lines[0];
+  }).join("\n");
+  return runInNewContext(stripTypeScriptTypes(declarations,{mode:"strip"})+"\n({store,config})",{row,origin:"https://router.fixture"},{timeout:1000});
+ }
+ test("Bifrost SDK fixture explicitly selects inline auth despite the eligible poisoned profile",()=>{
+  // D8 requires explicit api-key mode to prefer a literal config key over profiles.
+  for(const row of [...bifrostControls,...bifrostCases,...bifrostProgressCases].filter(r=>r.mode!=="profile")){
+   const {store,config}=actualBifrostAuthConfiguration(row),provider=config.models.providers.bifrost;
+   assert.equal(provider.auth,"api-key");assert.equal(provider.apiKey,bifrostKey(row.id));
+   assert.equal(store.profiles["bifrost:selected"].provider,"bifrost");
+   assert.equal(store.profiles["bifrost:selected"].type,"api_key");
+   assert.equal(store.profiles["bifrost:selected"].key,"synthetic-poison-unselected-profile");
+   assert.notEqual(provider.apiKey,store.profiles["bifrost:selected"].key);
+  }
+ });
+ test("Bifrost SDK fixture keeps the explicit profile reference and original selected key",()=>{
+  const row=bifrostCases.find(r=>r.mode==="profile");assert.ok(row);
+  const {store,config}=actualBifrostAuthConfiguration(row),provider=config.models.providers.bifrost;
+  assert.equal(provider.auth,"api-key");assert.equal(provider.apiKey,"bifrost:selected");
+  assert.equal(store.profiles[provider.apiKey].key,bifrostKey(row.id));
+  assert.equal(store.profiles[provider.apiKey].provider,"bifrost");
+  assert.equal(store.profiles[provider.apiKey].type,"api_key");
+ });
  function progressEvidence(){
   const w=nativeEvidence(),t=w.transports[0];w.owner.id="bifrost_progress";t.socketRequest={};t.socket={};t.socketClosedAt=20;w.caller.controlInvoke=21;
   w.caller.progress={accepted:true,enqueued:true,alreadyCanceled:false};
