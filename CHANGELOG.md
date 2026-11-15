@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Bind Bifrost's explicit negative SSE cases to their original public SDK response, iterator and controller before admitting the exact same-reader rejection vector. Keep raw failures, independent Worker retirement and financial assertions, with fail-closed origin and restoration checks.
+
 - Preserve the captured global timer receiver in Bifrost partial fixtures and report bounded producer failure sites after original joins, without changing deadlines, cancellation or accounting acceptance.
 
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.

@@ -3,6 +3,11 @@ import { types } from "node:util";
 import { execFileSync } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import { createRequire } from "node:module";
+import OpenAI from "openai";
+import { APIPromise } from "openai/core/api-promise";
+import { APIError } from "openai/core/error";
+import { Stream as OpenAIStream } from "openai/core/streaming";
+import { VERSION as openAIVersion } from "openai/version";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -41,6 +46,136 @@ export function createBifrostFetchObserver(fetcher:Function,capture:Function,obs
    try{receipt.threw(reason);}catch(error){observerFailures.push(error);}throw reason;
   }
   try{receipt.returned(original);}catch(error){observerFailures.push(error);}return original;
+ };
+}
+// These hooks observe public calls already made by D8. In particular, never
+// observe APIPromise with .then: that would start parsing before D8 requests it.
+export function createBifrostProviderErrorOrigin(d:any) {
+ const requests=new WeakMap<object,any>(),responses=new WeakMap<object,any>(),patches:any[]=[],records:any[]=[];
+ const faults:unknown[]=[],restoration:unknown[]=[],undelivered:unknown[]=[],chunks:any[]=[];
+ let request:any,stream:any,iterator:any,controller:any,response:any,originError:any,originPayload:any,finished=false,invalid=false,seal:any;
+ let responseCalls=0,factoryCalls=0,iteratorCalls=0,bytes=0;
+ const aborts:any[]=[];
+ const object=(v:any)=>v!==null&&(typeof v==="object"||typeof v==="function")&&!d.isProxy(v);
+ const fail=(e:unknown)=>{invalid=true;faults.push(e);try{d.fault(e);}catch(report){undelivered.push(e,report);}};
+ const guard=(fn:Function)=>{try{return fn();}catch(e){fail(e);}};
+ const need=(v:any)=>{if(v!==true)throw Error("incomplete provider-error origin");};
+ const own=(v:any,k:PropertyKey)=>{need(object(v));const x=Object.getOwnPropertyDescriptor(v,k);need(!!x&&"value" in x);return x!.value;};
+ const method=(v:any,k:PropertyKey)=>{need(object(v));for(let i=0;i<8&&v;i++,v=Object.getPrototypeOf(v)){
+  need(object(v));const x=Object.getOwnPropertyDescriptor(v,k);if(x){need("value" in x&&typeof x.value==="function"&&!d.isProxy(x.value));return x.value;}}
+  throw Error("missing origin method");};
+ const patch=(v:any,k:PropertyKey,fn:Function)=>{need(object(v));const before=Object.getOwnPropertyDescriptor(v,k);
+  need(!before||before.configurable===true&&"value" in before&&before.writable===true);
+  const ours={value:fn,configurable:true,writable:true,enumerable:before?.enumerable??false};Object.defineProperty(v,k,ours);patches.push({v,k,before,ours});};
+ const current=()=>{const i=d.invocation();return i?.owner===d.owner&&i.kind==="inference"&&i.caller===d.caller()?i:undefined;};
+ const active=()=>{need(!finished&&!seal);};
+ const restoredDescriptors=()=>patches.every(p=>{const now=Object.getOwnPropertyDescriptor(p.v,p.k);return p.before?sameBifrostDescriptor(now,p.before):now===undefined;});
+ const observe=(p:any,o:any)=>{o.pending=p;o.returned=p;
+  // Native promise brand validation also avoids reading a hostile then getter.
+  const observed=Reflect.apply(Promise.prototype.then,p,[(v:any)=>{guard(()=>{active();o.state="fulfilled";o.value=v;o.settle=d.next();if(o.kind==="response"){need(!response&&object(v));response=v;responses.set(v,request);}});},
+   (e:unknown)=>{guard(()=>{active();o.state="rejected";o.reason=e;o.settle=d.next();});}]);d.observer(observed);};
+ const operation=(kind:string,fn:Function,receiver:any,args:any[])=>{
+  let o:any;guard(()=>{active();need(records.length<32);o={kind,fn,receiver,args:[...args],state:"pending",invoke:d.next(),returned:undefined,pending:undefined};records.push(o);});
+  let value;try{value=d.storage.run({request,operation:o},()=>Reflect.apply(fn,receiver,args));}
+  catch(e){guard(()=>{if(o){o.state="threw";o.reason=e;o.settle=d.next();}});throw e;}
+  guard(()=>{if(o){o.returnAt=d.next();observe(value,o);}});return value;
+ };
+ const bindIterator=(value:any)=>{active();need(++iteratorCalls===1&&object(value));iterator=value;
+  for(const kind of ["next","return","throw"]){const fn=method(value,kind);patch(value,kind,function(this:any,...args:any[]){
+   if(this!==iterator){guard(()=>{need(false);});return Reflect.apply(fn,this,args);}
+   return operation(kind,fn,this,args);
+  });}
+ };
+ return {
+  records,
+  deny(){invalid=true;},
+  install(){
+   need(d.version==="7.43.0");
+   const requestMethod=method(d.OpenAI.prototype,"request"),asResponse=method(d.APIPromise.prototype,"asResponse"),factory=method(d.Stream,"fromSSEResponse");
+   patch(d.OpenAI.prototype,"request",function(this:any,...args:any[]){
+    let invocation:any;guard(()=>{invocation=current();});if(!invocation)return Reflect.apply(requestMethod,this,args);
+    let owned:any;guard(()=>{active();need(!request&&object(this)&&Object.getPrototypeOf(this)===d.OpenAI.prototype);
+     owned=request={invocation,client:this,args:[...args],guards:[],returned:undefined};});
+    let value;try{value=d.storage.run({request:owned},()=>Reflect.apply(requestMethod,this,args));}catch(e){guard(()=>{fail(e);});throw e;}
+    guard(()=>{need(!!owned&&object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype);owned.returned=value;requests.set(value,owned);});return value;
+   });
+   patch(d.APIPromise.prototype,"asResponse",function(this:any,...args:any[]){
+    let owned:any;guard(()=>{owned=object(this)?requests.get(this):undefined;});if(!owned)return Reflect.apply(asResponse,this,args);
+    guard(()=>{active();need(owned===request&&current()===owned.invocation&&++responseCalls===1);});
+    return operation("response",asResponse,this,args);
+   });
+   patch(d.Stream,"fromSSEResponse",function(this:any,...args:any[]){
+    let owned:any;guard(()=>{owned=object(args[0])?responses.get(args[0]):undefined;});
+    if(!owned)return Reflect.apply(factory,this,args);
+    guard(()=>{active();need(this===d.Stream&&owned===request&&current()===owned.invocation&&++factoryCalls===1&&args[2]===request.client&&args[3]!==true);
+     controller=args[1];need(object(controller));const abort=method(controller,"abort");
+     patch(controller,"abort",function(this:any,...operands:any[]){
+      let entry:any;guard(()=>{active();need(aborts.length<4);const context=d.storage.getStore();
+       need(this===controller&&context?.request===request&&records.includes(context.operation));
+       entry={operation:context.operation,receiver:this,args:[...operands],before:d.signal(controller.signal),invoke:d.next(),pending:d.pendingRead()};aborts.push(entry);});
+      let result;try{result=Reflect.apply(abort,this,operands);}catch(e){guard(()=>{if(entry){entry.threw=true;entry.reason=e;}fail(e);});throw e;}
+      guard(()=>{if(entry){entry.returned=result;entry.after=d.signal(controller.signal);entry.returnAt=d.next();}});return result;
+     });
+    });
+    let value;try{value=Reflect.apply(factory,this,args);}catch(e){guard(()=>{fail(e);});throw e;}
+    guard(()=>{need(!stream&&object(value)&&Object.getPrototypeOf(value)===d.Stream.prototype&&own(value,"controller")===controller);stream=value;
+     const iterate=method(value,Symbol.asyncIterator);patch(value,Symbol.asyncIterator,function(this:any,...operands:any[]){
+      let result;try{result=Reflect.apply(iterate,this,operands);}catch(e){guard(()=>{fail(e);});throw e;}
+      guard(()=>{need(this===stream&&current()===request.invocation);bindIterator(result);});return result;
+     });
+    });return value;
+   });
+  },
+  guard(a:any){guard(()=>{const context=d.storage.getStore();if(!context?.request)return;active();need(context.request===request&&request.guards.length===0);request.guards.push(a);});},
+  read(o:any){guard(()=>{if(o.kind!=="read"||o.state!=="fulfilled"||o.reader?.transport?.method!=="POST")return;active();
+   const done=own(o.value,"done");need(typeof done==="boolean");if(done)return;const value=own(o.value,"value");
+   need(!d.isProxy(value)&&d.uint8(value)&&chunks.length<8&&bytes+d.length(value)<=1024);const copy=d.copy(value);bytes+=copy.length;chunks.push({o,copy});
+  });},
+  finish(){need(!finished);finished=true;
+   for(const p of patches.toReversed())try{need(sameBifrostDescriptor(Object.getOwnPropertyDescriptor(p.v,p.k),p.ours));if(p.before)Object.defineProperty(p.v,p.k,p.before);else delete p.v[p.k];}
+   catch(e){restoration.push(e);fail(e);}
+   if(undelivered.length===1)throw undelivered[0];if(undelivered.length)throw new AggregateError(undelivered,"origin observation delivery failed");
+  },
+  seal(w:any){
+   if(seal){guard(()=>need(seal.same()&&restoredDescriptors()));return invalid?undefined:seal.value;}
+   const graph=()=>[w.sequence,w.originals,w.observers,w.failures,w.syncFailures,w.observerFailures,w.reportingFailures,w.transports,w.acquisitions,
+    w.originals.length,w.observers.length,w.failures.length,w.syncFailures.length,w.observerFailures.length,w.reportingFailures.length,w.restored,w.sourceExpired,
+    ...w.originals.flatMap((o:any)=>[o,o.state,o.reason,o.value,o.pending,o.returned,o.reader,o.receiver,o.invoke,o.settle,o.returnAt,o.args,...(o.args??[])]),
+    ...records.flatMap(o=>[o,o.state,o.reason,o.value,o.pending,o.returned,o.receiver,o.fn,o.args,...o.args,o.invoke,o.returnAt,o.settle]),...chunks.flatMap(x=>[x.o,...x.copy]),
+    ...aborts.flatMap(x=>[x,x.operation,x.receiver,x.args,...x.args,x.invoke,x.returnAt,x.pending,x.returned,x.threw,x.reason,x.before.observed,x.before.aborted,x.before.reason,x.after?.observed,x.after?.aborted,x.after?.reason]),
+    ...(originError?[originError,originPayload,own(originError,"error"),own(originError,"headers"),own(originError,"status"),own(originError,"code"),own(originError,"param"),own(originError,"type"),own(originPayload,"message"),own(originPayload,"type")]:[]),
+    ...w.transports.flatMap((t:any)=>[t,t.acquisition,t.invocation,t.context,t.owner,t.response,t.signal,t.guardObserved,t.releases,t.releaseDone,t.release,
+     t.bodies,...t.bodies,t.readers,...t.readers.flatMap((r:any)=>[r,r.owner,r.original,r.body,r.transport,r.closed,r.unlocks,r.unlockFailed,r.unlockAt,r.unlockReceiver,r.body.locked])]),
+    ...w.acquisitions.flatMap((a:any)=>[a,a.owner,a.guard,a.input,a.inputSignal,a.input?.signal,a.input?.init?.signal,a.invocation,a.context,a.transport,a.response,a.operation,a.pending,a.result,a.result?.response]),
+    w.caller,w.caller.owner,w.caller.signal,w.caller.signal.aborted,w.caller.abortCalled,w.caller.result,w.evidenceJoined,w.workerRetired,
+    w.retirementProof,w.retirementProof?.source,w.retirementProof?.observation,w.retirementProof?.events,
+    w.retirementProof?.owner,w.retirementProof?.retired,w.retirementProof?.disposition,w.retirementProof?.source?.owner,
+    w.retirementProof?.source?.held,w.retirementProof?.source?.expired,w.retirementProof?.source?.producer,
+    w.retirementProof?.source?.producer?.joined,w.retirementProof?.source?.producer?.failures,w.retirementProof?.source?.producer?.faults,
+    w.retirementProof?.observation?.owner,w.retirementProof?.observation?.usageObserved,
+    ...(w.retirementProof?.observation?.phases??[]).flat(),...(w.retirementProof?.source?.producer?.roles??[]).flat(),
+    request,request?.returned,request?.invocation,request?.guards[0],response,stream,iterator,controller,aborts.length,faults.length,restoration.length];
+   let value:any;guard(()=>{
+    need(finished&&!invalid&&restoredDescriptors()&&request&&request.guards.length===1&&responseCalls===1&&factoryCalls===1&&iteratorCalls===1);
+    const a=request.guards[0],t=a.transport,r=t?.readers[0];need(t&&r&&a.invocation===request.invocation&&bifrostInvocationBound(w,t)&&a.inputSignal===controller.signal);
+    const rejected=records.filter(o=>o.state==="rejected"),o=rejected[0];need(rejected.length===1&&o.kind==="next"&&records.every(x=>x===o||x.state==="fulfilled")&&object(o.reason)&&Object.getPrototypeOf(o.reason)===d.APIError.prototype);
+    need(records.filter(x=>x.kind==="response").length===1&&records.find(x=>x.kind==="response").value===response&&records.every(x=>x.kind!=="throw"));
+    need(records.filter(x=>x.kind==="return").every(x=>x.invoke>o.settle));
+    const error=own(o.reason,"error");need(object(error)&&Object.getPrototypeOf(error)===d.objectPrototype&&Object.keys(error).sort().join(",")==="message,type"&&
+     own(error,"message")==="synthetic-provider-error"&&own(error,"type")==="server_error"&&own(o.reason,"headers")===response.headers&&
+     own(o.reason,"status")===undefined&&own(o.reason,"code")===undefined&&own(o.reason,"param")===undefined&&own(o.reason,"type")==="server_error");
+    originError=o.reason;originPayload=error;
+    need(chunks.length>0&&chunks.every(x=>x.o.reader===r)&&d.wire(chunks.map(x=>x.copy))===d.expectedWire);
+    need(aborts.length===2&&aborts.every(x=>x.operation===o&&x.receiver===controller&&x.args.length===0&&x.returned===undefined&&!x.threw&&x.before.observed&&x.after.observed&&x.after.aborted===true));
+    const first=aborts[0],second=aborts[1],e=first.after.reason;
+    need(first.before.aborted===false&&second.before.aborted===true&&e!==undefined&&e!==null&&typeof e==="object"&&e!==o.reason&&
+     second.before.reason===e&&second.after.reason===e&&first.returnAt<second.invoke&&second.returnAt<o.settle&&first.invoke>o.invoke);
+    need(!!first.pending&&(!second.pending||first.pending===second.pending)&&!w.originals.some((x:any)=>x.reason===o.reason&&["rejected","threw"].includes(x.state)));
+    value=Object.freeze({owner:w.owner,invocation:request.invocation,transport:t,reader:r,response,controller,error:o.reason,reason:e,read:first.pending,abort:first.invoke,iteratorOperation:o});
+   });
+   let frozen:any[]=[];guard(()=>{frozen=graph();});seal={value,same:()=>{const live=graph();return live.length===frozen.length&&live.every((x,i)=>Object.is(x,frozen[i]));}};return invalid?undefined:value;
+  },
+  summary(){return [1,finished?1:0,invalid?1:0,seal?.value&&!invalid?1:0,responseCalls,factoryCalls,iteratorCalls,records.length,aborts.length,faults.length,faults.filter(e=>e===undefined).length,restoration.length];},
  };
 }
 // Passive diagnostics for one private fetch generation. No transport flag is read.
@@ -223,6 +358,43 @@ export function bifrostStoredErrorVector(w:any):any[]|undefined {
  if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
  return vector;
 }
+// The explicit negative SSE case has its own public SDK origin proof. Raw
+// native outcomes remain rejected; this vector is never shared with partials.
+export function bifrostProviderErrorVector(w:any):any[]|undefined {
+ const deny=()=>{w.origin?.deny();return undefined;};
+ if(w.mode!=="provider_error"||!w.origin||!w.evidenceJoined||!w.restored||w.workerRetired!==true||w.sourceExpired!==0||
+  [w.failures,w.observerFailures,w.syncFailures,w.reportingFailures].some((v:any)=>!Array.isArray(v)||v.length))return deny();
+ const proof=w.retirementProof,source=proof?.source,observation=proof?.observation;
+ if(!proof||proof.owner!==w.owner.id||proof.retired!==true||proof.disposition!=="strict"||source?.owner!==w.owner.id||source.held!==0||source.expired!==0||
+  source.producer?.joined!==true||source.producer.faults!==0||source.producer.failures!==0||source.producer.roles.some((r:any)=>r[1]!=="fulfilled")||
+  observation?.owner!==w.owner.id||observation.usageObserved!==true||observation.phases.some((p:any)=>p[0]!==2))return deny();
+ // These are the existing owned join/usage results, not financial acceptance.
+ // The unchanged outer row still executes its actual SQLite assertions.
+ const token=w.origin.seal(w);if(!token||token.owner!==w.owner)return deny();
+ const t=token.transport,a=t.acquisition,r=token.reader,c=w.caller;
+ if(w.transports.filter((x:any)=>x.method==="POST").length!==1||w.transports.filter((x:any)=>x.method==="GET").length!==1||
+  !bifrostInvocationBound(w,t)||t.invocation!==token.invocation||!t.guardObserved||t.owner!==w.owner||a.owner!==w.owner||a.guard!==w.identity.guard||
+  a.transport!==t||a.response!==t.response||a.result?.response!==t.response||a.operation?.state!=="fulfilled"||a.pending!==a.operation.pending||a.pending!==a.operation.returned||
+  t.fetch.state!=="fulfilled"||!t.fetch.pending||t.fetch.pending!==t.fetch.returned||t.readers.length!==1||t.readers[0]!==r||t.bodies.length!==1||
+  r.owner!==w.owner||r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||c.owner!==w.owner||c.abortCalled!==false||c.signal.aborted||c.result!=="error")return deny();
+ const ops=(kind:string)=>w.originals.filter((o:any)=>o.reader===r&&o.kind===kind);
+ const badReads=ops("read").filter((o:any)=>o.state==="rejected"),closes=ops("closed"),cancels=ops("cancel"),unlocks=ops("unlock");
+ const read=badReads[0],closed=closes[0],cancel=cancels[0],unlock=unlocks[0],vector=[read,closed,cancel];
+ if(badReads.length!==1||closes.length!==1||cancels.length!==1||unlocks.length!==1||read!==token.read||read.reason!==token.reason||
+  vector.some(o=>!o||o.owner!==w.owner||o.state!=="rejected"||o.reason!==token.reason||o.receiver!==r.original||!o.pending||o.pending!==o.returned)||
+  new Set(vector.map(o=>o.pending)).size!==3||closed.pending!==r.closed||!Array.isArray(cancel.args)||cancel.args.length!==1||cancel.args[0]!==undefined||
+  !Array.isArray(read.args)||read.args.length!==0||w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return deny();
+ if(![read,closed,cancel].every(o=>o.callerSignal===c.signal&&o.effectiveSignal===t.signal&&o.evidenceSettle?.caller?.observed===true&&o.evidenceSettle.caller.aborted===false&&
+  ["input","effective"].every(k=>o.evidenceSettle?.[k]?.observed===true&&o.evidenceSettle[k].aborted===true&&o.evidenceSettle[k].reason===token.reason))||
+  !["caller","input","effective"].every(k=>read.evidenceInvoke?.[k]?.observed===true&&read.evidenceInvoke[k].aborted===false)||
+  !(read.invoke<token.abort&&token.abort<Math.min(read.settle,closed.settle,cancel.invoke))||
+  unlock.state!=="fulfilled"||unlock.owner!==w.owner||unlock.receiver!==r.original||unlock.args?.length!==0||r.unlocks!==1||r.unlockFailed||r.unlockReceiver!==r.original||r.body.locked||
+  !(cancel.invoke<cancel.returnAt&&cancel.returnAt<unlock.invoke&&unlock.invoke<unlock.returnAt&&unlock.returnAt<r.unlockAt)||
+  t.releases!==1||!t.releaseDone||t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==undefined||t.release.args?.length!==0||
+  !t.release.pending||t.release.pending!==t.release.returned)return deny();
+ if(w.providerErrorVector){if(w.providerErrorVector.some((o:any,i:number)=>o!==vector[i]))return deny();return w.providerErrorVector;}
+ w.providerErrorVector=Object.freeze(vector);return w.providerErrorVector;
+}
 export function evaluateBifrostNativeControl(w:any):any {
  const contract=bifrostNativeContract(w.identity,w.provider,w.api);
  const vector=bifrostStoredErrorVector(w),hard=!contract||!w.owner||typeof w.owner!=="object"||w.evidenceJoined!==true||w.failures.length||w.observerFailures.length||w.syncFailures.length||(w.reportingFailures?.length??1)||
@@ -232,14 +404,14 @@ export function evaluateBifrostNativeControl(w:any):any {
    t.releases!==1||!t.releaseDone||t.release?.state!=="fulfilled"||t.readers.some((r:any)=>r.owner!==w.owner||r.transport!==t||r.body!==t.response?.body||
     r.body!==t.bodies[0]||r.unlocks!==1||r.unlockFailed||r.body.locked||r.unlockReceiver!==r.original||
     w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r&&o.pending===r.closed&&o.invoke<r.unlockAt).length!==1));
- const strict=w.originals.every((o:any)=>o.state==="fulfilled");
+ const role=w.role??(w.mode==="provider_error"?"provider_error":undefined);
+ const strict=w.originals.every((o:any)=>o.state==="fulfilled"),negative=!strict&&role==="provider_error"?bifrostProviderErrorVector(w):undefined;
  const posts=w.transports.filter((t:any)=>t.method==="POST").length,gets=w.transports.filter((t:any)=>t.method==="GET").length;
- const role=w.role;
  const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.preabortPostDelta===0&&w.caller?.abortCalled===true&&w.caller?.signal.aborted===true&&w.caller?.result==="error"&&w.caller?.emptyContent===true&&posts===0:
-  (role==="eof"||role==="provider_error")&&strict&&posts===1&&w.caller?.abortCalled===false&&w.caller?.signal.aborted===false&&
+  (role==="eof"||role==="provider_error")&&(strict||role==="provider_error"&&!!negative)&&posts===1&&w.caller?.abortCalled===false&&w.caller?.signal.aborted===false&&
    w.caller?.result===(role==="eof"?"stop":"error");
  return {qualified:!hard&&gets===1&&matched===true,contract,vector:vector?"stored_error":"strict",operand:vector?bifrostCancelOperand(vector[0],vector[2]):null,
-  vectorObserved:!!vector,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
+  vectorObserved:!!vector,negative,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
 }
 export function bifrostQualification(reports:any[],identity:any,provider:string,api:string):any {
  const contract=bifrostNativeContract(identity,provider,api);if(!contract)return;
@@ -252,6 +424,7 @@ export function bifrostQualification(reports:any[],identity:any,provider:string,
 export function bifrostProductExpected(w:any,q:any):any[] {
  if(!q||!q.contract||q.contract!==bifrostNativeContract(w.identity,w.provider,w.api)||q.identity!==w.identity||q.provider!==w.provider||q.api!==w.api||q.vector!=="stored_error"||
    q.roles?.join(",")!=="eof,preabort,partial,provider_error")return [];
+ if(w.mode==="provider_error"){const raw=evaluateBifrostNativeControl(w);return raw.qualified?raw.negative??[]:[];}
  const raw=evaluateBifrostNativeControl({...w,role:"partial"});
  return raw.qualified?bifrostStoredErrorVector(w)??[]:[];
 }
@@ -355,7 +528,7 @@ export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,
    // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
    undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
    bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker},
-  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof),...(w.transportWitnessEvidence?{transport:w.transportWitnessEvidence}:{})}
+  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof),...(w.transportWitnessEvidence?{transport:w.transportWitnessEvidence}:{}),...(w.origin?{origin:w.origin.summary()}:{})}
  ];
 }
 export function validateBifrostEvidence(record:any):void {
@@ -390,6 +563,12 @@ export function validateBifrostEvidence(record:any):void {
    v[3].slice(1).every((n:any)=>Number.isInteger(n)&&n>=0&&n<=16)&&
    (!(v[0]&1)||(v[0]===3&&v[1].slice(0,3).every((n:any)=>n===1)&&v[1][7]===0&&v[3][2]===0&&v[3][4]===0&&v[2][0]!==null&&v[2][1]!==null&&v[2][7]!==null))&&
    (!(v[0]&2)||v[3][4]===0)&&v[3][1]<=v[1][5]&&v[3][3]<=v[3][2]&&v[3][5]<=v[3][4];
+ }
+ if(record?.part==="postlude"&&Object.hasOwn(record,"origin")){
+  if(![3,7,14,15].includes(record.case)||Object.hasOwn(record,"transport"))throw Error("foreign provider-error origin");
+  fields.postlude.origin=(v:any)=>Array.isArray(v)&&v.length===12&&v.every((n:any)=>Number.isSafeInteger(n)&&n>=0&&n<=1000000)&&v[0]===1&&
+   v.slice(1,4).every((n:any)=>n<=1)&&v[7]<=32&&v[8]<=4&&v[10]<=v[9]&&v[11]<=v[9]&&
+   (!v[3]||(v[1]===1&&v[2]===0&&v.slice(4,7).every((n:any)=>n===1)&&v[8]===2&&v[9]===0&&v[11]===0));
  }
  Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});
  fields.order.cancelOperand=(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,kind,object,observed"&&reason({observed:v.observed,defined:v.defined,object:v.object})&&["absent","undefined","same-as-stored","distinct-defined","invalid","unobserved"].includes(v.kind);
@@ -601,9 +780,10 @@ function fixture(row:Case,body:Parameters<typeof fixtureOwned>[1]){
 async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:AbortController,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,inferenceKey:string)=>Promise<void>){
  const caseIndex=checkpointCase(row);
  const state=await checkpoints.observe(caseIndex,"setup",createOpenClawTestState,undefined,[{label:"bifrost-worker-contract"}]),control=new AbortController();
- const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:"bifrost",api:row.api,role:row.control,
+ const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:"bifrost",api:row.api,role:row.control,mode:row.mode,
   originals:[],observers:[],transports:[],acquisitions:[],failures:[],observerFailures:[],syncFailures:[],reportingFailures:checkpoints.failures,restored:false,sourceExpired:null,sequence:0};
- const ownership=createBifrostInvocationOwnership(new AsyncLocalStorage());
+ const invocationStorage=new AsyncLocalStorage<any>(),ownership=createBifrostInvocationOwnership(invocationStorage);
+ let providerOrigin:ReturnType<typeof createBifrostProviderErrorOrigin>|undefined;
  const transportWitness=row.control==="partial"&&row.api==="stream"?createBifrostTransportWitness({
   storage:new AsyncLocalStorage(),channel,isProxy:types.isProxy,next:()=>++w.sequence,
   selected:(t:any)=>t.method==="POST"&&t.owner===w.owner,
@@ -619,6 +799,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   if(["read","closed","cancel"].includes(kind))try{o.evidenceInvoke=bifrostOperationEvidence(o,originals);}catch(e){w.observerFailures.push(e);}return o;};
  const returned=(o:Original,value:any)=>{o.returned=value;o.returnAt=++w.sequence;
   const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
+   providerOrigin?.read(o);
    if(["read","closed","cancel"].includes(o.kind))try{o.evidenceSettle=bifrostOperationEvidence(o,originals);}catch(e){w.observerFailures.push(e);}
    o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;
    const phase=["read","closed","cancel"].includes(o.kind)?o.kind:o.kind==="guard_release"?"release":null;
@@ -630,6 +811,18 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   restores.push(()=>{if(!sameBifrostDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});};
  const signalHistory=(signal:AbortSignal|undefined)=>{const h:any={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0};if(signal){const onAbort=()=>{h.abort=++w.sequence;h.reason=signal.reason;};if(signal.aborted)onAbort();else{signal.addEventListener("abort",onAbort,{once:true});restores.push(()=>signal.removeEventListener("abort",onAbort));}}return h;};
  const c:any={owner:w.owner,signal:control.signal,abortCalled:false,completed:false,result:null,pending:[],delivered:0};w.caller=c;
+ if(row.mode==="provider_error"){
+  const frame=(v:any)=>"data: "+JSON.stringify(v)+"\n\n";
+  const expectedWire=frame({id:"chat_fixture",object:"chat.completion.chunk",created:1,model:"tenant/opaque-a",choices:[{index:0,delta:{role:"assistant",content:"synthetic-prefix"},finish_reason:null}]})+
+   frame({error:{message:"synthetic-provider-error",type:"server_error"}});
+  providerOrigin=createBifrostProviderErrorOrigin({OpenAI,APIPromise,APIError,Stream:OpenAIStream,version:openAIVersion,
+   storage:new AsyncLocalStorage(),owner:w.owner,caller:()=>c,invocation:()=>invocationStorage.getStore()?.invocation,
+   isProxy:types.isProxy,objectPrototype:Object.prototype,next:()=>++w.sequence,fault:(e:unknown)=>w.observerFailures.push(e),observer,
+   signal:bifrostSignalEvidence,pendingRead:()=>{const pending=originals.filter(o=>o.kind==="read"&&o.reader?.transport?.method==="POST"&&o.state==="pending");return pending.length===1?pending[0]:undefined;},
+   uint8:types.isUint8Array,length:(v:Uint8Array)=>Reflect.apply(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),"byteLength")!.get!,v,[]),copy:(v:Uint8Array)=>{const n=Reflect.apply(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),"byteLength")!.get!,v,[]);
+    const out=new Uint8Array(n);for(let i=0;i<n;i++)out[i]=v[i];return out;},wire:(chunks:Uint8Array[])=>Buffer.concat(chunks).toString("utf8"),expectedWire});
+  w.origin=providerOrigin;
+ }
  const setupCaller=()=>{
  const aborted=()=>{c.abortObserved=++w.sequence;};control.signal.addEventListener("abort",aborted,{once:true});restores.push(()=>control.signal.removeEventListener("abort",aborted));
  const abort=control.abort;patch(control,"abort",function(this:AbortController,...args:Parameters<typeof abort>){
@@ -686,6 +879,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  try{
   setupBoundary.enter("caller_install");
   setupCaller();
+  if(providerOrigin){restores.push(()=>providerOrigin!.finish());providerOrigin.install();}
   setupBoundary.enter("progress_subscribe");
   if(transportWitness){restores.push(()=>{const result=transportWitness.finish();w.transportWitnessEvidence=result.data;
    w.observerFailures.push(...result.failures);throwFailures(result.restorationFailures);});transportWitness.start();}
@@ -702,7 +896,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observingFetch(nativeUndiciFetch)});
   setupBoundary.enter("guard_hook");
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof nativeGuard>){
-   const input=args[0],a:any={guard:nativeGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
+   const input=args[0],a:any={guard:nativeGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};providerOrigin?.guard(a);a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof nativeGuard>;
    try{pending=returned(o,ownership.guard(nativeGuard,this,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
    observer(pending.then(result=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
@@ -746,8 +940,10 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
     bodyEntered=true;await checkpoints.observe(caseIndex,"body",body,undefined,[discover,control,track,resolveProviderAuth("bifrost").apiKey!]);
  }catch(e){if(!bodyEntered){setupBoundary.reject(e);checkpoints.mark(caseIndex,"case_setup","rejected",e);}failures.push(e);}
  checkpoints.mark(caseIndex,"original_join","enter");
- let at=0,seen=0;
- while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
+ let at=0,seen=0,originAt=0;
+ while(at<originals.length||seen<w.observers.length||originAt<(providerOrigin?.records.length??0)){
+  const batch=originals.slice(at),originBatch=providerOrigin?.records.slice(originAt)??[];at=originals.length;originAt=providerOrigin?.records.length??0;
+  await Promise.allSettled([...batch,...originBatch].flatMap(o=>o.pending?[o.pending]:[]));
   const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
  checkpoints.mark(caseIndex,"original_join","fulfilled");
  w.evidenceJoined=true;
@@ -761,9 +957,10 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  try{
   await retirementReader(retirementOwner,nativeFetch,undefined,[origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"}],"text",(_kind:string,start:Function)=>start(),retirementTicket);
   retirementReader.parse(retirementTicket);proof=retirementReader.validate(retirementTicket,validateBifrostRetirementProof);
-  w.sourceExpired=proof.source?.expired??null;
+  w.sourceExpired=proof.source?.expired??null;w.retirementProof=proof;
   retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
  }catch(e){workerFailures.push(e);}
+ w.workerRetired=worker&&workerFailures.length===0;
  checkpoints.mark(caseIndex,"worker_retirement",workerFailures.length?"rejected":"fulfilled",workerFailures[0]);
  const beforeRestore=failures.length;
  for(const restore of restores.toReversed())await check(()=>checkpoints.observe(caseIndex,"restoration",restore,undefined,[]));
@@ -774,10 +971,12 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  w.evidenceRestoreUndefined=failures.slice(beforeRestore).filter(e=>e===undefined).length;
  let allowed:Original[]=[];
  if(row.control){checkpoints.mark(caseIndex,"control","enter");const evaluated=evaluateBifrostNativeControl(w);checkpoints.mark(caseIndex,"control","fulfilled");if(evaluated.qualified&&row.control==="partial")allowed=bifrostStoredErrorVector(w)??[];
+  if(evaluated.qualified&&row.control==="provider_error")allowed=evaluated.negative??[];
   const reports=controlReports.get(row.api)??new Map();try{emitControl(row,w,evaluated,worker);}catch(e){failures.push(e);evaluated.qualified=false;}
   reports.set(row.control,evaluated);controlReports.set(row.api,reports);const q=bifrostQualification([...reports.values()],nativeIdentity,"bifrost",row.api);if(q)qualifications.set(row.api,q);
   if(!evaluated.qualified)failures.push(Error("native control qualification incomplete"));
- }else if(row.mode==="partial"||row.mode==="progress")allowed=bifrostProductExpected(w,qualifications.get(row.api));
+ }else if(row.mode==="partial"||row.mode==="progress"||row.mode==="provider_error")allowed=bifrostProductExpected(w,qualifications.get(row.api));
+ if(row.mode==="provider_error"&&allowed.length&&bifrostProviderErrorVector(w)!==allowed)allowed=[];
  for(const o of originals)if(o.state==="rejected"&&!allowed.includes(o))failures.push(o.reason);else if(o.state==="pending")failures.push(Error("original operation pending"));
  if(row.mode==="progress"){
   const f=bifrostProgressWitness(w,proof,allowed,worker,workerFailures);
