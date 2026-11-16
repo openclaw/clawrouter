@@ -32,6 +32,8 @@
 - Report native-bound realtime authority failure stages and independent cleanup outcomes for twelve distinct variants, retaining original failures within bounded diagnostics and keeping build failures attributed to the build after anchor callbacks finish.
 
 - Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts; require matching native terminal IDs and retain the target failure when diagnostic buffers fill.
+- Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
 - Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.

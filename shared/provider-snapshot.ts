@@ -1,10 +1,11 @@
+import type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
 import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
 import type { ProviderModelDefinition, ModelPricing } from "./provider-model.ts";
 import type { ProviderOfferDefinition, ProviderProduct } from "./provider-products.ts";
 
 // Compiled v1 declarations shared by build tools and runtime consumers.
 // Credential state and adapter implementations remain outside this contract.
-export type GrantKind = "api_key" | "oauth" | "subscription";
+export type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
 export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video" | "minimax.video";
 export type ManagedFileLinks = { mode?: "metadata"; metadata: string; download: string }
   | { mode: "download_only"; metadata?: never; download: string };
