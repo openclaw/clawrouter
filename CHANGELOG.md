@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Distinguish search-observation body failure boundaries through literal native subtest locations, preserving original operations, failures and cleanup. Missing failure-site delivery remains unknown.
+
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
 - Separate Bifrost progress-case Worker residual failures from the SDK retirement response verdict in bounded diagnostics. Preserve original failures, strict retirement and financial gates; missing observations remain unknown.

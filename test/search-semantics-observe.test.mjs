@@ -187,30 +187,115 @@ test("observation captures robots metadata while forwarding actual main Worker r
 });
 
 test("observations include rejected fixture variants without changing diagnostic/matrix behavior", async t => {
-  const { fetcher } = await runtime(t);
-  const matrix = await createSemanticsFixture({ token, fetcher });
-  const diagnostic = await createDiagnosticFixture({ token, fetcher });
-  const session = await createRequestObservation({ token, fetcher });
-  assert.deepEqual(await session.snapshot(), session.initial, "private controls do not count themselves");
-  const gets = await Promise.all(Array.from({ length: 20 }, () => fetcher(diagnostic.url)));
-  assert.ok((await gets[0].text()).includes(diagnostic.initial.marker));
-  for (const init of [{ method: "HEAD" }, { method: "POST", body: "SYNTHETIC_BODY" }]) await fetcher(diagnostic.url, init);
-  assert.equal((await fetcher(`${diagnostic.url}?private=SYNTHETIC_QUERY`)).status, 404);
-  assert.equal((await fetcher(`${diagnostic.url}/`)).status, 404);
-  assert.equal((await fetcher(`${fixtureOrigin}/search-semantics/not-registered`)).status, 404);
-  assert.equal((await fetcher(matrix.url("live"))).status, 200);
-  const observed = await session.snapshot();
-  assert.deepEqual(observed.counters, [bucket("diagnostic", "GET", false, 200, 20), bucket("diagnostic", "HEAD", false, 200, 1), bucket("diagnostic", "POST", false, 404, 1), bucket("diagnostic", "GET", true, 404, 1), bucket("diagnostic_variant", "GET", false, 404, 1), bucket("fixture_other", "GET", false, 404, 1), bucket("matrix", "GET", false, 200, 1)]);
-  assert.equal(observed.expiresAt, session.initial.expiresAt, "traffic never extends retention");
-  assert.equal(JSON.stringify(observed).includes(diagnostic.initial.marker), false);
-  assert.equal(JSON.stringify(observed).includes(matrix.initial.id), false);
-  assert.equal((await diagnostic.snapshot()).gets, 20);
-  assert.equal((await diagnostic.snapshot()).heads, 1);
-  assert.equal((await matrix.snapshot()).pages.live.gets, 1);
-  await session.close();
-  assert.equal((await diagnostic.snapshot()).gets, 20, "observation deletion preserves diagnostic");
-  assert.equal((await matrix.snapshot()).pages.live.gets, 1);
-  await diagnostic.close(); await matrix.close();
+  let site = "runtime", operand, bodyFailed = false, bodyReason;
+  try {
+    const { fetcher } = await runtime(t);
+    site = "matrix_create";
+    const matrix = await createSemanticsFixture({ token, fetcher });
+    site = "diagnostic_create";
+    const diagnostic = await createDiagnosticFixture({ token, fetcher });
+    site = "observation_create";
+    const session = await createRequestObservation({ token, fetcher });
+    site = "initial_snapshot";
+    assert.deepEqual((operand = await session.snapshot(), site = "initial_equality", operand), session.initial, "private controls do not count themselves");
+    site = "aggregate_gets";
+    const gets = await Promise.all(Array.from({ length: 20 }, () => fetcher(diagnostic.url)));
+    site = "first_response_text";
+    assert.ok((operand = await gets[0].text(), site = "marker_assertion", operand).includes(diagnostic.initial.marker));
+    let variant = 0;
+    for (const init of [{ method: "HEAD" }, { method: "POST", body: "SYNTHETIC_BODY" }]) {
+      site = variant++ === 0 ? "head_request" : "post_request";
+      await fetcher(diagnostic.url, init);
+    }
+    site = "query_request";
+    assert.equal((operand = await fetcher(`${diagnostic.url}?private=SYNTHETIC_QUERY`), site = "query_status", operand).status, 404);
+    site = "slash_request";
+    assert.equal((operand = await fetcher(`${diagnostic.url}/`), site = "slash_status", operand).status, 404);
+    site = "unregistered_request";
+    assert.equal((operand = await fetcher(`${fixtureOrigin}/search-semantics/not-registered`), site = "unregistered_status", operand).status, 404);
+    site = "matrix_request";
+    assert.equal((operand = await fetcher(matrix.url("live")), site = "matrix_status", operand).status, 200);
+    site = "counter_snapshot";
+    const observed = await session.snapshot();
+    site = "counter_assertion";
+    assert.deepEqual(observed.counters, [bucket("diagnostic", "GET", false, 200, 20), bucket("diagnostic", "HEAD", false, 200, 1), bucket("diagnostic", "POST", false, 404, 1), bucket("diagnostic", "GET", true, 404, 1), bucket("diagnostic_variant", "GET", false, 404, 1), bucket("fixture_other", "GET", false, 404, 1), bucket("matrix", "GET", false, 200, 1)]);
+    site = "expiry_assertion";
+    assert.equal(observed.expiresAt, session.initial.expiresAt, "traffic never extends retention");
+    site = "marker_privacy";
+    assert.equal(JSON.stringify(observed).includes(diagnostic.initial.marker), false);
+    site = "matrix_privacy";
+    assert.equal(JSON.stringify(observed).includes(matrix.initial.id), false);
+    site = "diagnostic_get_snapshot";
+    assert.equal((operand = await diagnostic.snapshot(), site = "diagnostic_get_assertion", operand).gets, 20);
+    site = "diagnostic_head_snapshot";
+    assert.equal((operand = await diagnostic.snapshot(), site = "diagnostic_head_assertion", operand).heads, 1);
+    site = "matrix_get_snapshot";
+    assert.equal((operand = await matrix.snapshot(), site = "matrix_get_assertion", operand).pages.live.gets, 1);
+    site = "observation_close";
+    await session.close();
+    site = "post_delete_diagnostic_snapshot";
+    assert.equal((operand = await diagnostic.snapshot(), site = "post_delete_diagnostic_assertion", operand).gets, 20, "observation deletion preserves diagnostic");
+    site = "post_delete_matrix_snapshot";
+    assert.equal((operand = await matrix.snapshot(), site = "post_delete_matrix_assertion", operand).pages.live.gets, 1);
+    site = "diagnostic_close";
+    await diagnostic.close();
+    site = "matrix_close";
+    await matrix.close();
+  } catch (reason) {
+    bodyFailed = true;
+    bodyReason = reason;
+  }
+  if (bodyFailed) {
+    // Only native declaration coordinates identify the failed boundary. No error inspection.
+    // A post-await site includes the remaining operand evaluation and assertion, not just assert.
+    let discriminatorFailed = false, discriminatorReason;
+    try {
+      switch (site) {
+        case "runtime": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "observation_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "initial_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "initial_equality": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "aggregate_gets": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "first_response_text": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "marker_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "head_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "post_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "query_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "query_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "slash_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "slash_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "unregistered_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "unregistered_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "counter_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "counter_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "expiry_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "marker_privacy": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_privacy": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_get_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_get_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_head_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_head_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_get_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_get_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "observation_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "post_delete_diagnostic_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "post_delete_diagnostic_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "post_delete_matrix_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "post_delete_matrix_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "diagnostic_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
+        case "matrix_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
+      }
+    } catch (reason) {
+      discriminatorFailed = true;
+      discriminatorReason = reason;
+    }
+    if (discriminatorFailed) throw new AggregateError([bodyReason, discriminatorReason], "Observation failure-site reporting failed");
+    throw bodyReason;
+  }
 });
 
 test("observation controls require strict authentication, creation and owned deletion", async t => {
