@@ -391,7 +391,7 @@ function inertPinnedRunner() {
   const files = new Map(), descriptors = new Map(), events = [], commands = [], packets = [];
   let inode = 0, nextFd = 0;
   const h = { runner, diagnostic, files, events, commands, packets, sourceHead, target, reporterSource, consumerSource, sdk,
-    fault() {}, native: null, options: null };
+    fault() {}, native: null, options: null, projects: [{ name: "extension-media" }] };
   const observe = (op, ...args) => { events.push(op); h.fault(op, ...args); };
   const put = (path, bytes, mode) => files.set(path, { bytes: Buffer.from(bytes), mode, ino: ++inode });
   const get = path => { const value = files.get(String(path)); if (!value) { const error = new Error("fake missing file"); error.code = "ENOENT"; throw error; } return value; };
@@ -408,7 +408,7 @@ function inertPinnedRunner() {
     closeSync(fd) { observe("close", fd); assert.equal(descriptors.delete(fd), true); },
     fstatSync(fd) { const f = get(descriptors.get(fd)); return { isFile: () => true, mode: f.mode, size: f.bytes.length, ino: f.ino }; },
     readFileSync(path) { observe("readSyncFile", path); return get(path).bytes; },
-    readSync(fd, buffer, offset, length, position) { const bytes = get(descriptors.get(fd)).bytes; const n = Math.min(length, bytes.length - position); bytes.copy(buffer, offset, position, position + n); return n; },
+    readSync(fd, buffer, offset, length, position) { observe("read", fd); const bytes = get(descriptors.get(fd)).bytes; const n = Math.min(length, bytes.length - position); bytes.copy(buffer, offset, position, position + n); return n; },
     writeSync(fd, buffer, offset) { const f = get(descriptors.get(fd)), bytes = buffer.subarray(offset); f.bytes = Buffer.concat([f.bytes, bytes]); return bytes.length; },
     readFile: async path => { observe("readFile", path); return get(path).bytes; },
     copyFile: async (from, to, flags) => { observe("copy", from, to, flags); assert.equal(flags, constants.COPYFILE_EXCL); assert.ok(!files.has(to)); put(to, get(from).bytes, 0o600); },
@@ -440,7 +440,7 @@ function inertPinnedRunner() {
   h.produce = (args, change = () => {}) => {
     const reporter = new report.NativeRunnerReporter(), outputFile = args.find(a => a.startsWith("--outputFile=")).slice(13);
     const module = { moduleId: "/native/" + h.options.testPath, errors: () => [] };
-    reporter.onInit({ version: "5.0.5", projects: [{ name: "extension-providers" }], config: { root: "/native", outputFile } });
+    reporter.onInit({ version: "5.0.5", projects: h.projects, config: { root: "/native", outputFile } });
     reporter.onTestRunStart([module]); reporter.onTestModuleQueued(module);
     change(reporter, module, outputFile);
     reporter.onTestRunEnd([module], [], "failed");
@@ -479,6 +479,7 @@ test("pinned Xiaomi runner uses actual helper and reporter with inert I/O", asyn
 
 test("pinned reporter preserves Qwen and rejects foreign plans and stale digests before native effects", async () => {
   const q = inertPinnedRunner(); q.options.testPath = q.report.runnerContract.target;
+  q.projects = [{ name: "extension-providers" }];
   q.options.runnerReport.onReport = packet => { q.packets.push(packet); }; await q.run(); assert.equal(q.packets[0].complete, true);
   for (const change of [h => h.options.sourceHead = "0".repeat(40), h => h.options.testPath = "extensions/foreign/test.ts",
     h => h.options.runnerReport.fixtureSha256 = "f".repeat(64), h => h.options.runnerReport.reporterSha256 = "f".repeat(64),
@@ -490,6 +491,53 @@ test("pinned reporter preserves Qwen and rejects foreign plans and stale digests
   for (const [version, projects] of [["other", [{ name: "extension-providers" }]], ["5.0.5", [{ name: "foreign" }]], ["5.0.5", []]]) {
     const reporter = new h.report.NativeRunnerReporter();
     assert.throws(() => reporter.onInit({ version, projects, config: { root: "/native", outputFile: "/native/report" } }));
+  }
+});
+
+test("pinned reporter binds one D8 project to the exact validated target before creating its report", async () => {
+  for (const [target, expected] of [["extensions/xiaomi/worker-contract.test.ts", "extension-media"],
+    ["extensions/qwen/worker-regions-contract.test.ts", "extension-providers"]]) {
+    for (const projects of [[{ name: "extension-media" }], [{ name: "extension-providers" }], [{ name: "foreign" }], [],
+      [{ name: expected }, { name: expected }]]) {
+      const h = inertPinnedRunner(); h.options.testPath = target; h.projects = projects;
+      h.options.runnerReport.onReport = packet => h.packets.push(packet);
+      let creates = 0;
+      h.fault = (op, path, flags) => { if (op === "open" && path.endsWith("/report.jsonl") && (flags & 16)) creates++; };
+      if (projects.length === 1 && projects[0].name === expected) {
+        await h.run(); assert.equal(h.packets[0].complete, true); assert.equal(creates, 1);
+      } else {
+        await assert.rejects(h.run(), error => {
+          assert.equal(error.errors[0].message, "unqualified native project plan"); return true;
+        });
+        assert.equal(creates, 0);
+        assert.equal(h.packets[0].reporter, "absent");
+      }
+      assert.ok(h.events.includes("removeReport") && h.events.includes("removeFixture"));
+    }
+  }
+});
+
+test("project access and private plan read failures preserve original undefined and independent close errors", async () => {
+  for (const original of [new Error("project"), undefined]) for (const kind of ["getter", "proxy"]) {
+    const h = inertPinnedRunner(); let reads = 0; let outputCreated = false;
+    if (kind === "getter") h.projects = [{ get name() { reads++; throw original; } }];
+    else h.projects = new Proxy([], { get() { reads++; throw original; } });
+    h.fault = (op, path, flags) => { if (op === "open" && path.endsWith("/report.jsonl") && (flags & 16)) outputCreated = true; };
+    await assert.rejects(h.run(), error => { assert.equal(error.errors[0], original); return true; });
+    assert.equal(reads, 1); assert.equal(outputCreated, false); assert.equal(h.packets[0].reporter, "absent");
+    assert.ok(h.events.includes("removeReport") && h.events.includes("removeFixture"));
+  }
+  for (const original of [new Error("plan read"), undefined]) for (const close of [new Error("plan close"), undefined]) {
+    const h = inertPinnedRunner(); let readingPlan = false; let projectReads = 0;
+    h.projects = [{ get name() { projectReads++; return "extension-media"; } }];
+    h.fault = (op, path) => {
+      if (op === "open") readingPlan = path.endsWith("/plan.json");
+      if (op === "read" && readingPlan) throw original;
+      if (op === "close" && readingPlan) throw close;
+    };
+    await assert.rejects(h.run(), error => { assert.deepEqual(error.errors[0].errors, [original, close]); return true; });
+    assert.equal(projectReads, 0); assert.equal(h.packets[0].reporter, "absent");
+    assert.ok(h.events.includes("removeReport") && h.events.includes("removeFixture"));
   }
 });
 
@@ -595,6 +643,7 @@ test("held original child prevents collection, cleanup and publication until it 
 
 test("foreign callback packets and duplicate delivery cannot leave a credible startup summary", async () => {
   const q = inertPinnedRunner(); q.options.testPath = q.report.runnerContract.target;
+  q.projects = [{ name: "extension-providers" }];
   q.options.runnerReport.onReport = packet => q.packets.push(packet); await q.run();
   const h = inertPinnedRunner(); assert.throws(() => h.runner.options.onReport(q.packets[0]));
   assert.equal(h.emit()[0].includes("Xiaomi native runner"), false);

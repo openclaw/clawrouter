@@ -157,11 +157,13 @@ export default class NativeRunnerReporter {
   onInit(ctx) {
     assert.equal(this.#file, undefined, "runner reporter initialized twice");
     assert.equal(ctx.version, "5.0.5", "unqualified native reporter API");
-    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === "extension-providers", "unqualified native project plan");
     assert.equal(typeof ctx.config.outputFile, "string", "explicit runner output required");
     this.#file = resolve(ctx.config.outputFile); this.#root = resolve(ctx.config.root);
     const plan = readPrivateFile(join(dirname(this.#file), "plan.json"), 4096);
     this.#binding = validateBinding(JSON.parse(plan.toString("utf8")));
+    // D8 extension-test-plan routes these exact, validated targets to distinct shards.
+    const project = this.#binding.target === "extensions/xiaomi/worker-contract.test.ts" ? "extension-media" : "extension-providers";
+    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === project, "unqualified native project plan");
     assert.equal(sha256(readFileSync(fileURLToPath(import.meta.url))), this.#binding.reporterSha256);
     assert.equal(sha256(readFileSync(join(this.#root, this.#binding.target))), this.#binding.fixtureSha256);
     const fd = openSync(this.#file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
