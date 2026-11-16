@@ -142,6 +142,15 @@ model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
 
+### Portable tariff declarations
+
+The contract package exports `ModelPricing`, `RequestPricing`, and their component
+types. Existing imports from `shared/provider-model.ts` and
+`shared/request-pricing.ts` remain supported through type-only exports. These are
+published tariff declarations; runtime policy overrides, admission, and settlement
+remain host-owned. This does not add a model-catalogue importer or change price
+units, nullable values, or provider-specific qualifications.
+
 ### Explicit products
 
 A service-provider v1 manifest can optionally declare `products`. A product ID
