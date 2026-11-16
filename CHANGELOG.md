@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
 - Match native runner project admission to the pinned target: Xiaomi uses the media project and Qwen uses the providers project. Validate the private binding before choosing the single expected project, and create no report until every startup guard passes. Preserve original failures, cleanup and native qualification requirements.
 
 - Bind Xiaomi startup and collection reporting to the pinned native runner and exact fixture/reporter bytes. Preserve existing SDK failure records and qualification rules; publish a bounded runner supplement only when SDK records are absent and the existing annotation budget permits it. Missing or incomplete reports remain failures, with no partial lifecycle or retirement credit.
