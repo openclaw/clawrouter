@@ -27,6 +27,8 @@
 
 - Preserve the captured global timer receiver in Bifrost partial fixtures and report bounded producer failure sites after original joins, without changing deadlines, cancellation or accounting acceptance.
 
+- Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
 - Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.

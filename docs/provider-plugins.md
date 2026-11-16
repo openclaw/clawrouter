@@ -123,6 +123,12 @@ bindings, credential records, or adapter implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
 
+Full product, binding, offer selection, and compiled offer declaration types are
+exported by `@clawrouter/provider-plugin-contract`. Core imports from
+`shared/provider-products.ts` remain type-only compatibility exports. The
+package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
+as `GrantKind` for existing consumers.
+
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
