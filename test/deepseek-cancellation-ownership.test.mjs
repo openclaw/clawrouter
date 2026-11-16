@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { deepSeekHeldFailure, deepSeekHeldPrefix, decodeDeepSeekHeldDiagnostic } from "../scripts/worker-test-failure-reporter.mjs";
 
 const source = readFileSync(new URL("./openclaw-deepseek-search.test.mjs", import.meta.url), "utf8");
 const name = "DeepSeek held upstream joins original cancellation before teardown";
@@ -23,7 +24,7 @@ const has = (options, name) => Object.hasOwn(options, name);
 // Execute only the exact registration/callback with inert owners. No fixture
 // module, Worker, socket, stream, native timer or dependency is instantiated.
 function run(options = {}) {
-  const calls = [], cancelStarted = deferred(), barrierClosed = deferred();
+  const calls = [], frames = [], cancelStarted = deferred(), barrierClosed = deferred();
   let callback, timer, callerReason, originalCancel, subscriptions = 0, observerCalls = 0, receiver, args;
   const fail = key => { if (has(options, key)) throw options[key]; };
   const reader = {
@@ -56,11 +57,11 @@ function run(options = {}) {
   const mf = { getWorker: async () => upstream, async dispose() { calls.push("dispose"); fail("disposeFailure"); } };
   const bindings = {
     test(actual, options, body) { assert.equal(actual, name); assert.equal(options.timeout, 60_000); callback = body; },
-    assert, Promise,
+    assert, Promise, deepSeekHeldFailure,
     AbortController: class { constructor() { this.signal = {}; } abort(reason) { callerReason = reason; calls.push("abort"); } },
     setTimeout(fn, delay) { assert.equal(delay, 45_000); timer = fn; return 1; },
     clearTimeout(id) { assert.equal(id, 1); calls.push("clearTimeout"); fail("timerFailure"); },
-    abortBarrier: async () => barrier,
+    abortBarrier: async () => { fail("setupFailure"); return barrier; },
     mkdtemp: async () => "synthetic-directory", tmpdir: () => "synthetic-root", join: (...parts) => parts.join("/"),
     loadHelper: async () => ({ startWorkerdFixture: async () => mf }),
     routerFixture: () => "synthetic-router", upstreamFixture: () => "synthetic-upstream", query: "synthetic",
@@ -69,10 +70,10 @@ function run(options = {}) {
     console: { log(label) { calls.push(label); if (options.reportFailures && Object.hasOwn(options.reportFailures, label)) throw options.reportFailures[label]; } },
     rm: async () => { calls.push("remove"); fail("removeFailure"); },
   };
-  new Function(...Object.keys(bindings), registration.replace(loader, "await loadHelper()"))(...Object.values(bindings));
+  new Function(...Object.keys(bindings), (options.registrationSource ?? registration).replace(loader, "await loadHelper()"))(...Object.values(bindings));
   assert.equal(typeof callback, "function");
   return {
-    result: outcome(callback()), calls, cancelStarted: cancelStarted.promise, barrierClosed: barrierClosed.promise,
+    result: outcome(callback({ diagnostic(frame) { calls.push("held.diagnostic"); fail("diagnosticFailure"); frames.push(frame); } })), calls, frames, cancelStarted: cancelStarted.promise, barrierClosed: barrierClosed.promise,
     expire: () => timer(), facts: () => ({ subscriptions, observerCalls, receiver, args, reader, callerReason }),
   };
 }
@@ -136,6 +137,7 @@ test("DeepSeek diagnostic waits for its pending original cancel after the bounde
   await Promise.resolve();
   assert.equal(finished, false);
   assert.equal(actual.calls.includes("dispose"), false);
+  assert.equal(actual.frames.length, 0, "no report before the original held cancellation joins");
   pending.reject(undefined);
   const result = await completion;
   assert.equal(result.failed, true);
@@ -145,6 +147,47 @@ test("DeepSeek diagnostic waits for its pending original cancel after the bounde
   assert.equal(result.reason.errors[1], undefined);
   assertOwned(actual);
 });
+
+// BEGIN standalone held diagnostic accounting tests.
+function heldRecord(actual) {
+  assert.equal(actual.frames.length, 1);
+  assert.ok(actual.frames[0].startsWith(deepSeekHeldPrefix));
+  const row = decodeDeepSeekHeldDiagnostic(JSON.parse(actual.frames[0].slice(deepSeekHeldPrefix.length)));
+  assert.ok(row); return row;
+}
+for (const reason of [undefined, {}]) {
+  for (const [fault, phase] of [["setupFailure", "setup"], ["readFailure", "upstream"], ["disposeFailure", "cleanup"]]) {
+    test(`DeepSeek held diagnostic accounts ${fault} without inspecting its ${reason === undefined ? "undefined" : "defined"} reason`, async () => {
+      const actual = run({ [fault]: reason }), result = await actual.result;
+      assert.equal(result.failed, true); assert.equal(result.reason, reason);
+      const row = heldRecord(actual); assert.equal(row.phase, phase); assert.equal(row.reasonDefined, reason !== undefined);
+      assert.deepEqual(row.counts, [1, reason === undefined ? 1 : 0, 0, 0]);
+    });
+  }
+}
+test("DeepSeek held diagnostic first means accounting order, including original cancel and observer failures", async () => {
+  const cancel = {}, actual = run({ cancelFailure: cancel, observerFailure: undefined, disposeFailure: undefined });
+  const result = await actual.result; assert.deepEqual(result.reason.errors, [cancel, undefined, undefined]);
+  const row = heldRecord(actual); assert.equal(row.phase, "cleanup"); assert.equal(row.reasonDefined, true); assert.deepEqual(row.counts, [3, 2, 0, 0]);
+  assertOwned(actual);
+});
+test("DeepSeek held diagnostic separates earlier reporting failures and never replaces its write failure", async () => {
+  const primary = {}, actual = run({ readFailure: primary, reportFailures: { "deepseek-held-cleanup": undefined } });
+  assert.deepEqual((await actual.result).reason.errors, [primary, undefined]);
+  assert.deepEqual(heldRecord(actual).counts, [1, 0, 1, 1]);
+  const failed = run({ readFailure: primary, diagnosticFailure: undefined });
+  assert.deepEqual((await failed.result).reason.errors, [primary, undefined]); assert.equal(failed.frames.length, 0);
+  assertOwned(failed);
+});
+test("DeepSeek held diagnostic does not invent an original failure for a reporting-only failure", async () => {
+  const actual = run({ reportFailures: { "deepseek-held-ownership": undefined } });
+  assert.equal((await actual.result).reason, undefined); const row = heldRecord(actual);
+  assert.equal(row.phase, null); assert.equal(row.failurePresent, false); assert.equal(row.reasonDefined, null); assert.deepEqual(row.counts, [0, 0, 1, 1]);
+});
+test("DeepSeek held successful accounting emits no diagnostic", async () => {
+  const actual = run(); assert.equal((await actual.result).failed, false); assert.equal(actual.frames.length, 0); assertOwned(actual);
+});
+// END standalone held diagnostic accounting tests.
 
 for (const failure of [undefined, new Error("synthetic observer rejection")]) {
   test(`DeepSeek diagnostic retains ${failure === undefined ? "undefined" : "defined"} observer failure and completes cleanup`, async () => {

@@ -560,6 +560,110 @@ export function workerAbortAdmission(tracked, invocation) {
   };
 }
 
+export const deepSeekHeldPrefix = "DEEPSEEK_HELD_FAILURE_V1 ";
+const deepSeekHeldFile = "test/openclaw-deepseek-search.test.mjs";
+const deepSeekHeldName = "DeepSeek held upstream joins original cancellation before teardown";
+
+// Snapshot the existing accounting order, before the diagnostic write itself.
+// Reasons are retained by the caller; only presence and definedness leave it.
+export function deepSeekHeldFailure(phase, failures, reporting) {
+  const record = { v: 1, kind: "deepseek_held_stage", phase: failures.length ? phase : null,
+    failurePresent: failures.length > 0, reasonDefined: failures.length ? failures[0] !== undefined : null,
+    counts: [failures.length, failures.filter(error => error === undefined).length,
+      reporting.length, reporting.filter(error => error === undefined).length] };
+  if (!decodeDeepSeekHeldDiagnostic(record)) throw new Error("invalid held diagnostic accounting");
+  return deepSeekHeldPrefix + JSON.stringify(record);
+}
+export function decodeDeepSeekHeldDiagnostic(value) {
+  if (!value || typeof value !== "object" || types.isProxy(value)) return null;
+  const keys = ["v", "kind", "phase", "failurePresent", "reasonDefined", "counts"];
+  if (Reflect.ownKeys(value).length !== keys.length || keys.some(key => !own(value, key).present)) return null;
+  const get = key => own(value, key).value, raw = get("counts");
+  const counts = closedDiagnosticTuple(raw, 4, n => Number.isSafeInteger(n) && n >= 0 && n <= limit);
+  if (!counts || Reflect.ownKeys(raw).length !== 5 || counts[1] > counts[0] || counts[3] > counts[2]
+    || counts[0] + counts[2] === 0 || get("v") !== 1 || get("kind") !== "deepseek_held_stage"
+    || get("failurePresent") !== (counts[0] > 0)
+    || (counts[0] ? !["setup", "upstream", "cleanup"].includes(get("phase")) || typeof get("reasonDefined") !== "boolean"
+      || get("reasonDefined") === false && counts[1] === 0 || get("reasonDefined") === true && counts[1] === counts[0]
+      : get("phase") !== null || get("reasonDefined") !== null)) return null;
+  return { v: 1, kind: "deepseek_held_stage", phase: get("phase"), failurePresent: get("failurePresent"), reasonDefined: get("reasonDefined"), counts };
+}
+export function deepSeekHeldInvocation(runtime, cwd) {
+  const values = own(runtime, "versions").value, env = own(runtime, "env").value, options = own(env, "NODE_OPTIONS");
+  if (own(values, "node").value !== "24.22.1" || !env || types.isProxy(env)
+    || own(env, "NODE_TEST_CONTEXT").present || options.present && options.value !== "") return null;
+  const list = value => Array.isArray(value) && !types.isProxy(value) && value.length <= 4097
+    ? closedDiagnosticTuple(value, value.length, x => typeof x === "string") : null;
+  const flags = list(own(runtime, "execArgv").value), args = list(own(runtime, "argv").value);
+  if (!flags || !args || !sameStrings(flags, ["--test", "--test-reporter=./scripts/worker-test-failure-reporter.mjs", "--test-reporter-destination=stdout"])
+    || args.length < 2 || args[0] !== own(runtime, "execPath").value) return null;
+  const file = value => typeof value === "string" ? relative(cwd, resolve(cwd, value)).split(sep).join("/") : null;
+  const files = args.slice(1).map(file);
+  if (files.some(value => !/^test\/[A-Za-z0-9][A-Za-z0-9._-]*\.test\.mjs$/.test(value))
+    || new Set(files).size !== files.length || !files.includes(deepSeekHeldFile)) return null;
+  return { files, file };
+}
+
+// This standalone Script declaration has no SDK capsule census. Bind its one
+// frame to native child coordinates and the complete original parent scope.
+export function deepSeekHeldAdmission(tracked, invocation) {
+  const expected = new Set(invocation?.files ?? []), wrappers = new Map(), parentIds = new Map(), children = new Map(), coordinates = new Map();
+  let invalid = !invocation, census = 0, childCount = 0, diagnostic = null, recognized = 0;
+  const same = (a, b) => a && b && a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
+  const count = x => Number.isSafeInteger(x) && x >= 0 && x <= limit;
+  const deny = () => { invalid = true; };
+  return {
+    observe(event) {
+      const type = own(event, "type").value, data = own(event, "data").value;
+      if (typeof type === "string" && type.startsWith("test:watch:")) { deny(); return; }
+      if (!["test:enqueue", "test:fail", "test:pass", "test:complete", "test:diagnostic"].includes(type)) return;
+      const message = own(data, "message").value;
+      if (type === "test:diagnostic" && (typeof message !== "string" || !message.startsWith(deepSeekHeldPrefix))) return;
+      if (++census > limit) { deny(); return; }
+      const entry = own(data, "entryFile"), file = tracked(own(data, "file").value);
+      const line = own(data, "line").value, column = own(data, "column").value, nesting = own(data, "nesting").value;
+      const at = file && count(line) && line > 0 && count(column) && column > 0 && count(nesting) ? [file, line, column, nesting] : null;
+      if (type === "test:diagnostic") {
+        const record = parseCanonicalWorkerRecord(message.slice(deepSeekHeldPrefix.length), decodeDeepSeekHeldDiagnostic);
+        if (++recognized !== 1 || !record || tracked(entry.value) !== deepSeekHeldFile || !at || file !== deepSeekHeldFile) { deny(); return; }
+        diagnostic = { at, record }; return;
+      }
+      if (!entry.present && (!data || typeof data !== "object" || types.isProxy(data) || Object.hasOwn(data, "entryFile"))) { deny(); return; }
+      if (entry.present && !expected.has(tracked(entry.value)) || !entry.present && !expected.has(file)) { deny(); return; }
+      if (entry.present && tracked(entry.value) !== deepSeekHeldFile) return;
+      if (entry.present && ++childCount > 4096) { deny(); return; }
+      const id = own(data, "testId").value, parent = own(data, "parentId"), name = own(data, "name").value;
+      if (!at || !Number.isSafeInteger(id) || id <= 0 || !parent.present
+        || !(parent.value === undefined || parent.value === null || Number.isSafeInteger(parent.value) && parent.value >= 0)
+        || typeof name !== "string" || Buffer.byteLength(name) > 512) { deny(); return; }
+      const identity = [id, parent.value, name, ...at], table = entry.present ? children : parentIds;
+      if (!entry.present && (invocation.file(name) !== file || line !== 1 || column !== 1 || nesting !== 0 || parent.value !== 0)) { deny(); return; }
+      if (type === "test:enqueue") {
+        if (table.has(id) || !entry.present && wrappers.has(file)) { deny(); return; }
+        const row = { identity, at, name, events: new Set(), failure: null }; table.set(id, row);
+        if (!entry.present) wrappers.set(file, row);
+        else { const key = JSON.stringify(at); coordinates.set(key, (coordinates.get(key) ?? 0) + 1); }
+      } else {
+        const row = table.get(id);
+        if (!row || !same(row.identity, identity) || row.events.has(type)) { deny(); return; }
+        row.events.add(type);
+        if (row.events.has("test:fail") && row.events.has("test:pass")) deny();
+        if (entry.present && type === "test:fail") row.failure = failureRecord(data, tracked);
+      }
+    },
+    finish() {
+      const rows = [...children.values()].filter(row => row.name === deepSeekHeldName && row.at[0] === deepSeekHeldFile);
+      const row = rows.length === 1 ? rows[0] : null;
+      if (invalid || recognized !== 1 || !row?.failure || !diagnostic || row.at[3] !== 0 || !same(row.at, diagnostic.at)
+        || coordinates.get(JSON.stringify(row.at)) !== 1 || wrappers.size !== expected.size
+        || ![...expected].every(file => wrappers.get(file)?.events.has("test:complete"))) return null;
+      const { v, kind, ...facts } = diagnostic.record;
+      const record = { v: 1, kind: "deepseek_held", at: row.at, ...facts };
+      return decodeWorkerReporterRecord(record) ? { failure: row.failure, record } : null;
+    },
+  };
+}
+
 // The private Checks collector shares the signed closed wire schema. Decoding
 // verifies shape, not native delivery, case success or cancellation ownership.
 export function decodeWorkerReporterRecord(value) {
@@ -588,7 +692,13 @@ export function decodeWorkerReporterRecord(value) {
   }
   if (get("v") !== 1) return null;
   let result;
-  if (get("kind") === "failure") {
+  if (get("kind") === "deepseek_held") {
+    if (!exact(["v", "kind", "at", "phase", "failurePresent", "reasonDefined", "counts"])) return null;
+    const at = closedDiagnosticTuple(get("at"), 4, (x, i) => i === 0 ? x === deepSeekHeldFile : count(x) && (i === 3 ? x === 0 : x > 0));
+    const data = decodeDeepSeekHeldDiagnostic({ v: 1, kind: "deepseek_held_stage", phase: get("phase"), failurePresent: get("failurePresent"), reasonDefined: get("reasonDefined"), counts: get("counts") });
+    if (!at || Reflect.ownKeys(get("at")).length !== 5 || !data) return null;
+    result = { v: 1, kind: "deepseek_held", at, phase: data.phase, failurePresent: data.failurePresent, reasonDefined: data.reasonDefined, counts: data.counts };
+  } else if (get("kind") === "failure") {
     const keys = ["v", "kind", "file", "line", "failureType", "errorClass", "code"], file = get("file"), line = get("line");
     if (!exact(keys) || !(file === null || typeof file === "string" && file.length <= 240 && filePattern.test(file))
       || !(line === null || file !== null && count(line) && line > 0)
@@ -688,9 +798,11 @@ function annotation(record, level) {
 export async function* workerFailureReport(source, { cwd = process.cwd() } = {}) {
   const tracked = trackedTestFiles(cwd), leaves = new Map(), parents = new Map();
   const admission = workerAbortAdmission(tracked, workerAbortInvocation(process, cwd));
+  const heldAdmission = deepSeekHeldAdmission(tracked, deepSeekHeldInvocation(process, cwd));
   let failures = 0, unknownFiles = 0;
   for await (const event of source) {
     admission.observe(event);
+    heldAdmission.observe(event);
     if (own(event, "type").value !== "test:fail") continue;
     failures = Math.min(limit, failures + 1);
     const record = failureRecord(own(event, "data").value, tracked);
@@ -701,7 +813,10 @@ export async function* workerFailureReport(source, { cwd = process.cwd() } = {})
   }
   const evidence = admission.finish();
   const prioritized = [...(evidence.failure ? [evidence.failure] : []), ...(evidence.records.length ? evidence.records : evidence.record ? [evidence.record] : [])];
-  const selected = [...prioritized, ...[...leaves.values(), ...parents.values()].filter(record => !evidence.failure || JSON.stringify(record) !== JSON.stringify(evidence.failure))].slice(0, 9);
+  const held = heldAdmission.finish();
+  if (held && prioritized.length <= 7) prioritized.push(held.failure, held.record);
+  const priorityIdentities = new Set(prioritized.filter(record => record.kind === "failure").map(record => JSON.stringify(record)));
+  const selected = [...prioritized, ...[...leaves.values(), ...parents.values()].filter(record => !priorityIdentities.has(JSON.stringify(record)))].slice(0, 9);
   const identities = selected.filter(record => record.kind === "failure").length;
   // Construct every command before yielding. A relational group is all eight or
   // none; native failure identities and the summary never depend on its validity.

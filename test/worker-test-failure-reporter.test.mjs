@@ -10,6 +10,7 @@ import { after, before, test } from "node:test";
 import { parse } from "yaml";
 import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
+import { deepSeekHeldFailure, deepSeekHeldPrefix, decodeDeepSeekHeldDiagnostic } from "../scripts/worker-test-failure-reporter.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
 const marker = "synthetic-private-marker-do-not-report";
@@ -119,6 +120,100 @@ function pureWorkerReporter(runtime = workerAbortRuntime()) {
   const tracked = file => typeof file === "string" && /^(?:worker\/)?test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(file) ? file : null;
   return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep);
 }
+// BEGIN standalone DeepSeek Script delivery tests.
+function heldScriptRuntime() {
+  return { ...workerAbortRuntime(), argv: ["/fixture/node", "test/openclaw-deepseek-search.test.mjs", "test/other.test.mjs"] };
+}
+function heldScriptEvents(frame) {
+  const native = { testId: 7, parentId: undefined, name: "DeepSeek held upstream joins original cancellation before teardown",
+    file: "test/openclaw-deepseek-search.test.mjs", entryFile: "test/openclaw-deepseek-search.test.mjs", line: 148, column: 1, nesting: 0 };
+  return [{ type: "test:enqueue", data: { ...native } },
+    { type: "test:fail", data: { ...native, details: { error: { failureType: "testCodeFailure", code: "ERR_TEST_FAILURE" } } } },
+    { type: "test:diagnostic", data: { entryFile: native.entryFile, file: native.file, line: native.line, column: native.column, nesting: 0, message: frame } }];
+}
+async function heldScriptPipeline(events, { runtime = heldScriptRuntime(), complete = true, wrappers } = {}) {
+  wrappers ??= runtime.argv.slice(1).map((file, i) => ({ testId: i + 1, parentId: 0, name: file, file, line: 1, column: 1, nesting: 0 }));
+  return workerAbortPipeline(events, { runtime, wrappers, complete });
+}
+test("DeepSeek Script delivery binds the actual accounting producer in both native event orders", async () => {
+  for (const phase of ["setup", "upstream", "cleanup"]) for (const reason of [undefined, {}]) {
+    const frame = deepSeekHeldFailure(phase, [reason], [undefined]);
+    for (const order of [[0, 1, 2], [0, 2, 1]]) {
+      const events = heldScriptEvents(frame), out = await heldScriptPipeline(order.map(i => events[i]));
+      const row = out.rows.find(row => row.kind === "deepseek_held"); assert.ok(row);
+      assert.equal(row.phase, phase); assert.equal(row.failurePresent, true); assert.equal(row.reasonDefined, reason !== undefined);
+      assert.deepEqual(row.counts, [1, reason === undefined ? 1 : 0, 1, 1]);
+      assert.equal(out.rows[0].kind, "failure"); assert.equal(out.rows.at(-1).failureEvents, 1);
+      for (const rows of [out.rows, [...out.rows].reverse()]) for (const value of rows) assert.deepEqual(parseWorkerReporterRecord(JSON.stringify(value)), value);
+    }
+  }
+  const out = await heldScriptPipeline(heldScriptEvents(deepSeekHeldFailure("cleanup", [], [undefined])));
+  assert.deepEqual(out.rows[1], { v: 1, kind: "deepseek_held", at: ["test/openclaw-deepseek-search.test.mjs", 148, 1, 0], phase: null, failurePresent: false, reasonDefined: null, counts: [0, 0, 1, 1] });
+});
+test("DeepSeek Script delivery rejects missing, duplicate, foreign and contradictory native association", async () => {
+  const frame = deepSeekHeldFailure("upstream", [undefined], []);
+  const mutations = [
+    e => e.splice(0, 1), e => e.splice(1, 1), e => e.splice(2, 1), e => { e[1].data.testId = 8; },
+    e => { delete e[0].data.parentId; }, e => { e[1].data.parentId = null; }, e => { e[0].data.testId = 7.5; },
+    e => { e[0].data.name = "unrelated"; e[1].data.name = "unrelated"; },
+    e => { e[2].data.entryFile = "test/other.test.mjs"; }, e => { delete e[2].data.entryFile; },
+    e => { e[2].data.line++; }, e => { e[2].data.nesting = 1; }, e => { e[2].data.file = "test/other.test.mjs"; },
+    e => e.push(e[0]), e => e.push(e[1]), e => e.push(e[2]),
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: 8, name: "unrelated" } }),
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: 8, line: 149 } }),
+    e => e.push({ type: "test:pass", data: { ...e[1].data } }), e => e.push({ type: "test:watch:drained", data: {} }),
+    e => { e[2].type = "test:stdout"; }, e => { e[2].data.message += "\u001b"; },
+    e => { e[2].data.message = e[2].data.message.slice(0, -1); }, e => { e[2].data.message = deepSeekHeldPrefix + "x".repeat(513); },
+    e => { e[2].data.message = e[2].data.message.replace('{"v":1,', '{"v":1,"v":1,'); },
+  ];
+  for (const mutate of mutations) {
+    const events = heldScriptEvents(frame); mutate(events);
+    const out = await heldScriptPipeline(events); assert.equal(out.rows.some(row => row.kind === "deepseek_held"), false);
+  }
+  assert.equal((await heldScriptPipeline(heldScriptEvents(frame), { complete: false })).rows.some(row => row.kind === "deepseek_held"), false);
+  for (const mutate of [r => { r.versions.node = "26.0.0"; }, r => { r.env.NODE_OPTIONS = "--test"; }, r => { r.env.NODE_TEST_CONTEXT = "child-v8"; }, r => r.argv.push(r.argv[1]), r => { r.execArgv.pop(); }]) {
+    const runtime = heldScriptRuntime(); mutate(runtime);
+    assert.equal((await heldScriptPipeline(heldScriptEvents(frame), { runtime })).rows.some(row => row.kind === "deepseek_held"), false);
+  }
+});
+test("DeepSeek Script accounting schema is closed and does not inspect reason or record accessors", async () => {
+  let reads = 0;
+  const reason = new Proxy({}, { get() { reads++; throw undefined; }, getOwnPropertyDescriptor() { reads++; throw undefined; } });
+  const good = JSON.parse(deepSeekHeldFailure("setup", [reason], []).slice(deepSeekHeldPrefix.length)); assert.equal(reads, 0);
+  const bad = [{ ...good, extra: null }, { ...good, phase: "native_fetch" }, { ...good, failurePresent: false }, { ...good, reasonDefined: null },
+    ...[[0, 0, 0, 0], [1, 2, 0, 0], [1, 0, 1, 2], [1, 0, 0, 0, {}], [1, 0, 0], [1, 0, 0, 0.5], [1, 0, 0, -1], [1, 0, 0, 1000001]].map(counts => ({ ...good, counts })),
+    { ...good, reasonDefined: false }, { ...good, reasonDefined: true, counts: [1, 1, 0, 0] }];
+  for (const record of bad) {
+    assert.equal(decodeDeepSeekHeldDiagnostic(record), null);
+    const out = await heldScriptPipeline(heldScriptEvents(deepSeekHeldPrefix + JSON.stringify(record)));
+    assert.equal(out.rows.some(row => row.kind === "deepseek_held"), false);
+    const projected = { ...record, kind: "deepseek_held", at: ["test/openclaw-deepseek-search.test.mjs", 148, 1, 0] };
+    assert.equal(decodeWorkerReporterRecord(projected), null);
+  }
+  for (const key of Object.keys(good)) {
+    const value = { ...good }; Object.defineProperty(value, key, { get() { reads++; throw undefined; } });
+    assert.equal(decodeDeepSeekHeldDiagnostic(value), null);
+  }
+  const sparse = { ...good, counts: [1, 0, 0, 0] }; delete sparse.counts[2]; assert.equal(decodeDeepSeekHeldDiagnostic(sparse), null);
+  const extra = { ...good, counts: [1, 0, 0, 0] }; extra.counts.extra = {}; assert.equal(decodeDeepSeekHeldDiagnostic(extra), null);
+  const projected = { ...good, kind: "deepseek_held", at: ["test/openclaw-deepseek-search.test.mjs", 148, 1, 0] };
+  projected.at.extra = {}; assert.equal(decodeWorkerReporterRecord(projected), null);
+  for (const at of [[...projected.at, null], ["test/other.test.mjs", 148, 1, 0], ["test/openclaw-deepseek-search.test.mjs", 148, 1, 1]]) assert.equal(decodeWorkerReporterRecord({ ...projected, at }), null);
+  assert.equal(decodeDeepSeekHeldDiagnostic(reason), null); assert.equal(reads, 0);
+});
+test("DeepSeek Script delivery keeps the failure and detail together within the existing quota", async () => {
+  const frame = deepSeekHeldFailure("upstream", [undefined], []), events = heldScriptEvents(frame);
+  const extra = Array.from({ length: 20 }, (_, i) => [{ type: "test:enqueue", data: { ...events[0].data, testId: 100 + i, line: 300 + i, name: "unrelated" } },
+    { type: "test:fail", data: { ...events[1].data, testId: 100 + i, line: 300 + i, name: "unrelated" } }]).flat();
+  const out = await heldScriptPipeline([...extra, ...events]);
+  assert.equal(out.lines.length, 10); assert.equal(out.rows[0].kind, "failure"); assert.equal(out.rows[1].kind, "deepseek_held");
+  assert.equal(out.rows.at(-1).reported, 8); assert.equal(out.rows.at(-1).omittedEvents, 13);
+  const maximal = deepSeekHeldPrefix + JSON.stringify({ v: 1, kind: "deepseek_held_stage", phase: "upstream", failurePresent: true, reasonDefined: false, counts: [1000000, 1000000, 1000000, 1000000] });
+  const maxEvents = heldScriptEvents(maximal); for (const event of maxEvents) { event.data.line = 1000000; event.data.column = 1000000; }
+  const max = await heldScriptPipeline(maxEvents); assert.equal(max.rows[1].kind, "deepseek_held");
+  assert.ok(Buffer.byteLength(JSON.stringify(max.rows[1])) <= 512);
+});
+// END standalone DeepSeek Script delivery tests.
 function workerAbortNativeEvents(frame) {
   const native = { testId: 7, parentId: undefined, name: "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement",
     file: "worker/test/litellm-model-discovery.test.mjs", entryFile: "worker/test/litellm-model-discovery.test.mjs", line: 704, column: 3, nesting: 0 };

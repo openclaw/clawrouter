@@ -10,6 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { deepSeekHeldFailure } from "../scripts/worker-test-failure-reporter.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "82dd065e23b678e61ad497f9d57fbb4c3da10eae";
@@ -145,11 +146,12 @@ async function abortBarrier() {
   };
 }
 
-test("DeepSeek held upstream joins original cancellation before teardown", { timeout: 60_000 }, async () => {
+test("DeepSeek held upstream joins original cancellation before teardown", { timeout: 60_000 }, async t => {
   const failures = [], cancellationFailures = [], cleanupFailures = [], reportingFailures = [];
   const reason = new Error("synthetic DeepSeek raw cancellation");
   const caller = new AbortController();
   let barrier, temporary, mf, reader, cancellation, phase = "setup", observed;
+  let firstFailurePhase;
   let cancelAttempted = false, cancelCompletion, cancelResult, cancelObserverFailure, stoppedForObserver = false;
   const beginCancellation = () => {
     cancelAttempted = true;
@@ -196,7 +198,7 @@ test("DeepSeek held upstream joins original cancellation before teardown", { tim
     assert.equal(observed[0].finished, true, "original nested fetch must settle before teardown");
     assert.equal(await bounded(fetch(barrier.origin + "/socket-closed").then(response => response.text())), "socket-closed");
     assert.equal(barrier.state().teardown, false);
-  } catch (error) { if (!stoppedForObserver) failures.push(error); }
+  } catch (error) { if (!stoppedForObserver) { failures.push(error); firstFailurePhase = phase === "setup" ? "setup" : "upstream"; } }
   finally {
     try { clearTimeout(timer); } catch (error) { cleanupFailures.push(error); }
     report(() => console.log("deepseek-held-cleanup", JSON.stringify({ phase, beforeTeardown: barrier?.state() })));
@@ -214,8 +216,10 @@ test("DeepSeek held upstream joins original cancellation before teardown", { tim
     try { await mf?.dispose(); } catch (error) { cleanupFailures.push(error); }
     if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { cleanupFailures.push(error); }
   }
+  const primaryFailureCount = failures.length;
   failures.push(...cancellationFailures, ...cleanupFailures);
   if (failures.length || reportingFailures.length) report(() => console.log("deepseek-held-failures", JSON.stringify([...failures, ...reportingFailures].map(error => ({ defined: error !== undefined, originalCallerReason: error === reason })))));
+  if (failures.length || reportingFailures.length) report(() => t.diagnostic(deepSeekHeldFailure(primaryFailureCount ? firstFailurePhase : "cleanup", failures, reportingFailures)));
   failures.push(...reportingFailures);
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "DeepSeek cancellation or cleanup failed");
