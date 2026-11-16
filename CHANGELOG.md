@@ -589,6 +589,7 @@
 - Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+- Declare native Levanto Sage, Liquid AI and TypeSafe decision provider routes with isolated credentials and typed codec fixtures, including explicit text/JSON Sage batch support metadata without inferred batch limits or prices; actual provider, catalog and DecisionV2 qualification remain separate.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
 - Declare scoped Vydra Jobs submission/retrieval/cancellation and validate returned workflow identity, preserving cancellation/refund uncertainty and unqualified upstream-dollar costs.
