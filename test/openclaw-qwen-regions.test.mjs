@@ -43,7 +43,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "4fef30f7ef737571a4cd71ad90e79063eab3489217a5a9eb17b36bc09c57603a";
+const qwenRunnerFixtureSha256 = "d47986e7427610aa7c3d3532cc775cebd98754791152c11f57b59cdf1f883229";
 const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
@@ -692,7 +692,7 @@ test("Qwen observer failure still joins appended held work without another paren
 test("Qwen observer codec rejects impossible short-circuit and foreign records", async () => {
   const f = qwenWitnessFixture("response", undefined); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
   const row = f.ledger.observerRecord(rows[0].id);
-  for (const patch of [{ case: "foreign" }, { parent: true }, { parent: row.observer }, { observer: 65536 }, { v: 2 },
+  for (const patch of [{ case: "foreign" }, { parent: true }, { parent: row.observer }, { observer: 65536 }, { v: 3 },
     { site: 0 }, { site: 7 }, { site: 4, seen: 3, truthy: 2, reasonDefined: false }, { seen: 1 }, { truthy: 1 }, { receipt: false, site: 5, seen: 7 },
     { acquisition: false }, { reasonDefined: null }, { failurePresent: false }, { parentState: "unknown" }, { raw: "forbidden" }]) {
     assert.throws(() => qwenObserverRecord({ ...row, ...patch }));
@@ -724,6 +724,120 @@ test("Qwen actual observer producer survives bounded relay with its first failed
   assert.ok(Buffer.byteLength(commands.join("\n")) <= 8192);
   const foreign = createQwenFailureRelay(); assert.throws(() => foreign.text(line));
   assert.throws(() => relay.text("QWEN_OBSERVER_V1 " + JSON.stringify({ ...record, reasonDefined: true }) + "\n"));
+  f.ledger.restore(); f.owner.restore();
+});
+
+function qwenRouteFixture(mode, reason) {
+  const ledger = createQwenLedger(), receiver = {}, response = { body: null }, contexts = [];
+  let context, reads = 0, calls = 0, subscriptions = 0, resolve, argsReads = 0;
+  const storage = { disable() { context = undefined; }, getStore() { reads++; return context; },
+    run(value, fn) { contexts.push(value); const prior = context; context = value; try { return fn(); } finally { context = prior; } } };
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "synthetic-fixture" };
+  const owner = createQwenOwnership(storage, ledger, expected), options = { method: "POST", headers: { authorization: "Bearer " + expected.credential } };
+  const parent = new Promise(yes => { resolve = yes; }), then = parent.then;
+  parent.then = function (...args) { subscriptions++; return Reflect.apply(then, this, args); };
+  const native = owner.wrapFetch(function (...args) {
+    calls++; assert.equal(this, receiver); assert.equal(args.length, 3);
+    assert.equal(args[0], expected.url); assert.equal(args[1], options); assert.equal(args[2], undefined); return parent;
+  });
+  const call = () => native.call(receiver, expected.url, options, undefined);
+  function guard() {
+    const fetch = mode === "restored_context" ? storage.run(contexts[0], call) : call();
+    return fetch.then(() => ({ response, release: () => Promise.resolve() }));
+  }
+  if (mode === "guarded") ledger.response = () => { throw reason; };
+  const result = owner.invoke(() => {
+    if (!["no_entry", "foreign_context", "late_entry"].includes(mode)) owner.providerEntry();
+    if (mode === "foreign_context") return storage.run(Object.freeze({ invocation: contexts[0].invocation }), call);
+    if (mode === "late_entry") { const original = call(); owner.providerEntry(); return original; }
+    if (mode === "setup_throw") {
+      const args = []; Object.defineProperty(args, "0", { get() { if (++argsReads === 1) throw reason; return options; } }); args.length = 1;
+      return owner.guard(guard, receiver, args);
+    }
+    return ["guarded", "restored_context"].includes(mode) ? owner.guard(guard, receiver, [options]) : call();
+  }, receiver, [], {});
+  return { ledger, owner, parent, result, response, resolve, calls: () => calls, reads: () => reads,
+    subscriptions: () => subscriptions, argsReads: () => argsReads };
+}
+
+for (const [mode, route, reads, subscriptions] of [
+  ["no_entry", [1,0,0,0,0,0,0,0,0], 1, 3],
+  ["provider_only", [1,1,0,0,0,0,1,0,0], 2, 3],
+  ["guarded", [1,1,1,1,0,0,2,2,1], 3, 4],
+  ["restored_context", [1,1,1,1,0,0,1,1,2], 3, 4],
+  ["foreign_context", null, 1, 3],
+  ["late_entry", [1,0,0,0,0,0,0,0,0], 2, 3],
+]) test(`Qwen invocation route observes ${mode} without changing original calls`, async () => {
+  const reason = {}, f = qwenRouteFixture(mode, reason); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const row = f.ledger.observerRecord(rows[0].id); assert.equal(row.v, 2); assert.deepEqual(row.route, route);
+  assert.equal(f.calls(), 1); assert.equal(f.reads(), reads); assert.equal(f.subscriptions(), subscriptions);
+  assert.equal(f.ledger.operations[row.parent - 1].pending, f.parent);
+  if (mode === "guarded") assert.equal(f.ledger.operations[row.observer - 1].reason, reason);
+  const { route: ignored, ...legacy } = row; legacy.v = 1; assert.deepEqual(qwenObserverRecord(legacy), legacy);
+  f.ledger.restore(); f.owner.restore();
+});
+
+for (const reason of [undefined, {}]) test("Qwen guard setup failure records original definedness without another argument read", async () => {
+  const f = qwenRouteFixture("setup_throw", reason); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  assert.deepEqual(f.ledger.observerRecord(rows[0].id).route, [1,1,1,0,1,Number(reason === undefined),1,1,0]);
+  assert.equal(f.ledger.failures().ownership[0], reason); assert.equal(f.argsReads(), 2); assert.equal(f.calls(), 1);
+  assert.equal(f.reads(), 3); assert.equal(f.subscriptions(), 4); f.ledger.restore(); f.owner.restore();
+});
+
+test("Qwen foreign invocation entries cannot supply the failing invocation route", async () => {
+  const ledger = createQwenLedger(); let context;
+  const storage = { disable() {}, getStore: () => context, run(value, fn) { const prior = context; context = value; try { return fn(); } finally { context = prior; } } };
+  const owner = createQwenOwnership(storage, ledger, { url: "https://qwen.fixture/", credential: "synthetic-fixture" });
+  owner.invoke(() => { owner.providerEntry(); }, undefined, [], {});
+  const response = { body: null }, pending = Promise.resolve(response);
+  const native = owner.wrapFetch(() => pending);
+  assert.equal(owner.invoke(() => native("https://qwen.fixture/", { method: "POST", headers: { authorization: "Bearer synthetic-fixture" } }), undefined, [], {}), pending);
+  await pending; await assert.rejects(ledger.drain());
+  assert.deepEqual(ledger.observerRecord(rows[0].id).route, [1,0,0,0,0,0,0,0,0]); ledger.restore(); owner.restore();
+});
+
+test("Qwen route recorder failure leaves original fetch and restoration failures independent", async () => {
+  const reason = {}, reportReason = {}, restoreReason = {}, f = qwenRouteFixture("guarded", reason);
+  f.ledger.captureObserverFailure = () => { throw reportReason; };
+  const target = { value: 1 }; f.ledger.replace(target, "value", 2);
+  Object.defineProperty(target, "value", { get() { throw restoreReason; }, configurable: true });
+  f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain()); assert.throws(() => f.ledger.restore());
+  assert.equal(f.ledger.operations.find(row => row.kind === "fetch_observer").reason, reason);
+  assert.equal(f.ledger.failures().recording[0], reportReason); assert.equal(f.ledger.failures().restoration.length, 1);
+  assert.equal(f.ledger.observerRecord(rows[0].id), null); assert.equal(f.calls(), 1); f.owner.restore();
+});
+
+for (const reason of [undefined, {}]) test("Qwen provider entry observation failure cannot skip original fetch or its joins", async () => {
+  const ledger = createQwenLedger(); let context, fault = true, reads = 0, calls = 0, subscriptions = 0;
+  const storage = { disable() {}, getStore() { reads++; if (fault) { fault = false; throw reason; } return context; },
+    run(value, fn) { const prior = context; context = value; try { return fn(); } finally { context = prior; } } };
+  const owner = createQwenOwnership(storage, ledger, { url: "https://qwen.fixture/", credential: "synthetic-fixture" });
+  let resolve; const response = { body: null }, original = new Promise(yes => { resolve = yes; }), then = original.then;
+  original.then = function (...args) { subscriptions++; return Reflect.apply(then, this, args); };
+  const fetch = owner.wrapFetch(() => { calls++; return original; });
+  assert.equal(owner.invoke(() => { owner.providerEntry(); return fetch("https://qwen.fixture/", { method: "POST", headers: { authorization: "Bearer synthetic-fixture" } }); }, undefined, [], {}), original);
+  let joined = false; const drain = ledger.drain().then(() => assert.fail("unexpected pass"), error => { joined = true; return error; });
+  await Promise.resolve(); assert.equal(joined, false); resolve(response); const failure = await drain;
+  assert.ok(Array.isArray(failure.errors)); assert.ok(failure.errors.some(value => Object.is(value, reason)));
+  assert.equal(ledger.failures().recording.length, 1); assert.equal(ledger.failures().recording[0], reason);
+  assert.equal(ledger.operations.find(row => row.kind === "fetch").pending, original);
+  assert.equal(ledger.operations.find(row => row.kind === "fetch_observer").state, "rejected");
+  assert.equal(ledger.observerRecord(rows[0].id), null); assert.equal(calls, 1); assert.equal(reads, 2); assert.equal(subscriptions, 3);
+  ledger.restore(); owner.restore();
+});
+
+test("Qwen invocation route codec rejects impossible counts and context relations", async () => {
+  const f = qwenRouteFixture("guarded", undefined); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const record = f.ledger.observerRecord(rows[0].id);
+  for (const route of [[1,0,1,1,0,0,2,2,1], [1,1,0,1,0,0,2,2,1], [1,1,1,1,1,0,2,2,1],
+    [1,1,1,1,0,1,2,2,1], [1,1,1,1,0,0,3,2,1], [1,1,1,1,0,0,2,2,2], [1,65536,1,1,0,0,2,2,1]]) {
+    assert.throws(() => qwenObserverRecord({ ...record, route }));
+  }
+  const route = [...record.route]; Object.defineProperty(route, "2", { get() { throw undefined; } });
+  assert.throws(() => qwenObserverRecord({ ...record, route }));
+  assert.equal(qwenObserverRecord({ ...record, route: null }).route, null);
+  const widest = qwenObserverRecord({ ...record, parent: 65534, observer: 65535, route: [1,65535,65535,65535,0,0,3,3,3] });
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(widest)) <= 768);
   f.ledger.restore(); f.owner.restore();
 });
 // END Qwen observer failure witness pure tests.

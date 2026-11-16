@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Preserve a bounded Qwen fetch-invocation witness for observed provider/SSRF spy entries, acquisition setup failures and exact context relations. Missing interception remains unknown; original failures and strict retirement checks are unchanged.
+
 - Retain an invocation-bound Qwen fetch-observer failure witness with the original parent promise state, exact callback boundary and observed ownership predicates. Preserve original failures, strict verdicts and bounded reporting without attributing native transport causes.
 
 - Bind Qwen's native runner report to the current SDK fixture bytes, retaining strict pre-execution digest checks and a fake-I/O regression that rejects stale bindings before any child or report-directory acquisition.
