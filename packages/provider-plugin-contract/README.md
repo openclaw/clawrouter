@@ -1,6 +1,6 @@
 # Provider plugin contract
 
-Data-only descriptors, conformance fixtures, package indexes, and product metadata
+Data-only descriptors, conformance fixtures, package indexes, and product/offer declarations
 for ClawRouter provider packages. No Worker, filesystem, network, or runtime
 dependencies. Validation does not authorize a provider or qualify its execution.
 
@@ -28,6 +28,8 @@ import {
   parseProviderConformanceScenario,
   type ProviderPluginDescriptor,
   type ProviderPackageIndex,
+  type ProviderProduct,
+  type ProviderOfferDefinition,
 } from "@clawrouter/provider-plugin-contract";
 ```
 
@@ -35,3 +37,8 @@ Node 24 or newer is supported. Consumers do not need TypeScript at runtime,
 ClawRouter source files, or a TypeScript loader. The package exports the same
 contracts used by ClawRouter's source-based build tools. It does not include the
 manifest compiler, package loader, conformance runner, or provider assets.
+
+`ProviderProduct`, its binding and offer selections, and `ProviderOfferDefinition`
+are static declarations. `ProviderGrantKind` retains the legacy `api_key`,
+`oauth`, and `subscription` credential classifications. Neither declares
+protocol support, admission, live entitlement, or an executable offer.
