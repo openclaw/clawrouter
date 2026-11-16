@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Connect Xiaomi native disconnect controls directly to the fixture Worker and retain bounded first-postlude failure sites with independent reason-definedness summaries in the existing control records. Preserve original failures, strict retirement and accounting gates, and annotation quotas; native cancellation still requires hosted qualification.
+
 - Join the existing LiteLLM fixture producer proof before sampling final active, cancellation and expiry counters. Preserve strict retirement and accounting assertions, original request counts and independent cleanup failures; this corrects test ordering without attributing a historical native failure.
 
 - Retain bounded Xiaomi control-witness and original ownership summaries before rejecting failed control responses, without changing retirement, producer or accounting acceptance. Preserve independent diagnostic failures and the existing relay request count.

@@ -128,8 +128,9 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
       const keys = ["v", "source", "caseId", "phase", "checkpoint", "failed", "kind", "actual", "expected", "count"];
       const shape = factKeys[own(value, "phase") as string];
       if (shape) keys.push("facts");
-      const control = own(value, "v") === 2;
+      const control = own(value, "v") === 2 || own(value, "v") === 3;
       if (control) keys.push("control");
+      if (own(value, "v") === 3) keys.push("postlude");
       if (Reflect.ownKeys(value).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, "value"))) return null;
       const v = Object.fromEntries(keys.map(k => [k, own(value, k)]));
       if (!(v.v === 1 || control && v.source === "sdk" && v.phase === "control" && xiaomiNativeControls().some(row => row.id === v.caseId)) || !["sdk", "worker", "outer"].includes(v.source as string) || !cases.has(v.caseId as string) || !phases.has(v.phase as string)
@@ -152,6 +153,17 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
           || (safe.state === 1 ? !tuple(safe.witness, 9, (v, i) => i >= 1 && i <= 4 ? count(v) && v <= 1000 : typeof v === "boolean") : safe.witness !== null)
           || !tuple(safe.qualification, 14, (v, i) => v === null || (i < 10 ? count(v) : typeof v === "boolean"))) return null;
         v.control = safe;
+        if (v.v === 3) {
+          // Pre-relay coverage only: first site/definedness, count, defined and
+          // undefined site masks, saturation. Later relay/seal failures stay fatal.
+          if (!tuple(v.postlude, 7, (n, i) => i === 2 ? n === null || typeof n === "boolean" : i === 6 ? typeof n === "boolean" : count(n))) return null;
+          const [coverage, first, defined, total, definedSites, undefinedSites, saturated] = v.postlude;
+          if (coverage !== 1 || first > 12 || definedSites > 4095 || undefinedSites > 4095
+            || saturated && total !== 1_000_000 || v.failed !== (total > 0)
+            || (total === 0 ? first !== 0 || defined !== null || definedSites !== 0 || undefinedSites !== 0 || saturated
+              : first === 0 || defined === null || !((defined ? definedSites : undefinedSites) & (1 << (first - 1)))
+                || total < definedSites.toString(2).replaceAll("0", "").length + undefinedSites.toString(2).replaceAll("0", "").length)) return null;
+        }
       }
       if (shape) {
         const facts = v.facts, numbers = shape.numbers.split(" "), flags = shape.flags.split(" "), names = [...numbers, ...flags];
@@ -174,11 +186,11 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     const rows: Record<string, any>[] = []; let suppressed = 0;
     return { add(value: unknown) {
       const row = validate(value); if (!row) throw new Error("invalid Xiaomi diagnostic");
-      if (row.v === 2 && rows.some(value => value.v === 2 && value.caseId === row.caseId)) throw new Error("duplicate Xiaomi control observation");
+      if (row.v !== 1 && rows.some(value => value.v !== 1 && value.caseId === row.caseId)) throw new Error("duplicate Xiaomi control observation");
       if (rows.length < 63) rows.push(row);
       else {
         // Keep the first control observation even after earlier failure notices fill the store.
-        const index = row.v === 2 ? rows.findLastIndex(value => value.v !== 2 && value.phase !== "helper") : -1;
+        const index = row.v !== 1 ? rows.findLastIndex(value => value.v === 1 && value.phase !== "helper") : -1;
         if (index >= 0) rows[index] = row;
         suppressed++;
       }
@@ -192,7 +204,7 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     for (const row of rows) unique.set([row.source, row.caseId, row.phase, row.checkpoint,
       row.facts?.acquisition, row.facts?.reader, row.facts?.operation].join("/"), row);
     const priority = (row: Record<string, any>) => row.phase === "helper" ? 0
-      : row.v === 2 && row.phase === "control" ? row.caseId === "c_cancel" ? 0.5 : 0.75
+      : row.v !== 1 && row.phase === "control" ? row.caseId === "c_cancel" ? 0.5 : row.v === 3 && row.caseId === "c_provider_error" ? 0.6 : 0.75
       : row.caseId === "c_cancel" && row.phase === "result_witness" ? 1
       : row.caseId === "c_cancel" && row.phase === "owner_witness" ? 2
       : row.caseId === "c_cancel" && ["operation_witness", "reader_witness"].includes(row.phase) ? 3
@@ -216,12 +228,28 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     return { state: !parsed ? 3 : valid ? 1 : 2, status,
       witness: valid ? keys.slice(1).map(key => own(value, key)) : null };
   }
-  function controlRecord(base: Record<string, any>, observation: any, qualification: unknown[]) {
-    const value = validate({ ...base, v: 2, control: { ...(observation ?? { state: 0, status: null, witness: null }), qualification } });
+  function controlRecord(base: Record<string, any>, observation: any, qualification: unknown[], postlude?: unknown[]) {
+    const value = validate({ ...base, v: postlude ? 3 : 2, control: { ...(observation ?? { state: 0, status: null, witness: null }), qualification }, ...(postlude ? { postlude } : {}) });
     if (!value) throw new Error("invalid Xiaomi control observation");
     return value;
   }
   return { own, record, witness, validate, store, emit, controlObservation, controlRecord };
+}
+// Closed postlude sites: 1 ownership join, 2 release wait, 3 physical release or
+// observer settle, 4 observer faults, 5 control witness, 6 acquisition/release,
+// 7 reader join, 8 control qualification, 9 witness construction, 10 detach,
+// 11 restoration, 12 reporting, 13 relay, 14 final seal. First means retention
+// order, not native chronology. No reason properties read.
+function xiaomiPostludeFailures(failures: unknown[]) {
+  let first = 0, firstDefined: boolean | null = null, total = 0, definedSites = 0, undefinedSites = 0, saturated = false;
+  return { add(site: number, ...errors: unknown[]) {
+    for (const error of errors) {
+      failures.push(error);
+      if (!first) { first = site; firstDefined = error !== undefined; }
+      if (total < 1_000_000) total++; else saturated = true;
+      if (error === undefined) undefinedSites |= 1 << (site - 1); else definedSites |= 1 << (site - 1);
+    }
+  }, snapshot() { return [1, first, firstDefined, total, definedSites, undefinedSites, saturated]; } };
 }
 // Diagnostic-only: consume the original text once, retain safe facts before the
 // original status/schema assertion, and never install them as an accepted witness.
@@ -708,34 +736,38 @@ afterEach(async () => {
     if (failures.length) throw new AggregateError(failures, "Xiaomi observer restoration failed");
     return;
   }
-  const failures: unknown[] = [], context = { ...planContext };
+  const failures: unknown[] = [], context = { ...planContext }, postlude = xiaomiPostludeFailures(failures);
+  let site = 6;
   for (const invocation of planInvocations) invocation.bodyPassed = planBodyPassed;
   try {
     await Promise.allSettled(planAcquisitions.flatMap(row => row.returned ? [row.returned] : []));
-    failures.push(...await planOwnership.join());
+    site = 1;
+    postlude.add(1, ...await planOwnership.join());
+    site = 2;
     await Promise.all(planAcquisitions.map(row => row.released));
-    const physical = await Promise.allSettled(planAcquisitions.flatMap(row => [
+    site = 3; const physical = await Promise.allSettled(planAcquisitions.flatMap(row => [
       ...row.releases.flatMap((operation: any) => operation.pending ? [operation.pending] : []), ...(row.observation ? [row.observation.settle()] : [])]));
-    failures.push(...physical.flatMap(value => value.status === "rejected" ? [value.reason] : []), ...planObserverFaults);
+    postlude.add(3, ...physical.flatMap(value => value.status === "rejected" ? [value.reason] : []));
+    postlude.add(4, ...planObserverFaults);
     for (const invocation of planInvocations) if (invocation.control || invocation.id === "n_preabort") {
-      try { invocation.witness = await planWitness(invocation); } catch (error) { failures.push(error); }
+      site = 5; try { invocation.witness = await planWitness(invocation); } catch (error) { postlude.add(5, error); }
     }
     for (const row of planAcquisitions) {
-      const invocation = row.invocation;
+      site = 6; const invocation = row.invocation;
       const selection = { acquisition: row, invocation, qualified: qualifiedNativeControls(), control: invocation?.control && invocation.witness?.joined === true };
-      if (row.state === "sync_throw" || row.state === "rejected" && !xiaomiSdkPreabortDisposition(selection, row)) failures.push(row.reason);
+      if (row.state === "sync_throw" || row.state === "rejected" && !xiaomiSdkPreabortDisposition(selection, row)) postlude.add(6, row.reason);
       if (row.state === "fulfilled") {
-        if (!row.bound || !row.releases.length) failures.push(new Error("missing bound original request release"));
-        for (const release of row.releases) if (release.state !== "fulfilled" && release.state !== "rejected") failures.push(release.reason);
-        if (row.observation) try { await row.observation.join(selection); } catch (error) { failures.push(error); }
+        if (!row.bound || !row.releases.length) postlude.add(6, new Error("missing bound original request release"));
+        for (const release of row.releases) if (release.state !== "fulfilled" && release.state !== "rejected") postlude.add(6, release.reason);
+        site = 7; if (row.observation) try { await row.observation.join(selection); } catch (error) { postlude.add(7, error); }
       }
     }
     for (const invocation of planInvocations) {
-      if (invocation.control && !xiaomiNativeControlQualified(invocation)) failures.push(new Error("native control did not qualify"));
+      site = 8; if (invocation.control && !xiaomiNativeControlQualified(invocation)) postlude.add(8, new Error("native control did not qualify"));
       // No acquisition is not itself a passing cancellation receipt.
-      if (invocation.id === "n_preabort" && !xiaomiSdkPreabortDisposition({ invocation, qualified: qualifiedNativeControls() })) failures.push(new Error("original public pre-abort result did not qualify"));
+      if (invocation.id === "n_preabort" && !xiaomiSdkPreabortDisposition({ invocation, qualified: qualifiedNativeControls() })) postlude.add(8, new Error("original public pre-abort result did not qualify"));
     }
-  } catch (error) { failures.push(error); }
+  } catch (error) { postlude.add(site, error); }
   // Snapshot existing originals only. These records never grant a disposition.
   for (const invocation of planInvocations) if (["c_cancel", "n_cancel"].includes(invocation.id)) try {
     planRecords.add(planDiagnostic.witness("sdk", invocation.id, "result_witness", {
@@ -743,7 +775,7 @@ afterEach(async () => {
       assertion: context.phase === "assert" ? context.checkpoint : null, partial: invocation.textDelta ?? false,
       callerAborted: invocation.caller.signal?.aborted ?? null, bodyPassed: invocation.bodyPassed,
     }));
-  } catch (error) { failures.push(error); }
+  } catch (error) { postlude.add(9, error); }
   for (const row of planAcquisitions) if (["c_cancel", "n_cancel"].includes(row.context.id)) try {
     const invocation = row.invocation;
     planRecords.add(planDiagnostic.witness("sdk", row.context.id, "owner_witness", {
@@ -765,30 +797,30 @@ afterEach(async () => {
       acquisition: row.ordinal, operation: index + 1, state: xiaomiState(op.state), invoked: op.invoked, settled: op.settled ?? null,
       resourceReturned: row.state === "fulfilled", reasonPresent: op.reasonPresent, reasonDefined: op.reasonPresent && op.reason !== undefined,
     }));
-  } catch (error) { failures.push(error); }
+  } catch (error) { postlude.add(9, error); }
   // Detach our passive listeners only after the original operations have joined.
-  for (const row of planAcquisitions) try { row.guard.detach(); } catch (error) { failures.push(error); }
-  for (const invocation of planInvocations) try { invocation.caller.detach(); } catch (error) { failures.push(error); }
-  for (const restore of [restorePlanRuntime, () => planOwnership.restore(), () => vi.restoreAllMocks()]) try { restore?.(); } catch (error) { failures.push(error); }
-  for (const error of [...failures]) try { planRemember({ ...context, phase: "join" }, error); } catch (reportError) { failures.push(reportError); }
+  for (const row of planAcquisitions) try { row.guard.detach(); } catch (error) { postlude.add(10, error); }
+  for (const invocation of planInvocations) try { invocation.caller.detach(); } catch (error) { postlude.add(10, error); }
+  for (const restore of [restorePlanRuntime, () => planOwnership.restore(), () => vi.restoreAllMocks()]) try { restore?.(); } catch (error) { postlude.add(11, error); }
+  for (const error of [...failures]) try { planRemember({ ...context, phase: "join" }, error); } catch (reportError) { postlude.add(12, reportError); }
   if (!failures.length && context.id === "n_cancel" && planBodyPassed && planPartial && planCaller?.aborted) {
     try { planRecords.add(planDiagnostic.record("sdk", context.id, "sdk_cancel_receipt", 1, false, undefined, planAcquisitions.length)); }
-    catch (error) { failures.push(error); }
+    catch (error) { postlude.add(12, error); }
   }
   if (context.id.startsWith("c_")) try {
     const base = planDiagnostic.record("sdk", context.id, "control", 1, failures.length > 0, undefined, planAcquisitions.length)!;
     const invocation = planInvocations.find(value => value.id === context.id);
-    planRecords.add(invocation ? planDiagnostic.controlRecord(base, invocation.controlObservation, xiaomiControlQualification(invocation)) : base);
-  } catch (error) { failures.push(error); }
+    planRecords.add(invocation ? planDiagnostic.controlRecord(base, invocation.controlObservation, xiaomiControlQualification(invocation), postlude.snapshot()) : base);
+  } catch (error) { postlude.add(12, error); }
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2000);
   try {
     for (const record of planRecords.values()) {
       const response = await controlFetch(origin + "/fixture/diagnostic", { method: "POST", signal: controller.signal, headers: { "content-type": "application/json" }, body: JSON.stringify(record) });
       await response.arrayBuffer(); if (response.status !== 204) throw new Error("diagnostic relay rejected");
     }
-  } catch (error) { failures.push(error); }
+  } catch (error) { postlude.add(13, error); }
   finally { clearTimeout(timer); }
-  try { await xiaomiSealReaderObservations(planAcquisitions.flatMap(row => row.observation ? [row.observation] : [])); } catch (error) { failures.push(error); }
+  try { await xiaomiSealReaderObservations(planAcquisitions.flatMap(row => row.observation ? [row.observation] : [])); } catch (error) { postlude.add(14, error); }
   if (!failures.length && planBodyPassed && context.id.startsWith("c_")) qualifiedControls.add(context.id);
   if (failures.length) throw new AggregateError(failures, "Xiaomi SDK original cleanup failed");
 });

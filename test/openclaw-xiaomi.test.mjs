@@ -16,7 +16,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const sdkSource = readFileSync(new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), "utf8");
 const proofCode = stripTypeScriptTypes(sdkSource.slice(sdkSource.indexOf("// BEGIN Xiaomi proof functions."), sdkSource.indexOf("// END Xiaomi proof functions.")));
-const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification };")();
+const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures };")();
 const planRows = xiaomiPlanCases(), allPlanRows = [...xiaomiNativeControls(), ...planRows], diagnostic = xiaomiDiagnostic(nodeTypes.isProxy);
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -24,7 +24,7 @@ function xiaomiRunnerReport() {
   let reported = false, summary;
   const options = {
     expectedInvocations: 1,
-    fixtureSha256: "fac698a1a299b210cdbae25b1035d291babd96550f958bad53ed7bff42ed937d",
+    fixtureSha256: "7ed589053ceb897e21462bbab6c0b8ca28b0f2db90be3dad14935dc01c0fad6b",
     reporterSha256: "88a9021f87d47b62c0e120cc6c02bf9c96248ac20bd549595b981d6ef20f0b67",
     onReport(packet) {
       summary = undefined;
@@ -73,7 +73,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
   const failures = [], evidence = diagnostic.store(), runner = xiaomiRunnerReport(); let helperFulfilled = false, phase = "setup", sdkCount = null;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       const model = id === "retired_pro" ? "mimo-v2.5-pro" : id === "retired" ? "mimo-v2.5" : cards[id] ?? "mimo-v2.6-pro";
@@ -85,7 +85,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
     }
     await kv.put("connections/xiaomi", JSON.stringify({ providerId: "xiaomi", enabled: true }));
     await provisionPlans(kv);
-    origin = String(await mf.ready).replace(/\/$/, "");
+    origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     phase = "helper";
     await runOpenClawConsumer({ diagnostic() {} }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), testPath: "extensions/xiaomi/worker-contract.test.ts",
@@ -605,7 +605,7 @@ test("actual SDK postlude preserves restoration and report failures while sealin
         releases: [{ state: "fulfilled", pending: Promise.resolve() }], context: { id: "p0" }, guard: { detach() {} } }],
       planOwnership: { async join() { return []; }, restore() { restorationCalls++; throw restorationReason; } },
       restorePlanRuntime() { restorationCalls++; }, vi: { restoreAllMocks() { restorationCalls++; } }, planObserverFaults: [],
-      xiaomiSealReaderObservations, qualifiedNativeControls: () => false, xiaomiSdkPreabortDisposition: () => false, xiaomiNativeControlQualified: () => false,
+      xiaomiPostludeFailures, xiaomiSealReaderObservations, qualifiedNativeControls: () => false, xiaomiSdkPreabortDisposition: () => false, xiaomiNativeControlQualified: () => false,
       planRemember() {}, planRecords: { values: () => [{}] }, planDiagnostic: {}, qualifiedControls: new Set(),
       AbortController: class { signal = {}; }, setTimeout: () => 1, clearTimeout() {}, origin: "https://fixture.example",
       async controlFetch() { reportCalls++; throw reportReason; },
@@ -746,7 +746,7 @@ test("actual cleanup callback retains consumed failure, restoration and reportin
       restorePlanRuntime() { restored++; }, vi: { restoreAllMocks() { restored++; } },
       async planWitness(inv) { reads++; return xiaomiConsumeControlWitness(inv.id, JSON.stringify(xiaomiInertControlValue()), () => { throw original; }, diagnostic, value => { inv.controlObservation = value; }); },
       qualifiedNativeControls: () => false, xiaomiSdkPreabortDisposition: () => false, xiaomiNativeControlQualified,
-      xiaomiControlQualification, async xiaomiSealReaderObservations() { sealed++; },
+      xiaomiControlQualification, xiaomiPostludeFailures, async xiaomiSealReaderObservations() { sealed++; },
       planRemember() {}, AbortController: class { signal = {}; }, setTimeout: () => 1, clearTimeout() {}, origin: "https://fixture.invalid",
       async controlFetch() { relays++; throw reporting; },
     };
@@ -754,13 +754,141 @@ test("actual cleanup callback retains consumed failure, restoration and reportin
     await assert.rejects(callback(), error => error instanceof AggregateError && error.errors.some(e => Object.is(e, original))
       && error.errors.includes(restoration) && error.errors.includes(reporting));
     assert.equal(reads, 1); assert.equal(restored, 3); assert.equal(sealed, 1); assert.equal(relays, 1);
-    const control = records.values().find(row => row.v === 2);
+    const control = records.values().find(row => row.v === 3);
     assert.ok(control); assert.equal(control.failed, true); assert.equal(control.control.state, 3);
     assert.equal(control.control.witness, null); assert.equal(invocation.witness, undefined);
     assert.equal(bindings.qualifiedControls.size, 0);
   }
 });
 // END Xiaomi consumed control witness inert tests.
+
+// BEGIN Xiaomi direct ingress and postlude site inert tests.
+test("native Xiaomi setup selects the existing direct router socket without another request", async () => {
+  const text = readFileSync(new URL(import.meta.url), "utf8");
+  const start = text.indexOf("mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture()");
+  const end = text.indexOf("\n", start), originStart = text.indexOf("origin = ", end), originEnd = text.indexOf("\n", originStart);
+  assert.ok(start > 0 && end > start && originStart > end);
+  const setup = text.slice(start, end) + "\n" + text.slice(originStart, originEnd);
+  let starts = 0, direct = 0, proxy = 0;
+  const actual = new Function("startWorkerdFixture", "temporary", "routerFixture", "upstreamFixture",
+    "return (async () => { let mf, origin; " + setup + "; return origin; })();");
+  const origin = await actual(async (...args) => {
+    starts++; assert.deepEqual(args, ["owned", "router", "upstream", { directRouter: true }]);
+    return { get ready() { proxy++; throw new Error("proxy origin is not direct ingress"); },
+      async unsafeGetDirectURL(name) { direct++; assert.equal(name, "router"); return { origin: "https://direct.fixture.invalid" }; } };
+  }, "owned", () => "router", () => "upstream");
+  assert.equal(origin, "https://direct.fixture.invalid"); assert.deepEqual([starts, direct, proxy], [1, 1, 0]);
+});
+test("postlude summaries preserve undefined and independent originals without inspecting reasons", () => {
+  const originals = [], summary = xiaomiPostludeFailures(originals); let inspected = 0;
+  const reason = new Proxy({}, { get() { inspected++; throw undefined; }, getOwnPropertyDescriptor() { inspected++; throw undefined; } });
+  summary.add(7, undefined, reason); summary.add(11, reason); summary.add(12, undefined);
+  assert.deepEqual(summary.snapshot(), [1, 7, false, 4, (1 << 6) | (1 << 10), (1 << 6) | (1 << 11), false]);
+  assert.equal(originals.length, 4); assert.equal(originals[0], undefined); assert.equal(originals[1], reason); assert.equal(originals[2], reason); assert.equal(originals[3], undefined);
+  assert.equal(inspected, 0);
+});
+function xiaomiPostludeInertCase(failures = new Map(), controlStatus = 200) {
+  const records = diagnostic.store(), events = [], reason = site => failures.get(site), has = site => failures.has(site);
+  const trip = site => { if (has(site)) throw reason(site); };
+  const reader = { closedState: "fulfilled", unlockCalls: 1, unlockReturns: 1, body: { locked: false }, faults: [], operations: [{ state: "fulfilled" }] };
+  const observation = { readers: [reader], revision: 0, settle() { events.push("settle"); return has(3) ? Promise.reject(reason(3)) : Promise.resolve(); },
+    async join() { events.push("reader"); trip(7); }, seal() {} };
+  const invocation = { id: "c_provider_error", control: true, caller: { observed: true, initial: false, reasonPresent: false, signal: { aborted: false }, detach() {} }, acquisitions: [] };
+  const row = { invocation, state: "fulfilled", bound: !has(6), accepted: true, context: { id: invocation.id }, returned: Promise.resolve(),
+    get released() { return has(2) ? Promise.reject(reason(2)) : Promise.resolve(); },
+    releases: [{ state: "fulfilled", pending: Promise.resolve() }], observation, guard: { detach() { events.push("detach"); trip(10); } } };
+  invocation.acquisitions.push(row);
+  const value = { caseId: invocation.id, joined: true, requests: 1, inputs: 1, calls: 1, reserves: 1, canceled: false, expired: false, sourceJoined: true, completed: true };
+  const start = sdkSource.indexOf("afterEach(async () => {"), end = sdkSource.indexOf("\n});\nasync function planControl", start);
+  assert.ok(start > 0 && end > start);
+  const callbackSource = stripTypeScriptTypes(sdkSource.slice(start + "afterEach(".length, end + 2));
+  const bindings = {
+    planContext: { id: invocation.id, phase: "assert", checkpoint: 1 }, planInvocations: [invocation], planBodyPassed: true,
+    planAcquisitions: [row], planObserverFaults: has(4) ? [reason(4)] : [], qualifiedControls: new Set(), planRecords: records, planDiagnostic: diagnostic,
+    planOwnership: { async join() { events.push("ownership"); return has(1) ? [reason(1)] : []; }, restore() { events.push("restore-owner"); trip(11); } },
+    restorePlanRuntime() { events.push("restore-runtime"); }, vi: { restoreAllMocks() { events.push("restore-mocks"); } },
+    async planWitness(inv) { events.push("control"); trip(5);
+      return xiaomiConsumeControlWitness(inv.id, JSON.stringify(value), () => controlStatus, diagnostic, data => { inv.controlObservation = data; }); },
+    qualifiedNativeControls: () => false, xiaomiSdkPreabortDisposition: () => false,
+    xiaomiNativeControlQualified(inv) { return !has(8) && xiaomiNativeControlQualified(inv); },
+    xiaomiControlQualification, xiaomiPostludeFailures, async xiaomiSealReaderObservations() { events.push("seal"); trip(14); },
+    planRemember() { trip(12); }, AbortController: class { signal = {}; },
+    setTimeout() { events.push("timer"); return 1; }, clearTimeout() { events.push("clear"); }, origin: "https://fixture.invalid",
+    async controlFetch() { events.push("relay"); trip(13); return { status: 204, async arrayBuffer() { events.push("consume"); } }; },
+  };
+  return { records, events, bindings, callback: new Function(...Object.keys(bindings), "return (" + callbackSource + ");")(...Object.values(bindings)) };
+}
+test("actual postlude classifies first sites and preserves subsequent failures and final cleanup", async () => {
+  const clean = xiaomiPostludeInertCase(); await clean.callback();
+  assert.deepEqual(clean.records.values()[0].postlude, [1, 0, null, 0, 0, 0, false]);
+  assert.deepEqual(clean.events, ["ownership", "settle", "control", "reader", "detach", "restore-runtime", "restore-owner", "restore-mocks", "timer", "relay", "consume", "clear", "seal"]);
+  const denied = xiaomiPostludeInertCase(new Map(), 500); await assert.rejects(denied.callback());
+  const deniedRecord = denied.records.values().find(row => row.v === 3);
+  assert.equal(deniedRecord.control.status, 500); assert.equal(deniedRecord.postlude[1], 5);
+  assert.ok(deniedRecord.postlude[4] & (1 << 7)); assert.equal(denied.bindings.planInvocations[0].witness, undefined);
+  for (const site of [1, 2, 3, 4, 5, 7, 10, 11]) for (const original of [undefined, {}]) {
+    const f = xiaomiPostludeInertCase(new Map([[site, original]]));
+    await assert.rejects(f.callback(), error => error instanceof AggregateError && error.errors.some(value => Object.is(value, original)));
+    const row = f.records.values().find(value => value.v === 3); assert.ok(row);
+    assert.equal(row.postlude[1], site); assert.equal(row.postlude[2], original !== undefined); assert.equal(row.failed, true);
+    assert.ok(row.postlude[original === undefined ? 5 : 4] & (1 << (site - 1)));
+    assert.equal(f.events.at(-1), "seal"); assert.equal(f.bindings.qualifiedControls.size, 0);
+  }
+  for (const site of [6, 8]) {
+    const f = xiaomiPostludeInertCase(new Map([[site, true]])); await assert.rejects(f.callback());
+    assert.equal(f.records.values().find(row => row.v === 3).postlude[1], site);
+  }
+  const original = {}, restoration = {}, reporting = {};
+  const combined = xiaomiPostludeInertCase(new Map([[7, original], [11, restoration], [12, reporting], [13, undefined], [14, undefined]]));
+  await assert.rejects(combined.callback(), error => {
+    assert.deepEqual(error.errors, [original, restoration, reporting, reporting, undefined, undefined]); return true;
+  });
+  const row = combined.records.values().find(value => value.v === 3);
+  assert.deepEqual(row.postlude, [1, 7, true, 4, (1 << 6) | (1 << 10) | (1 << 11), 0, false]);
+  assert.equal(combined.events.at(-1), "seal");
+  for (const site of [13, 14]) {
+    const f = xiaomiPostludeInertCase(new Map([[site, undefined]]));
+    await assert.rejects(f.callback(), error => error.errors.includes(undefined));
+    // The earlier serialized observation never claims coverage of relay/final seal.
+    assert.deepEqual(f.records.values().find(value => value.v === 3).postlude, [1, 0, null, 0, 0, 0, false]);
+    assert.equal(f.bindings.qualifiedControls.size, 0);
+  }
+});
+test("v3 postlude records stay closed and keep both controls under the existing packet quota", () => {
+  const make = (id, summary) => diagnostic.controlRecord(diagnostic.record("sdk", id, "control", 1, summary[3] > 0, undefined, 1),
+    { state: 1, status: 500, witness: [false, 1000, 1000, 1000, 1000, false, true, false, false] },
+    [...Array(10).fill(1_000_000), true, false, true, true], summary);
+  const summary = [1, 12, false, 1_000_000, 4095, 4095, true], cancel = make("c_cancel", summary), provider = make("c_provider_error", summary);
+  assert.equal(diagnostic.validate(cancel).v, 3);
+  for (const postlude of [[0, ...summary.slice(1)], [1, 13, false, 1, 0, 4096, false], [1, 7, false, 1, 64, 0, false],
+    [1, 0, null, 1, 0, 0, false], [1, 0, null, 0, 0, 0, true], [1, 1, true, 1, 3, 0, false], [...summary, 0]]) {
+    assert.equal(diagnostic.validate({ ...cancel, postlude }), null);
+  }
+  let reads = 0; const getter = [...summary]; Object.defineProperty(getter, "1", { get() { reads++; return 12; } });
+  assert.equal(diagnostic.validate({ ...cancel, postlude: getter }), null); assert.equal(reads, 0);
+  assert.equal(diagnostic.validate({ ...cancel, postlude: new Proxy(summary, { ownKeys() { throw undefined; } }) }), null);
+  for (const bad of [{ ...cancel, failed: false }, { ...cancel, source: "worker" }, { ...cancel, extra: true }, { ...cancel, v: 2 }]) assert.equal(diagnostic.validate(bad), null);
+  for (const reversed of [false, true]) {
+    const store = diagnostic.store();
+    for (let i = 0; i < 63; i++) store.add(diagnostic.record("sdk", `p${i % 48}`, "join", i, true, undefined));
+    for (const row of reversed ? [provider, cancel] : [cancel, provider]) store.add(row);
+    const values = store.values(); assert.equal(values.find(row => row.phase === "overflow").count, 2);
+    assert.throws(() => store.add(cancel), /duplicate/);
+    const rows = [diagnostic.record("outer", "none", "helper", 2, true, undefined, 1_000_000), ...values]; if (reversed) rows.reverse();
+    let text; diagnostic.emit(rows, true, value => { text = value; });
+    const lines = text.trim().split("\n"), prefix = "::error title=Xiaomi typed contract::";
+    const decoded = lines.map(line => diagnostic.validate(JSON.parse(line.slice(prefix.length))));
+    assert.ok(decoded.every(Boolean)); assert.equal(lines.length, 10);
+    assert.deepEqual(decoded.slice(1, 3), [cancel, provider]);
+    assert.equal(decoded.at(-1).phase, "overflow"); assert.ok(decoded.at(-1).count > 0);
+    assert.ok(lines.every(line => Buffer.byteLength(line + "\n") <= 768)); assert.ok(Buffer.byteLength(text) <= 8192);
+    for (const error of [undefined, {}]) { let calls = 0;
+      assert.throws(() => diagnostic.emit(rows, true, () => { calls++; throw error; }), value => Object.is(value, error)); assert.equal(calls, 1);
+    }
+  }
+});
+// END Xiaomi direct ingress and postlude site inert tests.
+
 
 test("diagnostic schema refuses getters, proxies, arbitrary data and oversized coordinates", () => {
   let invoked = 0; const error = Object.defineProperty({}, "actual", { get() { invoked++; return "secret"; } });
