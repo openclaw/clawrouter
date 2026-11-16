@@ -128,12 +128,31 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
       const keys = ["v", "source", "caseId", "phase", "checkpoint", "failed", "kind", "actual", "expected", "count"];
       const shape = factKeys[own(value, "phase") as string];
       if (shape) keys.push("facts");
+      const control = own(value, "v") === 2;
+      if (control) keys.push("control");
       if (Reflect.ownKeys(value).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, "value"))) return null;
       const v = Object.fromEntries(keys.map(k => [k, own(value, k)]));
-      if (v.v !== 1 || !["sdk", "worker", "outer"].includes(v.source as string) || !cases.has(v.caseId as string) || !phases.has(v.phase as string)
+      if (!(v.v === 1 || control && v.source === "sdk" && v.phase === "control" && xiaomiNativeControls().some(row => row.id === v.caseId)) || !["sdk", "worker", "outer"].includes(v.source as string) || !cases.has(v.caseId as string) || !phases.has(v.phase as string)
         || !Number.isInteger(v.checkpoint) || (v.checkpoint as number) < 0 || (v.checkpoint as number) > 65535 || typeof v.failed !== "boolean"
         || !["none", "undefined", "unknown"].includes(v.kind as string) || !scalar(v.actual) || !scalar(v.expected)
         || !(v.count === null || Number.isInteger(v.count) && (v.count as number) >= 0 && (v.count as number) <= 1_000_000)) return null;
+      if (control) {
+        const c = v.control, names = ["state", "status", "witness", "qualification"];
+        if (!c || typeof c !== "object" || isProxy(c) || Reflect.ownKeys(c).length !== names.length
+          || names.some(key => !Object.hasOwn(Object.getOwnPropertyDescriptor(c, key) ?? {}, "value"))) return null;
+        const safe = Object.fromEntries(names.map(key => [key, own(c, key)]));
+        const tuple = (value: any, size: number, field: (v: any, i: number) => boolean) => {
+          if (!Array.isArray(value) || isProxy(value) || Reflect.ownKeys(value).length !== size + 1 || value.length !== size) return false;
+          return Array.from({ length: size }, (_, i) => Object.getOwnPropertyDescriptor(value, String(i)))
+            .every((d, i) => d && Object.hasOwn(d, "value") && field(d.value, i));
+        };
+        const count = (n: any) => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000;
+        if (![0, 1, 2, 3].includes(safe.state) || !(safe.status === null || Number.isInteger(safe.status) && safe.status >= 100 && safe.status <= 599)
+          || ([0, 3].includes(safe.state) ? safe.status !== null : safe.status === null)
+          || (safe.state === 1 ? !tuple(safe.witness, 9, (v, i) => i >= 1 && i <= 4 ? count(v) && v <= 1000 : typeof v === "boolean") : safe.witness !== null)
+          || !tuple(safe.qualification, 14, (v, i) => v === null || (i < 10 ? count(v) : typeof v === "boolean"))) return null;
+        v.control = safe;
+      }
       if (shape) {
         const facts = v.facts, numbers = shape.numbers.split(" "), flags = shape.flags.split(" "), names = [...numbers, ...flags];
         if (!facts || typeof facts !== "object" || isProxy(facts) || Reflect.ownKeys(facts).length !== names.length
@@ -153,7 +172,17 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
   }
   function store() {
     const rows: Record<string, any>[] = []; let suppressed = 0;
-    return { add(value: unknown) { const row = validate(value); if (!row) throw new Error("invalid Xiaomi diagnostic"); if (rows.length < 63) rows.push(row); else suppressed++; },
+    return { add(value: unknown) {
+      const row = validate(value); if (!row) throw new Error("invalid Xiaomi diagnostic");
+      if (row.v === 2 && rows.some(value => value.v === 2 && value.caseId === row.caseId)) throw new Error("duplicate Xiaomi control observation");
+      if (rows.length < 63) rows.push(row);
+      else {
+        // Keep the first control observation even after earlier failure notices fill the store.
+        const index = row.v === 2 ? rows.findLastIndex(value => value.v !== 2 && value.phase !== "helper") : -1;
+        if (index >= 0) rows[index] = row;
+        suppressed++;
+      }
+    },
       values() { return [...rows, ...(suppressed ? [record("outer", "none", "overflow", 0, false, undefined, suppressed)!] : [])]; } };
   }
   function emit(values: unknown[], failed: boolean, write: (line: string) => unknown) {
@@ -163,6 +192,7 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     for (const row of rows) unique.set([row.source, row.caseId, row.phase, row.checkpoint,
       row.facts?.acquisition, row.facts?.reader, row.facts?.operation].join("/"), row);
     const priority = (row: Record<string, any>) => row.phase === "helper" ? 0
+      : row.v === 2 && row.phase === "control" ? row.caseId === "c_cancel" ? 0.5 : 0.75
       : row.caseId === "c_cancel" && row.phase === "result_witness" ? 1
       : row.caseId === "c_cancel" && row.phase === "owner_witness" ? 2
       : row.caseId === "c_cancel" && ["operation_witness", "reader_witness"].includes(row.phase) ? 3
@@ -174,7 +204,62 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     if (new TextEncoder().encode(text).length > 8192) throw new Error("Xiaomi annotation capacity");
     write(text);
   }
-  return { own, record, witness, validate, store, emit };
+  // v2 control states: 0 unreached, 1 matching complete shape, 2 invalid shape,
+  // 3 parse/capacity/status-read failure. None grants HTTP or retirement acceptance.
+  // witness: joined, requests, inputs, calls, reserves, canceled, expired, sourceJoined, completed.
+  function controlObservation(caseId: string, status: number | null, value: unknown, parsed: boolean) {
+    const keys = ["caseId", "joined", "requests", "inputs", "calls", "reserves", "canceled", "expired", "sourceJoined", "completed"];
+    const valid = parsed && value && typeof value === "object" && !isProxy(value) && Reflect.ownKeys(value).length === keys.length
+      && keys.every(key => Object.hasOwn(Object.getOwnPropertyDescriptor(value, key) ?? {}, "value")) && own(value, "caseId") === caseId
+      && ["requests", "inputs", "calls", "reserves"].every(key => { const n = own(value, key); return Number.isSafeInteger(n) && (n as number) >= 0 && (n as number) <= 1000; })
+      && ["joined", "canceled", "expired", "sourceJoined", "completed"].every(key => typeof own(value, key) === "boolean");
+    return { state: !parsed ? 3 : valid ? 1 : 2, status,
+      witness: valid ? keys.slice(1).map(key => own(value, key)) : null };
+  }
+  function controlRecord(base: Record<string, any>, observation: any, qualification: unknown[]) {
+    const value = validate({ ...base, v: 2, control: { ...(observation ?? { state: 0, status: null, witness: null }), qualification } });
+    if (!value) throw new Error("invalid Xiaomi control observation");
+    return value;
+  }
+  return { own, record, witness, validate, store, emit, controlObservation, controlRecord };
+}
+// Diagnostic-only: consume the original text once, retain safe facts before the
+// original status/schema assertion, and never install them as an accepted witness.
+function xiaomiConsumeControlWitness(caseId: string, text: string, readStatus: () => number,
+  diagnostic: ReturnType<typeof xiaomiDiagnostic>, retain: (value: any) => void) {
+  let value: any, status: number | null = null, parsed = false, primary: unknown, primaryPresent = false;
+  let reporting: unknown, reportingPresent = false;
+  try {
+    if (text.length > 768) throw new Error("native control witness capacity");
+    value = JSON.parse(text); status = readStatus(); parsed = true;
+  } catch (error) { primary = error; primaryPresent = true; }
+  try { retain(diagnostic.controlObservation(caseId, status, value, parsed)); }
+  catch (error) { reporting = error; reportingPresent = true; }
+  if (!primaryPresent) try {
+    const keys = ["caseId", "joined", "requests", "inputs", "calls", "reserves", "canceled", "expired", "sourceJoined", "completed"];
+    if (status !== 200 || !value || Object.keys(value).length !== keys.length || value.caseId !== caseId
+      || !keys.every(key => Object.hasOwn(value, key)) || typeof value.joined !== "boolean"
+      || ![value.requests, value.inputs, value.calls, value.reserves].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 1000)
+      || ![value.canceled, value.expired, value.sourceJoined, value.completed].every(v => typeof v === "boolean")) throw new Error("native control witness invalid");
+  } catch (error) { primary = error; primaryPresent = true; }
+  if (primaryPresent && reportingPresent) throw new AggregateError([primary, reporting], "Xiaomi control witness and reporting failed");
+  if (primaryPresent) throw primary;
+  if (reportingPresent) throw reporting;
+  return value;
+}
+// Counts summarize retained private records only; no signal/body reads or new
+// qualification checks. UNKNOWN is null. The original classifiers remain sole authority.
+// qualification: acquisitions, bound, admitted, fulfilled, releases, release fulfilled,
+// rejected, sync_throw, pending, undefined failures; caller observed, initial,
+// reason present, reason defined. No error values or native properties are read.
+function xiaomiControlQualification(invocation: any) {
+  const rows = invocation.acquisitions, releases = rows.flatMap((row: any) => row.releases);
+  return [rows.length, rows.filter((row: any) => row.bound === true).length,
+    rows.filter((row: any) => row.accepted === true).length, rows.filter((row: any) => row.state === "fulfilled").length,
+    releases.length, ...["fulfilled", "rejected", "sync_throw", "invoke"].map(state => releases.filter((op: any) => op.state === state).length),
+    releases.filter((op: any) => op.reasonPresent === true && op.reason === undefined).length,
+    invocation.caller?.observed ?? null, invocation.caller?.initial ?? null, invocation.caller?.reasonPresent ?? null,
+    invocation.caller?.reasonPresent === true ? invocation.caller.reason !== undefined : null];
 }
 function xiaomiNativeControls() {
   const base = xiaomiPlanCases()[0];
@@ -612,13 +697,9 @@ beforeEach(() => {
 });
 async function planWitness(invocation: any) {
   const response = await controlFetch(origin + `/fixture/plan/${invocation.id}/witness`);
-  const text = await response.text(); if (text.length > 768) throw new Error("native control witness capacity");
-  const value = JSON.parse(text), keys = ["caseId", "joined", "requests", "inputs", "calls", "reserves", "canceled", "expired", "sourceJoined", "completed"];
-  if (response.status !== 200 || !value || Object.keys(value).length !== keys.length || value.caseId !== invocation.id
-    || !keys.every(key => Object.hasOwn(value, key)) || typeof value.joined !== "boolean"
-    || ![value.requests, value.inputs, value.calls, value.reserves].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 1000)
-    || ![value.canceled, value.expired, value.sourceJoined, value.completed].every(v => typeof v === "boolean")) throw new Error("native control witness invalid");
-  return value;
+  const text = await response.text();
+  return xiaomiConsumeControlWitness(invocation.id, text, () => response.status, planDiagnostic,
+    value => { invocation.controlObservation = value; });
 }
 afterEach(async () => {
   if (!planContext) {
@@ -694,7 +775,11 @@ afterEach(async () => {
     try { planRecords.add(planDiagnostic.record("sdk", context.id, "sdk_cancel_receipt", 1, false, undefined, planAcquisitions.length)); }
     catch (error) { failures.push(error); }
   }
-  if (context.id.startsWith("c_")) try { planRecords.add(planDiagnostic.record("sdk", context.id, "control", 1, failures.length > 0, undefined, planAcquisitions.length)); } catch (error) { failures.push(error); }
+  if (context.id.startsWith("c_")) try {
+    const base = planDiagnostic.record("sdk", context.id, "control", 1, failures.length > 0, undefined, planAcquisitions.length)!;
+    const invocation = planInvocations.find(value => value.id === context.id);
+    planRecords.add(invocation ? planDiagnostic.controlRecord(base, invocation.controlObservation, xiaomiControlQualification(invocation)) : base);
+  } catch (error) { failures.push(error); }
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2000);
   try {
     for (const record of planRecords.values()) {

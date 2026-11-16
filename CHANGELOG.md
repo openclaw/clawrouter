@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Retain bounded Xiaomi control-witness and original ownership summaries before rejecting failed control responses, without changing retirement, producer or accounting acceptance. Preserve independent diagnostic failures and the existing relay request count.
+
 - Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
 
 - Match native runner project admission to the pinned target: Xiaomi uses the media project and Qwen uses the providers project. Validate the private binding before choosing the single expected project, and create no report until every startup guard passes. Preserve original failures, cleanup and native qualification requirements.
