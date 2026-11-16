@@ -66,6 +66,22 @@ models:
                 reasoning: { modes: [auto, off, on], metadata: true }
                 limits: { maxQuestions: 1 }
                 confidence: provider-specific
+          decisions_batch:
+            sources: [https://docs.levanto.ai/quickstart]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: levanto-sage
+                questions:
+                  boolean: { probabilities: boolean, abstention: true }
+                  choice: { probabilities: categorical, abstention: true, minOptions: 2, maxOptions: 120 }
+                  score: { probabilities: categorical, abstention: false, minOptions: 2, maxOptions: 26 }
+                  sort: { probabilities: none, abstention: false, minOptions: 2, maxOptions: 120 }
+                  tags: { probabilities: independent, abstention: true, minOptions: 1, maxOptions: 120 }
+                reasoning: { modes: [auto, off, on], metadata: true }
+                confidence: provider-specific
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

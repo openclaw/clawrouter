@@ -5,6 +5,8 @@ import test from "node:test";
 import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
 import { prepareSageRequest, decodeSageResponse } from "../provider-sage.ts";
 import { prepareSystemOneRequest, decodeSystemOneResponse } from "../provider-systemone.ts";
+const { prepareNativeSage } = await import("../native-sage.ts");
+const { sageBatchFacts } = await import("./sage-batch-metadata-fixture.ts");
 
 const contracts = [
   ["levanto", "SAGE_API_KEY", "https://sage.levanto.ai/decide", "levanto-sage-2", "levanto.sage"],
@@ -48,12 +50,49 @@ for (const [id, key, url, modelId, format] of contracts) {
   });
 }
 
-test("Sage batch has a distinct native route and observes aggregate usage once", () => {
-  const provider = providers.find(provider => provider.id === "levanto"), endpoint = provider.endpoints.find(endpoint => endpoint.id === "decisions_batch");
+function declaredSageBatchSelection() {
+  const provider = structuredClone(providers.find(provider => provider.id === "levanto"));
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === "decisions_batch");
+  const model = providerModel(provider, "levanto/levanto-sage-2", endpoint);
+  return { provider, endpoint, model, capability: "llm.decisions.batch", method: "POST", pathParams: {},
+    body: { model: model.id, requests: [{ content: "synthetic evidence", questions: [
+      { id: "gate", kind: "yesno", instructions: "evaluate" },
+      { id: "other", kind: "yesno", instructions: "evaluate separately" },
+    ] }], reasoning: "off" } };
+}
+
+test("the compiled Sage declaration qualifies its batch route and observes aggregate usage once", () => {
+  const selected = declaredSageBatchSelection(), { provider, endpoint, model } = selected;
+  const facts = model.nativeCapabilities.endpoints.decisions_batch;
+  assert.deepEqual(facts, sageBatchFacts);
+  assert.equal(facts.inference.decision.limits, undefined);
+  assert.equal(model.nativeCapabilities.endpoints.decisions.inference.decision.limits.maxQuestions, 1);
+  assert.equal(model.pricing, null);
   assert.equal(endpoint.request_format, "levanto.sage_batch");
   const auth = configuredUpstream(provider, null, { SAGE_API_KEY: "synthetic-selected" });
+  assert.equal(auth.headers.get("authorization"), "Bearer synthetic-selected");
   assert.equal(auth.baseUrl + upstreamPath(provider, endpoint, {}, {}, auth), "https://sage.levanto.ai/decide/batch");
-  const body = prepareSageRequest({ requests: [{ content: "synthetic evidence", questions: [{ id: "gate", kind: "yesno", instructions: "evaluate" }] }] }, true);
-  const decoded = decodeSageResponse({ results: [{ answers: [{ ok: false, error: "synthetic failure" }] }], meta: { usage: { input_tokens: 19, output_tokens: 2 } } }, body);
+  const before = structuredClone(selected), native = prepareNativeSage(selected);
+  assert.equal(native.origin, "https://sage.levanto.ai"); assert.equal(native.path, "/decide/batch");
+  assert.equal(native.tariff, undefined);
+  assert.deepEqual(selected, { ...before, body: { requests: before.body.requests, reasoning: "off" } });
+  const response = { results: [{ answers: [
+    { ok: false, error: "synthetic failure" },
+    { ok: true, result: { id: "other", kind: "yesno", result: { answer: "yes", probability: 0.8 },
+      meta: { usage: { input_tokens: 999, output_tokens: 999 } } } },
+  ] }], meta: { usage: { input_tokens: 19, output_tokens: 2 } } };
+  const decoded = decodeSageResponse(response, selected.body);
+  assert.deepEqual(decoded.response, response);
   assert.equal(decoded.inspection.tokens.total, 21);
+});
+
+test("compiled Sage singular or foreign metadata cannot qualify the batch endpoint", () => {
+  for (const foreign of [undefined, "liquid-ai", "typesafe"]) {
+    const selected = declaredSageBatchSelection(), endpoints = selected.model.nativeCapabilities.endpoints;
+    if (foreign === undefined) delete endpoints.decisions_batch;
+    else endpoints.decisions_batch = structuredClone(providers.find(provider => provider.id === foreign).models[0].nativeCapabilities.endpoints.decisions);
+    const before = structuredClone(selected);
+    assert.throws(() => prepareNativeSage(selected), error => error.status === 400 && error.code === "invalid_native_sage_route");
+    assert.deepEqual(selected, before);
+  }
 });
