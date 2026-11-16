@@ -365,6 +365,20 @@ function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
 // Each reporter reserves entry and first-failure slots within its seven-record budget;
 // incomplete delivery does not imply an uninvoked test or a successful case.
 export function validatePrivateCheckpoint(record:any):void {
+ // V12 adds only a construction-site enum to an existing capture failure.
+ // 0/absent is UNKNOWN (legacy record); 1 global fetch, 2 Undici fetch.
+ // Current V7 site / V10-V11 scalar is multiplied by three, then tagged.
+ // Older V8-V9 array records remain unchanged and have no construction tag.
+ if(record?.v===12){
+  if(!Array.isArray(record.meta)||record.meta.length!==5)throw Error("invalid Private capture metadata");
+  const packed=record.meta[3],scalar=typeof packed==="number";
+  if(!(scalar?Number.isSafeInteger(packed)&&packed>=0:Array.isArray(packed)&&packed.length===3&&Number.isSafeInteger(packed[0])&&packed[0]>=0))throw Error("invalid Private capture observer");
+  const value=scalar?packed:packed[0],tag=value%3;
+  if(![1,2].includes(tag))throw Error("invalid Private capture observer");
+  const first:any=scalar?Math.floor(value/3):[Math.floor(value/3),packed[1],packed[2]],version=scalar?(first>=8712?11:10):7;
+  if(version===7&&!(first[0]>=4))throw Error("unbound Private capture observer");
+  validatePrivateCheckpoint({...record,v:version,meta:[...record.meta.slice(0,3),first,record.meta[4]]});return;
+ }
  if(record?.v===11){
   if(!Array.isArray(record.meta)||record.meta.length!==5)throw Error("invalid Private callback metadata");
   const packed=record.meta?.[3];
@@ -473,7 +487,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:first.meta===null?4:(typeof first.meta[3]==="number"?(first.meta[3]>=8712?11:10):first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+  send({v:b===null?2:first.meta===null?4:first.captureObserver?12:(typeof first.meta[3]==="number"?(first.meta[3]>=8712?11:10):first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
    stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
@@ -484,7 +498,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null||typeof v==="number"?v:[...v]);}if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m){first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null||typeof v==="number"?v:[...v]);if(m.captureObserver&&(typeof m.first==="number"||m.first?.length===3)){first.captureObserver=m.captureObserver;first.meta[3]=typeof m.first==="number"?m.first*3+m.captureObserver:[m.first[0]*3+m.captureObserver,m.first[1],m.first[2]];}}}if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -503,7 +517,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
  // definedness. These observations do not establish cause, EOF or joined ownership.
  const own=(m:any,value:any,key:string)=>{if(!value||typeof value!=="object"||m.isProxy(value))return [4,null];
   const d=Object.getOwnPropertyDescriptor(value,key);return !d?[1,null]:!Object.hasOwn(d,"value")?[3,null]:d.value===undefined?[2,null]:[5,d.value];};
- const invalidateMetadata=(index:number)=>{const b=bodyScopes.get(index),m=b?.metadata;if(m){m.invalid=true;m.type=b.awaited&2?[4,null]:[0,null];m.code=b.awaited&2?[4,null]:[0,null];m.http=m.responseSeen?[3,null]:[0,null];m.first=null;m.wording=b.awaited&2?[4,null]:[0,null];}};
+ const invalidateMetadata=(index:number)=>{const b=bodyScopes.get(index),m=b?.metadata;if(m){m.invalid=true;m.type=b.awaited&2?[4,null]:[0,null];m.code=b.awaited&2?[4,null]:[0,null];m.http=m.responseSeen?[3,null]:[0,null];m.first=null;m.captureObserver=0;m.wording=b.awaited&2?[4,null]:[0,null];}};
  const metadata=(index:number,owner:object)=>{const b=bodyScopes.get(index);if(!b||b.owner!==owner||b.invalid||b.failed||finished||!b.metadata||b.metadata.invalid)throw Error("foreign Private metadata owner");return b;};
  const label=(p:any,values:string[])=>p[0]!==5?p:values.includes(p[1])?[5,values.indexOf(p[1])+1]:[4,null];
  // V6 reads one own-data field of the already bound ordinary result. These exact
@@ -545,9 +559,10 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   }catch(error){invalidateMetadata(index);failures.push(error);}},
   // V7 reuses the first-failure tuple: 4..20 are capture source sites below,
   // state 1 is the original synchronous capture throw, never a fetch rejection.
-  bodyCaptureFailure(index:number,owner:object,site:number,reason:unknown,condition:any=null){try{
+  bodyCaptureFailure(index:number,owner:object,site:number,reason:unknown,condition:any=null,captureObserver=0){try{
    const b=bodyScopes.get(index);if(!b?.metadata||b.failed)return;metadata(index,owner);
    if(!Number.isSafeInteger(site)||site<4||site>20)throw Error("foreign Private capture site");
+   if(![0,1,2].includes(captureObserver))throw Error("foreign Private capture observer");
    if(condition!==null&&!(site===11&&Array.isArray(condition)&&[6,7,8,9].includes(condition.length)&&condition[0]===11&&
     Number.isSafeInteger(condition[1])&&condition[1]>=0&&condition[1]<=10&&condition[2]===2**(condition[1]+1)-1&&condition[3]===2**condition[1]-1&&
     typeof condition[4]==="boolean"&&(condition[4]||![0,4].includes(condition[1]))&&condition[5]===(reason!==undefined)&&(condition.length===6||[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].includes(condition[6])&&(condition[1]<4?condition[6]===0:true))&&(condition.length<8||Number.isSafeInteger(condition[7])&&condition[7]>=0&&condition[7]<=10&&(condition[1]>=4||condition[7]===0))&&(condition.length!==9||condition[8]===null||Number.isSafeInteger(condition[8])&&condition[8]>=0&&condition[8]<13286025&&(condition[1]>=4||condition[8]===null))))throw Error("foreign Private ownership condition");
@@ -556,6 +571,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    // losslessly encode all six observed fields in V9: flags*18+censusIndex.
    // Decoding a validated prefix is not reevaluating an ownership predicate.
    if(b.metadata.first===null){
+    b.metadata.captureObserver=captureObserver;
     if(condition===null)b.metadata.first=[site,1,reason!==undefined];
     else{const m=condition[2]*2048+condition[3],f=condition[1]*4+(condition[4]?2:0)+(condition[5]?1:0);
      const packed=f*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(condition[6]);
@@ -696,7 +712,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
     const value=invoke(kind,()=>Reflect.apply(original,this,args),{reader:r,receiver:this,args,callerSignal:c?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c?.signal?.aborted??null});
     if(kind==="read"&&c?.delivered&&c.pendingReady){const notify=c.pendingReady;c.pendingReady=undefined;notify();}return value;});}
    const release=reader.releaseLock;patch(reader,"releaseLock",function(this:unknown,...args:unknown[]){try{const v=invoke("unlock",()=>Reflect.apply(release,this,args),{reader:r,receiver:this,args});r.unlocks++;r.unlockReceiver=this;r.unlockAt=++w.sequence;return v;}catch(e){r.unlockFailed=true;throw e;}});return reader;});};
- const observedFetch=(fetcher:Function)=>createPrivateFetchObserver(fetcher,(receiver:unknown,args:any[])=>{
+ const observedFetch=(fetcher:Function,captureObserver=0)=>createPrivateFetchObserver(fetcher,(receiver:unknown,args:any[])=>{
   // Each site precedes its original expression; a throw reports only that span.
   // No operand is evaluated twice and capture failure cannot be called fetch failure.
   let site=4,condition:any=null;try{
@@ -716,7 +732,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   site=20;const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;
   return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,reason);w.syncFailures.push(reason);},
    returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
-  }catch(reason){try{checkpoints.bodyCaptureFailure(caseIndex,row,site,reason,condition);}catch(error){w.observerFailures.push(error);}throw reason;}
+  }catch(reason){try{checkpoints.bodyCaptureFailure(caseIndex,row,site,reason,condition,captureObserver);}catch(error){w.observerFailures.push(error);}throw reason;}
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let bodyEntered=false;
@@ -724,8 +740,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  try{
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
-  const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch));selection?.globalDescriptor(globalFetchDescriptor);
-  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch)});
+  const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch,1));selection?.globalDescriptor(globalFetchDescriptor);
+  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,2)});
   if(selection){
    for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
     installPrivateDefiningSpy(module,name,observe,restores,callbacks);

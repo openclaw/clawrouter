@@ -21,6 +21,8 @@
 
 ## Unreleased
 
+- Distinguish global-fetch and Undici-fetch observer construction sites in the Private fixture’s first capture-failure diagnostic. Preserve original errors, ownership guards and retirement/accounting assertions; the tag does not establish cause or ownership.
+
 - Distinguish Private diagnostic callback entry, original guard association and defining-export descriptor custody without changing transport ownership, error handling or test acceptance. Unobserved callbacks remain unknown.
 
 - Support the pinned Vitest configurable getter exports in the two Private diagnostic module spies, preserving original callables and exact descriptor restoration without changing transport ownership or test acceptance.

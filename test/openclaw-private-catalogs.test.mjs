@@ -512,11 +512,11 @@ export async function privateInertReader(read,closed=Promise.resolve()){
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  // BEGIN Private capture entry inert regressions
- function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false,ownershipOverride}={}){
+ function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false,ownershipOverride,captureObserver=0}={}){
   source??=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
   const section=(a,b)=>{assert.equal(source.split(a).length,2);return source.slice(source.indexOf(a),source.indexOf(b,source.indexOf(a)));};
   const wrapper=section("export function createPrivateFetchObserver(","export function createPrivateInvocationOwnership(").replace(/^export /gm,"");
-  const capture=section(" const observedFetch=(fetcher:Function)=>", "\n const check=");
+  const capture=section(" const observedFetch=(fetcher:Function,captureObserver=0)=>", "\n const check=");
   const records=[],originals=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",v=>records.push(v));
   const row={provider:"baseten",api:"stream",control:"eof"};r.bindCase(0,0);r.bindBody(0,row,originals);r.bindBodyMetadata(0,row,privateNodeTypes.isProxy);
   const w={sequence:0,syncFailures:[],observerFailures:[]},calls=[],receiver={},pending=Promise.resolve({}),signalClass=class {};
@@ -538,9 +538,9 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    signalHistory:()=>{hit(12);return [];},transports:transportRows,observedDispatchers:new Set(),patch:(o,k,v)=>{o[k]=v;},invoke:(_k,fn)=>fn(),record,w,checkpoints,caseIndex:0,returned,observer,observeBody:()=>{}};
   const factory=new Function(...Object.keys(dependencies),'"use strict";'+stripTypeScriptTypes(wrapper+capture,{mode:"strip"})+';return observedFetch;')(...Object.values(dependencies));
   let fetchCalls=0,actualReceiver,actualArgs;
-  const wrapped=factory(function(...args){fetchCalls++;actualReceiver=this;actualArgs=args;if(fetchThrow)throw reason;return pending;});
+  const wrapped=factory(function(...args){fetchCalls++;actualReceiver=this;actualArgs=args;if(fetchThrow)throw reason;return pending;},captureObserver);
   return {wrapped,receiver,input,init,pending,row,r,w,records,calls,originals,get fetchCalls(){return fetchCalls;},get actualReceiver(){return actualReceiver;},get actualArgs(){return actualArgs;},
-   capsule(){r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);return records.find(v=>v.v===7||v.v===6);}};
+   capsule(){r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);return records.find(v=>v.v===12||v.v===7||v.v===6);}};
  }
  test("Private capture entry identifies original URL ownership and header failures before fetch",()=>{
   for(const failAt of Array.from({length:16},(_,i)=>i+5))for(const reason of [undefined,{}]){
@@ -1039,6 +1039,72 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   for(const extra of [{extra:true},null,7,[]])assert.throws(()=>validate({...cap,v:10,meta:[...cap.meta.slice(0,3),cap.meta[3]%8712,cap.meta[4],extra]}));
  });
  // END Private callback V11 inert regressions
+
+  test("Private capture V12 construction literals preserve the original capture and fetch trace",async()=>{
+   for(const captureObserver of [1,2])for(const reason of [undefined,{}]){
+    for(let failAt=5;failAt<=20;failAt++){
+     const old=privateCaptureHarness({failAt,reason}),now=privateCaptureHarness({failAt,reason,captureObserver});
+     for(const h of [old,now])assert.throws(()=>Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]),e=>e===reason);
+     assert.deepEqual(now.calls,old.calls);assert.equal(now.fetchCalls,0);
+     const prior=old.capsule(),cap=now.capsule();assert.equal(cap.v,12);assert.equal(cap.meta[3][0]%3,captureObserver);
+     assert.equal(JSON.stringify({...cap,v:prior.v,meta:[...cap.meta.slice(0,3),[Math.floor(cap.meta[3][0]/3),...cap.meta[3].slice(1)],cap.meta[4]]}),JSON.stringify(prior));
+    }
+    for(const fetchThrow of [false,true]){
+     const old=privateCaptureHarness({fetchThrow,reason}),now=privateCaptureHarness({fetchThrow,reason,captureObserver});
+     for(const h of [old,now]){if(fetchThrow)assert.throws(()=>Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]),e=>e===reason);
+      else {const result=Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]);assert.equal(result,h.pending);await result;}
+      assert.equal(h.fetchCalls,1);assert.equal(h.actualReceiver,h.receiver);assert.deepEqual(h.actualArgs,[h.input,h.init]);}
+     assert.deepEqual(now.calls,old.calls);assert.equal(JSON.stringify(now.capsule()),JSON.stringify(old.capsule()));
+    }
+   }
+   const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+   assert.equal(source.split("observedFetch(nativeFetch,1)").length,2);assert.equal(source.split("observedFetch(originalUndiciFetch,2)").length,2);
+  });
+  test("Private capture V12 keeps the first construction tag and leaves absent or unreached observations unknown",()=>{
+   for(const tag of [0,1,2]){
+    const h=privateCaptureHarness({captureObserver:tag});assert.equal(h.capsule().meta.length,5);assert.equal(h.fetchCalls,0);
+    const first=privateCaptureHarness();first.r.bodyCaptureFailure(0,first.row,6,undefined,null,tag);
+    first.r.bodyCaptureFailure(0,first.row,11,{},null,tag===1?2:1);const cap=first.capsule();
+    assert.equal(cap.meta.length,5);if(tag)assert.equal(cap.meta[3][0]%3,tag);
+    assert.deepEqual(JSON.parse(JSON.stringify(tag?[Math.floor(cap.meta[3][0]/3),...cap.meta[3].slice(1)]:cap.meta[3])),[6,1,false]);
+   }
+   for(const tag of [-1,3,true,"1",null,{},[]]){
+    const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,6,undefined,null,tag);
+    assert.equal(h.r.failures.length,1);assert.equal(h.capsule().meta[3],null);
+   }
+   const foreign=privateCaptureHarness();foreign.r.bodyCaptureFailure(0,{},6,undefined,null,1);
+   assert.equal(foreign.r.failures.length,1);assert.equal(foreign.capsule().meta.length,5);
+  });
+  test("Private capture V12 closes the whole tagged shape before parent emission",()=>{
+   const validate=privateCheckpointFunctions().validatePrivateCheckpoint;
+   for(const tag of [1,2])for(const condition of [null,[11,5,63,31,false,false,129,0],[11,5,63,31,false,false,129,0,0]]){
+    const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,undefined,condition,tag);const cap=h.capsule();validate(cap);
+    assert.equal(cap.v,12);assert.equal(JSON.stringify(privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)})),JSON.stringify([cap]));
+    const packed=cap.meta[3],badTags=typeof packed==="number"?[Math.floor(packed/3)*3,-1,NaN,Infinity,Number.MAX_SAFE_INTEGER]:[-1,0,null,true,"1",{},[],Math.floor(packed[0]/3)*3].map(x=>[x,...packed.slice(1)]);
+    for(const meta of [cap.meta.slice(0,4),[...cap.meta,null],[...cap.meta,{}],null,{},...badTags.map(x=>[...cap.meta.slice(0,3),x,cap.meta[4]])]){
+     const invalid={...cap,meta};assert.throws(()=>validate(invalid));let writes=0;
+     assert.throws(()=>privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(invalid)}).forEach(privateAnnotationEmitter(()=>writes++)));assert.equal(writes,0);
+    }
+    for(const patch of [{case:1},{decl:4},{lane:"outer"},{meta:[...cap.meta.slice(0,3),[2*3+tag,1,false],cap.meta[4]]}])assert.throws(()=>validate({...cap,...patch}));
+   }
+  });
+  test("Private capture V12 retains undefined primary reporting and restoration failures independently",async()=>{
+   for(const captureObserver of [1,2])for(const reason of [undefined,{}])for(const restoreReason of [undefined,{}]){
+    const h=privateCaptureHarness({captureObserver,failAt:11,reason,reportThrow:true});let caught;
+    try{await finishPrivateOwned(()=>Reflect.apply(h.wrapped,h.receiver,[h.input,h.init]),[()=>{throw h.w.observerFailures[0];},()=>{throw restoreReason;}]);}catch(error){caught=error;}
+    assert.deepEqual(caught.errors,[reason,undefined,restoreReason]);assert.equal(h.fetchCalls,0);assert.equal(h.capsule().meta.length,5);
+   }
+  });
+  test("Private capture V12 primary writer failures keep the captured tag and independent raw failures",async()=>{
+   for(const tag of [1,2])for(const reason of [undefined,{}])for(const reportReason of [undefined,{}]){
+    const records=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter("sdk",record=>{records.push(record);if(record.v===12)throw reportReason;});
+    const row={provider:"baseten",api:"stream",control:"eof"};r.bindCase(0,0);r.bindBody(0,row,[]);r.bindBodyMetadata(0,row,privateNodeTypes.isProxy);
+    r.bodyCaptureFailure(0,row,11,reason,[11,5,63,31,false,reason!==undefined,129,0,0],tag);r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);
+    const cap=records.find(x=>x.v===12);assert.equal(cap.meta[3]%3,tag);assert.equal(cap.defined,reason!==undefined);assert.deepEqual([...r.failures],[reportReason]);
+    let caught;try{await finishPrivateOwned(()=>{throw reason;},[()=>{throw r.failures[0];},()=>{throw undefined;}]);}catch(error){caught=error;}
+    assert.deepEqual(caught.errors,[reason,reportReason,undefined]);assert.equal(records.filter(x=>x.v===12).length,1);
+   }
+  });
 
 // END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
