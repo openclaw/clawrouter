@@ -24,7 +24,7 @@ function xiaomiRunnerReport() {
   let reported = false, summary;
   const options = {
     expectedInvocations: 1,
-    fixtureSha256: "7ed589053ceb897e21462bbab6c0b8ca28b0f2db90be3dad14935dc01c0fad6b",
+    fixtureSha256: "c51d01fb566bb3a26dbd78414c7d8aa6f68d660ed720e0af1eff913d99cb5afe",
     reporterSha256: "88a9021f87d47b62c0e120cc6c02bf9c96248ac20bd549595b981d6ef20f0b67",
     onReport(packet) {
       summary = undefined;
@@ -642,6 +642,228 @@ test("actual Worker final retirement seals after its open drain and preserves la
   }
 });
 // END Xiaomi reader join inert tests.
+
+// BEGIN Xiaomi first failed reader snapshot inert tests. No native streams or transport.
+function xiaomiReaderSnapshotOwner(f, id = "c_provider_error") {
+  const invocation = { id, ordinal: 1, control: true, acquisitions: [] };
+  const acquisition = { ordinal: 1, invocation, state: "fulfilled", bound: true, accepted: true, observation: f.proof,
+    releases: [{ state: "fulfilled", invoked: 90, settled: 91 }] };
+  invocation.acquisitions.push(acquisition);
+  return { invocation, acquisition, qualified: false, control: true };
+}
+function xiaomiReaderControlRecord(snapshot, id = "c_provider_error") {
+  return diagnostic.controlRecord(diagnostic.record("sdk", id, "control", 1, true, undefined, 1),
+    { state: 1, status: 200, witness: [true, 1, 1, 1, 1, false, false, true, true] },
+    [1, 1, 1, 1, 1, 1, 0, 0, 0, 0, true, false, false, null], [1, 7, true, 2, 192, 0, false], snapshot);
+}
+test("first reader snapshot distinguishes original read, cancel, closed and observer failures without inspecting reasons", async () => {
+  let inspected = 0;
+  const opaque = new Proxy({}, { get() { inspected++; throw new Error("reason inspected"); }, getOwnPropertyDescriptor() { inspected++; throw new Error("reason inspected"); }, ownKeys() { inspected++; throw new Error("reason inspected"); } });
+  for (const reason of [undefined, opaque]) for (const kind of ["read", "cancel", "closed", "observer"]) {
+    const closed = Promise.withResolvers(), options = { closed: closed.promise };
+    if (kind === "read" || kind === "cancel") options[kind] = () => Promise.reject(reason);
+    if (kind === "observer") options.read = () => Promise.resolve({ get done() { throw reason; } });
+    const f = xiaomiInertReader(options), selection = xiaomiReaderSnapshotOwner(f), operand = {};
+    const original = f.reader.read(operand), canceled = f.reader.cancel(undefined);
+    if (kind === "closed") closed.reject(reason); else closed.resolve();
+    await Promise.allSettled([original, canceled]); f.reader.releaseLock();
+    const trace = f.calls.slice(), subscriptions = new Map(f.subscriptions); let originalError;
+    await assert.rejects(f.proof.join(selection), error => { originalError = error; return error.errors.includes(reason); });
+    const snapshot = f.proof.failureSnapshot(); assert.equal(snapshot.errorPresent, false);
+    const v = snapshot.value, expected = { read: [2, 1], cancel: [2, 2], closed: [8, 3], observer: [64, 4] }[kind];
+    assert.equal(v[8], expected[0]); assert.equal(v[15][0], expected[1]); assert.equal(v[15][2], reason === undefined ? 1 : 2);
+    assert.deepEqual(v.slice(1, 5), [1, 1, 1, 1]); assert.equal(v[6], 1); assert.deepEqual(v[17], [0, null, 1, false]);
+    if (reason === undefined) assert.deepEqual(v[15].slice(3), [null, null, null, null, null]);
+    assert.equal(xiaomiReaderControlRecord(v).v, 4);
+    await assert.rejects(f.proof.join(), error => error === originalError); await assert.rejects(xiaomiSealReaderObservations([f.proof]));
+    assert.equal(f.proof.failureSnapshot(), snapshot); assert.deepEqual(f.calls, trace);
+    for (const [pending, count] of subscriptions) assert.equal(f.subscriptions.get(pending), count + 1);
+    assert.equal(f.calls.find(row => row.kind === "read").args[0], operand); assert.deepEqual(f.calls.find(row => row.kind === "cancel").args, [undefined]);
+  }
+  assert.equal(inspected, 0);
+});
+test("snapshot retains existing locked evaluation once, including throw and unreached disposition operands", async () => {
+  for (const reason of [undefined, {}]) {
+    const f = xiaomiInertReader(), selection = xiaomiReaderSnapshotOwner(f);
+    await f.reader.read(); f.reader.releaseLock(); let gets = 0;
+    Object.defineProperty(f.body, "locked", { get() { gets++; throw reason; } });
+    await assert.rejects(f.proof.join(selection), error => error.errors.includes(reason));
+    const value = f.proof.failureSnapshot().value;
+    assert.equal(gets, 1); assert.deepEqual(value[17], [0, null, 2, null]); assert.equal(value[8], 64);
+    xiaomiReaderControlRecord(value); assert.equal(gets, 1);
+  }
+  const f = xiaomiInertReader({ read: () => Promise.reject(undefined) }), selection = xiaomiReaderSnapshotOwner(f, "c_cancel");
+  selection.control = false; await Promise.allSettled([f.reader.read()]); f.reader.releaseLock();
+  await assert.rejects(f.proof.join(selection)); assert.equal(f.proof.failureSnapshot().value[5], 0);
+  assert.deepEqual(f.proof.failureSnapshot().value[17], [0, null, 1, false]);
+});
+test("reader snapshot keeps missing originals diagnostic and missing closed result does not invent a failure", async () => {
+  const f = xiaomiInertReader(), selection = xiaomiReaderSnapshotOwner(f);
+  await f.reader.read(); f.reader.releaseLock(); await f.proof.settle();
+  f.proof.readers[0].originalClosed = undefined;
+  await f.proof.join(selection); assert.equal(f.proof.failureSnapshot(), undefined);
+  const g = xiaomiInertReader(), owner = xiaomiReaderSnapshotOwner(g);
+  await g.reader.read(); g.reader.releaseLock(); await g.proof.settle(); g.proof.readers[0].operations[0].original = undefined;
+  await assert.rejects(g.proof.join(owner)); const value = g.proof.failureSnapshot().value;
+  assert.equal(value[8], 4); assert.deepEqual(value[10], [1, 0, 0, 0, 1]); assert.deepEqual(value[15].slice(0, 3), [0, null, 0]);
+  const foreign = xiaomiInertReader({ cancel: () => Promise.reject(undefined) }), bad = xiaomiReaderSnapshotOwner(foreign);
+  bad.acquisition.observation = { readers: foreign.proof.readers.slice() };
+  await Promise.allSettled([foreign.reader.cancel()]); foreign.reader.releaseLock(); await assert.rejects(foreign.proof.join(bad));
+  assert.deepEqual(foreign.proof.failureSnapshot().value, [0]);
+});
+test("snapshot reporting preserves original undefined failures and independent postlude errors", async () => {
+  for (const original of [undefined, {}]) for (const reporting of [undefined, {}]) {
+    const f = xiaomiPostludeInertCase(new Map([[7, original]]));
+    f.bindings.planAcquisitions[0].observation.failureSnapshot = () => { throw reporting; };
+    await assert.rejects(f.callback(), error => {
+      assert.equal(error.errors[0], original); assert.equal(error.errors[1], reporting); return true;
+    });
+    const record = f.records.values().find(row => row.v === 3);
+    assert.ok(record.postlude[reporting === undefined ? 5 : 4] & (1 << 8));
+    assert.equal(f.events.at(-1), "seal");
+    const g = xiaomiInertReader({ read: () => Promise.reject(original) }), owner = xiaomiReaderSnapshotOwner(g);
+    Object.defineProperty(owner.acquisition, "releases", { get() { throw reporting; } });
+    await Promise.allSettled([g.reader.read()]); g.reader.releaseLock();
+    await assert.rejects(g.proof.join(owner), error => error.errors[0] === original);
+    assert.equal(g.proof.failureSnapshot().errorPresent, true); assert.equal(g.proof.failureSnapshot().error, reporting);
+  }
+});
+test("the actual cancel disposition reads each reached locked operand once and preserves its thrown reason", async () => {
+  for (const throwing of [false, true]) {
+    let tick = 0, gets = 0; const reason = {}, signal = { aborted: false, reason: undefined };
+    const f = xiaomiInertReader({ observe: false, read: () => Promise.resolve({ done: false, value: new Uint8Array([1]) }) });
+    f.proof = xiaomiObserveBody(f.body, signal, (object, key, value) => { object[key] = value; }, () => {}, () => ++tick);
+    f.reader = f.body.getReader(); await f.reader.read();
+    const owner = xiaomiReaderSnapshotOwner(f, "c_cancel"), inv = owner.invocation, acq = owner.acquisition;
+    Object.assign(inv, { bodyPassed: true, resultAborted: true, partialReader: f.proof.readers[0], partial: ++tick });
+    inv.caller = { observed: true, initial: false, event: ++tick, reasonPresent: true, reason };
+    acq.guard = { signal, observed: true, initial: false, event: ++tick, reasonPresent: true, reason };
+    signal.aborted = true; signal.reason = reason; await f.reader.cancel();
+    acq.releases = [{ state: "fulfilled", invoked: ++tick, settled: ++tick }]; f.reader.releaseLock();
+    Object.defineProperty(f.body, "locked", { get() { gets++; if (throwing) throw undefined; return false; } });
+    if (throwing) {
+      await assert.rejects(f.proof.join(owner), error => error.errors.length === 2 && error.errors.every(value => value === undefined));
+      const snapshot = f.proof.failureSnapshot().value;
+      assert.equal(snapshot[6], 3); assert.deepEqual(snapshot[17], [2, null, 2, null]); assert.equal(snapshot[8], 64);
+    } else {
+      await f.proof.join(owner); assert.equal(f.proof.failureSnapshot(), undefined); assert.equal(f.proof.joinAccepted, true);
+    }
+    assert.equal(gets, 2);
+  }
+});
+test("held original observer tails and concurrent joins complete before the immutable first failure snapshot", async () => {
+  const held = Promise.withResolvers(), failed = Promise.withResolvers(), observer = Promise.withResolvers(); let appended = false, f, attached = 0;
+  const then = failed.promise.then;
+  failed.promise.then = function(...args) {
+    const result = Reflect.apply(then, this, args);
+    return ++attached === 1 ? result.finally(() => observer.promise) : result;
+  };
+  f = xiaomiInertReader({ read: () => failed.promise, cancel: () => held.promise });
+  const owner = xiaomiReaderSnapshotOwner(f); f.reader.read();
+  const first = f.proof.join(owner); assert.equal(f.proof.join(owner), first);
+  failed.resolve({ get done() { if (!appended) { appended = true; f.reader.cancel(); } throw undefined; } });
+  let settled = false; const observed = first.catch(() => { settled = true; }); await xiaomiInertTurns();
+  assert.equal(settled, false); assert.equal(f.proof.failureSnapshot(), undefined); held.reject(undefined); f.reader.releaseLock();
+  await xiaomiInertTurns(); assert.equal(settled, false); assert.equal(f.proof.failureSnapshot(), undefined); observer.resolve();
+  await observed; assert.equal(f.proof.joinAccepted, false);
+  const snapshot = f.proof.failureSnapshot(); assert.equal(snapshot.value[8], 2 | 64);
+  await Promise.allSettled([f.reader.cancel()]); await assert.rejects(f.proof.join());
+  assert.equal(f.proof.failureSnapshot(), snapshot); assert.equal(snapshot.value[11][0], 1);
+});
+test("v4 control tuples stay closed, opaque and bounded in both formatter orders while v1-v3 bytes stay exact", async () => {
+  const f = xiaomiInertReader({ cancel: () => Promise.reject(undefined) }), owner = xiaomiReaderSnapshotOwner(f);
+  await Promise.allSettled([f.reader.cancel()]); f.reader.releaseLock(); await assert.rejects(f.proof.join(owner));
+  const value = f.proof.failureSnapshot().value, row = xiaomiReaderControlRecord(value);
+  const legacy = xiaomiReaderControlRecord(); assert.equal(legacy.v, 3);
+  const { reader, ...base } = row; assert.equal(JSON.stringify({ ...base, v: 3 }), JSON.stringify(legacy));
+  assert.equal(diagnostic.validate({ ...row, failed: false, postlude: [1, 0, null, 0, 0, 0, false] }), null);
+  const invalid = [];
+  for (const [i, v] of [[0, 2], [3, 2], [4, 2], [5, 4], [6, 0], [7, 0], [8, 256], [9, 0]]) { const t = structuredClone(value); t[i] = v; invalid.push(t); }
+  for (const i of [10, 11, 12, 13, 14, 15, 16, 17]) { const t = structuredClone(value); t[i].push(0); invalid.push(t); }
+  const unknown = structuredClone(value); unknown[15][2] = 1; unknown[15][3] = true; invalid.push(unknown);
+  const skipped = structuredClone(value); skipped[17] = [0, true, 1, false]; invalid.push(skipped);
+  for (const reader of invalid) assert.equal(diagnostic.validate({ ...row, reader }), null);
+  let gets = 0; const accessor = value.slice(); Object.defineProperty(accessor, "8", { get() { gets++; return 2; } });
+  assert.equal(diagnostic.validate({ ...row, reader: accessor }), null); assert.equal(gets, 0);
+  assert.equal(diagnostic.validate({ ...row, reader: new Proxy(value, { ownKeys() { throw undefined; } }) }), null);
+  const parent = new Function(proofCode + ";return xiaomiDiagnostic;")()(nodeTypes.isProxy);
+  for (const [producer, consumer] of [[diagnostic, parent], [parent, diagnostic]]) {
+    const control = producer.controlRecord(row, row.control, row.control.qualification, row.postlude, value);
+    const cancel = { ...control, caseId: "c_cancel" }, store = producer.store();
+    for (let i = 0; i < 63; i++) store.add(producer.record("sdk", "p0", "read", i, true, undefined));
+    store.add(control); store.add(cancel); assert.throws(() => store.add(control));
+    let text; producer.emit(store.values(), true, value => { text = value; });
+    const commands = text.trimEnd().split("\n"); assert.ok(commands.length <= 10); assert.ok(Buffer.byteLength(text) <= 8192);
+    const rows = commands.map(command => { assert.ok(Buffer.byteLength(command + "\n") <= 768); return consumer.validate(JSON.parse(command.split("::").at(-1))); });
+    assert.ok(rows.every(Boolean)); assert.ok(rows.some(value => value.v === 4 && value.caseId === "c_cancel")); assert.ok(rows.some(value => value.v === 4 && value.caseId === "c_provider_error"));
+  }
+  // Include the command prefix and newline in the unchanged 768-byte limit.
+  const wide = structuredClone(row);
+  wide.reader[1] = wide.reader[2] = 1_000_000;
+  wide.reader[10] = wide.reader[11] = [1_000_000, 250000, 250000, 250000, 250000];
+  wide.reader[13] = wide.reader[14] = [1_000_000, 1_000_000]; wide.reader[16].fill(1_000_000);
+  wide.control.qualification = [1, 1, 1, 1, ...Array(6).fill(1_000_000), false, false, false, false];
+  wide.control.witness = [false, 1000, 1000, 1000, 1000, false, false, false, false];
+  wide.postlude = [1, 12, false, 1_000_000, 4095, 4095, false];
+  wide.reader[15] = [2, 1_000_000, 2, false, false, false, false, false];
+  wide.actual = wide.expected = -1.2345678901234567e-100;
+  wide.count = 1_000_000; wide.checkpoint = 65535; assert.ok(diagnostic.validate(wide));
+  let maximum; diagnostic.emit([wide], true, value => { maximum = value; });
+  assert.equal(Buffer.byteLength(maximum), 747); assert.ok(Buffer.byteLength(maximum) <= 768);
+  const oversized = { ...wide, reader: [...wide.reader, "x".repeat(768)] };
+  let writes = 0; assert.equal(diagnostic.validate(oversized), null);
+  assert.throws(() => diagnostic.emit([oversized], true, () => { writes++; })); assert.equal(writes, 0);
+});
+// BEGIN Xiaomi reader first-accounted gate regression.
+test("first reader failure follows accounting order rather than the lowest failed bit", async () => {
+  const same = {}, packets = [], parent = new Function(proofCode + ";return xiaomiDiagnostic;")()(nodeTypes.isProxy);
+  const cases = [
+    ...[undefined, same].flatMap(read => [undefined, same].map(cancel => ({ read, cancel, missing: false }))),
+    { read: undefined, cancel: undefined, missing: true },
+  ];
+  for (const item of cases) {
+    const f = xiaomiInertReader({ read: () => item.missing ? Promise.resolve({ done: true }) : Promise.reject(item.read),
+      cancel: () => { if (item.missing) return Promise.reject(item.cancel); throw item.cancel; } });
+    const owner = xiaomiReaderSnapshotOwner(f), operand = {}, pending = f.reader.read(operand);
+    if (item.missing) await Promise.allSettled([f.reader.cancel(operand)]);
+    else assert.throws(() => f.reader.cancel(operand), error => error === item.cancel);
+    await Promise.allSettled([pending]); f.reader.releaseLock(); await f.proof.settle();
+    if (item.missing) f.proof.readers[0].operations[0].original = undefined;
+    const calls = f.calls.slice(), subscriptions = [...f.subscriptions.values()]; let original;
+    await assert.rejects(f.proof.join(owner), error => {
+      original = error; assert.equal(error.errors.length, 2); assert.equal(error.errors[1], item.cancel);
+      if (item.missing) assert.equal(error.errors[0].message, "original reader operation not joined");
+      else assert.equal(error.errors[0], item.read);
+      return true;
+    });
+    const value = f.proof.failureSnapshot().value;
+    assert.equal(value[8], item.missing ? 6 : 3); assert.equal(value[9], item.missing ? 3 : 2);
+    assert.equal(value[15][2], item.missing ? 0 : item.read === undefined ? 1 : 2);
+    assert.equal(f.proof.readers[0].operations[0].pending, pending);
+    await assert.rejects(f.proof.join(), error => error === original);
+    assert.deepEqual(f.calls, calls); assert.deepEqual([...f.subscriptions.values()], subscriptions);
+    assert.equal(calls.find(row => row.kind === "read").args[0], operand);
+    assert.equal(calls.find(row => row.kind === "cancel").args[0], operand);
+    const row = xiaomiReaderControlRecord(value);
+    for (const [producer, consumer] of [[diagnostic, parent], [parent, diagnostic]]) {
+      let text; producer.emit([row, { ...row, caseId: "c_cancel" }], true, output => { text = output; });
+      assert.ok(Buffer.byteLength(text) <= 8192);
+      packets.push(text.trimEnd().split("\n").map(command => {
+        assert.ok(Buffer.byteLength(command + "\n") <= 768);
+        const message = command.slice("::error title=Xiaomi typed contract::".length), value = JSON.parse(message);
+        assert.deepEqual(consumer.validate(value), value);
+        return { title: "Xiaomi typed contract", annotation_level: "failure", message };
+      }));
+      for (const first of [0, 9, -1, 1.5, "2", true, false, null, undefined, NaN, 2 ** 53, item.missing ? 1 : 3]) {
+        const reader = value.slice(); reader[9] = first;
+        assert.equal(consumer.validate({ ...row, reader }), null);
+      }
+    }
+  }
+  return packets;
+});
+// END Xiaomi reader first-accounted gate regression.
+// END Xiaomi first failed reader snapshot inert tests.
 
 // BEGIN Xiaomi consumed control witness inert tests.
 function xiaomiInertControlInvocation() {

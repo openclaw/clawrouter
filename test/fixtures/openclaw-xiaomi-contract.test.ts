@@ -128,9 +128,10 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
       const keys = ["v", "source", "caseId", "phase", "checkpoint", "failed", "kind", "actual", "expected", "count"];
       const shape = factKeys[own(value, "phase") as string];
       if (shape) keys.push("facts");
-      const control = own(value, "v") === 2 || own(value, "v") === 3;
+      const control = [2, 3, 4].includes(own(value, "v") as number);
       if (control) keys.push("control");
-      if (own(value, "v") === 3) keys.push("postlude");
+      if ([3, 4].includes(own(value, "v") as number)) keys.push("postlude");
+      if (own(value, "v") === 4) keys.push("reader");
       if (Reflect.ownKeys(value).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, "value"))) return null;
       const v = Object.fromEntries(keys.map(k => [k, own(value, k)]));
       if (!(v.v === 1 || control && v.source === "sdk" && v.phase === "control" && xiaomiNativeControls().some(row => row.id === v.caseId)) || !["sdk", "worker", "outer"].includes(v.source as string) || !cases.has(v.caseId as string) || !phases.has(v.phase as string)
@@ -153,7 +154,7 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
           || (safe.state === 1 ? !tuple(safe.witness, 9, (v, i) => i >= 1 && i <= 4 ? count(v) && v <= 1000 : typeof v === "boolean") : safe.witness !== null)
           || !tuple(safe.qualification, 14, (v, i) => v === null || (i < 10 ? count(v) : typeof v === "boolean"))) return null;
         v.control = safe;
-        if (v.v === 3) {
+        if (v.v === 3 || v.v === 4) {
           // Pre-relay coverage only: first site/definedness, count, defined and
           // undefined site masks, saturation. Later relay/seal failures stay fatal.
           if (!tuple(v.postlude, 7, (n, i) => i === 2 ? n === null || typeof n === "boolean" : i === 6 ? typeof n === "boolean" : count(n))) return null;
@@ -163,6 +164,12 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
             || (total === 0 ? first !== 0 || defined !== null || definedSites !== 0 || undefinedSites !== 0 || saturated
               : first === 0 || defined === null || !((defined ? definedSites : undefinedSites) & (1 << (first - 1)))
                 || total < definedSites.toString(2).replaceAll("0", "").length + undefinedSites.toString(2).replaceAll("0", "").length)) return null;
+        }
+        if (v.v === 4) {
+          if (!["c_cancel", "c_provider_error"].includes(v.caseId) || !xiaomiReaderSnapshotValid(v.reader, tuple, count)) return null;
+          if (!v.failed || !((v.postlude[4] | v.postlude[5]) & 64)) return null;
+          if (v.reader[0] === 1 && !safe.qualification.slice(0, 4).every((n: unknown) => n === 1)) return null;
+          if (new TextEncoder().encode(`::error title=Xiaomi typed contract::${JSON.stringify(v)}\n`).length > 768) return null;
         }
       }
       if (shape) {
@@ -204,7 +211,7 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     for (const row of rows) unique.set([row.source, row.caseId, row.phase, row.checkpoint,
       row.facts?.acquisition, row.facts?.reader, row.facts?.operation].join("/"), row);
     const priority = (row: Record<string, any>) => row.phase === "helper" ? 0
-      : row.v !== 1 && row.phase === "control" ? row.caseId === "c_cancel" ? 0.5 : row.v === 3 && row.caseId === "c_provider_error" ? 0.6 : 0.75
+      : row.v !== 1 && row.phase === "control" ? row.caseId === "c_cancel" ? 0.5 : [3, 4].includes(row.v) && row.caseId === "c_provider_error" ? 0.6 : 0.75
       : row.caseId === "c_cancel" && row.phase === "result_witness" ? 1
       : row.caseId === "c_cancel" && row.phase === "owner_witness" ? 2
       : row.caseId === "c_cancel" && ["operation_witness", "reader_witness"].includes(row.phase) ? 3
@@ -228,13 +235,78 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     return { state: !parsed ? 3 : valid ? 1 : 2, status,
       witness: valid ? keys.slice(1).map(key => own(value, key)) : null };
   }
-  function controlRecord(base: Record<string, any>, observation: any, qualification: unknown[], postlude?: unknown[]) {
-    const value = validate({ ...base, v: postlude ? 3 : 2, control: { ...(observation ?? { state: 0, status: null, witness: null }), qualification }, ...(postlude ? { postlude } : {}) });
+  function controlRecord(base: Record<string, any>, observation: any, qualification: unknown[], postlude?: unknown[], reader?: unknown[]) {
+    const value = validate({ ...base, v: reader ? 4 : postlude ? 3 : 2, control: { ...(observation ?? { state: 0, status: null, witness: null }), qualification }, ...(postlude ? { postlude } : {}), ...(reader ? { reader } : {}) });
     if (!value) throw new Error("invalid Xiaomi control observation");
     return value;
   }
   return { own, record, witness, validate, store, emit, controlObservation, controlRecord };
 }
+// v4 is the first failed reader-join evaluation, before relay/final seal. [0]
+// means no unambiguous private control/acquisition/reader association. No reason
+// properties, native getters, original calls or clocks are read by this snapshot.
+// Slots: coverage, invocation/acquisition/reader/count, selection bits, disposition
+// (false/true/threw = 1/2/3), evaluated/failed masks, first failure-list gate,
+// read/cancel [total, fulfilled, rejected, sync throw, unobserved], closed state,
+// unlock counts, fault/undefined counts, first original reason presence/identity,
+// existing release/unlock ticks, two locked evaluations (unreached/returned/threw).
+// Reason kind 4 is the retained fault collection, not an inferred native cause;
+// definedness is absent/undefined/defined = 0/1/2, undefined equality is unknown.
+// Gates 1..8: sync throw, rejected operation, absent original result, rejected
+// closed, pending closed/unlock, absent reader/locked body, faults, invalidation.
+// Missing originalClosed is an observation, never an added fatal predicate.
+function xiaomiReaderFailureSnapshot(selection: any, readers: any[], faults: unknown[], trace: any) {
+  const invocation = selection?.invocation, acquisition = selection?.acquisition;
+  if (!invocation?.control || !["c_cancel", "c_provider_error"].includes(invocation.id)
+    || !Array.isArray(invocation.acquisitions) || invocation.acquisitions.length !== 1 || invocation.acquisitions[0] !== acquisition || acquisition?.invocation !== invocation
+    || !acquisition.bound || !acquisition.accepted || acquisition.state !== "fulfilled"
+    || acquisition.observation?.readers !== readers || readers.length !== 1) return [0];
+  const reader = readers[0], operations = reader.operations;
+  const counts = (kind: string) => {
+    const values = operations.filter((op: any) => op.kind === kind), out = [values.length, 0, 0, 0, 0];
+    for (const op of values) out[op.state === "sync_throw" ? 3 : op.original?.result?.status === "fulfilled" ? 1 : op.original?.result?.status === "rejected" ? 2 : 4]++;
+    return out;
+  };
+  const same = (present: boolean, reason: unknown) => xiaomiSameReason(trace.present, trace.reason, present, reason);
+  const sameOperations = (kind: string) => {
+    const results = operations.filter((op: any) => op.kind === kind && op.original?.result?.status === "rejected").map((op: any) => op.original.result);
+    return !trace.present || trace.reason === undefined || !results.length || results.some((result: any) => !Object.hasOwn(result, "reason") || result.reason === undefined)
+      ? null : results.every((result: any) => result.reason === trace.reason);
+  };
+  const closed = reader.originalClosed?.result, release = acquisition.releases.at(-1), op = trace.operand;
+  return [1, invocation.ordinal, acquisition.ordinal, 1, readers.length,
+    (selection.qualified === true ? 1 : 0) | (selection.control === true ? 2 : 0), trace.disposition,
+    trace.evaluated, trace.failed, trace.first, counts("read"), counts("cancel"),
+    [xiaomiState(reader.closedState), !closed ? 1 : closed.status === "fulfilled" ? 2 : closed.status === "rejected" ? 3 : 0,
+      !reader.closedReasonPresent ? 0 : reader.closedReason === undefined ? 1 : 2],
+    [reader.unlockCalls, reader.unlockReturns], [faults.length, faults.filter(reason => reason === undefined).length],
+    [trace.kind, trace.operation, !trace.present ? 0 : trace.reason === undefined ? 1 : 2,
+      sameOperations("read"), sameOperations("cancel"), same(closed?.status === "rejected" && Object.hasOwn(closed, "reason"), closed?.reason),
+      same(op?.signalAbortedAtInvoke === true, op?.signalReasonAtInvoke), same(op?.signalAbortedAtReject === true, op?.signalReasonAtReject)],
+    [release?.invoked ?? null, release?.settled ?? null, reader.unlockInvoked ?? null, reader.unlockReturned ?? null],
+    [...trace.dispositionLocked, ...trace.bodyLocked]];
+}
+function xiaomiReaderSnapshotValid(value: any, tuple: (value: any, size: number, field: (v: any, i: number) => boolean) => boolean, count: (n: any) => boolean) {
+  if (tuple(value, 1, n => n === 0)) return true;
+  if (!tuple(value, 18, () => true) || value[0] !== 1) return false;
+  const nullableCount = (n: any) => n === null || count(n), nullableFlag = (v: any) => v === null || typeof v === "boolean";
+  if (![1, 2, 3].every(i => count(value[i]) && value[i] > 0) || value[3] !== 1 || value[4] !== 1
+    || !count(value[5]) || value[5] > 3 || ![1, 2, 3].includes(value[6])
+    || ![7, 8].every(i => count(value[i]) && value[i] <= 255) || value[8] === 0 || (value[8] & ~value[7]) !== 0
+    || !Number.isSafeInteger(value[9]) || value[9] < 1 || value[9] > 8 || !(value[8] & (1 << (value[9] - 1)))) return false;
+  for (const i of [10, 11]) if (!tuple(value[i], 5, count) || value[i][0] !== value[i].slice(1).reduce((a: number, b: number) => a + b, 0)) return false;
+  if (!tuple(value[12], 3, (n, i) => i === 0 ? [0, 2, 3, 5].includes(n) : i === 1 ? [0, 1, 2, 3].includes(n) : [0, 1, 2].includes(n))
+    || !tuple(value[13], 2, count) || !tuple(value[14], 2, count) || value[14][1] > value[14][0]
+    || !tuple(value[15], 8, (n, i) => i === 0 ? Number.isInteger(n) && n >= 0 && n <= 4 : i === 1 ? nullableCount(n) : i === 2 ? [0, 1, 2].includes(n) : nullableFlag(n))
+    || !tuple(value[16], 4, nullableCount)
+    || !tuple(value[17], 4, (n, i) => i % 2 === 0 ? [0, 1, 2].includes(n) : nullableFlag(n))) return false;
+  const reason = value[15];
+  if ([1, 2].includes(reason[0]) ? !(count(reason[1]) && reason[1] > 0) : reason[1] !== null) return false;
+  if (reason[0] === 0 && reason[2] !== 0 || reason[2] !== 2 && reason.slice(3).some((v: unknown) => v !== null)) return false;
+  for (const i of [0, 2]) if (value[17][i] !== 1 && value[17][i + 1] !== null) return false;
+  return true;
+}
+
 // Closed postlude sites: 1 ownership join, 2 release wait, 3 physical release or
 // observer settle, 4 observer faults, 5 control witness, 6 acquisition/release,
 // 7 reader join, 8 control qualification, 9 witness construction, 10 detach,
@@ -436,7 +508,7 @@ function xiaomiSignal(signal: AbortSignal | null | undefined, tick: () => number
   return { ...value, detach() { signal?.removeEventListener("abort", abort); }, get event() { return value.event; },
     get reasonPresent() { return value.reasonPresent; }, get reason() { return value.reason; } };
 }
-function xiaomiSdkReaderDisposition(selection: any, reader: any) {
+function xiaomiSdkReaderDisposition(selection: any, reader: any, locked?: () => boolean) {
   const acquisition = selection?.acquisition, invocation = acquisition?.invocation;
   if (!invocation || !(selection.qualified === true || selection.control === true && invocation.control === true)
     || !["n_cancel", "c_cancel"].includes(invocation.id) || !invocation.bodyPassed || !invocation.resultAborted
@@ -450,7 +522,7 @@ function xiaomiSdkReaderDisposition(selection: any, reader: any) {
     || invocation.partial >= invocation.caller.event || invocation.caller.event > acquisition.guard.event
     || !reader.operations.some((op: any) => op.kind === "read" && op.state === "fulfilled" && op.nonempty && op.settled < invocation.partial)
     || !acquisition.releases.length || acquisition.releases.some((op: any) => op.state !== "fulfilled" || op.invoked <= acquisition.guard.event)
-    || reader.unlockCalls !== 1 || reader.unlockReturns !== 1 || reader.body.locked
+    || reader.unlockCalls !== 1 || reader.unlockReturns !== 1 || (locked ? locked() : reader.body.locked)
     || reader.closedState === "pending" || reader.faults.length) return false;
   const cancel = reader.operations.filter((op: any) => op.kind === "cancel");
   if (cancel.length !== 1 || cancel[0].unlockCallsBefore !== 0 || cancel[0].invoked < acquisition.guard.event
@@ -483,6 +555,7 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
   let physical: Promise<void> | undefined, joining: Promise<void> | undefined, completedJoin: Promise<void> | undefined;
   let completedRevision = -1, currentFailure: AggregateError | undefined;
   let selectionSet = false, selected: any, firstFailure: AggregateError | undefined;
+  let firstFailedJoin: { value?: unknown[]; error?: unknown; errorPresent: boolean } | undefined;
   const fault = (error: unknown) => { faults.push(error); failed = true; joinAccepted = false; revision++; };
   const safe = (fn: () => void) => { try { fn(); } catch (error) { fault(error); } };
   const changed = (receiver: unknown, expected: unknown) => {
@@ -569,30 +642,62 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
       try {
         while (true) {
           await settle(); const failures: unknown[] = [];
+          // These bits describe existing evaluations, not a second acceptance pass.
+          const trace: any = { evaluated: 0, failed: 0, first: 0, kind: 0, operation: null, present: false,
+            reason: undefined, operand: undefined, disposition: 0, dispositionLocked: [0, null], bodyLocked: [0, null] };
+          const retain = (bit: number, reason: unknown, kind = 0, op?: any, present = kind !== 0) => {
+            trace.failed |= bit;
+            if (!trace.first) { trace.first = Math.log2(bit) + 1; trace.kind = kind; trace.operation = op?.ordinal ?? null;
+              trace.reason = reason; trace.present = present; trace.operand = op; }
+          };
+          const locked = (owner: any, target: any[]) => {
+            target[0] = 2; // A throw retains the original reason through the existing safe() boundary.
+            const value = owner.locked; target[0] = 1; target[1] = typeof value === "boolean" ? value : null; return value;
+          };
           for (const row of readers) {
-            let eligible = false; safe(() => { eligible = xiaomiSdkReaderDisposition(selected, row); });
+            let eligible = false;
+            safe(() => { trace.disposition = 3; eligible = xiaomiSdkReaderDisposition(selected, row, () => locked(row.body, trace.dispositionLocked)); trace.disposition = eligible ? 2 : 1; });
             for (const op of row.operations) {
-              if (op.state === "sync_throw") failures.push(op.reason);
-              else if (op.original?.result?.status === "rejected" && (!eligible || op.late)) failures.push(op.original.result.reason);
-              else if (!op.original?.result) failures.push(new Error("original reader operation not joined"));
+              trace.evaluated |= 1;
+              if (op.state === "sync_throw") { retain(1, op.reason, op.kind === "read" ? 1 : 2, op, op.reasonPresent === true); failures.push(op.reason); }
+              else {
+                trace.evaluated |= 2;
+                if (op.original?.result?.status === "rejected" && (!eligible || op.late)) {
+                  retain(2, op.original.result.reason, op.kind === "read" ? 1 : 2, op, Object.hasOwn(op.original.result, "reason")); failures.push(op.original.result.reason);
+                } else {
+                  trace.evaluated |= 4;
+                  if (!op.original?.result) { retain(4, undefined); failures.push(new Error("original reader operation not joined")); }
+                }
+              }
             }
-            if (row.originalClosed?.result?.status === "rejected" && !eligible) failures.push(row.originalClosed.result.reason);
-            if (row.closedState === "pending" || !row.unlockCalls || row.unlockCalls !== row.unlockReturns) failures.push(new Error("original reader did not retire"));
+            trace.evaluated |= 8;
+            if (row.originalClosed?.result?.status === "rejected" && !eligible) {
+              retain(8, row.originalClosed.result.reason, 3, undefined, Object.hasOwn(row.originalClosed.result, "reason")); failures.push(row.originalClosed.result.reason);
+            }
+            trace.evaluated |= 16;
+            if (row.closedState === "pending" || !row.unlockCalls || row.unlockCalls !== row.unlockReturns) { retain(16, undefined); failures.push(new Error("original reader did not retire")); }
           }
-          safe(() => { if (!readers.length || body.locked) failures.push(new Error("original body not consumed and unlocked")); });
+          safe(() => { trace.evaluated |= 32; if (!readers.length || locked(body, trace.bodyLocked)) { retain(32, undefined); failures.push(new Error("original body not consumed and unlocked")); } });
           if (originalCursor < originals.length || observerCursor < observers.length) continue;
+          trace.evaluated |= 64; if (faults.length) retain(64, faults[0], 4);
           failures.push(...faults);
-          if (failed && !failures.length) failures.push(firstFailure ?? new Error("original reader acceptance invalidated"));
+          trace.evaluated |= 128;
+          if (failed && !failures.length) { retain(128, undefined); failures.push(firstFailure ?? new Error("original reader acceptance invalidated")); }
           if (failures.length) {
             failed = true; joinAccepted = false;
-            const error = new AggregateError(failures, "Xiaomi original reader outcomes"); firstFailure ??= error; currentFailure = error; throw error;
+            const error = new AggregateError(failures, "Xiaomi original reader outcomes"); firstFailure ??= error; currentFailure = error;
+            if (!firstFailedJoin) {
+              try { firstFailedJoin = { value: xiaomiReaderFailureSnapshot(selected, readers, faults, trace), errorPresent: false }; }
+              catch (reportError) { firstFailedJoin = { error: reportError, errorPresent: true }; }
+            }
+            throw error;
           }
           acceptedOnce = true; acceptedRevision = revision; joinAccepted = true; return;
         }
       } finally { completedJoin = joining; completedRevision = revision; joining = undefined; }
     })();
   };
-  return { readers, settle, join, get joinAccepted() { return failed ? false : acceptedRevision === revision ? joinAccepted : null; },
+  return { readers, settle, join, failureSnapshot: () => firstFailedJoin, get joinAccepted() { return failed ? false : acceptedRevision === revision ? joinAccepted : null; },
     get revision() { return revision; }, get sealed() { return sealed; }, seal() {
       if (physical || joining || completedRevision !== revision || originalCursor !== originals.length || observerCursor !== observers.length) {
         const error = new Error("original reader seal before stable joins"); fault(error); throw error;
@@ -759,7 +864,14 @@ afterEach(async () => {
       if (row.state === "fulfilled") {
         if (!row.bound || !row.releases.length) postlude.add(6, new Error("missing bound original request release"));
         for (const release of row.releases) if (release.state !== "fulfilled" && release.state !== "rejected") postlude.add(6, release.reason);
-        site = 7; if (row.observation) try { await row.observation.join(selection); } catch (error) { postlude.add(7, error); }
+        site = 7; if (row.observation) try { await row.observation.join(selection); } catch (error) {
+          postlude.add(7, error);
+          if (["c_cancel", "c_provider_error"].includes(invocation?.id) && row.observation.failureSnapshot) try {
+            const snapshot = row.observation.failureSnapshot();
+            if (snapshot?.errorPresent) postlude.add(9, snapshot.error);
+            else if (!Object.hasOwn(invocation, "readerSnapshot")) invocation.readerSnapshot = snapshot?.value ?? [0];
+          } catch (reportError) { postlude.add(9, reportError); }
+        }
       }
     }
     for (const invocation of planInvocations) {
@@ -810,7 +922,7 @@ afterEach(async () => {
   if (context.id.startsWith("c_")) try {
     const base = planDiagnostic.record("sdk", context.id, "control", 1, failures.length > 0, undefined, planAcquisitions.length)!;
     const invocation = planInvocations.find(value => value.id === context.id);
-    planRecords.add(invocation ? planDiagnostic.controlRecord(base, invocation.controlObservation, xiaomiControlQualification(invocation), postlude.snapshot()) : base);
+    planRecords.add(invocation ? planDiagnostic.controlRecord(base, invocation.controlObservation, xiaomiControlQualification(invocation), postlude.snapshot(), invocation.readerSnapshot) : base);
   } catch (error) { postlude.add(12, error); }
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2000);
   try {
