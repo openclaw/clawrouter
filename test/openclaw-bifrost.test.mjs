@@ -1303,12 +1303,12 @@ export async function bifrostResidualInertCases(assert, source) {
   }
   await run("all failure categories are distinguishable",()=>assert.equal(new Set(groups.map(g=>JSON.stringify(g[4].worker))).size,6));
   for(const [status,retired] of [[200,true],[200,false],[500,true],[500,false]])await run("separate verdict operands "+status+"/"+retired,()=>{
-    const c={};assert.equal(f.bifrostObserveRetirementVerdict(c,{status},{retired,disposition:"strict"}),status===200&&retired);assert.deepEqual(c.verdict,[status===200,retired,1]);
+    const c={};assert.equal(f.bifrostObserveRetirementVerdict(c,{status},{retired,disposition:"strict"}),status===200&&retired);assert.ok(Array.isArray(c.verdict));assert.deepEqual(Array.from(c.verdict),[status===200,retired,1]);
   });
   for(const reason of [undefined,{}])await run("status getter original failure "+(reason===undefined?"undefined":"defined"),()=>{
     const c={};let threw=false;try{f.bifrostObserveRetirementVerdict(c,{get status(){throw reason;}},{retired:false,disposition:"strict"});}catch(e){threw=true;assert.equal(e,reason);}assert.equal(threw,true);assert.equal(c.verdict,undefined);
   });
-  await run("unknown and missing observations stay unknown",()=>{const r=group(undefined)[4];assert.deepEqual(r.worker,[1,null,null,null,null]);f.validateBifrostCheckpoint(r);});
+  await run("unknown and missing observations stay unknown",()=>{const r=group(undefined)[4];assert.ok(Array.isArray(r.worker));assert.deepEqual(Array.from(r.worker),[1,null,null,null,null]);f.validateBifrostCheckpoint(r);});
   await run("maximum legal progress tuple and actual relay",async()=>{
     const g=group(undefined),r=g[4];r.control=Array.from({length:6},()=>[3,false,1000000,1000000,1000000]);r.validated=false;
     r.producer=[false,Array.from({length:4},(_,i)=>[i,3,false]),...Array(7).fill(1000000)];r.router=Array.from({length:4},()=>[3,false]);r.usage=[true,1000000,1000000];
