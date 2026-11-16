@@ -2,19 +2,28 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Validator } from "@cfworker/json-schema";
-import { parse } from "yaml";
+import { loadProviderManifestInputs, parseProviderCompilerArgs } from "./provider-manifest-inputs.mjs";
+import { compileProviderProducts } from "./provider-products.mjs";
+import { compileProviderOffers } from "./provider-offers.mjs";
+import { compileProviderModels, validateProviderModels } from "./provider-models.mjs";
+import { authSchemeId, compileProviderAuth, validateGrantTransports } from "./provider-auth.mjs";
+import { normalizeQuota, validateQuota } from "./provider-quota.mjs";
+import { validatePublicCatalog, validateNativeModels, validateSyntheticModels } from "./provider-catalogs.mjs";
+import { validateManagedLifecycles } from "./provider-lifecycles.mjs";
+import { compileProviderEndpoints, validateEndpoints } from "./provider-endpoints.mjs";
+import { validateGoogleUnaryMedia, validateGoogleSpeech, validateGoogleGroundedSearch, validateGoogleUnderstanding, validateGoogleEmbeddings } from "./provider-validation/google.mjs";
 
-const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
-const decisionContracts = new Map([
-  ["openai-decisions", { provider: "openai", format: "openai.decisions" }],
-  ["levanto-sage", { provider: "levanto", format: "levanto.sage" }],
-  ["liquid-ai-systemone", { provider: "liquid-ai", format: "liquid.systemone" }],
-  ["typesafe-systemone", { provider: "typesafe", format: "typesafe.systemone" }],
-  ["subq-decisions", { provider: "subq", format: "subq.decisions" }],
-]);
+import { validateBedrockConverse, validateBedrockEmbeddings } from "./provider-validation/aws-bedrock.mjs";
+import { validateBasetenSystemOne } from "./provider-validation/baseten.mjs";
+import { validateSageBatch } from "./provider-validation/levanto.mjs";
+import { validateDeepSeekSearch } from "./provider-validation/deepseek.mjs";
+import { validateXaiImages, validateXaiSpeech } from "./provider-validation/xai.mjs";
+import { validateGradiumSpeech } from "./provider-validation/gradium.mjs";
+import { validateNativeTranscription, validateOpenRouterTranscription, validateDeepgramPrerecorded } from "./provider-validation/transcription.mjs";
+import { validateInputProfiles } from "./provider-validation/pixverse.mjs";
+
 const manifestSchema = JSON.parse(readFileSync(new URL("../providers/_schema/service-provider.schema.json", import.meta.url), "utf8"));
 const manifestValidator = new Validator(manifestSchema, "2020-12");
-
 
 export function compileProviderSnapshot(manifests) {
   const ids = new Set();
@@ -34,7 +43,9 @@ export function compileProviderSnapshot(manifests) {
       model_index[model.id] = {
         provider: provider.id,
         upstream: model.upstream,
+        ...(model.displayName ? { displayName: model.displayName } : {}),
         capabilities: model.capabilities,
+        ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
@@ -57,38 +68,8 @@ function compileProvider(manifest, ids) {
     endpoint: capability.endpoint,
     methods: capability.methods?.length ? capability.methods : [manifest.endpoints[capability.endpoint]?.method ?? "POST"],
   }));
-  const endpoints = Object.entries(manifest.endpoints).sort(([a], [b]) => a.localeCompare(b)).map(([id, endpoint]) => ({
-    id,
-    method: endpoint.method ?? "POST",
-    methods: unique([endpoint.method ?? "POST", ...capabilities.filter((item) => item.endpoint === id).flatMap((item) => item.methods)]),
-    path: endpoint.path,
-    native_proxy: endpoint.nativeProxy ?? true,
-    auth: endpoint.auth ?? null,
-    headers: endpoint.headers ?? {},
-    request_headers: endpoint.requestHeaders ?? [],
-    response_headers: endpoint.responseHeaders ?? [],
-    query: endpoint.query ?? {},
-    path_params: endpoint.pathParams ?? [],
-    path_param_styles: endpoint.pathParamStyles ?? {},
-    request_format: endpoint.requestFormat,
-    response_format: endpoint.responseFormat,
-    streaming: endpoint.streaming ?? null,
-    ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
-    ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
-    ...(endpoint.toolPricing ? { toolPricing: structuredClone(endpoint.toolPricing) } : {}),
-    ...(endpoint.modelPassthrough ? { modelPassthrough: {
-      pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
-      pricing: endpoint.modelPassthrough.pricingRef ? normalizePricing(manifest.models.entries.find((model) => model.pricingRef === endpoint.modelPassthrough.pricingRef).pricing) : null,
-    } } : {}),
-    ...(endpoint.websocket ? { websocket: endpoint.websocket } : {}),
-    timeout_ms: endpoint.timeoutMs ?? null,
-  }));
-  const auth = {
-    schemes: (manifest.auth.schemes ?? []).map(normalizeAuthScheme),
-    authorization: normalizeAuthorization(manifest.auth.authorization),
-    refresh: normalizeRefresh(manifest.auth.refresh),
-    grantTransports: Object.fromEntries(Object.entries(manifest.auth.grantTransports ?? {}).map(([kind, transport]) => [kind, normalizeGrantTransport(transport)])),
-  };
+  const endpoints = compileProviderEndpoints(manifest, capabilities);
+  const auth = compileProviderAuth(manifest);
   const routing = {
     nativePrefixes: manifest.routing?.nativePrefixes ?? [],
     modelPrefixes: manifest.routing?.modelPrefixes ?? [],
@@ -113,26 +94,19 @@ function compileProvider(manifest, ids) {
       })),
     },
   };
-  const models = (manifest.models?.entries ?? []).map((model) => ({
-    id: model.id,
-    upstream: model.upstream,
-    capabilities: model.capabilities ?? [],
-    ...(model.codexModel ? { codexModel: model.codexModel } : {}),
-    ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
-    ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
-    ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
-    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: normalizePricing(card.pricing) }])) } : {}),
-    pricing_ref: model.pricingRef ?? null,
-    pricing: model.pricing ? normalizePricing(model.pricing) : null,
-  }));
+  const models = compileProviderModels(manifest);
   const billing = {
     meter: manifest.billing?.meter ?? null,
     dimensions: manifest.billing?.dimensions ?? [],
     counters: manifest.billing?.counters ?? [],
   };
   const quota = normalizeQuota(manifest.quota);
+  const products = compileProviderProducts(manifest);
+  const offerDefinitions = compileProviderOffers(manifest, products);
   return {
     id: manifest.id,
+    ...(products ? { products } : {}),
+    ...(offerDefinitions ? { offer_definitions: offerDefinitions } : {}),
     display_name: manifest.displayName,
     status: manifest.status ?? "stable",
     class: manifest.class ?? "openai_compatible",
@@ -155,336 +129,54 @@ function compileProvider(manifest, ids) {
   };
 }
 
-function normalizeQuota(value) {
-  const fallback = [
-    { id: "requests", kind: "requests", limitHeaders: ["ratelimit-limit-requests", "x-ratelimit-limit-requests"], remainingHeaders: ["ratelimit-remaining-requests", "x-ratelimit-remaining-requests"], resetHeaders: ["ratelimit-reset-requests", "x-ratelimit-reset-requests"] },
-    { id: "tokens", kind: "tokens", limitHeaders: ["ratelimit-limit-tokens", "x-ratelimit-limit-tokens"], remainingHeaders: ["ratelimit-remaining-tokens", "x-ratelimit-remaining-tokens"], resetHeaders: ["ratelimit-reset-tokens", "x-ratelimit-reset-tokens"] },
-    { id: "generic", kind: "generic", limitHeaders: ["ratelimit-limit", "x-ratelimit-limit"], remainingHeaders: ["ratelimit-remaining", "x-ratelimit-remaining"], resetHeaders: ["ratelimit-reset", "x-ratelimit-reset"] },
-  ];
-  return {
-    responseHeaders: (value?.responseHeaders ?? fallback).map((window) => normalizeQuotaWindow(window, false)),
-    probes: (value?.probes ?? []).map((probe) => ({
-      grantKinds: probe.grantKinds ?? [],
-      requiresRefreshToken: probe.requiresRefreshToken === true,
-      url: probe.url,
-      method: probe.method ?? "GET",
-      headers: probe.headers ?? {},
-      ...(probe.facts ? { facts: probe.facts } : {}),
-      windows: (probe.windows ?? []).map((window) => normalizeQuotaWindow(window, true)),
-    })),
-  };
-}
-
-function normalizeQuotaWindow(window, probe) {
-  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null, metricScale: window.metricScale ?? 1 };
-  return probe ? {
-    ...shared,
-    ...(window.models ? { models: window.models } : {}),
-    ...(window.collection ? { collection: window.collection } : {}),
-    limitPointer: window.limitPointer ?? null,
-    remainingPointer: window.remainingPointer ?? null,
-    usedPointer: window.usedPointer ?? null,
-    resetPointer: window.resetPointer ?? null,
-  } : {
-    ...shared,
-    limitHeaders: window.limitHeaders ?? [],
-    remainingHeaders: window.remainingHeaders ?? [],
-    usedHeaders: window.usedHeaders ?? [],
-    resetHeaders: window.resetHeaders ?? [],
-  };
-}
-
-function normalizePricing(pricing) {
-  if (pricing.unit === "image_token") return structuredClone(pricing);
-  if (pricing.unit === "character") return { unit: pricing.unit, effectiveAt: pricing.effectiveAt, source: pricing.source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
-  return {
-    effectiveAt: pricing.effectiveAt,
-    ...(pricing.checkedAt ? { checkedAt: pricing.checkedAt } : {}),
-    source: pricing.source,
-    ...normalizeRates(pricing),
-    maxInputTokens: pricing.maxInputTokens,
-    maxRequestInputTokens: pricing.maxRequestInputTokens ?? null,
-    defaultMaxOutputTokens: pricing.defaultMaxOutputTokens,
-    inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
-    ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
-    ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
-    ...(pricing.anthropicModifiers ? { anthropicModifiers: structuredClone(pricing.anthropicModifiers) } : {}),
-    longContext: normalizeLongContext(pricing.longContext),
-    ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
-  };
-}
-
-function normalizeRates(value) {
-  return { inputMicrosPerMillion: value.inputMicrosPerMillion, outputMicrosPerMillion: value.outputMicrosPerMillion, ...Object.fromEntries(optionalRateFields.map((field) => [field, value[field] ?? null])) };
-}
-
-function normalizeLongContext(value) {
-  return value ? { thresholdInputTokens: value.thresholdInputTokens, ...normalizeRates(value) } : null;
-}
-
-function validatePricing(pricing, modelId) {
-  if (!pricing) return;
-  if (pricing.unit === "image_token") {
-    const g = pricing.generation, b = g.outputTokenBound;
-    const maxFactor = Math.max(...Object.values(b.qualityFactors));
-    const output = Math.ceil(maxFactor * maxFactor * (b.basePixels + g.maxPixels) / b.divisor) * g.maxImages;
-    const input = (g.maxPromptCharacters * 4 + 1024) * g.maxImages;
-    if (g.minPixels > g.maxPixels || g.maxEdge % g.dimensionMultiple || !Number.isSafeInteger(output * pricing.imageOutputMicrosPerMillion + input * pricing.textInputMicrosPerMillion)) throw new Error("image pricing has an invalid reservation envelope");
-    return;
-  }
-  if (pricing.longContext && pricing.longContext.thresholdInputTokens >= pricing.maxInputTokens) throw new Error(`model ${modelId} has an invalid long-context threshold`);
-  if (pricing.serviceTiers === undefined) return;
-  const tiers = pricing.serviceTiers;
-  const fail = (message) => { throw new Error(`model ${modelId} serviceTiers ${message}`); };
-  const ids = new Set();
-  for (const tier of tiers) {
-    for (const id of [tier.id, ...(tier.aliases ?? [])]) {
-      if (id === "auto" || ids.has(id)) fail("ids and aliases must be unique bounded wire values other than auto");
-      ids.add(id);
-    }
-    if (tier.maxInputTokens != null && tier.maxInputTokens > pricing.maxInputTokens) fail("has an invalid input limit");
-    if (tier.longContext && tier.longContext.thresholdInputTokens >= (tier.maxInputTokens ?? pricing.maxInputTokens)) fail("has an invalid long-context threshold");
-  }
-  const standard = tiers.find((tier) => tier.id === "default");
-  if (!standard || standard.maxInputTokens != null || JSON.stringify(normalizeRates(standard)) !== JSON.stringify(normalizeRates(pricing)) || JSON.stringify(normalizeLongContext(standard.longContext)) !== JSON.stringify(normalizeLongContext(pricing.longContext))) fail("default card must match the canonical model rates and context");
-}
-
 function validateManifest(manifest) {
   // Validate before normalization so defaults cannot hide a malformed manifest.
   // Cross-field references below remain semantic checks on this canonical shape.
   const validation = manifestValidator.validate(manifest);
   if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
+  validateInputProfiles(manifest);
+  validateSageBatch(manifest);
+  validateBasetenSystemOne(manifest);
+  validateGradiumSpeech(manifest);
+  validateXaiSpeech(manifest);
+  validateDeepSeekSearch(manifest);
+  validateDeepgramPrerecorded(manifest);
+  validateOpenRouterTranscription(manifest);
+  validateNativeTranscription(manifest);
+  validateGoogleEmbeddings(manifest);
+  validateBedrockEmbeddings(manifest);
+  validateBedrockConverse(manifest);
+  validateGoogleUnaryMedia(manifest, "image", "image.generate", ["gemini-3.1-flash-image", "gemini-3-pro-image"]);
+  validateGoogleUnaryMedia(manifest, "music", "audio.generate", ["lyria-3-clip-preview", "lyria-3-pro-preview"]);
+  validateGoogleSpeech(manifest);
+  validateGoogleGroundedSearch(manifest);
+  validateGoogleUnderstanding(manifest);
+  validateXaiImages(manifest);
+  validateNativeModels(manifest, "baseten", "https://inference.baseten.co/v1");
+  validateNativeModels(manifest, "arcee", "https://api.arcee.ai/api/v1");
+  validateNativeModels(manifest, "chutes", "https://llm.chutes.ai/v1");
+  validateNativeModels(manifest, "featherless", "https://api.featherless.ai/v1");
+  validateNativeModels(manifest, "venice", "https://api.venice.ai/api/v1");
+  validateNativeModels(manifest, "novita", "https://api.novita.ai/openai/v1");
+  validateNativeModels(manifest, "requesty", "https://router.requesty.ai/v1", { format: "requesty.models_managed", path: "/models/managed", id: "models_managed" });
+  validatePublicCatalog(manifest);
+  validateSyntheticModels(manifest);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
     if (!Object.hasOwn(manifest.endpoints, capability.endpoint)) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }
-  for (const model of manifest.models?.entries ?? []) {
-    for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
-    if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
-    for (const [id, parameters] of Object.entries(model.requestParameters ?? {})) {
-      const endpoint = Object.hasOwn(manifest.endpoints, id) ? manifest.endpoints[id] : null;
-      if (!endpoint || !manifest.capabilities.some((capability) => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} requestParameters must reference a supported endpoint`);
-      if (!["openai.chat_completions", "openai.responses"].includes(endpoint.requestFormat)) throw new Error(`model ${model.id} requestParameters requires an OpenAI Chat or Responses wire format`);
-      if (parameters.defaultReasoningEffort !== undefined && !model.supportedReasoningEfforts?.includes(parameters.defaultReasoningEffort)) throw new Error(`model ${model.id} requestParameters default effort must belong to supportedReasoningEfforts`);
-    }
-    if ([model.pricing, ...Object.values(model.endpointPricing ?? {}).map(card => card.pricing)].some(pricing => pricing?.anthropicModifiers)) {
-      if (manifest.id !== "anthropic" || !manifest.capabilities.some(capability => model.capabilities?.includes(capability.id) && manifest.endpoints[capability.endpoint]?.requestFormat === "anthropic.messages" && manifest.endpoints[capability.endpoint]?.responseFormat === "anthropic.messages")) throw new Error(`model ${model.id} anthropicModifiers requires first-party Anthropic Messages`);
-    }
-    validatePricing(model.pricing, model.id);
-    if (model.capabilities?.includes("image.generation") && model.pricing?.unit !== "image_token") throw new Error("image generation requires a qualified image pricing contract");
-    if (model.pricing?.unit === "image_token" && (!model.capabilities?.length || model.capabilities.some((id) => {
-      const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
-      return id !== "image.generation" || endpoint?.requestFormat !== "openai.images_generations" || endpoint.responseFormat !== "openai.images_generations" || endpoint.streaming;
-    }))) throw new Error("image pricing requires the JSON image generation contract");
-    for (const [id, card] of Object.entries(model.endpointPricing ?? {})) {
-      if (!Object.hasOwn(manifest.endpoints, id) || !manifest.capabilities.some(capability => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} endpointPricing must reference a supported endpoint`);
-      validatePricing(card.pricing, `${model.id}/${id}`);
-    }
-    if (model.pricing?.unit === "character" && (!model.capabilities?.length || model.capabilities.some((id) => {
-      const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
-      return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";
-    }))) throw new Error(`model ${model.id} character pricing requires the binary speech contract`);
-    for (const [id, facts] of Object.entries(model.nativeCapabilities?.endpoints ?? {})) {
-      const endpoint = Object.hasOwn(manifest.endpoints, id) ? manifest.endpoints[id] : null;
-      const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
-      const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
-      if (!endpoint || !supported.length) fail("must reference a supported endpoint");
-      if (facts.contextTokens !== undefined && (facts.contextWindow === undefined || facts.contextTokens > facts.contextWindow)) fail("contextTokens requires and cannot exceed contextWindow");
-      if (facts.maxOutputTokens !== undefined && facts.contextWindow !== undefined && facts.maxOutputTokens > facts.contextWindow) fail("maxOutputTokens cannot exceed contextWindow");
-      if (facts.inference?.chat === true && !supported.some(capability => ["llm.chat", "llm.responses", "llm.messages", "llm.generate"].includes(capability.id))) fail("chat requires a conversational capability");
-      if (facts.inference?.chat && facts.maxOutputTokens === 0) fail("chat cannot declare zero output tokens");
-      const decision = facts.inference?.decision;
-      if (decision) {
-        const contract = decisionContracts.get(decision.protocol);
-        if (!contract || manifest.id !== contract.provider || endpoint.requestFormat !== contract.format || endpoint.responseFormat !== contract.format
-          || (endpoint.method ?? "POST") !== "POST" || endpoint.streaming || endpoint.websocket || endpoint.nativeProxy === false
-          || endpoint.modelPassthrough || endpoint.responsesLifecycle || endpoint.lifecycle
-          || !supported.some(capability => capability.id === "llm.decisions")
-          || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) fail("decision requires the declared Decisions endpoint and qualified protocol/provider pair");
-        for (const [kind, question] of Object.entries(decision.questions)) {
-          if (question.minOptions > question.maxOptions) fail(`${kind} minOptions exceeds maxOptions`);
-          if (question.maxImageOptions > question.maxOptions) fail(`${kind} maxImageOptions exceeds maxOptions`);
-        }
-        if (decision.reasoning?.default && !decision.reasoning.modes.includes(decision.reasoning.default)) fail("decision default reasoning must belong to declared modes");
-        if (decision.limits?.maxStateAndQuestionTokens > decision.limits?.maxRequestTokens) fail("decision state/question limit exceeds request limit");
-        if (decision.limits?.image && !facts.input?.includes("image")) fail("decision image limits require image input");
-      }
-      if (facts.hostedTools && (manifest.id !== "openai" || id !== "responses" || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || !supported.some(capability => capability.id === "llm.responses"))) fail("hosted tools require the OpenAI Responses endpoint");
-      if (facts.supportedServiceTiers) {
-        if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");
-        if (facts.supportedServiceTiers.some(tier => ["auto", "fast"].includes(tier) || !model.pricing?.serviceTiers?.some(card => card.id === tier))) fail("service tiers require canonical priced tier ids");
-      }
-    }
-  }
-  const responseControls = new Set();
-  for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
-    // This request format owns OpenAI's free tariff and API-key-only transport.
-    // Wire compatibility alone cannot qualify another provider's billing.
-    if (endpoint.requestFormat === "openai.moderations" && manifest.id !== "openai") throw new Error(`provider ${manifest.id} endpoint ${id} openai.moderations requires provider openai`);
-    if (endpoint.responsesLifecycle) {
-      const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} responsesLifecycle requires distinct bodyless Responses retrieve/cancel endpoints`); };
-      if ((endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses") fail();
-      for (const [action, controlId] of Object.entries(endpoint.responsesLifecycle)) {
-        const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-        if (!control || controlId === id || responseControls.has(controlId) || control.responsesLifecycle || control.modelPassthrough || control.websocket
-          || (control.method ?? "POST") !== (action === "retrieve" ? "GET" : "POST")
-          || control.requestFormat !== "openai.responses" || control.responseFormat !== "openai.responses"
-          || JSON.stringify(control.pathParams) !== '["response_id"]' || !control.path.includes("${response_id}")
-          || manifest.capabilities.some((capability) => capability.endpoint === controlId)) fail();
-        responseControls.add(controlId);
-      }
-    }
-    if (endpoint.requestFormat === "openai.standalone_search" && (manifest.id !== "openai" || endpoint.path !== "/v1/alpha/search" || (endpoint.method ?? "POST") !== "POST" || endpoint.responseFormat !== "openai.standalone_search" || endpoint.streaming || endpoint.websocket || endpoint.modelPassthrough || endpoint.nativeProxy === false || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "search.web") || manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST")))) throw new Error("standalone search requires the native unary OpenAI search endpoint");
-    if (endpoint.requestFormat === "openai.responses_compact") {
-      if (manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) throw new Error(`provider ${manifest.id} endpoint ${id} compact is POST-only`);
-      const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id).map(capability => capability.id);
-      const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.some(capability => capabilities.includes(capability)));
-      if (!models.length || models.some(model => !model.pricing || model.pricing.unit != null || !Number.isSafeInteger(model.pricing.defaultMaxOutputTokens) || model.pricing.defaultMaxOutputTokens <= 0)) throw new Error(`provider ${manifest.id} endpoint ${id} compact requires registered token-priced models with authoritative output bounds`);
-    }
-    if (endpoint.toolPricing) {
-      const responses = endpoint.requestFormat === "openai.responses" && endpoint.responseFormat === "openai.responses";
-      const messages = endpoint.requestFormat === "anthropic.messages" && endpoint.responseFormat === "anthropic.messages";
-      if ((endpoint.method ?? "POST") !== "POST" || (!responses && !messages)
-        || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id !== "llm.count_tokens")) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing requires a Responses or Messages generation endpoint`);
-      if (messages && Object.keys(endpoint.toolPricing.previewMicrosPerCallByModel).length) throw new Error(`provider ${manifest.id} endpoint ${id} Messages toolPricing cannot declare preview models`);
-      for (const model of Object.keys(endpoint.toolPricing.previewMicrosPerCallByModel)) {
-        if (!manifest.models?.entries?.some(entry => entry.upstream === model && entry.capabilities?.some(capability => manifest.capabilities.some(item => item.id === capability && item.endpoint === id)))) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing references an unsupported preview model`);
-      }
-    }
-    if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);
-    if (endpoint.modelPassthrough) {
-      const capabilities = manifest.capabilities.filter((capability) => capability.endpoint === id).map((capability) => capability.id);
-      if (!capabilities.length) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough requires a declared capability`);
-      const ref = endpoint.modelPassthrough.pricingRef;
-      if (ref !== undefined) {
-        const models = (manifest.models?.entries ?? []).filter((model) => model.pricingRef === ref);
-        if (models.length !== 1 || !models[0].pricing || !models[0].capabilities?.some((capability) => capabilities.includes(capability))) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough pricingRef must resolve to one priced endpoint-compatible model`);
-      }
-    }
-    if (endpoint.websocket === "openai.realtime") {
-      if ((endpoint.method ?? "POST") !== "GET" || endpoint.requestFormat !== "openai.realtime" || endpoint.responseFormat !== "openai.realtime" || endpoint.streaming || endpoint.nativeProxy === false || endpoint.modelPassthrough) throw new Error("Realtime requires a native GA GET endpoint");
-    } else if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
-    for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
-      if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
-    }
-  }
-  const headerName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-  for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
-    if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
-    for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
-    if (transport.allowedEndpoints?.some((id) => !Object.hasOwn(manifest.endpoints, id))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
-    const warm = transport.maintenance?.keepWarm;
-    if (warm) {
-      if (!Object.hasOwn(manifest.endpoints, warm.endpoint)) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm references missing endpoint ${warm.endpoint}`);
-      const endpoint = manifest.endpoints[warm.endpoint];
-      if ((endpoint.method ?? "POST").toUpperCase() !== "POST" || (endpoint.pathParams ?? []).length) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm requires a POST endpoint without path parameters`);
-      if (JSON.stringify(warm.body).length > 16 * 1024) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm body is too large`);
-    }
-    if (transport.maintenance?.quotaPoll && !(manifest.quota?.probes ?? []).some((probe) => probe.grantKinds?.includes(kind))) throw new Error(`provider ${manifest.id} grant transport ${kind} quota polling requires a matching quota probe`);
-  }
+  validateProviderModels(manifest);
+  validateManagedLifecycles(manifest);
+  validateEndpoints(manifest, manifestSchema.$defs.literalUpstreamPath.pattern);
+  validateGrantTransports(manifest);
   validateQuota(manifest.id, manifest.quota);
 }
 
-function validateQuota(providerId, quota) {
-  const validateBase = (window) => {
-    if (window.fixedLimit != null && (!Number.isFinite(window.fixedLimit) || window.fixedLimit < 0)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid fixed limit`);
-    if (window.metricScale != null && (!Number.isFinite(window.metricScale) || window.metricScale <= 0 || window.metricScale > 1_000_000)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid metric scale`);
-  };
-  const responseHeaders = quota?.responseHeaders ?? [];
-  for (const window of responseHeaders) {
-    validateBase(window);
-    const fields = ["limitHeaders", "remainingHeaders", "usedHeaders", "resetHeaders"];
-    const headers = fields.flatMap((field) => window[field] ?? []);
-    if (!headers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota window ${window.id} has no response source`);
-    if (headers.some((header) => typeof header !== "string" || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header))) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid header`);
-  }
-  const probes = quota?.probes ?? [];
-  for (const probe of probes) {
-    for (const [name, value] of Object.entries(probe.headers ?? {})) if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== "string") throw new Error(`provider ${providerId} quota probe has an invalid header`);
-    for (const window of probe.windows) {
-      validateBase(window);
-      const pointers = ["limitPointer", "remainingPointer", "usedPointer", "resetPointer"].flatMap((field) => window[field] == null ? [] : [window[field]]);
-      if (!pointers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota probe window ${window.id} has no data source`);
-    }
-  }
-}
-
-function authSchemeId(scheme) {
-  if (scheme.type === "bearer") return `bearer:${scheme.secretKind}${scheme.required ? "" : ":optional"}`;
-  if (scheme.type === "api_key" || scheme.type === "query_api_key") return `${scheme.type}:${scheme.secretKind}`;
-  if (scheme.type === "oauth") return scheme.provider ? `oauth:${scheme.provider}` : "oauth";
-  if (scheme.type === "sig_v4") return `sigv4:${scheme.service}`;
-  return scheme.type;
-}
-
-function normalizeAuthScheme(scheme) {
-  if (scheme.type === "bearer") return { ...scheme, required: scheme.required ?? true };
-  if (scheme.type === "oauth") return {
-    ...scheme,
-    provider: scheme.provider ?? null,
-    tokenRef: scheme.tokenRef ?? null,
-  };
-  if (scheme.type === "sig_v4") return { ...scheme, regionParam: scheme.regionParam ?? null };
-  return scheme;
-}
-
-function normalizeAuthorization(value) {
-  if (!value) return null;
-  return {
-    ...value,
-    clientId: value.clientId ?? null,
-    clientIdConfig: value.clientIdConfig ?? null,
-    clientSecretConfig: value.clientSecretConfig ?? null,
-    grantKind: value.grantKind ?? "oauth",
-    extraAuthorizeParams: value.extraAuthorizeParams ?? {},
-    extraTokenParams: value.extraTokenParams ?? {},
-    accountIdJsonPointer: value.accountIdJsonPointer ?? null,
-    subscriptionPlanJsonPointer: value.subscriptionPlanJsonPointer ?? null,
-  };
-}
-
-function normalizeRefresh(value) {
-  if (!value) return null;
-  return {
-    ...value,
-    clientId: value.clientId ?? null,
-    clientIdConfig: value.clientIdConfig ?? null,
-    clientSecretConfig: value.clientSecretConfig ?? null,
-    requestFormat: value.requestFormat ?? "form",
-    extraParams: value.extraParams ?? {},
-  };
-}
-
-function normalizeGrantTransport(value) {
-  return {
-    baseUrl: value.baseUrl ?? null,
-    auth: value.auth ?? null,
-    endpointPaths: value.endpointPaths ?? {},
-    ...(value.allowedEndpoints ? { allowedEndpoints: value.allowedEndpoints } : {}),
-    headers: value.headers ?? {},
-    appendHeaders: value.appendHeaders ?? {},
-    requestTransforms: { prependSystem: value.requestTransforms?.prependSystem ?? [] },
-    maintenance: {
-      quotaPoll: value.maintenance?.quotaPoll ?? null,
-      keepWarm: value.maintenance?.keepWarm ? { ...value.maintenance.keepWarm, defaultEnabled: value.maintenance.keepWarm.defaultEnabled === true } : null,
-    },
-  };
-}
-
-function unique(values) {
-  return [...new Set(values.map((value) => String(value).toUpperCase()))];
-}
-
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
-  const outputIndex = rawArgs.indexOf("--output");
-  const output = outputIndex >= 0 ? rawArgs[outputIndex + 1] : null;
-  const paths = rawArgs.filter((_, index) => outputIndex < 0 || (index !== outputIndex && index !== outputIndex + 1));
-  if (!paths.length) throw new Error("usage: compile-providers <manifest...> [--output path]");
-
-  const manifests = paths.sort().map((path) => parse(readFileSync(path, "utf8")));
+  const { manifestPaths, pluginPaths, output } = parseProviderCompilerArgs(process.argv.slice(2));
+  const manifests = loadProviderManifestInputs(manifestPaths, pluginPaths);
   const snapshot = compileProviderSnapshot(manifests);
   const encoded = output ? `${JSON.stringify(snapshot)}\n` : `${JSON.stringify(snapshot, null, 2)}\n`;
   if (output) {

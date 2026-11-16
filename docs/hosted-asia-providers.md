@@ -1,5 +1,9 @@
 # Hosted Asian model APIs
 
+Moonshot's frozen catalog, separate China credential and native model discovery
+are specified in [Moonshot native contracts](moonshot-native-contracts.md).
+The initial batch description below records its original Chat seed scope.
+
 These experimental manifests expose standard Chat Completions and SSE. They do
 not establish live provider parity. Endpoint and model references were checked
 on 2026-11-03. No live upstream inference has been performed for this batch.

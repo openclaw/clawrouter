@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,16 +13,17 @@ import { assertSecretLineage, uploadMessage } from '../scripts/deploy-train-secr
 import { recoverRemote, failureIssue } from '../scripts/deploy-train-recover.mjs';
 import { createHash } from 'node:crypto';
 import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
+import { native, nativeVersion } from './helpers/deploy-native-fixture.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
 function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0, scriptSettings } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
-  let versions = [{ id: blue }];
+  let versions = [nativeVersion(blue, oldSha)];
   let time = 1_000_000, smokes = 0, uploads = 0;
   const calls = [], receipts = [], smokeObservations = [];
-  const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration };
+  const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration, native };
   let stale = 0, previous;
   const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, wait: async (ms) => { time += ms; }, fetchImpl: async (url, init) => {
     calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body), time });
@@ -42,8 +43,10 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
     }
     else if (path.endsWith(`/versions/${green}`)) {
       if (versionLag-- > 0) return Response.json({ success: false, errors: [{ message: 'version not found' }] }, { status: 404 });
-      result = { id: green, annotations: { 'workers/tag': sha } };
+      result = nativeVersion(green, sha, blue);
+      result.annotations['workers/message'] = uploadMessage(state);
     }
+    else if (path.endsWith(`/versions/${blue}`)) result = nativeVersion(blue, oldSha);
     else if (path.endsWith('/script-settings')) result = scriptSettings();
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
@@ -324,6 +327,33 @@ test('real git range detects TOML lifecycle changes and rollback-unsafe commit t
   assert.throws(() => inspectSource({ blueSha: c, greenSha: d, cwd: directory }), /Non-versioned Worker settings/);
 });
 
+test('native source rejects lifecycle, container, actor and fingerprint-owner changes', t => {
+  mkdirSync('.artifacts', { recursive: true });
+  const directory = mkdtempSync(join(process.cwd(), '.artifacts/train-native-source-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: directory, encoding: 'utf8' }).trim();
+  git('init', '-q'); mkdirSync(join(directory, 'worker/large-http'), { recursive: true });
+  const config = 'name="fixture"\nmain="worker.mjs"\nkeep_vars=true\nno_bundle=true\n[[migrations]]\ntag="v6-large-http"\nnew_sqlite_classes=["LargeHttpPool","LargeHttpSlot"]\n[[containers]]\nclass_name="LargeHttpSlot"\nscheduling_policy="durable_object"\n[[durable_objects.bindings]]\nname="LARGE_HTTP_POOL"\nclass_name="LargeHttpPool"\n';
+  writeFileSync(join(directory, 'wrangler.toml'), config);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// fingerprint protocol\n');
+  const commit = () => { git('add', '.'); git('commit', '-qm', 'fixture'); return git('rev-parse', 'HEAD'); };
+  const base = commit();
+  for (const changed of [config.replace('durable_object', 'other'), config.replace('name="LARGE_HTTP_POOL"', 'name="OTHER"'), config.replace('v6-large-http', 'v7')]) {
+    writeFileSync(join(directory, 'wrangler.toml'), changed);
+    const head = commit();
+    for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory, nativeCutover }), /Non-versioned|Native lifecycle/);
+  }
+  writeFileSync(join(directory, 'wrangler.toml'), config);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// changed fingerprint protocol\n');
+  const incompatible = commit();
+  for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: incompatible, cwd: directory, nativeCutover }), /fingerprint protocol/);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// fingerprint protocol\n');
+  writeFileSync(join(directory, 'worker/large-http/continuous.ts'), '// additive control fence\n');
+  const control = commit();
+  assert.throws(() => inspectSource({ blueSha: base, greenSha: control, cwd: directory }), /fingerprint protocol/);
+  assert.deepEqual(inspectSource({ blueSha: base, greenSha: control, cwd: directory, nativeCutover:true }), { migration:false,unsafe:false });
+});
+
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {
   const calls = [];
   const api = { github: async (path, options) => { calls.push({ path, options }); return options ? { number: 9 } : [{ number: 9, title: 'Production deployment train failures', state: 'closed', body: '<!-- clawrouter-production-train-failures -->' }]; } };
@@ -367,31 +397,117 @@ test('unsupported per-version GraphQL schema is not reported as a successful com
 test('command timeout terminates a descendant CLI before recovery can proceed', async (t) => {
   mkdirSync('.artifacts', { recursive: true });
   const directory = mkdtempSync(join(process.cwd(), '.artifacts/train-timeout-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const executable = join(directory, 'pnpm'), receipt = join(directory, 'pid');
-  writeFileSync(executable, `#!${process.execPath}
-import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'inherit' });
-writeFileSync(process.env.TEST_RECEIPT, String(child.pid));
-setInterval(() => {}, 1000);
-`);
-  chmodSync(executable, 0o700);
-  await assert.rejects(command(['fixture'], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, TEST_RECEIPT: receipt }, timeout: 500 }), /timed out/);
-  const pid = Number(readFileSync(receipt, 'utf8'));
-  // close is emitted after inherited pipes close; the forced process-group kill
-  // has happened before command() rejects, not later during rollback.
+  const executable = join(directory, 'pnpm'), receipt = join(directory, 'ready'), term = join(directory, 'term'), group = join(directory, 'group');
+  // Only the parent's command timers are virtual. Process startup, signals,
+  // inherited pipes and close remain real, with independent bounded I/O waits.
+  const realTimeout = globalThis.setTimeout, realClearTimeout = globalThis.clearTimeout;
+  const watchers = new Set(), waits = [];
+  const bounded = (pending, label) => new Promise((resolve, reject) => {
+    const timer = realTimeout(() => reject(new Error(`${label} did not finish`)), 5_000);
+    pending.then(value => { realClearTimeout(timer); resolve(value); }, error => { realClearTimeout(timer); reject(error); });
+  });
+  const waitReceipt = path => {
+    const pending = new Promise((resolve, reject) => {
+      let settled = false, timer, watcher;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true; realClearTimeout(timer); watcher?.close(); watchers.delete(cancel);
+        if (error) reject(error); else resolve(value);
+      };
+      const cancel = () => finish(new Error('fixture receipt wait stopped'));
+      const check = () => {
+        try { if (existsSync(path)) finish(null, readFileSync(path, 'utf8')); }
+        catch (error) { finish(error); }
+      };
+      watchers.add(cancel);
+      watcher = watch(directory, check);
+      watcher.on('error', error => finish(error));
+      timer = realTimeout(() => finish(new Error('fixture receipt deadline')), 5_000);
+      check();
+    });
+    void pending.catch(() => {}); waits.push(pending); return pending;
+  };
+  let observed, state = 'unstarted', pid, terminalObserved = false;
   const terminal = () => {
     try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return true; throw error; }
-    // Linux may retain a killed, reparented zombie until init reaps it. A PID
-    // still existing is not evidence that it can execute or mutate a deployment.
+    // A reparented Linux zombie is terminal even before init reaps it.
     if (process.platform === 'linux') {
       try { return /^\d+ \(.*\) Z /.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
-      catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+      catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') return true; throw error; }
     }
     return false;
   };
-  const deadline = Date.now() + 1_000;
-  while (!terminal() && Date.now() < deadline) await delay(20);
-  assert.equal(terminal(), true, 'descendant must have exited, not merely received a signal');
+  const assertTerminal = async () => {
+    if (terminalObserved) return;
+    const deadline = Date.now() + 1_000;
+    while (!terminal()) {
+      assert.ok(Date.now() < deadline, 'descendant must have exited, not merely received a signal');
+      await new Promise(resolve => realTimeout(resolve, 20));
+    }
+    terminalObserved = true;
+  };
+  t.after(async () => {
+    let joined = !observed;
+    try {
+      if (observed) {
+        if (state === 'pending') {
+          // Failure-prefix cleanup cannot count as the passing close proof.
+          t.mock.timers.tick(500); t.mock.timers.tick(5_000);
+          if (existsSync(group)) {
+            const ownedGroup = Number(readFileSync(group, 'utf8'));
+            assert.ok(Number.isSafeInteger(ownedGroup) && ownedGroup > 0);
+            try { process.kill(-ownedGroup, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+          }
+        }
+        await bounded(observed, 'original command close'); joined = true;
+        if (pid === undefined && existsSync(receipt)) pid = JSON.parse(readFileSync(receipt, 'utf8')).pid;
+        if (pid !== undefined) {
+          assert.ok(Number.isSafeInteger(pid) && pid > 0);
+          await assertTerminal();
+        }
+      }
+    } finally {
+      for (const cancel of [...watchers]) cancel();
+      await Promise.allSettled(waits);
+      if (joined) {
+        t.mock.timers.reset();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+  const descendant = `const { renameSync, writeFileSync } = require('node:fs');
+const publish = (path, value) => { writeFileSync(path + '.tmp', value); renameSync(path + '.tmp', path); };
+process.on('SIGTERM', () => publish(process.env.TEST_TERM, String(process.pid)));
+setInterval(() => {}, 1000);
+publish(process.env.TEST_RECEIPT, JSON.stringify({ pid: process.pid, parent: process.ppid }));`;
+  writeFileSync(executable, `#!${process.execPath}
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.env.TEST_GROUP, String(process.pid));
+spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], { stdio: 'inherit' });
+setInterval(() => {}, 1000);
+`);
+  chmodSync(executable, 0o700);
+  const ready = waitReceipt(receipt); // Watch before launching the original command.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  state = 'pending';
+  const original = command(['fixture'], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, TEST_RECEIPT: receipt, TEST_TERM: term, TEST_GROUP: group }, timeout: 500 });
+  observed = original.then(value => { state = 'fulfilled'; return { value }; }, error => { state = 'rejected'; return { error }; });
+  const started = JSON.parse(await ready); pid = started.pid;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  assert.equal(started.parent, Number(readFileSync(group, 'utf8')));
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(499);
+  assert.equal(state, 'pending'); assert.equal(existsSync(term), false);
+  const terminated = waitReceipt(term);
+  t.mock.timers.tick(1);
+  assert.equal(Number(await terminated), pid);
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(4_999);
+  assert.equal(state, 'pending'); assert.equal(terminal(), false);
+  t.mock.timers.tick(1);
+  const result = await bounded(observed, 'forced original command close');
+  assert.equal(state, 'rejected'); assert.match(result.error.message, /timed out/);
+  await assertTerminal(); // Recovery is permitted only after this original close proof.
+  t.diagnostic('descendant READY and TERM witnessed; original command closed; descendant terminal before recovery');
 });

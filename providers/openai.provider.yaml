@@ -24,6 +24,69 @@ auth:
         ChatGPT-Account-ID: "${grant.accountId}"
         OpenAI-Beta: responses=experimental
         originator: clawrouter
+products:
+  - id: platform-api
+    displayName: OpenAI API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [chat_completions, decisions, embeddings, images_generations, images_edits, models_list, models_retrieve, moderations, realtime, responses, responses_cancel, responses_compact, responses_input_tokens, responses_retrieve, speech, standalone_search, transcriptions]
+    offers:
+      - endpoint: moderations
+        capability: llm.moderations
+        models: [openai/omni-moderation-latest, openai/omni-moderation-2024-09-26]
+      - endpoint: models_list
+        capability: models.list
+        models: null
+      - endpoint: models_retrieve
+        capability: models.retrieve
+        models: null
+      - endpoint: realtime
+        capability: audio.realtime
+        models: [openai/gpt-realtime-2.1]
+      - endpoint: standalone_search
+        capability: search.web
+        models: null
+      - endpoint: responses_compact
+        capability: llm.responses.compact
+        models: [openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra]
+      - endpoint: decisions
+        capability: llm.decisions
+        models: [openai/gpt-6-luna]
+      - endpoint: responses_input_tokens
+        capability: llm.count_tokens
+        models: [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: responses
+        capability: llm.responses
+        models: &openaiResponseProductModels [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: chat_completions
+        capability: llm.chat
+        models: [openai/gpt-5.6, openai/gpt-6-astra, openai/gpt-6.1-sol, openai/gpt-6.1-terra, openai/gpt-6-sol, openai/gpt-6-luna, openai/gpt-5.6-sol, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.5, openai/gpt-4.1-mini, openai/gpt-5.4]
+      - endpoint: embeddings
+        capability: llm.embeddings
+        models: [openai/text-embedding-3-small, openai/text-embedding-3-large]
+      - endpoint: transcriptions
+        capability: audio.transcription
+        models: [openai/gpt-4o-transcribe, openai/gpt-4o-mini-transcribe]
+      - endpoint: speech
+        capability: audio.speech
+        models: [openai/tts-1]
+      - endpoint: images_generations
+        capability: image.generation
+        models: [openai/gpt-image-2.5-sunburst, openai/gpt-image-2.5-sunburst-2026-09-08, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-flare-2026-09-08]
+      - endpoint: images_edits
+        capability: image.edit
+        models: [openai/gpt-image-2.5-sunburst, openai/gpt-image-2.5-sunburst-2026-09-08, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-flare-2026-09-08]
+  - id: chatgpt-subscription
+    displayName: ChatGPT subscription
+    commercialModel: subscription
+    authenticationMethod: oauth2
+    binding: { type: grant-transport, grantKind: subscription }
+    endpoints: [responses]
+    offers:
+      - endpoint: responses
+        capability: llm.responses
+        models: *openaiResponseProductModels
 baseUrls: { default: https://api.openai.com }
 routing:
   nativePrefixes: [clawrouter-openai, openai]
@@ -115,6 +178,7 @@ capabilities:
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
+  - {id: image.edit, endpoint: images_edits, methods: [POST]}
 endpoints:
   standalone_search: { path: /v1/alpha/search, requestHeaders: [originator, x-codex-turn-metadata, X-Client-Request-Id], requestFormat: openai.standalone_search, responseFormat: openai.standalone_search, timeoutMs: 120000 }
   moderations: {path: /v1/moderations, requestHeaders: [X-Client-Request-Id], requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
@@ -177,6 +241,12 @@ endpoints:
     responseFormat: audio.binary
     streaming: audio
     timeoutMs: 120000
+  images_edits:
+    path: /v1/images/edits
+    requestHeaders: [X-Client-Request-Id]
+    requestFormat: openai.images_edits
+    responseFormat: openai.images_generations
+    timeoutMs: 600000
   images_generations:
     path: /v1/images/generations
     requestHeaders: [X-Client-Request-Id]
@@ -186,14 +256,15 @@ endpoints:
 models:
   entries:
     # Free endpoint tariff; no invented token-context ceiling. See docs/openai-moderations.md.
-    - {id: openai/omni-moderation-latest, upstream: omni-moderation-latest, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: &omniModerationCapabilities {version: clawrouter.native-capabilities.v1, endpoints: {moderations: {sources: [https://developers.openai.com/api/docs/models/omni-moderation-latest, https://developers.openai.com/api/docs/guides/moderation], checkedAt: "2026-10-21", input: [text, image], inference: {chat: false}}}}}
-    - {id: openai/omni-moderation-2024-09-26, upstream: omni-moderation-2024-09-26, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: *omniModerationCapabilities}
-    - {"id":"openai/gpt-realtime-2.1","upstream":"gpt-realtime-2.1","capabilities":["audio.realtime"],"pricingRef":"openai-realtime-2.1-manual-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/pricing","inputMicrosPerMillion":32000000,"outputMicrosPerMillion":64000000,"cachedInputMicrosPerMillion":400000,"maxInputTokens":128000,"maxRequestInputTokens":128000,"defaultMaxOutputTokens":4096,"inputTokenOverhead":0,"settlementBasis":"published_upper_bound"},"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"realtime":{"sources":["https://developers.openai.com/api/docs/models/gpt-realtime-2.1"],"checkedAt":"2026-10-20","input":["text","audio"],"contextWindow":128000,"maxOutputTokens":4096,"inference":{"chat":false}}}}}
-    - {"id":"openai/gpt-4o-transcribe","upstream":"gpt-4o-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-transcribe","inputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
-    - {"id":"openai/gpt-4o-mini-transcribe","upstream":"gpt-4o-mini-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-mini-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","inputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
+    - {id: openai/omni-moderation-latest, displayName: "Omni Moderation (Latest)", upstream: omni-moderation-latest, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: &omniModerationCapabilities {version: clawrouter.native-capabilities.v1, endpoints: {moderations: {sources: [https://developers.openai.com/api/docs/models/omni-moderation-latest, https://developers.openai.com/api/docs/guides/moderation], checkedAt: "2026-10-21", input: [text, image], inference: {chat: false}}}}}
+    - {id: openai/omni-moderation-2024-09-26, displayName: "Omni Moderation (2024-09-26)", upstream: omni-moderation-2024-09-26, capabilities: [llm.moderations], pricingRef: openai-omni-moderation-free-2026-10-21, nativeCapabilities: *omniModerationCapabilities}
+    - {"id":"openai/gpt-realtime-2.1","displayName":"GPT Realtime 2.1","upstream":"gpt-realtime-2.1","capabilities":["audio.realtime"],"pricingRef":"openai-realtime-2.1-manual-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/pricing","inputMicrosPerMillion":32000000,"outputMicrosPerMillion":64000000,"cachedInputMicrosPerMillion":400000,"maxInputTokens":128000,"maxRequestInputTokens":128000,"defaultMaxOutputTokens":4096,"inputTokenOverhead":0,"settlementBasis":"published_upper_bound"},"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"realtime":{"sources":["https://developers.openai.com/api/docs/models/gpt-realtime-2.1"],"checkedAt":"2026-10-20","input":["text","audio"],"contextWindow":128000,"maxOutputTokens":4096,"inference":{"chat":false}}}}}
+    - {"id":"openai/gpt-4o-transcribe","displayName":"GPT-4o Transcribe","upstream":"gpt-4o-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-transcribe","inputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
+    - {"id":"openai/gpt-4o-mini-transcribe","displayName":"GPT-4o Mini Transcribe","upstream":"gpt-4o-mini-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-mini-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-mini-transcribe","inputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
     - id: openai/gpt-image-2.5-sunburst
+      displayName: "GPT Image 2.5 Sunburst"
       upstream: gpt-image-2.5-sunburst
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-sunburst-2026-10-20
       pricing: &openaiImage25GenerationPricing
         unit: image_token
@@ -217,21 +288,25 @@ models:
             divisor: 4000000
             qualityFactors: {low: 16, medium: 24, high: 48, xhigh: 64, max: 96}
     - id: openai/gpt-image-2.5-sunburst-2026-09-08
+      displayName: "GPT Image 2.5 Sunburst (2026-09-08)"
       upstream: gpt-image-2.5-sunburst-2026-09-08
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-sunburst-2026-09-08-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-image-2.5-flare
+      displayName: "GPT Image 2.5 Flare"
       upstream: gpt-image-2.5-flare
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-flare-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-image-2.5-flare-2026-09-08
+      displayName: "GPT Image 2.5 Flare (2026-09-08)"
       upstream: gpt-image-2.5-flare-2026-09-08
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-flare-2026-09-08-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-5.6
+      displayName: "GPT-5.6"
       upstream: gpt-5.6
       # The public API documents gpt-5.6 as the Sol alias.
       codexModel: gpt-5.6-sol
@@ -303,6 +378,7 @@ models:
               cacheWriteInputMicrosPerMillion: 5000000
               outputMicrosPerMillion: 15000000
     - id: openai/gpt-6-astra
+      displayName: "GPT-6 Astra"
       upstream: gpt-6-astra
       capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
       nativeCapabilities:
@@ -374,6 +450,7 @@ models:
               cacheWriteInputMicrosPerMillion: 12500000
               outputMicrosPerMillion: 37500000
     - id: openai/gpt-6.1-sol
+      displayName: "GPT-6.1 Sol"
       upstream: gpt-6.1-sol
       capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
       nativeCapabilities:
@@ -415,6 +492,7 @@ models:
           - {"id":"flex","inputMicrosPerMillion":1000000,"cachedInputMicrosPerMillion":50000,"cacheWriteInputMicrosPerMillion":1250000,"outputMicrosPerMillion":5000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":7500000}}
           - {"id":"ultrafast","inputMicrosPerMillion":12000000,"cachedInputMicrosPerMillion":600000,"cacheWriteInputMicrosPerMillion":15000000,"outputMicrosPerMillion":60000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":24000000,"cachedInputMicrosPerMillion":1200000,"cacheWriteInputMicrosPerMillion":30000000,"outputMicrosPerMillion":90000000}}
     - id: openai/gpt-6.1-terra
+      displayName: "GPT-6.1 Terra"
       upstream: gpt-6.1-terra
       capabilities: [llm.responses, llm.chat, llm.responses.compact, llm.count_tokens, search.web]
       nativeCapabilities:
@@ -442,6 +520,7 @@ models:
           - {"id":"priority","aliases":["fast"],"inputMicrosPerMillion":2000000,"cachedInputMicrosPerMillion":100000,"cacheWriteInputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":4000000,"cachedInputMicrosPerMillion":200000,"cacheWriteInputMicrosPerMillion":5000000,"outputMicrosPerMillion":15000000}}
           - {"id":"flex","inputMicrosPerMillion":500000,"cachedInputMicrosPerMillion":25000,"cacheWriteInputMicrosPerMillion":625000,"outputMicrosPerMillion":2500000,"longContext":{"thresholdInputTokens":272000,"inputMicrosPerMillion":1000000,"cachedInputMicrosPerMillion":50000,"cacheWriteInputMicrosPerMillion":1250000,"outputMicrosPerMillion":3750000}}
     - id: openai/gpt-6-sol
+      displayName: "GPT-6 Sol"
       upstream: gpt-6-sol
       capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       nativeCapabilities:
@@ -513,6 +592,7 @@ models:
               cacheWriteInputMicrosPerMillion: 2500000
               outputMicrosPerMillion: 7500000
     - id: openai/gpt-6-luna
+      displayName: "GPT-6 Luna"
       upstream: gpt-6-luna
       capabilities: [llm.responses, llm.chat, llm.decisions, llm.count_tokens, search.web]
       nativeCapabilities:
@@ -613,6 +693,7 @@ models:
               cacheWriteInputMicrosPerMillion: 125000
               outputMicrosPerMillion: 375000
     - id: openai/gpt-5.6-sol
+      displayName: "GPT-5.6 Sol"
       upstream: gpt-5.6-sol
       capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
@@ -633,6 +714,7 @@ models:
       pricingRef: openai-gpt-5.6-sol-tiers-2026-09-22
       pricing: *openaiGpt56Pricing
     - id: openai/gpt-5.6-terra
+      displayName: "GPT-5.6 Terra"
       upstream: gpt-5.6-terra
       capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
@@ -702,6 +784,7 @@ models:
               cacheWriteInputMicrosPerMillion: 2500000
               outputMicrosPerMillion: 9000000
     - id: openai/gpt-5.6-luna
+      displayName: "GPT-5.6 Luna"
       upstream: gpt-5.6-luna
       capabilities: [llm.responses, llm.chat, llm.count_tokens, search.web]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
@@ -771,6 +854,7 @@ models:
               cacheWriteInputMicrosPerMillion: 250000
               outputMicrosPerMillion: 900000
     - id: openai/gpt-5.5
+      displayName: "GPT-5.5"
       upstream: gpt-5.5
       capabilities: [llm.responses, llm.chat, llm.count_tokens]
       supportedReasoningEfforts: [none, low, medium, high, xhigh]
@@ -828,6 +912,7 @@ models:
               cachedInputMicrosPerMillion: 500000
               outputMicrosPerMillion: 22500000
     - id: openai/gpt-4.1-mini
+      displayName: "GPT-4.1 Mini"
       upstream: gpt-4.1-mini
       capabilities: [llm.responses, llm.chat, llm.count_tokens]
       requestParameters:
@@ -867,6 +952,7 @@ models:
             cachedInputMicrosPerMillion: 175000
             outputMicrosPerMillion: 2800000
     - id: openai/gpt-5.4
+      displayName: "GPT-5.4"
       upstream: gpt-5.4
       capabilities: [llm.responses, llm.chat, llm.count_tokens]
       supportedReasoningEfforts: [none, low, medium, high, xhigh]
@@ -932,6 +1018,7 @@ models:
               cachedInputMicrosPerMillion: 250000
               outputMicrosPerMillion: 11250000
     - id: openai/text-embedding-3-small
+      displayName: "Text Embedding 3 Small"
       upstream: text-embedding-3-small
       capabilities: [llm.embeddings]
       pricingRef: openai-text-embedding-3-small-standard-2026-10-21
@@ -944,6 +1031,7 @@ models:
         maxRequestInputTokens: 300000
         defaultMaxOutputTokens: 0
     - id: openai/text-embedding-3-large
+      displayName: "Text Embedding 3 Large"
       upstream: text-embedding-3-large
       capabilities: [llm.embeddings]
       pricingRef: openai-text-embedding-3-large-standard-2026-06-19
@@ -956,6 +1044,7 @@ models:
         maxRequestInputTokens: 300000
         defaultMaxOutputTokens: 0
     - id: openai/tts-1
+      displayName: "TTS-1"
       upstream: tts-1
       capabilities: [audio.speech]
       nativeCapabilities:

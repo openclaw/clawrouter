@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
@@ -25,15 +26,16 @@ for (const transport of ["http", "websocket"]) {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-router-"));
     let mf, client;
+    const primary = { failed: false, error: undefined };
     try {
-      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture(), { directRouter: transport === "http" });
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: null, retainRequestContent: false };
       const credential = { enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" };
       await kv.put("policies/fixture", JSON.stringify(policy));
       await kv.put("credentials/fixture", JSON.stringify(credential));
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-      const origin = await mf.ready;
+      const origin = transport === "http" ? (await mf.unsafeGetDirectURL("router")).origin : await mf.ready;
       let currentKey = key;
       const dispatch = (path, credentialKey = currentKey) => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${credentialKey}` }, signal: AbortSignal.timeout(10_000) });
       const discovered = await dispatch("/v1/catalog");
@@ -204,10 +206,11 @@ for (const transport of ["http", "websocket"]) {
       assert.equal((await state()).requests.length, afterRotation.requests.length);
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+    } catch (error) {
+      primary.error = error; primary.failed = true;
+      throw error;
     } finally {
-      await client?.close();
-      await mf?.dispose();
-      await rm(home, { recursive: true, force: true });
+      await cleanupFixture([() => client?.close(), () => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
     }
   });
 }
@@ -497,17 +500,23 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
   test(`native Codex through workerd: HTTP defaults, ${scenario}`, { skip: !binary, timeout: 90_000 }, async t => {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-retry-"));
-    let mf, client;
+    let mf, client, httpStarted;
+    const primary = { failed: false, error: undefined };
+    const http = { phase: "not-started", headers: false, bodyComplete: false, elapsedMs: 0 };
+    const beginHttp = phase => { http.phase = phase; http.headers = false; http.bodyComplete = false; http.elapsedMs = 0; httpStarted = performance.now(); };
+    const completeHttp = phase => { http.phase = phase; http.bodyComplete = true; http.elapsedMs = Math.round(performance.now() - httpStarted); };
     try {
-      mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }));
+      mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }), { directRouter: scenario === "interrupt" });
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: null, retainRequestContent: false }));
       await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-      const origin = await mf.ready;
+      const origin = scenario === "interrupt" ? (await mf.unsafeGetDirectURL("router")).origin : await mf.ready;
       const dispatch = path => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
-      const discovered = await dispatch("/v1/catalog"); assert.equal(discovered.status, 200);
-      const { env } = await configureNativeClient(home, origin, await discovered.json(), "http", true);
+      beginHttp("catalog-headers");
+      const discovered = await dispatch("/v1/catalog"); http.headers = true; assert.equal(discovered.status, 200);
+      http.phase = "catalog-body"; const catalog = await discovered.json(); completeHttp("catalog-complete");
+      const { env } = await configureNativeClient(home, origin, catalog, "http", true);
       client = nativeCodexClient(t, binary, home, env);
       await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       client.child.stdin.write('{"method":"initialized"}\n');
@@ -550,11 +559,13 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
       assert.equal(retries.length, scenario === "stream_retry" ? 1 : 0, "HTTP request retries stay below the native stream-retry notification layer");
       let usage;
       await until(async () => {
-        usage = await (await dispatch("/v1/usage")).json();
+        beginHttp("usage-headers"); const response = await dispatch("/v1/usage"); http.headers = true;
+        http.phase = "usage-body"; usage = await response.json(); completeHttp("usage-complete");
         assert.ok(usage.usage.events.length <= observed.requests.length);
         return usage.usage.events.length === observed.requests.length;
       });
-      const ingress = await (await dispatch("/fixture-ingress")).json();
+      beginHttp("ingress-headers"); const ingressResponse = await dispatch("/fixture-ingress"); http.headers = true;
+      http.phase = "ingress-body"; const ingress = await ingressResponse.json(); completeHttp("ingress-complete");
       assert.deepEqual(ingress.map(({ status }) => status), scenario === "request_retry" ? [503, 200] : [200, 200]);
       const receipts = ingress.map(({ requestId }) => usage.usage.events.filter(event => event.request_id === requestId));
       assert.ok(receipts.every(events => events.length === 1), "each actual router attempt has one receipt");
@@ -578,10 +589,15 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
         assert.deepEqual(await (await ledger.fetch("https://budget/fixture-unsettled")).json(), { total: 2, count: 0 });
       }
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+    } catch (error) {
+      primary.error = error; primary.failed = true;
+      try {
+        t.diagnostic(JSON.stringify({ fixture: "native-http-defaults-failure", scenario, lastHttp: {
+          ...http, elapsedMs: httpStarted === undefined || http.bodyComplete ? http.elapsedMs : Math.round(performance.now() - httpStarted),
+        } }));
+      } finally { throw error; }
     } finally {
-      await client?.close();
-      await mf?.dispose();
-      await rm(home, { recursive: true, force: true });
+      await cleanupFixture([() => client?.close(), () => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
     }
   });
 }
@@ -592,13 +608,14 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
     await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
     await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-    const origin = await mf.ready;
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const upstream = await mf.getWorker("upstream");
     await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
     await new Promise((resolve, reject) => {
@@ -633,9 +650,11 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
     assert.ok(receipt.actual_cost_micros > 0);
     assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros);
     assert.equal(usage.budget.spentMicros, receipt.actual_cost_micros);
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(home, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
   }
 });
 

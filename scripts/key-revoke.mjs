@@ -1,7 +1,4 @@
-import { spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
-import { legacyCredential, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
+import { legacyCredential, putLocalKeyRecords, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
 import { parseArgs } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 
@@ -35,31 +32,7 @@ function revokeLocalBootstrapRecord() {
     ...(legacy ? [[`keys/${kid}`, writeKeyJson(legacy, "legacy-key.json")]] : []),
   ];
 
-  try {
-    for (const [key, path] of records) {
-      run("pnpm", [
-        "exec",
-        "wrangler",
-        "kv",
-        "key",
-        "put",
-        key,
-        "--path",
-        path,
-        "--binding",
-        binding,
-        "--config",
-        config,
-        "--preview",
-        "false",
-      ]);
-    }
-  } finally {
-    for (const [, path] of records) {
-      rmSync(path, { force: true });
-      rmSync(join(path, ".."), { force: true, recursive: true });
-    }
-  }
+  putLocalKeyRecords(records, { binding, config });
 }
 
 function required(value, name) {
@@ -67,12 +40,4 @@ function required(value, name) {
     throw new Error(`${name} is required`);
   }
   return value;
-}
-
-function run(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8" });
-  if (result.status !== 0) {
-    throw new Error(result.stderr || `${command} failed`);
-  }
-  return result;
 }

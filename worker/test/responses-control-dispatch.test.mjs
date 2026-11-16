@@ -1,3 +1,4 @@
+import { accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -92,7 +93,7 @@ for (const mode of ["local", "cloudflare_access"]) test(`${mode} verifier proof 
     const unsigned = `${encode({ alg: "RS256", kid })}.${encode({ aud: audience, iss: `https://${domain}`, email, exp: expiresAtMs / 1000 })}`;
     const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keys.privateKey, new TextEncoder().encode(unsigned));
     headers = { "cf-access-jwt-assertion": `${unsigned}.${Buffer.from(signature).toString("base64url")}` };
-    f.fetchGate.response = request => { assert.equal(request, `https://${domain}/cdn-cgi/access/certs`); return Response.json({ keys: [jwk] }); };
+    f.fetchGate.response = request => { assert.equal(request, `https://${domain}/cdn-cgi/access/certs`); return accessCertsResponse({ keys: [jwk] }, `https://${domain}/cdn-cgi/access/certs`); };
   }
   const session = await verifiedAccessSession(new Request("https://router.example/control", { headers }), f.env);
   assert.ok(session); const identity = sessionPolicyIdentity(session, { policyId: "policy", policy: f.auth.policy });

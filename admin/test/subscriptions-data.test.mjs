@@ -36,11 +36,24 @@ test("policy inventory includes its tenant pool and honors provider and explicit
   assert.deepEqual(policyGrants({ ...policy, grantRouting: { ...policy.grantRouting, eligibleGrants: { anthropic: ["max"] } } }, [grant, shared]), [grant]);
 });
 
+test("policy inventory adds exact shared subscription owners without matching foreign token references", () => {
+  const shared = { ...grant, key: "oauth/source/max", scopeId: "source" };
+  const unrelated = { ...shared, key: "oauth/unrelated/max", scopeId: "unrelated" };
+  const consumer = { ...policy, grantRouting: { ...policy.grantRouting, sharedGrants: { anthropic: [shared.key] } } };
+  assert.deepEqual(policyGrants(consumer, [grant, shared, unrelated]), [grant, shared]);
+  assert.deepEqual(policyGrants(consumer, [{ ...shared, kind: "api_key" }]), []);
+  assert.deepEqual(policyGrants({ ...consumer, grantRouting: { ...consumer.grantRouting, eligibleGrants: { anthropic: [] } } }, [shared]), []);
+});
+
 test("probe availability follows the manifest rather than assuming refresh tokens", () => {
   const noRefresh = { ...grant, hasRefreshToken: false };
   assert.equal(canProbeGrant(noRefresh, { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } }), true);
   assert.equal(canProbeGrant(noRefresh, { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: true }] } }), false);
   assert.equal(canProbeGrant(noRefresh, undefined), false);
+  const provider = { quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } };
+  assert.equal(canProbeGrant({ ...grant, enabled: false }, provider), false);
+  assert.equal(canProbeGrant({ ...grant, usable: false }, provider), false);
+  assert.equal(canProbeGrant({ ...grant, revokedAt: "2026-10-01T00:00:00Z" }, provider), false);
 });
 
 test("model freshness uses retained window timestamps rather than recent unrelated traffic", () => {

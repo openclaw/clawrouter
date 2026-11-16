@@ -1,23 +1,33 @@
+import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { modelExecutable } from "../shared/route-catalog.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
+import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
+import { REQUESTY_MODELS_FORMAT, filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
+import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
 // These formats are metadata, not inference or a permission to delete models.
 export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return ["openai.models", "anthropic.models", "ollama.models"].includes(endpoint.request_format);
+  return endpoint.request_format === REQUESTY_MODELS_FORMAT || endpoint.request_format === "featherless.catalog" || publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
 }
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
 }
 export function discoveryAllows(policy: AccessPolicy, provider: CompiledProvider, upstream: string): boolean {
-  return policy.models == null || policy.models.includes(discoveryModelId(provider, upstream));
+  return modelExecutable(provider, { id: discoveryModelId(provider, upstream), upstream })
+    && (policy.models == null || policy.models.includes(discoveryModelId(provider, upstream)));
 }
 export function prepareModelDiscovery(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, pathParams: Record<string, string>): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
   if (Object.keys(body).length) throw new HttpError(400, "invalid_model_discovery", "model discovery does not accept a request body");
   if (Object.keys(pathParams).some(name => !endpoint.path_params.includes(name))) throw new HttpError(400, "invalid_model_discovery", "unknown discovery path parameter");
   const id = pathParams.model_id;
   if (endpoint.path_params.includes("model_id") && (typeof id !== "string" || !id.length || id.length > 512 || /[\u0000-\u001f\u007f]/.test(id))) throw new HttpError(400, "invalid_model_id", "a bounded nonempty model_id is required");
+  if (id && !modelExecutable(provider, { id: discoveryModelId(provider, id), upstream: id }))
+    throw new HttpError(400, "model_unavailable", "the selected model identity is stopped");
   // Metadata pricing must never inherit the selected model's inference tariff.
   const model: CompiledModel | null = id ? { id: discoveryModelId(provider, id), upstream: id, capabilities: [], pricing: null, pricing_ref: null } : null;
   return { model, body: {}, pathParams };
@@ -34,7 +44,7 @@ export function validateDiscoveryQuery(provider: CompiledProvider, endpoint: Com
     query["lifecycle[]"] = query.lifecycle; delete query.lifecycle;
   }
   for (const [name, value] of Object.entries(query)) {
-    if (provider.id !== "anthropic" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
+    if (endpoint.request_format !== "anthropic.models" || endpoint.path_params.length || !["after_id", "before_id", "limit", "lifecycle[]"].includes(name)) throw new HttpError(400, "invalid_model_discovery_query", "unsupported model discovery query parameter");
     if (name === "lifecycle[]") {
       const values = Array.isArray(value) ? value : [value];
       if (!values.length || values.length > 3 || values.some(v => typeof v !== "string" || !["active", "deprecated", "retired"].includes(v))) throw new HttpError(400, "invalid_model_discovery_query", "invalid model lifecycle filter");
@@ -55,20 +65,43 @@ function metadataResponse(value: unknown, response: Response): Response {
 }
 
 const malformed = () => new HttpError(502, "invalid_model_discovery_response", "upstream model metadata is invalid or exceeds the discovery scan bound");
-async function readMetadata(response: Response, operation: HttpOperation): Promise<Record<string, unknown>> {
+async function discardMetadata(response: Response, registerInput?: NativeJsonInputHooks["registerInput"]): Promise<void> {
+  if (!registerInput) { void response.body?.cancel().catch(() => undefined); return; }
+  if (!response.body) return;
+  if (response.bodyUsed || response.body.locked) throw malformed();
+  const input = inputRetirement(response.body.getReader());
+  registerInput(input, response);
+  // This helper precedes a known rejection; the registered owner separately
+  // retains any failed retirement and cannot release its charge from it.
+  await input.retire("cancel").catch(() => undefined);
+}
+async function readMetadata(response: Response, operation: HttpOperation, boundReads = false,
+  registerInput?: NativeJsonInputHooks["registerInput"]): Promise<Record<string, unknown>> {
+  if (registerInput && (response.bodyUsed || response.body?.locked)) throw malformed();
   const reader = response.body?.getReader();
   if (!reader) throw malformed();
-  const chunks: Uint8Array[] = []; let size = 0;
+  const input = registerInput ? inputRetirement(reader) : undefined;
+  if (input) registerInput!(input, response);
+  const chunks: Uint8Array[] = []; let size = 0, reads = 0;
+  let eof = false, failed = false;
   try {
     while (true) {
-      const { done, value } = await operation.wait(reader.read());
-      if (done) break;
+      if (boundReads && ++reads > 8192) throw malformed();
+      const { done, value } = await operation.wait(input ? input.read(() => reader.read()) : reader.read());
+      if (done) { eof = true; break; }
       size += value.byteLength;
       if (size > 2 * 1024 * 1024) throw malformed();
       chunks.push(value);
     }
-  } catch (error) { void reader.cancel(error).catch(() => undefined); throw error; }
-  finally { reader.releaseLock(); }
+  } catch (error) {
+    failed = true;
+    if (input) void input.retire("cancel", error);
+    else void reader.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    if (input) await input.retire(eof ? "eof" : "cancel", operation.signal.reason).catch(error => { if (!failed) throw error; });
+    else reader.releaseLock();
+  }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try {
@@ -81,19 +114,54 @@ async function readMetadata(response: Response, operation: HttpOperation): Promi
 // Filtered pages expose only permitted model IDs, including first/last cursors.
 // An all-hidden page is scanned internally on the SAME selected grant; never
 // repick/fail over to a different account to manufacture a combined inventory.
-export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>): Promise<Response> {
-  const restricted = policy.models != null, seen = new Set<string>();
+export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>, registerInput?: NativeJsonInputHooks["registerInput"]): Promise<Response> {
+  let restricted = policy.models != null;
+  const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
+    if (endpoint.request_format === REQUESTY_MODELS_FORMAT) {
+      if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
+      const metadata = await readRequestyModels(response, operation.signal, id => discoveryAllows(policy, provider, id), registerInput);
+      policy = await refreshPolicy();
+      return metadataResponse(filterRequestyModels(metadata, id => discoveryAllows(policy, provider, id)), response);
+    }
+    if (refreshPolicy && response.status !== 200) {
+      if (response.status < 400) {
+        await discardMetadata(response, registerInput);
+        throw new HttpError(502, "model_discovery_rejected", "upstream rejected model discovery");
+      }
+      // Preserve the native error contract only after bounded complete parsing
+      // and current authority. Restricted callers keep content-free errors.
+      const metadata = await readMetadata(response, operation, true, registerInput);
+      policy = await refreshPolicy(); restricted = policy.models != null;
+      if (!restricted) return metadataResponse(metadata, response);
+      throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
+    }
+    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
+      await discardMetadata(response, registerInput);
+      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
+    }
     if (!response.ok) {
       if (response.status >= 300 && response.status < 400) {
-        void response.body?.cancel().catch(() => undefined);
+        await discardMetadata(response, registerInput);
         throw new HttpError(502, "provider_unavailable", `upstream request to provider ${provider.id} failed`);
       }
       if (!restricted) { const headers = new Headers(response.headers); headers.set("cache-control", "private, no-store"); return new Response(response.body, { status: response.status, headers }); }
-      void response.body?.cancel().catch(() => undefined);
+      await discardMetadata(response, registerInput);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
-    const metadata = await readMetadata(response, operation);
+    if (isKeyedModelDiscovery(endpoint.request_format)) {
+      const metadata = await readKeyedModelDiscovery(endpoint.request_format, response, operation.signal, id => discoveryAllows(policy, provider, id));
+      return metadataResponse(metadata, response);
+    }
+    if (endpoint.request_format === "synthetic.models") {
+      const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,
+        value => filterSyntheticModels(value, id => discoveryAllows(policy, provider, id)), () => { throw malformed(); });
+      return metadataResponse(metadata, response);
+    }
+    const metadata = await readMetadata(response, operation, !!refreshPolicy, registerInput);
+    // Optional original-owner binding refreshes permissions AFTER the complete
+    // read. A stale admission policy must not publish newly hidden model IDs.
+    if (refreshPolicy) { policy = await refreshPolicy(); restricted = policy.models != null; }
     if (endpoint.request_format === "ollama.models") {
       try { return metadataResponse(filterOllamaModels(metadata, id => discoveryAllows(policy, provider, id)), response); }
       catch { throw malformed(); }
@@ -105,10 +173,10 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       return metadataResponse(metadata, response);
     }
     if (!Array.isArray(metadata.data) || !metadata.data.every(valid)) throw malformed();
-    if (provider.id === "anthropic" && typeof metadata.has_more !== "boolean" || provider.id === "openai" && metadata.object !== "list") throw malformed();
-    if (!restricted) return metadataResponse(metadata, response);
+    if (endpoint.request_format === "anthropic.models" && typeof metadata.has_more !== "boolean" || endpoint.request_format === "openai.models" && metadata.object !== "list") throw malformed();
+    if (!restricted && !provider.models.some(model => model.availability?.status === "stopped")) return metadataResponse(metadata, response);
     const data = metadata.data.filter(model => discoveryAllows(policy, provider, model.id));
-    if (provider.id === "openai") return metadataResponse({ object: "list", data }, response);
+    if (endpoint.request_format === "openai.models") return metadataResponse({ object: "list", data }, response);
     if (data.length || !metadata.has_more) return metadataResponse({ data, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null, has_more: metadata.has_more }, response);
     const before = query.before_id != null;
     const cursor = before ? metadata.first_id : metadata.last_id;
@@ -116,6 +184,6 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
     seen.add(cursor);
     response = await next(cursor, before);
   }
-  void response.body?.cancel().catch(() => undefined);
+  await discardMetadata(response, registerInput);
   throw malformed();
 }

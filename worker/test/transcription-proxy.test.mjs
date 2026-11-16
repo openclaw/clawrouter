@@ -17,19 +17,13 @@ function form(fields = {}, file = new File([audio], "sample.wav", {type:"audio/w
   return body;
 }
 function fixture(t, options = {}, policy = {}) {
-  const env = usageEnv([], { limit:1_000_000, fixedCost:200, retainContent:false, ...options });
+  const env = usageEnv([], { limit:1_000_000, fixedCost:200, retainContent:false, ...options, admissionReply(value, requestBody) {
+    if(value.policy) Object.assign(value.policy.policy,policy);
+    admissions.push(requestBody);
+    return authorityEdit(value);
+  } });
   const events=[], pending=[], retained=[], admissions=[], ledger=sqlBudgetNamespace(t);
-  const original = env.ACCESS_CONTROL.get;
   let authorityEdit = value => value;
-  env.ACCESS_CONTROL.get = (...args) => {
-    const stub=original(...args);
-    return { fetch: async (url,init) => {
-      const response=await stub.fetch(url,init), value=await response.json();
-      if(value.policy) Object.assign(value.policy.policy,policy);
-      if(new URL(url).pathname === "/admission/resolve") admissions.push(JSON.parse(init.body));
-      return Response.json(authorityEdit(value));
-    } };
-  };
   env.BUDGET_LEDGER=ledger; env.OPENAI_API_KEY="fixture-upstream-key";
   env.USAGE_QUEUE={send:async event => events.push(event)};
   env.CONTENT_ARCHIVE={put:async (...args)=>retained.push(args)};
@@ -421,4 +415,52 @@ test("soft denial waits for durable usage ACK and fails closed when publication 
   const response=await f.call();assert.equal(response.status,503);assert.equal((await response.json()).error.code,"accounting_unavailable");
   await Promise.all(f.pending);assert.equal(upstream.mock.callCount(),1);
   for(const name of owners) assert.deepEqual(f.ledger.get(name).reservations(),[]);
+});
+
+for (const first of ["read", "cancel"]) for (const cleanupRejects of [false, true]) test(`bounded upload joins first cleanup and read (${first}, rejection=${cleanupRejects})`, { timeout: 5000 }, async () => {
+  const { readBounded } = await import("../transcription-body.ts");
+  const { HttpOperation } = await import("../http-operation.ts");
+  const started = Promise.withResolvers(), readAck = Promise.withResolvers(), cancelAck = Promise.withResolvers(), cancelStarted = Promise.withResolvers();
+  const operation = new HttpOperation(); let cancels = 0, unlocks = 0, ended = false;
+  const source = new ReadableStream({ pull() { started.resolve(); }, async cancel() { cancels++; cancelStarted.resolve(); await cancelAck.promise;
+    if (cleanupRejects) throw new Error("synthetic cleanup failure");
+  } }, { highWaterMark: 0 });
+  const acquire = source.getReader.bind(source);
+  source.getReader = () => { const reader = acquire(); return {
+    async read() { try { return await reader.read(); } finally { await readAck.promise; } },
+    cancel: reason => reader.cancel(reason), releaseLock() { unlocks++; reader.releaseLock(); },
+  }; };
+  const result = readBounded(source, 32, operation).then(() => assert.fail("aborted read returned bytes"), () => { ended = true; });
+  try {
+    await started.promise; operation.cancel(new Error("synthetic caller stop")); await cancelStarted.promise;
+    assert.equal(ended, false); assert.equal(source.locked, true); assert.equal(cancels, 1);
+    (first === "read" ? readAck : cancelAck).resolve(); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(ended, false); assert.equal(source.locked, true);
+    (first === "read" ? cancelAck : readAck).resolve(); await result;
+    assert.equal(source.locked, false); assert.equal(unlocks, 1); assert.equal(cancels, 1);
+  } finally { readAck.resolve(); cancelAck.resolve(); await result; }
+});
+
+for (const refusal of ["bytes", "chunks"]) test(`bounded upload ${refusal} refusal retains its first cancellation`, { timeout: 5000 }, async () => {
+  const { readBounded } = await import("../transcription-body.ts");
+  const { HttpOperation } = await import("../http-operation.ts");
+  const cleanup = Promise.withResolvers(), started = Promise.withResolvers(); let ended = false, cancels = 0;
+  const source = new ReadableStream({ pull(controller) { controller.enqueue(new Uint8Array(refusal === "bytes" ? 2 : 0)); },
+    async cancel() { cancels++; started.resolve(); await cleanup.promise; } }, { highWaterMark: 0 });
+  const result = readBounded(source, 1, new HttpOperation(), 413, 1).then(() => assert.fail("refusal returned bytes"), error => {
+    ended = true; assert.equal(error.status, 413);
+  });
+  try { await started.promise; assert.equal(ended, false); assert.equal(source.locked, true); cleanup.resolve(); await result;
+    assert.equal(source.locked, false); assert.equal(cancels, 1);
+  } finally { cleanup.resolve(); await result; }
+});
+
+test("multipart header refusal never acquires an input reader and post-EOF parser refusal never recancels", async () => {
+  const { readTranscriptionUpload } = await import("../transcription-body.ts"); let acquired = 0, cancels = 0;
+  const source = new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("invalid")); controller.close(); }, cancel() { cancels++; } });
+  const acquire = source.getReader.bind(source); source.getReader = (...args) => { acquired++; return acquire(...args); };
+  await assert.rejects(readTranscriptionUpload(new Request("https://router.example", { method: "POST", body: source, duplex: "half", headers: { "content-type": "text/plain" } })));
+  assert.equal(acquired, 0); assert.equal(source.locked, false);
+  await assert.rejects(readTranscriptionUpload(new Request("https://router.example", { method: "POST", body: source, duplex: "half", headers: { "content-type": "multipart/form-data; boundary=x" } })));
+  assert.equal(acquired, 1); assert.equal(source.locked, false); assert.equal(cancels, 0);
 });
