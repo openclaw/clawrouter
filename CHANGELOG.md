@@ -21,6 +21,8 @@
 
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
+- Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
 - Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.
