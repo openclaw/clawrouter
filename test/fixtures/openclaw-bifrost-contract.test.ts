@@ -473,6 +473,24 @@ export function bifrostSetupPhase(phase:unknown):boolean {
  return typeof phase==="string"&&["caller_install","progress_subscribe","source_env_pin","source_git_pin","poison_env","fetch_hook","undici_hook","guard_hook","guard_descriptor","profile_write","discovery_env","api_key_resolver","auth_resolver","discovery_auth_check","inference_auth_check","facade_load","plugin_register","plugin_id_check","catalog_check"].includes(phase);
 }
 // Native accessors bypass instance getters. Reasons stay private and are never serialized.
+// Version 1: counts; first kind/state/index/reason presence; private pair links.
+// States: 0 unknown, 1 pending, 2 fulfilled, 3 rejected, 4 threw.
+export function validateBifrostWorkerResidual(v:any):boolean {
+ const n=(x:any)=>Number.isSafeInteger(x)&&x>=0&&x<=1000000;
+ const bit=(x:any)=>x===null||typeof x==="boolean";
+ if(!Array.isArray(v)||v.length!==4||v[0]!==1||!Array.isArray(v[1])||v[1].length!==3||!v[1].every(n))return false;
+ const f=v[2],p=v[3];
+ if(v[1][0]===0?f!==null:!Array.isArray(f)||f.length!==4||!f.every(n)||f[0]>13||![0,1,3,4].includes(f[1])||f[3]>2||([0,1].includes(f[1])&&f[3]!==0))return false;
+ if(!Array.isArray(p)||p.length!==7||!p.slice(0,2).every(n)||p[0]+p[1]>v[1][0]||!p.slice(2,5).every(bit)||!p.slice(5).every((x:any)=>Number.isInteger(x)&&x>=0&&x<=4))return false;
+ if(f&&(f[0]===3?p[0]<1:f[0]===4?p[1]<1:v[1][0]-p[0]-p[1]<1))return false;
+ if((p[0]!==1||p[1]!==1)&&p.slice(2,5).some((x:any)=>x!==null)||p[0]!==1&&p.slice(5).some((x:any)=>x!==0))return false;
+ return true;
+}
+export function bifrostObserveRetirementVerdict(c:any,response:any,value:any):boolean {
+ const status200=response.status===200,retired=value.retired;
+ c.verdict=[status200,retired,value.disposition==="strict"?1:value.disposition==="provisional_worker_deadline_read"?2:0];
+ return status200&&retired===true;
+}
 export function bifrostSignalEvidence(signal:unknown):any {
  try{
   const aborted=Reflect.apply(Object.getOwnPropertyDescriptor(AbortSignal.prototype,"aborted")!.get!,signal,[]);
@@ -544,7 +562,7 @@ export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,
    // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
    undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
    bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker},
-  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof),...(w.transportWitnessEvidence?{transport:w.transportWitnessEvidence}:{}),...(w.origin?{origin:w.origin.summary()}:{})}
+  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof,index),...(w.transportWitnessEvidence?{transport:w.transportWitnessEvidence}:{}),...(w.origin?{origin:w.origin.summary()}:{})}
  ];
 }
 export function validateBifrostEvidence(record:any):void {
@@ -569,7 +587,11 @@ export function validateBifrostEvidence(record:any):void {
   router:(v:any)=>v===null||Array.isArray(v)&&v.length===4&&v.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null)),
   usage:(v:any)=>v===null||Array.isArray(v)&&v.length===3&&typeof v[0]==="boolean"&&(v[0]?v.slice(1).every((n:any)=>n!==null&&number(n)):v[1]===null&&v[2]===null),
  };
- // Optional only for the source-owned stream-partial control; not a success predicate.
+  // Mandatory only in the two progress cases under this source-bound schema.
+  if(record?.part==="postlude"&&[30,31].includes(record.case))fields.postlude.worker=(v:any)=>Array.isArray(v)&&v.length===5&&v[0]===1&&
+    (v[1]===null?v[2]===null&&v[3]===null:validateBifrostWorkerResidual(v.slice(0,4)))&&
+    (v[4]===null||Array.isArray(v[4])&&v[4].length===3&&typeof v[4][0]==="boolean"&&typeof v[4][1]==="boolean"&&[1,2].includes(v[4][2]));
+  // Optional only for the source-owned stream-partial control; not a success predicate.
  if(record?.part==="postlude"&&Object.hasOwn(record,"transport")){
   if(record.case!==2)throw Error("foreign transport witness");
   fields.postlude.transport=(v:any)=>Array.isArray(v)&&v.length===4&&Number.isInteger(v[0])&&v[0]>=0&&v[0]<=7&&
@@ -765,15 +787,17 @@ export function validateBifrostRetirementProof(value:any,id:string):boolean {
   Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read"].includes(value.disposition)&&
   (value.source===null||validateBifrostSourceProof(value.source,id))&&!!value.observation&&value.observation.owner===id&&
   Array.isArray(value.observation.phases)&&value.observation.phases.length===4&&value.observation.phases.every(r=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null))&&
-  (value.observation.producer===null||validateBifrostSourceProof(value.observation.producer,id))&&typeof value.observation.usageObserved==="boolean";
+   (value.observation.producer===null||validateBifrostSourceProof(value.observation.producer,id))&&typeof value.observation.usageObserved==="boolean"&&
+   (!Object.hasOwn(value.observation,"residual")||value.observation.residual===null||validateBifrostWorkerResidual(value.observation.residual));
 }
-export function bifrostPostludeEvidence(c:any,proof:any):any {
+export function bifrostPostludeEvidence(c:any,proof:any,index?:number):any {
  const step=(i:number)=>{const o=c?.steps?.[i];return o?[o.state,o.state===3||o.state===4?o.reason!==undefined:null,o.invoke,o.returnAt??null,o.settle??null]:null;};
  const observation=proof?.observation,source=observation?.producer,p=source?.producer;
  return {control:[0,1,2,3,4,5].map(step),validated:c?.validated===true,
   producer:p?[p.joined,p.roles.map((r:any)=>[["producer","progressTask","progressObserved","progressCommand"].indexOf(r[0]),["pending","fulfilled","rejected"].indexOf(r[1])+1,r[2]]),p.faults,p.failures,p.undefinedFailures,
    source.held,source.canceled,source.expired,source.settled,...(Object.hasOwn(p,"site")?[p.site]:[])]:null,
-  router:observation?.phases??null,usage:observation?[observation.usageObserved,observation.usageObserved?proof.events.length:null,observation.usageObserved?proof.charged:null]:null};
+   router:observation?.phases??null,usage:observation?[observation.usageObserved,observation.usageObserved?proof.events.length:null,observation.usageObserved?proof.charged:null]:null,
+   ...([30,31].includes(index as number)?{worker:[...(observation?.residual??[1,null,null,null]),c?.verdict??null]}:{})};
 }
 
 const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"),true);
@@ -974,7 +998,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   await retirementReader(retirementOwner,nativeFetch,undefined,[origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"}],"text",(_kind:string,start:Function)=>start(),retirementTicket);
   retirementReader.parse(retirementTicket);proof=retirementReader.validate(retirementTicket,validateBifrostRetirementProof);
   w.sourceExpired=proof.source?.expired??null;w.retirementProof=proof;
-  retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
+  retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=row.mode==="progress"?bifrostObserveRetirementVerdict(retirementReader.inspect(retirementTicket),response,value):response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
  }catch(e){workerFailures.push(e);}
  w.workerRetired=worker&&workerFailures.length===0;
  checkpoints.mark(caseIndex,"worker_retirement",workerFailures.length?"rejected":"fulfilled",workerFailures[0]);

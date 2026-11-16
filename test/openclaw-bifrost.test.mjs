@@ -351,7 +351,7 @@ export function bifrostCheckpointFunctions(){
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
  const native=bifrostNativeEvaluator();
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary,createBifrostRetirementReader,validateBifrostProducerSite,validateBifrostProducerObservation,validateBifrostSourceProof,validateBifrostRetirementProof,bifrostPostludeEvidence})",{AbortSignal,Buffer,bifrostInvocationBound:native.bifrostInvocationBound,bifrostCancelOperand:native.bifrostCancelOperand},{timeout:1000});
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary,createBifrostRetirementReader,validateBifrostWorkerResidual,bifrostObserveRetirementVerdict,validateBifrostProducerSite,validateBifrostProducerObservation,validateBifrostSourceProof,validateBifrostRetirementProof,bifrostPostludeEvidence})",{AbortSignal,Buffer,bifrostInvocationBound:native.bifrostInvocationBound,bifrostCancelOperand:native.bifrostCancelOperand},{timeout:1000});
 }
 export function bifrostCheckpointRecords(error){
  const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
@@ -900,6 +900,22 @@ export function observeBifrostOperation(s, kind, start, details = {}) {
   }));
   return pending;
 }
+// Source-owned records only. This snapshot never classifies or removes a failure.
+export function bifrostWorkerResidual(s) {
+  const bounded=n=>{if(!Number.isSafeInteger(n)||n<0||n>1000000)throw Error("residual evidence bound");return n;};
+  const state=o=>["pending","fulfilled","rejected","threw"].indexOf(o?.state)+1;
+  const present=o=>o&&["rejected","threw"].includes(o.state)&&Object.hasOwn(o,"error");
+  const bad=s.ops.filter(o=>o.state!=="fulfilled"),first=bad[0];
+  const kinds=["fetch","fetch_observer","read","read_observer","closed","cancel","body_cancel","control_fetch","control_body","control_cancel","usage","waitUntil","handler"];
+  const reads=bad.filter(o=>o.kind==="read"),observers=bad.filter(o=>o.kind==="read_observer");
+  const read=reads.length===1?reads[0]:undefined,observer=observers.length===1?observers[0]:undefined;
+  const unique=kind=>{if(!read?.reader)return 0;const rows=s.ops.filter(o=>o.reader===read.reader&&o.kind===kind);return rows.length===1?state(rows[0]):0;};
+  return [1,[bounded(bad.length),bounded(s.sync.length),bounded(s.observerFailures.length)],
+    first?[kinds.indexOf(first.kind)+1,state(first),bounded(s.ops.indexOf(first)),present(first)?first.error===undefined?1:2:0]:null,
+    [bounded(reads.length),bounded(observers.length),read&&observer?!!read.reader&&read.reader===observer.reader:null,
+      read&&observer?!!read.pending&&read.pending===observer.originalRead:null,
+      present(read)&&present(observer)?Object.is(read.error,observer.error):null,unique("closed"),unique("cancel")]];
+}
 export async function collectBifrostOperations(s) {
   let at=0;
   while(at<s.roots.length){const batch=s.roots.slice(at);at=s.roots.length;for(const outcome of await Promise.allSettled(batch))if(outcome.status==="rejected")s.observerFailures.push(outcome.reason);}
@@ -966,6 +982,7 @@ import {sha256Hex} from './worker/utils.ts';
 import {InternalHttpAbort} from './worker/http-operation.ts';
 ${observeBifrostOperation.toString()}
 ${collectBifrostOperations.toString()}
+${bifrostWorkerResidual.toString()}
 ${bifrostDeadlineQualified.toString()}
 ${bifrostDeadlineWitness.toString()}
 ${bifrostCheckpointFunctions().createBifrostRetirementReader.toString()}
@@ -1061,7 +1078,8 @@ export default {async fetch(request,bindings,originalContext){
     const candidate=bifrostDeadlineQualified(deadline);
     for(const o of s.ops)if(o.state!=='fulfilled'&&!(candidate&&(o.ordinal===deadline.readOrdinal||o.ordinal===deadline.observerOrdinal)))failures.push(o.error);
     failures.push(...s.sync,...s.observerFailures);
-    const proof={owner:s.id,observation:{owner:s.id,phases,producer:s.producerObservation??null,usageObserved},calls:s.calls,operations:publicOperations(s),readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.body.locked})),source:s.source??null,events:usage?.events??[],charged,prefix:s.prefix,mutated:s.mutated,inspected:!!s.inspected,inboundChatAborted:s.inboundChatAborted===true,deadline,
+     let residual=null;if(s.mode==='progress')try{residual=bifrostWorkerResidual(s);}catch(error){failures.push(error);}
+     const proof={owner:s.id,observation:{owner:s.id,phases,producer:s.producerObservation??null,usageObserved,...(s.mode==='progress'?{residual}: {})},calls:s.calls,operations:publicOperations(s),readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.body.locked})),source:s.source??null,events:usage?.events??[],charged,prefix:s.prefix,mutated:s.mutated,inspected:!!s.inspected,inboundChatAborted:s.inboundChatAborted===true,deadline,
       disposition:candidate?'provisional_worker_deadline_read':'strict',retired:failures.length===0,syncFailures:s.sync.length};
     s.retirementFailures=failures;return proof;
    })();
@@ -1251,6 +1269,89 @@ export async function bifrostParentRelayInertCases(assert){
  });
  return passed;
 }
+
+export async function bifrostResidualInertCases(assert, source) {
+  const names=[],groups=[],run=async(name,fn)=>{await fn();names.push(name);},f=bifrostCheckpointFunctions();
+  const start=source.indexOf("if(!s.retirement)s.retirement=(async()=>{")+"if(!s.retirement)s.retirement=(async()=>{".length;
+  const end=source.indexOf("})();",start);assert.ok(start>0&&end>start);
+  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+  const retire=new AsyncFunction("s","drain","control","invoke","usageSnapshot","bindings","bodyBudgetCharged","bifrostDeadlineWitness","bifrostDeadlineQualified","InternalHttpAbort","publicOperations","bifrostWorkerResidual",source.slice(start,end));
+  const group=(proof,c={})=>f.bifrostCaseEvidence(30,{transports:[],acquisitions:[],originals:[],caller:{},failures:[],syncFailures:[],observerFailures:[],evidenceRestoreFailures:0,evidenceRestoreUndefined:0},proof,false,[],c);
+  for(const kind of ["healthy","same defined P/Q","undefined P/Q","sync only","observer only","mixed"]){
+    await run(kind,async()=>{
+      const E=kind==="undefined P/Q"?undefined:{},sync={},observer={},s={id:"owned",mode:"progress",workerDeadline:false,sequence:0,ops:[],roots:[],sync:[],observerFailures:[],readers:[],transports:[],requests:[],calls:[],inboundChatAborted:true};
+      const reader={body:{locked:false},unlocks:1,eof:false},track=(kind,p,details={})=>observeBifrostOperation(s,kind,()=>p,details);
+      s.readers.push(reader);track("closed",Promise.resolve(),{reader});
+      if(["same defined P/Q","undefined P/Q","mixed"].includes(kind)){
+        const P=track("read",Promise.reject(E),{reader}),Q=P.then(()=>undefined);track("read_observer",Q,{reader,originalRead:P});assert.notEqual(P,Q);
+      }else track("read",Promise.resolve({done:false,value:{byteLength:1}}),{reader});
+      track("cancel",Promise.resolve(),{reader});
+      if(["sync only","mixed"].includes(kind))s.sync.push(sync);
+      if(["observer only","mixed"].includes(kind))s.observerFailures.push(observer);
+      const sourceProof={owner:s.id,held:0,canceled:1,expired:0,settled:1,completed:0,progressCalls:1,progressEnqueued:1,progressTerminal:false,calls:[],producer:{v:1,joined:true,roles:["producer","progressTask","progressObserved","progressCommand"].map(k=>[k,"fulfilled",null]),faults:0,failures:0,undefinedFailures:0}};
+      const proof=await retire(s,collectBifrostOperations,async()=>{s.producerObservation=sourceProof;return sourceProof;},(s,k,start)=>observeBifrostOperation(s,k,start),async()=>({events:[{},{}]}),{},()=>0,bifrostDeadlineWitness,bifrostDeadlineQualified,function InternalHttpAbort(){},s=>s.ops.map(o=>({kind:o.kind,state:o.state})),bifrostWorkerResidual);
+      assert.deepEqual(proof.observation.phases,Array.from({length:4},()=>[2,null]));assert.equal(proof.retired,kind==="healthy");
+      assert.equal(f.validateBifrostWorkerResidual(proof.observation.residual),true);assert.equal(proof.deadline.workerOnly,false);
+      const expected=kind.includes("P/Q")||kind==="mixed"?[E,E]:[];if(s.sync.length)expected.push(sync);if(s.observerFailures.length)expected.push(observer);
+      assert.equal(s.retirementFailures.length,expected.length);s.retirementFailures.forEach((reason,i)=>assert.equal(reason,expected[i]));
+      const c={},response={get status(){assert.equal(this,response);c.statusReads=(c.statusReads??0)+1;return proof.retired?200:500;}};
+      assert.equal(f.bifrostObserveRetirementVerdict(c,response,proof),proof.retired);assert.equal(c.statusReads,1);
+      const records=group(proof,c);records.forEach(f.validateBifrostCheckpoint);groups.push(records);
+      const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});records.forEach(relay.record);await relay.flush();
+      assert.equal(lines.length,5);assert.ok(lines.every(l=>Buffer.byteLength(l)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+    });
+  }
+  await run("all failure categories are distinguishable",()=>assert.equal(new Set(groups.map(g=>JSON.stringify(g[4].worker))).size,6));
+  for(const [status,retired] of [[200,true],[200,false],[500,true],[500,false]])await run("separate verdict operands "+status+"/"+retired,()=>{
+    const c={};assert.equal(f.bifrostObserveRetirementVerdict(c,{status},{retired,disposition:"strict"}),status===200&&retired);assert.deepEqual(c.verdict,[status===200,retired,1]);
+  });
+  for(const reason of [undefined,{}])await run("status getter original failure "+(reason===undefined?"undefined":"defined"),()=>{
+    const c={};let threw=false;try{f.bifrostObserveRetirementVerdict(c,{get status(){throw reason;}},{retired:false,disposition:"strict"});}catch(e){threw=true;assert.equal(e,reason);}assert.equal(threw,true);assert.equal(c.verdict,undefined);
+  });
+  await run("unknown and missing observations stay unknown",()=>{const r=group(undefined)[4];assert.deepEqual(r.worker,[1,null,null,null,null]);f.validateBifrostCheckpoint(r);});
+  await run("maximum legal progress tuple and actual relay",async()=>{
+    const g=group(undefined),r=g[4];r.control=Array.from({length:6},()=>[3,false,1000000,1000000,1000000]);r.validated=false;
+    r.producer=[false,Array.from({length:4},(_,i)=>[i,3,false]),...Array(7).fill(1000000)];r.router=Array.from({length:4},()=>[3,false]);r.usage=[true,1000000,1000000];
+    // One handler plus 499999 reads and 500000 observers: all widths retained.
+    r.worker=[1,[1000000,1000000,1000000],[13,4,1000000,2],[499999,500000,null,null,null,0,0],[false,false,2]];
+    f.validateBifrostCheckpoint(r);const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});g.forEach(relay.record);await relay.flush();groups.push(g);
+    assert.ok(Math.max(...lines.map(l=>Buffer.byteLength(l)))<=768);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  });
+  for(const [label,mutate]of [
+    ["version",r=>r.worker[0]=2],["boolean count",r=>r.worker[1]=[true,0,0]],["overflow",r=>r.worker[1]=[1000001,0,0]],
+    ["missing",r=>delete r.worker],["foreign case",r=>r.case=29],["disposition",r=>r.worker[4]=[false,false,3]],
+    ["extra field",r=>r.worker.push(0)],["impossible pair",r=>r.worker=[1,[0,0,0],null,[1,1,true,true,true,2,2],null]],
+  ])await run("strict residual schema "+label,()=>{const r=JSON.parse(JSON.stringify(groups[0][4]));mutate(r);assert.throws(()=>f.validateBifrostCheckpoint(r));});
+  for(const [label,residual]of [
+    ["read without failed read",[1,[1,0,0],[3,3,0,2],[0,0,null,null,null,0,0]]],
+    ["observer without failed observer",[1,[1,0,0],[4,3,0,2],[0,0,null,null,null,0,0]]],
+    ["other kind without residual operation",[1,[2,0,0],[13,3,0,2],[1,1,false,false,false,2,2]]],
+    ["old maximum consumed by pair",[1,[1000000,1000000,1000000],[13,4,1000000,2],[499999,500001,null,null,null,0,0]]],
+  ])for(const reverse of [false,true])await run("first-kind/count contradiction "+label+"/"+reverse,async()=>{
+    assert.equal(f.validateBifrostWorkerResidual(residual),false);
+    const g=JSON.parse(JSON.stringify(groups[0]));g[4].worker=[...residual,[false,false,1]];assert.throws(()=>f.validateBifrostCheckpoint(g[4]));
+    const lines=[],relay=createBifrostParentRelay(line=>{lines.push(line);return Promise.resolve();});(reverse?[...g].reverse():g).forEach(relay.record);
+    await assert.rejects(relay.flush());assert.equal(lines.length,0);
+  });
+  await run("first-kind/count positive boundaries preserve unknown kind",()=>{
+    for(const residual of [
+      [1,[1,0,0],[3,3,0,2],[1,0,null,null,null,0,0]],
+      [1,[1,0,0],[4,3,0,2],[0,1,null,null,null,0,0]],
+      [1,[3,0,0],[13,3,0,2],[1,1,false,false,false,2,2]],
+      [1,[3,0,0],[0,0,0,0],[1,1,false,false,false,2,2]],
+    ])assert.equal(f.validateBifrostWorkerResidual(residual),true);
+  });
+  await run("foreign pair links are observations not acceptance",()=>{
+    const E={},P={},reader={},ops=[{kind:"read",state:"rejected",pending:P,reader,error:E},{kind:"read_observer",state:"rejected",originalRead:{},reader:{},error:{}}];
+    const r=bifrostWorkerResidual({ops,sync:[],observerFailures:[]});assert.deepEqual(r[3],[1,1,false,false,false,0,0]);assert.equal(f.validateBifrostWorkerResidual(r),true);
+  });
+  await run("generated router captures after original failure collection",()=>{
+    assert.ok(source.indexOf("residual=bifrostWorkerResidual(s)")>source.indexOf("failures.push(...s.sync,...s.observerFailures)"));
+    assert.ok(source.includes("${bifrostWorkerResidual.toString()}"));
+  });
+  return {names,groups};
+}
+test("Bifrost progress residual observations preserve strict failures (inert)",async()=>{assert.ok((await bifrostResidualInertCases(assert,readFileSync(new URL("./openclaw-bifrost.test.mjs",import.meta.url),"utf8"))).names.length>=20);});
 
 export async function bifrostDemandProducerInertCases(assert, source) {
  const names=[],run=async(name,fn)=>{await fn();names.push(name);};
