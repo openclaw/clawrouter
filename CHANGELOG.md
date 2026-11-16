@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Route Qwen regional cancellation fixtures through the direct Worker ingress, preserving existing SDK, retirement and accounting assertions.
+
 - Preserve an invocation-bound Qwen diagnostic for defining transport lookup, returned-host build and selected-fetch hook outcomes. Keep unsupported interception and ambiguous custody unknown, without changing original calls, errors, ownership or financial verdicts.
 
 - Preserve a bounded Qwen fetch-invocation witness for observed provider/SSRF spy entries, acquisition setup failures and exact context relations. Missing interception remains unknown; original failures and strict retirement checks are unchanged.

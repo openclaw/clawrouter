@@ -489,10 +489,13 @@ export default {async fetch(request){
 }
 
 async function startFixture() {
-  const directory = await mkdtemp(join(tmpdir(), "qwen-regions-")); let runtime;
-  try { runtime = await startWorkerdFixture(directory, routerScript(), upstreamScript(), { requestContext: true }); }
-  catch (error) { return finish(() => { throw error; }, [() => rm(directory, { recursive: true, force: true })]); }
-  const origin = String(await runtime.ready).replace(/\/$/, "");
+  const directory = await mkdtemp(join(tmpdir(), "qwen-regions-")); let runtime, origin;
+  try {
+    runtime = await startWorkerdFixture(directory, routerScript(), upstreamScript(), { directRouter: true, requestContext: true });
+    origin = (await runtime.unsafeGetDirectURL("router")).origin;
+  } catch (error) {
+    return finish(() => { throw error; }, [...(runtime ? [() => runtime.dispose()] : []), () => rm(directory, { recursive: true, force: true })]);
+  }
   return { runtime, origin, close: () => finish(() => {}, [() => runtime.dispose(), () => rm(directory, { recursive: true, force: true })]) };
 }
 
