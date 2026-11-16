@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -21,15 +22,16 @@ test("actual OpenClaw Particle configured native client through workerd and SQLi
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-particle-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [id === "particle_foreign" ? "openai" : "particle"], models: id === "particle_empty" ? ["particle/unlisted-fixture"] : models.map(id => `particle/${id}`), tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "particle_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put("connections/particle", JSON.stringify({ providerId: "particle", enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-particle_catalog-fixture-secret" } });
     assert.equal(catalogResponse.status, 200); const catalog = await catalogResponse.json();
@@ -111,9 +113,11 @@ test("actual OpenClaw Particle configured native client through workerd and SQLi
       assert.equal(usage.budget.spentMicros, 0);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
   }
 });
 

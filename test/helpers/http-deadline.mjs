@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWorkerdFixture } from "./workerd.mjs";
+import { cleanupFixture } from "./fixture-cleanup.mjs";
 
 const endpointMs = 500;
 const limit = 1_000_000;
@@ -13,13 +14,14 @@ const headers = { authorization: `Bearer clawrouter-live-fixture-${secret}`, "co
 export async function runHttpDeadlineCases(t, scenarios) {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-http-deadline-"));
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: 7, retainRequestContent: false }));
     await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
     await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-    const origin = await mf.ready;
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router");
     const read = async (path, signal) => {
       const response = await fetch(new URL(path, origin), { headers, signal: AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]) });
@@ -149,9 +151,11 @@ export async function runHttpDeadlineCases(t, scenarios) {
       });
       if (cleanupError) throw cleanupError;
     }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
   }
 }
 

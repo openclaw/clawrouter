@@ -373,15 +373,18 @@ test("workerd full-output music uses actual fetch BYOB, original wire, bounded d
     const proof=await settled(origin);assertPhysical(proof);assert.ok(proof.bytes<65536);
     await settlement(origin,2,'success');
   }));
-  await t.test("full-size replay cancellation releases the original operation without replaying POST", () => musicRequest(origin,'delivery-cancel',async (pending,abort) => {
-    const response=await pending;await assertStatus(response,200,origin);
-    const reader=response.body.getReader();
-    try { assert.ok((await reader.read()).value.length); }
-    finally { abort.abort(); await reader.cancel().catch(()=>{}); reader.releaseLock(); }
-    const proof=await settled(origin);assertPhysical(proof);assert.equal(proof.bytes,32*1024*1024);
-    assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
-    await settlement(origin,3,'client_error');
-  }));
+  await t.test("full-size replay cancellation releases the original operation without replaying POST", async () => {
+    const origin = (await instance.unsafeGetDirectURL("router")).origin;
+    return musicRequest(origin,'delivery-cancel',async (pending,abort) => {
+      const response=await pending;await assertStatus(response,200,origin);
+      const reader=response.body.getReader();
+      try { assert.ok((await reader.read()).value.length); }
+      finally { abort.abort(); await reader.cancel().catch(()=>{}); reader.releaseLock(); }
+      const proof=await settled(origin);assertPhysical(proof);assert.equal(proof.bytes,32*1024*1024);
+      assert.ok(proof.beforeDeliveryCapacity>=64*1024*1024);
+      await settlement(origin,3,'client_error');
+    });
+  });
   await t.test("controlled incoming signal cancels quarantine without partial audio; host transport is separate", async caseTest => {
     // HOST TRANSPORT ONLY: on locked workerd 1.20261023.1, the real host abort
     // and socket close did not propagate before headers (90d5553 trace).
