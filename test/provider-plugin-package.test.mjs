@@ -31,7 +31,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   execFileSync("tar", ["-xzf", join(root, archives[0]), "--strip-components=1", "-C", installed], { timeout: 30_000 });
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
-    "LICENSE", "README.md", "dist/conformance.d.ts", "dist/conformance.js", "dist/index.d.ts", "dist/index.js",
+    "LICENSE", "README.md", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/index.d.ts", "dist/index.js",
     "dist/package-index.d.ts", "dist/package-index.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
@@ -52,11 +52,20 @@ assert.equal(PROVIDER_CONFORMANCE_SCHEMA, "clawrouter.provider-conformance.v1");
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
 import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
+  type AuthScheme, type AuthorizationConfig, type RefreshConfig, type GrantTransportAuth, type CompiledGrantTransport,
   type ProviderProductSummary, type ProviderGrantKind, type ProviderProduct, type ProviderProductBinding,
   type ProviderProductOffer, type ProviderOfferDefinition, type ProviderOfferReference, type ProviderConformanceScenario, type ProviderConformanceExecution,
   type ProviderConformanceValidation } from "@clawrouter/provider-plugin-contract";
 const descriptor: ProviderPluginDescriptor = parseProviderPluginDescriptor({});
 const product: ProviderProductSummary = { id: "api", displayName: "API", commercialModel: "metered", authenticationMethod: "api-key" };
+const apiKey: AuthScheme = { type: "api_key", header: "x-api-key", secretKind: "api_key" };
+const transportAuth: GrantTransportAuth = { type: "bearer", header: "authorization", format: "Bearer \${secret}" };
+const transport: CompiledGrantTransport = { baseUrl: null, auth: transportAuth, endpointPaths: {},
+  headers: {}, appendHeaders: {}, requestTransforms: { prependSystem: [] }, maintenance: { quotaPoll: null, keepWarm: null } };
+declare const authorization: AuthorizationConfig;
+declare const refresh: RefreshConfig;
+// @ts-expect-error Header authentication must name the host-owned secret kind.
+const invalidAuth: AuthScheme = { type: "api_key", header: "x-api-key" };
 const kind: ProviderGrantKind = "subscription";
 const binding: ProviderProductBinding = { type: "grant-transport", grantKind: kind };
 const selection: ProviderProductOffer = { endpoint: "invoke", capability: "tool.invoke", models: null };
@@ -72,7 +81,7 @@ const index: ProviderPackageIndex = { schema: "clawrouter.provider-package-index
 declare const scenario: ProviderConformanceScenario;
 declare const validation: ProviderConformanceValidation;
 declare const execution: ProviderConformanceExecution;
-export { descriptor, product, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
+export { descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
 `);
   writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, noEmit: true },
