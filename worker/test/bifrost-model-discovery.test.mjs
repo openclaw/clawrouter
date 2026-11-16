@@ -5,18 +5,26 @@ import {parse} from "yaml";
 import {compileProviderSnapshot} from "../../scripts/compile-providers.mjs";
 import snapshot from "../generated/provider-snapshot.json" with {type:"json"};
 import {startBifrostFixture,finishBifrostOwned,assertBifrostRetired,bifrostKey,bifrostDiscoveryKey} from "../../test/openclaw-bifrost.test.mjs";
+import {bifrostWorkerEvidence} from "../../scripts/worker-test-failure-reporter.mjs";
 const source=parse(readFileSync(new URL("../../providers/bifrost.provider.yaml",import.meta.url),"utf8"));
 const compiled=snapshot.providers.find(p=>p.id==='bifrost'),catalog=ids=>({object:'list',data:ids.map(id=>({id,object:'model'}))});
 const selected='tenant/opaque-a';
 let count=0;
-async function run(t,mode,body,base,{workerDeadline=false}={}){
- let application;
- const f=await startBifrostFixture({hotCache:mode.startsWith('warm_')}),id='worker_bifrost_'+(++count);
+async function run(t,mode,body,base,{workerDeadline=false,evidence}={}){
+ let application, f;
+ evidence?.stage(1);
+ try { f=await startBifrostFixture({hotCache:mode.startsWith('warm_')}); }
+ catch(error){evidence?.failed(error);throw error;}
+ const id='worker_bifrost_'+(++count);
  const request=async(manifest=false,suffix='',options={})=>{
-  const response=await fetch(f.origin+(manifest==='versioned'?'/v1/native/bifrost/v1/models':manifest?'/v1/proxy/bifrost/models_list':'/v1/native/bifrost/models')+suffix,{headers:{authorization:'Bearer '+bifrostKey(id),'x-api-key':'synthetic-caller-key','x-upstream-url':'https://foreign.example'},...options});
-  const text=await response.text();application={status:response.status,body:JSON.parse(text),cache:response.headers.get('cache-control')};return application;
+  evidence?.stage(3);const response=await fetch(f.origin+(manifest==='versioned'?'/v1/native/bifrost/v1/models':manifest?'/v1/proxy/bifrost/models_list':'/v1/native/bifrost/models')+suffix,{headers:{authorization:'Bearer '+bifrostKey(id),'x-api-key':'synthetic-caller-key','x-upstream-url':'https://foreign.example'},...options});
+  evidence?.stage(4);const text=await response.text();
+  evidence?.stage(5);application={status:response.status,body:JSON.parse(text),cache:response.headers.get('cache-control')};return application;
  };
- let proof;await finishBifrostOwned(async()=>{await f.setup({id,mode,base,workerDeadline});await body({f,id,request});},[async()=>{proof=await f.join(id);assertBifrostRetired(proof,{workerDeadline,application});},()=>f.close()]);return proof;
+ let proof;await finishBifrostOwned(async()=>{evidence?.stage(2);await f.setup({id,mode,base,workerDeadline});await body({f,id,request});},[
+  async()=>{evidence?.stage(8);proof=await f.join(id);evidence?.stage(9);assertBifrostRetired(proof,{workerDeadline,application,evidence});},
+  ()=>{evidence?.stage(13);return f.close();}
+ ],evidence?.failed);return proof;
 }
 test('Bifrost shipping declaration preserves original Chat/card/auth and FIRST capability bindings',()=>{
  assert.deepEqual(compileProviderSnapshot([source]).providers,[compiled]);
@@ -67,8 +75,15 @@ for(const mode of ['error401','error403','redirect','invalid_owner'])test('Bifro
 });
 
 test('Bifrost shipping 30-second deadline cancels an incomplete original response without publication', {timeout:40000},async t=>{
- const proof=await run(t,'deadline',async({request})=>{const r=await request();assert.equal(r.status,502);assert.equal(JSON.stringify(r.body).includes(selected),false);},undefined,{workerDeadline:true});
- assert.equal(proof.calls.length,1);assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);assert.equal(proof.source.expired,0);
+ const evidence=bifrostWorkerEvidence();let failed=false,primary;
+ try {
+  const proof=await run(t,'deadline',async({request})=>{const r=await request();evidence.stage(6);assert.equal(r.status,502);evidence.stage(7);assert.equal(JSON.stringify(r.body).includes(selected),false);},undefined,{workerDeadline:true,evidence});
+  evidence.stage(14);assert.equal(proof.calls.length,1);evidence.stage(15);assert.equal(proof.source.canceled,1);evidence.stage(16);assert.equal(proof.source.settled,1);evidence.stage(17);assert.equal(proof.source.expired,0);
+ }catch(error){failed=true;primary=error;evidence.escaping(error);}
+ // Existing run() has awaited the original join and all cleanup before reporting.
+ const reporting=evidence.report(t);
+ if(failed&&reporting.length===0)throw primary;
+ if(failed||reporting.length)throw new AggregateError([...(failed?[primary]:[]),...reporting],"Bifrost Worker failure and diagnostic reporting failed");
 });
 
 for(const mode of ['account_a','account_b','rotation','unpriced'])test('Bifrost distinct discovery/inference credentials and opaque native routing: '+mode,async t=>{

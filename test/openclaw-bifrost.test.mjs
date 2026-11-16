@@ -450,10 +450,15 @@ export async function runBifrostReported(body,cleanups,emit,flush=()=>{}){
  },flush]);
 }
 
-export async function finishBifrostOwned(body, cleanups) {
-  const failures = []; let result;
-  try { result = await body(); } catch (error) { failures.push(error); }
-  for (const cleanup of cleanups) try { await cleanup(); } catch (error) { failures.push(error); }
+export async function finishBifrostOwned(body, cleanups, observeFailure) {
+  const failures = [], reporting = []; let result;
+  const observe = error => { if (observeFailure) try { observeFailure(error); } catch (error) { reporting.push(error); } };
+  try { result = await body(); } catch (error) { failures.push(error); observe(error); }
+  for (const cleanup of cleanups) try { await cleanup(); } catch (error) { failures.push(error); observe(error); }
+  if (reporting.length) {
+    const primary = failures.length === 1 ? failures[0] : new AggregateError(failures, "Bifrost body and original cleanup failed");
+    throw new AggregateError([...(failures.length ? [primary] : []), ...reporting], "Bifrost original failure and observation failed");
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Bifrost body and original cleanup failed");
   return result;
@@ -1172,7 +1177,7 @@ export async function startBifrostFixture({hotCache=false}={}) {
     close:()=>finishBifrostOwned(()=>{},[()=>runtime.dispose(),()=>rm(directory,{recursive:true,force:true})]) };
 }
 
-export function assertBifrostRetired(proof, {workerDeadline=false, application}={}) {
+export function assertBifrostRetired(proof, {workerDeadline=false, application, evidence}={}) {
   assert.equal(proof.retired,true);
   if(workerDeadline){
     assert.equal(bifrostDeadlineQualified(proof.deadline),true,JSON.stringify(proof.deadline));
@@ -1183,8 +1188,9 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
       [proof.deadline.readOrdinal,"read","rejected"],[proof.deadline.observerOrdinal,"read_observer","rejected"]]);
   }else assert.ok(proof.operations.every(r=>r.state==='fulfilled'));
   assert.ok(proof.readers.every(r=>r.unlocks===1&&!r.locked));
-  assert.equal(proof.charged,0);assert.equal(proof.source.held,0);assert.equal(proof.source.expired,0);
-  for(const call of proof.calls){assert.equal(call.noCaller,true);assert.equal(call.redirect,'manual');assert.ok(call.original||call.rotated);}
+  evidence?.stage(10);assert.equal(proof.charged,0);
+  evidence?.stage(11);assert.equal(proof.source.held,0);assert.equal(proof.source.expired,0);
+  evidence?.stage(12);for(const call of proof.calls){assert.equal(call.noCaller,true);assert.equal(call.redirect,'manual');assert.ok(call.original||call.rotated);}
 }
 
 export async function bifrostParentRelayInertCases(assert){
