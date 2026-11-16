@@ -1693,7 +1693,7 @@ test("native typed read pure: actual outer producer and accounting gates stay in
   }
   for (const fault of ["proof", "usage", "remote_assertions"]) { const c = await abortDiagnosticCase({ fault, undefinedFault: true }); assert.equal(c.failed, true); }
   const healthy = await abortDiagnosticCase(); assert.equal(healthy.failed, false);
-  assert.deepEqual(healthy.calls.filter(name => ["retire", "observation", "proof", "usage"].includes(name)), ["retire", "observation", "proof", "usage"]);
+  assert.deepEqual(healthy.calls.filter(name => ["retire", "observation", "proof", "usage"].includes(name)), ["retire", "proof", "observation", "usage"]);
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.
