@@ -889,10 +889,10 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    const h=privateSelectionHarness(),restores=[],calls=[];let spies=0;
    const transportHost={getAiTransportHost(...args){calls.push([this,args]);return h.host;}},openAITransport={withOpenAIErrorResponseHook(...args){calls.push([this,args]);return h.closure;}};
    const before=[Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook")];
-   const vi={spyOn(object,name){if(++spies===2&&failSecond)throw undefined;const d=Object.getOwnPropertyDescriptor(object,name);return {mockImplementation(fn){Object.defineProperty(object,name,{...d,value:fn});},mockRestore(){Object.defineProperty(object,name,d);}};}};
-   const samePrivateDescriptor=(a,b)=>JSON.stringify({...a,value:undefined})===JSON.stringify({...b,value:undefined})&&a.value===b.value;
-   let present=false;try{new Function("selection","transportHost","openAITransport","vi","restores","samePrivateDescriptor",code)(h.w,transportHost,openAITransport,vi,restores,samePrivateDescriptor);}catch(e){present=true;assert.equal(e,undefined);}
-   assert.equal(present,failSecond);
+   const fakeVi=privateDefiningFakeVi(),vi={spyOn(...args){if(++spies===2&&failSecond)throw undefined;return fakeVi.spyOn(...args);}};
+   const installPrivateDefiningSpy=privateDefiningFactory(transportHost,openAITransport,vi);
+   let present=false;try{new Function("selection","transportHost","openAITransport","restores","installPrivateDefiningSpy",code)(h.w,transportHost,openAITransport,restores,installPrivateDefiningSpy);}catch(e){present=true;assert.equal(e,undefined);}
+   assert.equal(present,failSecond);assert.equal(spies,2);assert.equal(restores.length,failSecond?2:3);
    if(!failSecond){assert.equal(Reflect.apply(transportHost.getAiTransportHost,h.receiver,[1,2]),h.host);const value=h.build();assert.equal(Reflect.apply(openAITransport.withOpenAIErrorResponseHook,h.receiver,[value,undefined,h.model]),h.closure);assert.equal(h.w.snapshot(h.invocation),6);assert.equal(calls.length,2);assert.equal(calls[0][0],h.receiver);}
    for(const restore of restores.toReversed())restore();
    assert.deepEqual(Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),before[0]);assert.deepEqual(Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook"),before[1]);
