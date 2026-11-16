@@ -426,9 +426,9 @@ export default {fetch(request){const u=new URL(request.url);if(u.hostname==='pri
  return s.ledger.invoke('source_handler',upstreamProduct,undefined,[request,s,u,r],r);
 }};`;
 
-export async function startPrivateCatalogFixture(){const directory=await mkdtemp(join(tmpdir(),'private-catalog-client-'));let runtime;
- try{runtime=await startWorkerdFixture(directory,router,upstream,{requestContext:true});}catch(error){await finishPrivateOwned(()=>{throw error;},[()=>rm(directory,{recursive:true,force:true})]);}
- const origin=(await runtime.ready).origin,evidence=new Map();
+export async function startPrivateCatalogFixture(){const directory=await mkdtemp(join(tmpdir(),'private-catalog-client-'));let runtime,origin;
+ try{runtime=await startWorkerdFixture(directory,router,upstream,{requestContext:true,directRouter:true});origin=(await runtime.unsafeGetDirectURL('router')).origin;}catch(error){await finishPrivateOwned(()=>{throw error;},[...(runtime===undefined?[]:[()=>runtime.dispose()]),()=>rm(directory,{recursive:true,force:true})]);}
+ const evidence=new Map();
  const command=async(row,kind,body={})=>{const response=await fetch(origin+'/private-control/'+kind+'/'+row.id,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});return privateControlResponse(response,response.text,text=>{const value=JSON.parse(text);if(kind==='join'&&value.id===row.id)evidence.set(row,value);assert.equal(response.status,200,'private fixture control failed');return value;});};
  return {origin,setup:row=>command(row,'setup',row),join:row=>command(row,'join'),evidence:row=>evidence.get(row),close:()=>finishPrivateOwned(()=>{},[()=>runtime.dispose(),()=>rm(directory,{recursive:true,force:true})])};
 }

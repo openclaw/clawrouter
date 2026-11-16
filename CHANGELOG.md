@@ -21,6 +21,8 @@
 
 ## Unreleased
 
+- Use direct Worker router ingress for the Private catalog SDK fixture’s cancellation checks; dispose acquired runtimes and remove temporary state on setup failure while preserving original errors and strict retirement/accounting assertions.
+
 - Distinguish global-fetch and Undici-fetch observer construction sites in the Private fixture’s first capture-failure diagnostic. Preserve original errors, ownership guards and retirement/accounting assertions; the tag does not establish cause or ownership.
 
 - Distinguish Private diagnostic callback entry, original guard association and defining-export descriptor custody without changing transport ownership, error handling or test acceptance. Unobserved callbacks remain unknown.
