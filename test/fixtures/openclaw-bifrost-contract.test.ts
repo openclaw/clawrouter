@@ -54,11 +54,14 @@ export function createBifrostProviderErrorOrigin(d:any) {
  const requests=new WeakMap<object,any>(),responses=new WeakMap<object,any>(),patches:any[]=[],records:any[]=[];
  const faults:unknown[]=[],restoration:unknown[]=[],undelivered:unknown[]=[],chunks:any[]=[];
  let request:any,stream:any,iterator:any,controller:any,response:any,originError:any,originPayload:any,finished=false,invalid=false,seal:any;
- let responseCalls=0,factoryCalls=0,iteratorCalls=0,bytes=0;
+ let responseCalls=0,factoryCalls=0,iteratorCalls=0,bytes=0,firstFaultSite=0;
  const aborts:any[]=[];
  const object=(v:any)=>v!==null&&(typeof v==="object"||typeof v==="function")&&!d.isProxy(v);
- const fail=(e:unknown)=>{invalid=true;faults.push(e);try{d.fault(e);}catch(report){undelivered.push(e,report);}};
- const guard=(fn:Function)=>{try{return fn();}catch(e){fail(e);}};
+ // First fault only: 0 unobserved, 1 unknown, 2 invocation, 3 client binding,
+ // 4 returned promise, 5 response lookup, 6 guard attachment, 7 read validation,
+ // 8 seal prerequisite. Record the original reason before latching its site.
+ const fail=(e:unknown,site=1)=>{invalid=true;faults.push(e);if(faults.length===1)firstFaultSite=site;try{d.fault(e);}catch(report){undelivered.push(e,report);}};
+ const guard=(fn:Function,site=1)=>{try{return fn();}catch(e){fail(e,site);}};
  const need=(v:any)=>{if(v!==true)throw Error("incomplete provider-error origin");};
  const own=(v:any,k:PropertyKey)=>{need(object(v));const x=Object.getOwnPropertyDescriptor(v,k);need(!!x&&"value" in x);return x!.value;};
  const method=(v:any,k:PropertyKey)=>{need(object(v));for(let i=0;i<8&&v;i++,v=Object.getPrototypeOf(v)){
@@ -93,19 +96,19 @@ export function createBifrostProviderErrorOrigin(d:any) {
    need(d.version==="7.43.0");
    const requestMethod=method(d.OpenAI.prototype,"request"),asResponse=method(d.APIPromise.prototype,"asResponse"),factory=method(d.Stream,"fromSSEResponse");
    patch(d.OpenAI.prototype,"request",function(this:any,...args:any[]){
-    let invocation:any;guard(()=>{invocation=current();});if(!invocation)return Reflect.apply(requestMethod,this,args);
+    let invocation:any;guard(()=>{invocation=current();},2);if(!invocation)return Reflect.apply(requestMethod,this,args);
     let owned:any;guard(()=>{active();need(!request&&object(this)&&Object.getPrototypeOf(this)===d.OpenAI.prototype);
-     owned=request={invocation,client:this,args:[...args],guards:[],returned:undefined};});
+     owned=request={invocation,client:this,args:[...args],guards:[],returned:undefined};},3);
     let value;try{value=d.storage.run({request:owned},()=>Reflect.apply(requestMethod,this,args));}catch(e){guard(()=>{fail(e);});throw e;}
-    guard(()=>{need(!!owned&&object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype);owned.returned=value;requests.set(value,owned);});return value;
+    guard(()=>{need(!!owned&&object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype);owned.returned=value;requests.set(value,owned);},4);return value;
    });
    patch(d.APIPromise.prototype,"asResponse",function(this:any,...args:any[]){
-    let owned:any;guard(()=>{owned=object(this)?requests.get(this):undefined;});if(!owned)return Reflect.apply(asResponse,this,args);
+    let owned:any;guard(()=>{owned=object(this)?requests.get(this):undefined;},5);if(!owned)return Reflect.apply(asResponse,this,args);
     guard(()=>{active();need(owned===request&&current()===owned.invocation&&++responseCalls===1);});
     return operation("response",asResponse,this,args);
    });
    patch(d.Stream,"fromSSEResponse",function(this:any,...args:any[]){
-    let owned:any;guard(()=>{owned=object(args[0])?responses.get(args[0]):undefined;});
+    let owned:any;guard(()=>{owned=object(args[0])?responses.get(args[0]):undefined;},5);
     if(!owned)return Reflect.apply(factory,this,args);
     guard(()=>{active();need(this===d.Stream&&owned===request&&current()===owned.invocation&&++factoryCalls===1&&args[2]===request.client&&args[3]!==true);
      controller=args[1];need(object(controller));const abort=method(controller,"abort");
@@ -126,11 +129,11 @@ export function createBifrostProviderErrorOrigin(d:any) {
     });return value;
    });
   },
-  guard(a:any){guard(()=>{const context=d.storage.getStore();if(!context?.request)return;active();need(context.request===request&&request.guards.length===0);request.guards.push(a);});},
+  guard(a:any){guard(()=>{const context=d.storage.getStore();if(!context?.request)return;active();need(context.request===request&&request.guards.length===0);request.guards.push(a);},6);},
   read(o:any){guard(()=>{if(o.kind!=="read"||o.state!=="fulfilled"||o.reader?.transport?.method!=="POST")return;active();
    const done=own(o.value,"done");need(typeof done==="boolean");if(done)return;const value=own(o.value,"value");
    need(!d.isProxy(value)&&d.uint8(value)&&chunks.length<8&&bytes+d.length(value)<=1024);const copy=d.copy(value);bytes+=copy.length;chunks.push({o,copy});
-  });},
+  },7);},
   finish(){need(!finished);finished=true;
    for(const p of patches.toReversed())try{need(sameBifrostDescriptor(Object.getOwnPropertyDescriptor(p.v,p.k),p.ours));if(p.before)Object.defineProperty(p.v,p.k,p.before);else delete p.v[p.k];}
    catch(e){restoration.push(e);fail(e);}
@@ -172,10 +175,10 @@ export function createBifrostProviderErrorOrigin(d:any) {
      second.before.reason===e&&second.after.reason===e&&first.returnAt<second.invoke&&second.returnAt<o.settle&&first.invoke>o.invoke);
     need(!!first.pending&&(!second.pending||first.pending===second.pending)&&!w.originals.some((x:any)=>x.reason===o.reason&&["rejected","threw"].includes(x.state)));
     value=Object.freeze({owner:w.owner,invocation:request.invocation,transport:t,reader:r,response,controller,error:o.reason,reason:e,read:first.pending,abort:first.invoke,iteratorOperation:o});
-   });
+   },8);
    let frozen:any[]=[];guard(()=>{frozen=graph();});seal={value,same:()=>{const live=graph();return live.length===frozen.length&&live.every((x,i)=>Object.is(x,frozen[i]));}};return invalid?undefined:value;
   },
-  summary(){return [1,finished?1:0,invalid?1:0,seal?.value&&!invalid?1:0,responseCalls,factoryCalls,iteratorCalls,records.length,aborts.length,faults.length,faults.filter(e=>e===undefined).length,restoration.length];},
+  summary(){return [1,finished?1:0,invalid?1:0,seal?.value&&!invalid?1:0,responseCalls,factoryCalls,iteratorCalls,records.length,aborts.length,faults.length,faults.filter(e=>e===undefined).length,restoration.length,firstFaultSite];},
  };
 }
 // Passive diagnostics for one private fetch generation. No transport flag is read.
@@ -566,8 +569,8 @@ export function validateBifrostEvidence(record:any):void {
  }
  if(record?.part==="postlude"&&Object.hasOwn(record,"origin")){
   if(![3,7,14,15].includes(record.case)||Object.hasOwn(record,"transport"))throw Error("foreign provider-error origin");
-  fields.postlude.origin=(v:any)=>Array.isArray(v)&&v.length===12&&v.every((n:any)=>Number.isSafeInteger(n)&&n>=0&&n<=1000000)&&v[0]===1&&
-   v.slice(1,4).every((n:any)=>n<=1)&&v[7]<=32&&v[8]<=4&&v[10]<=v[9]&&v[11]<=v[9]&&
+  fields.postlude.origin=(v:any)=>Array.isArray(v)&&v.length===13&&v.every((n:any)=>Number.isSafeInteger(n)&&n>=0&&n<=1000000)&&v[0]===1&&
+   v.slice(1,4).every((n:any)=>n<=1)&&v[7]<=32&&v[8]<=4&&v[10]<=v[9]&&v[11]<=v[9]&&v[12]<=8&&(v[9]===0?v[12]===0:v[12]>0)&&
    (!v[3]||(v[1]===1&&v[2]===0&&v.slice(4,7).every((n:any)=>n===1)&&v[8]===2&&v[9]===0&&v[11]===0));
  }
  Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});

@@ -181,13 +181,77 @@ export function bifrostProviderOriginWireInertCases(assert) {
  const record=()=>({v:1,pin:bifrostPin,lane:"sdk",case:15,evidence:true,complete:false,part:"postlude",
   control:Array.from({length:6},()=>[3,false,1000000,1000000,1000000]),validated:true,
   producer:[false,Array.from({length:4},(_,i)=>[i,3,false]),...Array(7).fill(1000000)],router:Array.from({length:4},()=>[3,false]),usage:[true,1000000,1000000],
-  origin:[1,1,1,0,1000000,1000000,1000000,32,4,1000000,1000000,1000000]});
+  origin:[1,1,1,0,1000000,1000000,1000000,32,4,1000000,1000000,1000000,8]});
  for(const index of [3,7,14,15]){const r=record();r.case=index;validateBifrostEvidence(r);assert.ok(Buffer.byteLength("::notice title=Bifrost closed diagnostic::"+JSON.stringify(r)+"\n")<=759);passed.push("own case "+index);}
  for(const mutate of [r=>{r.case=2;},r=>{r.origin[1]=true;},r=>{r.origin[3]=1;},r=>{r.origin[10]=1000001;},r=>{r.origin.push(0);},r=>{r.transport=[];}]){
   const r=record();mutate(r);assert.throws(()=>validateBifrostEvidence(r));passed.push("closed schema rejection");}
  return passed;
 }
 test("Bifrost provider-error origin keeps the existing postlude quota (inert)",()=>{assert.equal(bifrostProviderOriginWireInertCases(assert).length,10);});
+export async function bifrostOriginFirstFaultInertCases(assert) {
+ const f=bifrostNativeEvaluator(),passed=[],run=async(name,fn)=>{await fn();passed.push(name);};
+ const site=h=>h.origin.summary()[12];
+ const denied=h=>{assert.equal(f.bifrostProviderErrorVector(h.w),undefined);assert.equal(f.evaluateBifrostNativeControl(h.w).qualified,false);};
+ await run("healthy origin has no observed fault site",async()=>{const h=await bifrostProviderOriginInertHarness(f).drive();
+  assert.ok(f.bifrostProviderErrorVector(h.w));assert.equal(site(h),0);assert.equal(h.origin.summary()[9],0);});
+ for(const reason of [{},undefined])await run("invocation fault retains original definedness",async()=>{
+  const h=await bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.invocation=()=>{throw reason;};}}).drive();
+  assert.equal(site(h),2);assert.equal(h.w.observerFailures[0],reason);assert.equal(h.origin.summary()[10],reason===undefined?1:0);assert.equal(h.counts.request,1);denied(h);});
+ await run("client binding precedes the independent returned-promise fault",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const returned={};let calls=0;
+  const receiver={makeRequest(){calls++;return returned;},responsePromise(value){assert.equal(value,returned);return value;}};
+  assert.equal(Reflect.apply(h.OpenAI.prototype.request,receiver,[17]),returned);assert.equal(calls,1);
+  assert.equal(site(h),3);assert.equal(h.origin.summary()[9],2);const first=h.w.observerFailures[0];h.origin.finish();
+  assert.equal(h.w.observerFailures[0],first);assert.equal(site(h),3);denied(h);});
+ await run("returned-promise binding preserves the original value",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const client=new h.OpenAI(),returned={};client.responsePromise=()=>returned;
+  assert.equal(client.request(17),returned);assert.equal(site(h),4);assert.equal(h.counts.request,1);h.origin.finish();denied(h);});
+ await run("response lookup failure forwards the original method",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const p=new h.OpenAI().request({});const reason={};
+  h.d.isProxy=value=>{if(value===p)throw reason;return types.isProxy(value);};const returned=p.asResponse();
+  assert.equal(await returned,h.response);assert.equal(site(h),5);assert.equal(h.w.observerFailures[0],reason);assert.equal(h.counts.response,1);h.origin.finish();denied(h);});
+ await run("factory response lookup failure forwards once",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const client=new h.OpenAI(),p=client.request({});await p.asResponse();
+  h.d.isProxy=value=>{if(value===h.response)throw undefined;return types.isProxy(value);};const stream=h.Stream.fromSSEResponse(h.response,h.controller,client);
+  assert.equal(Object.getPrototypeOf(stream),h.Stream.prototype);assert.equal(site(h),5);assert.equal(h.w.observerFailures[0],undefined);assert.equal(h.counts.factory,1);await h.finish();denied(h);});
+ await run("guard attachment fault remains distinct from later faults",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();new h.OpenAI().request({});h.origin.guard(h.a);
+  const first=h.w.observerFailures[0];assert.equal(site(h),6);h.origin.read({kind:"read",state:"fulfilled",reader:{transport:{method:"POST"}},value:{}});
+  assert.equal(h.origin.summary()[9],2);assert.equal(h.w.observerFailures[0],first);assert.equal(site(h),6);h.origin.finish();denied(h);});
+ await run("read validation keeps accessor untouched and first fault",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);let touched=0;const value={};Object.defineProperty(value,"done",{get(){touched++;throw undefined;}});
+  h.origin.read({kind:"read",state:"fulfilled",reader:{transport:{method:"POST"}},value});assert.equal(site(h),7);assert.equal(touched,0);h.origin.finish();denied(h);});
+ await run("missing hook produces seal prerequisite, not callback credit",async()=>{
+  const h=await bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.invocation=()=>undefined;}}).drive();
+  assert.equal(site(h),0);assert.equal(h.origin.summary()[9],0);assert.deepEqual(Array.from(h.origin.summary().slice(4,9)),[0,0,0,0,0]);
+  denied(h);assert.equal(site(h),8);assert.equal(h.origin.summary()[9],1);assert.equal(h.origin.summary()[10],0);});
+ await run("first site is durable before reporting, including undefined",async()=>{
+  let h;const hReason=undefined,reportReason={};h=bifrostProviderOriginInertHarness(f,{dependencies:d=>{
+   d.invocation=()=>{throw hReason;};d.fault=e=>{assert.equal(h.origin.summary()[9],1);assert.equal(site(h),2);h.w.observerFailures.push(e);throw reportReason;};}});
+  h.origin.install();const p=new h.OpenAI().request({});assert.equal(await p.asResponse(),h.response);
+  let failed=false;try{h.origin.finish();}catch(e){failed=true;assert.deepEqual(Array.from(e.errors),[hReason,reportReason]);}
+  assert.equal(failed,true);assert.equal(site(h),2);assert.equal(h.w.observerFailures[0],undefined);denied(h);});
+ await run("descriptor conflict is unknown site and fatal restoration",async()=>{
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();Object.defineProperty(h.Stream,"fromSSEResponse",{value:()=>{},writable:true,configurable:true});
+  h.origin.finish();assert.equal(site(h),1);assert.equal(h.origin.summary()[11],1);denied(h);});
+ await run("observer delivery fault uses unknown without losing undefined",async()=>{
+  const h=bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.observer=()=>{throw undefined;};}});h.origin.install();
+  const p=new h.OpenAI().request({}),returned=p.asResponse();assert.equal(returned,h.origin.records[0].pending);await returned;
+  assert.equal(site(h),1);assert.equal(h.w.observerFailures[0],undefined);await h.finish();denied(h);});
+ await run("late read cannot revive a seal or change the first site",async()=>{
+  const h=await bifrostProviderOriginInertHarness(f).drive();assert.ok(f.bifrostProviderErrorVector(h.w));
+  h.origin.read(h.w.originals.find(o=>o.kind==="read"&&o.state==="fulfilled"));assert.equal(site(h),7);denied(h);assert.equal(site(h),7);});
+ const {validateBifrostEvidence}=bifrostCheckpointFunctions();
+ const wire=()=>({v:1,pin:bifrostPin,lane:"sdk",case:3,evidence:true,complete:false,part:"postlude",
+  control:Array(6).fill(null),validated:false,producer:null,router:null,usage:null,origin:[1,1,1,0,0,0,0,0,0,1,0,0,1]});
+ for(let n=0;n<=8;n++)await run("wire admits exact site "+n,()=>{const r=wire();r.origin[12]=n;if(n===0)r.origin[9]=0;validateBifrostEvidence(r);});
+ for(const mutate of [r=>r.origin.pop(),r=>{r.origin[12]=undefined;},r=>{r.origin[12]=null;},r=>{r.origin[12]=true;},r=>{r.origin[12]="2";},
+  r=>{r.origin[12]=1.5;},r=>{r.origin[12]=9;},r=>{r.origin[12]=-1;},r=>{r.origin[12]=0;},r=>{r.origin[9]=0;},r=>{r.origin[3]=1;}])
+  await run("wire rejects missing, contradictory or foreign site",()=>{const r=wire();mutate(r);assert.throws(()=>validateBifrostEvidence(r));});
+ await run("missing origin remains unobserved, never fabricated",()=>{const r=wire();delete r.origin;validateBifrostEvidence(r);assert.equal(Object.hasOwn(r,"origin"),false);});
+ return passed;
+}
+test("Bifrost origin first-fault sites preserve original errors (inert)",async()=>{await bifrostOriginFirstFaultInertCases(assert);});
 // The control request signals one closed command. The original producer's
 // already-created continuation owns enqueue. Neither path completes its pull.
 export function requestBifrostProgress(s){
