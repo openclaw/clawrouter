@@ -129,11 +129,27 @@ exported by `@clawrouter/provider-plugin-contract`. Core imports from
 package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
 as `GrantKind` for existing consumers.
 
+Authentication scheme, OAuth authorization/refresh configuration, and compiled
+grant-transport types also belong to the package. Existing imports of
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` from `shared/provider-snapshot.ts` remain supported.
+Credential storage, refresh ownership, runtime validation, and upstream calls
+remain host responsibilities.
+
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
+
+### Portable tariff declarations
+
+The contract package exports `ModelPricing`, `RequestPricing`, and their component
+types. Existing imports from `shared/provider-model.ts` and
+`shared/request-pricing.ts` remain supported through type-only exports. These are
+published tariff declarations; runtime policy overrides, admission, and settlement
+remain host-owned. This does not add a model-catalogue importer or change price
+units, nullable values, or provider-specific qualifications.
 
 ### Explicit products
 

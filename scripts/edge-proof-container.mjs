@@ -69,15 +69,21 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "e6a5f7c22b611da265da9ede8f89428ec3fcd62b",
-    "sha256": "b30e29b6467f1be7946c1accbfb38ced67fd9fd31ea298efcd37820805b38d4e",
-    "bytes": 1768
+    "blob": "8400014aab9814521c4b3bd8eee381acfa974bbc",
+    "sha256": "b440e83e10c6172f1c8876da1fa1c633516523fefd5d0eeb94417f2a6b67c70a",
+    "bytes": 2496
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
     "blob": "59142f77a7949483e1f83e5a4463867cafc0f8dd",
     "sha256": "fafc5d56815877825ca49d279349c09bb1492f982e10ccac821a157d95362470",
     "bytes": 583
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/auth.ts",
+    "blob": "a4a6b2f19dcde32cd4962a1c82a5f3ed1aff21ab",
+    "sha256": "5cb7ccb7d9024604ba443d7e1a68b97cb62f7864c1ef1bc0c535bde1874dbd6f",
+    "bytes": 1927
   },
   {
     "path": "packages/provider-plugin-contract/src/conformance.ts",
@@ -87,15 +93,21 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "9448f9f2436e4ddd25076a76bea6f8286a44a362",
-    "sha256": "c6d01cee6b06c52a429f35ed5f597ade60ad2c22269601490e342d698ba47e07",
-    "bytes": 5646
+    "blob": "1a70d91c550b7519c54c5701be681fa236731e58",
+    "sha256": "7bce6abcb1dc113b7312a8114674ec20f531a20041fdab595d60f63f60742786",
+    "bytes": 6065
   },
   {
     "path": "packages/provider-plugin-contract/src/package-index.ts",
     "blob": "454f53a1a801441b2c9c6e6259fb1ba23e0ed0ef",
     "sha256": "46a21483fae6f5723d1b04387f4e593479b9755b8ba24a66ded2958edb52f986",
     "bytes": 735
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/pricing.ts",
+    "blob": "99b0fe0ead76afcb3fe5caa7123a50ffa9edbc17",
+    "sha256": "080646fa1303dd05083eae5ac38558ccbd943bc616c0c304f801189ab121c64c",
+    "bytes": 4034
   },
   {
     "path": "packages/provider-plugin-contract/src/product-metadata.ts",

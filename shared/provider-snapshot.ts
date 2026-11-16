@@ -1,3 +1,4 @@
+import type { AuthScheme, AuthorizationConfig, RefreshConfig, CompiledGrantTransport } from "../packages/provider-plugin-contract/src/auth.ts";
 import type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
 import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
 import type { ProviderModelDefinition, ModelPricing } from "./provider-model.ts";
@@ -5,6 +6,7 @@ import type { ProviderOfferDefinition, ProviderProduct } from "./provider-produc
 
 // Compiled v1 declarations shared by build tools and runtime consumers.
 // Credential state and adapter implementations remain outside this contract.
+export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "../packages/provider-plugin-contract/src/auth.ts";
 export type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
 export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video" | "minimax.video";
 export type ManagedFileLinks = { mode?: "metadata"; metadata: string; download: string }
@@ -67,34 +69,6 @@ export interface CompiledQuotaProbe {
 }
 export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
 
-export type GrantTransportAuth =
-  | { type: "bearer"; header: string; format: string }
-  | { type: "api_key"; header: string }
-  | { type: "query_api_key"; param: string };
-export interface CompiledGrantTransport {
-  baseUrl: string | null;
-  auth: GrantTransportAuth | null;
-  endpointPaths: Record<string, string>;
-  allowedEndpoints?: string[];
-  headers: Record<string, string>;
-  appendHeaders: Record<string, string>;
-  requestTransforms: { prependSystem: Array<{ type: "text"; text: string }> };
-  maintenance: {
-    quotaPoll: { normalIntervalSeconds: number; urgentIntervalSeconds: number; exhaustedIntervalSeconds: number; urgentRemainingPercent: number } | null;
-    keepWarm: { defaultEnabled: boolean; intervalSeconds: number; endpoint: string; body: Record<string, unknown> } | null;
-  };
-}
-
-export type AuthScheme =
-  | { type: "bearer"; header: string; format: string; secretKind: string; required: boolean }
-  | { type: "api_key"; header: string; secretKind: string }
-  | { type: "query_api_key"; param: string; secretKind: string }
-  | { type: "oauth"; provider: string | null; scopes: string[]; tokenRef: string | null }
-  | { type: "sig_v4"; service: string; regionParam: string | null }
-  | { type: "cloudflare_binding" };
-
-export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
-export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
 export type CompiledModel = ProviderModelDefinition;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
 export interface ToolPricing { version: string; effectiveAt: string; source: string; webSearchMicrosPerCall: number; previewMicrosPerCallByModel: Record<string, number> }

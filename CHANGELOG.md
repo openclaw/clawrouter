@@ -19,6 +19,18 @@
 
 ## Unreleased
 
+- Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
+
+- Attribute HTTP deadline fixture failures to source-owned case and operation/assertion boundaries after joining original work and attempting independent cleanup. Preserve original reasons and strict accounting; missing diagnostic markers remain unknown.
+
+- Route client-disconnect fixtures through the existing direct workerd socket, preserving WebSocket and in-Worker controls and all cancellation and accounting assertions. Retain original failures while attempting fixture cleanup independently.
+
+- Export published model and request tariff types from the provider plugin contract while preserving existing shared imports.
+
+- Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
+
+- Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
+
 - Route Qwen regional cancellation fixtures through the direct Worker ingress, preserving existing SDK, retirement and accounting assertions.
 
 - Preserve an invocation-bound Qwen diagnostic for defining transport lookup, returned-host build and selected-fetch hook outcomes. Keep unsupported interception and ambiguous custody unknown, without changing original calls, errors, ownership or financial verdicts.
