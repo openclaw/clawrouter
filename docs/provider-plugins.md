@@ -117,8 +117,9 @@ admission rules before rendering or serving resources.
 ## Compiled provider contract
 
 [`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot, endpoint, model, auth, and quota declarations. Build tools and
-future package compilers can import these types without importing Worker
+v1 snapshot, model, and quota declarations, and re-exports portable endpoint
+and auth declarations. Build tools and future package compilers can import these
+types without importing Worker
 bindings, credential records, or adapter implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
@@ -141,6 +142,12 @@ It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
+
+Endpoint declarations also belong to the package: `CompiledEndpoint`,
+`ManagedProtocol`, `ManagedFileLinks`, `OutputTokenLimit`, and `ToolPricing`.
+Existing imports from `shared/provider-snapshot.ts` remain supported. These
+compiled types preserve path, format, streaming, lifecycle, and limit fields;
+they do not replace manifest validation or host dispatch and admission.
 
 ### Portable tariff declarations
 
