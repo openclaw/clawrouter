@@ -24,7 +24,7 @@ function xiaomiRunnerReport() {
   let reported = false, summary;
   const options = {
     expectedInvocations: 1,
-    fixtureSha256: "c51d01fb566bb3a26dbd78414c7d8aa6f68d660ed720e0af1eff913d99cb5afe",
+    fixtureSha256: "e1df3ce4729e9eac41c3cecf5da7883bb12ef015e5b3f7925ab10f0c1290acda",
     reporterSha256: "88a9021f87d47b62c0e120cc6c02bf9c96248ac20bd549595b981d6ef20f0b67",
     onReport(packet) {
       summary = undefined;
@@ -814,6 +814,176 @@ test("v4 control tuples stay closed, opaque and bounded in both formatter orders
   let writes = 0; assert.equal(diagnostic.validate(oversized), null);
   assert.throws(() => diagnostic.emit([oversized], true, () => { writes++; })); assert.equal(writes, 0);
 });
+// BEGIN Xiaomi original reader reason display regressions. Builtins and inert readers only.
+const xiaomiReaderReasonProjector = new Function(proofCode + ";return xiaomiReaderReasonProjector;")();
+const reasonCodes = ["ABORT_ERR", "UND_ERR_ABORTED", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT", "ECONNRESET",
+  "ECONNREFUSED", "EPIPE", "ERR_INVALID_STATE", "UND_ERR_SOCKET", "UND_ERR_BODY_TIMEOUT", "UND_ERR_CONNECT_TIMEOUT"];
+const reasonConstructors = [Error, TypeError, SyntaxError, ReferenceError, RangeError, URIError, EvalError, AggregateError];
+const reasonError = Ctor => Ctor === AggregateError ? new AggregateError([]) : new Ctor();
+test("original reason display matches immediate prototypes and one own-data cause, never own names", () => {
+  const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError);
+  const original = new TypeError(), cause = Object.assign(new Error(), { code: "ECONNRESET" });
+  assert.equal(Object.hasOwn(original, "name"), false);
+  Object.defineProperties(original, { name: { value: "ForgedClass" }, code: { value: "UND_ERR_SOCKET" }, cause: { value: cause } });
+  const wrapper = new AggregateError([original]), members = wrapper.errors;
+  assert.equal(project(wrapper, original, true, 1, null, true),
+    "readerReason=v1;source=read;kind=native;protoMatch=TypeError;code=UND_ERR_SOCKET;cause=native/Error/ECONNRESET;abortEq=ut;origin=unknown");
+  assert.equal(wrapper.errors, members); assert.equal(wrapper.errors[0], original); assert.equal(original.cause, cause);
+  for (const [field, expected] of [[null, "absent"], [{ get() { throw undefined; } }, "accessor"],
+    [{ value: undefined }, "undefined"], [{ value: 1 }, "wrongtype"], [{ value: "PRIVATE_UNKNOWN" }, "unknown"]]) {
+    const value = new Error(); if (field) Object.defineProperty(value, "code", field);
+    assert.ok(project(new AggregateError([value]), value, true, 1, false, null).includes(`;code=${expected};`));
+  }
+});
+test("reason display never invokes getters, proxy traps, returned prototypes or stack preparation", () => {
+  const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError);
+  let touched = 0;
+  const touch = () => { touched++; throw undefined; };
+  const opaque = new Proxy({}, { get: touch, getPrototypeOf: touch, getOwnPropertyDescriptor: touch, ownKeys: touch });
+  const revoked = Proxy.revocable(new Error(), {}); revoked.revoke();
+  const value = new TypeError();
+  for (const key of ["name", "message", "stack", "constructor", "errors", Symbol.toStringTag])
+    Object.defineProperty(value, key, { get: touch, configurable: true });
+  Object.defineProperties(value, { code: { get: touch }, cause: { get: touch } });
+  const returnedPrototype = new TypeError(); Object.setPrototypeOf(returnedPrototype, opaque);
+  const prepare = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+  try {
+    Object.defineProperty(Error, "prepareStackTrace", { value: touch, configurable: true });
+    assert.ok(project(new AggregateError([]), value, true, 1, null, null).includes("protoMatch=TypeError;code=accessor;cause=accessor"));
+    for (const proxy of [opaque, revoked.proxy]) assert.ok(project(new AggregateError([]), proxy, true, 1, null, null).includes(";kind=proxy;"));
+    assert.ok(project(new AggregateError([]), returnedPrototype, true, 1, null, null).includes("protoMatch=unknown;"));
+    assert.ok(project(new AggregateError([]), Object.create(TypeError.prototype), true, 1, null, null).includes(";kind=foreign;"));
+  } finally {
+    if (prepare) Object.defineProperty(Error, "prepareStackTrace", prepare); else delete Error.prepareStackTrace;
+  }
+  assert.equal(touched, 0);
+});
+test("reason projector captures intrinsics before mocks and reflects each admitted error only once", () => {
+  const descriptor = Object.getOwnPropertyDescriptor, define = Object.defineProperty, proto = Object.getPrototypeOf, own = Object.hasOwn;
+  const saved = ["getPrototypeOf", "getOwnPropertyDescriptor", "hasOwn", "defineProperty"].map(key => [key, descriptor(Object, key)]);
+  const native = ["isProxy", "isNativeError"].map(key => [key, descriptor(nodeTypes, key)]);
+  const seen = [], branded = [], proxyChecks = [];
+  const original = Object.assign(new TypeError(), { code: "UND_ERR_SOCKET", cause: Object.assign(new Error(), { code: "ECONNRESET" }) });
+  const wrapper = new AggregateError([original]), denied = Proxy.revocable(new Error(), {}); denied.revoke();
+  let project, text;
+  try {
+    define(Object, "getPrototypeOf", { value: value => { seen.push(["prototype", value]); return proto(value); }, configurable: true });
+    define(Object, "getOwnPropertyDescriptor", { value: (value, key) => { seen.push([key, value]); return descriptor(value, key); }, configurable: true });
+    const proxy = nodeTypes.isProxy, brand = nodeTypes.isNativeError;
+    project = xiaomiReaderReasonProjector(value => { proxyChecks.push(value); return proxy(value); },
+      value => { branded.push(value); return brand(value); });
+    for (const [key, prior] of saved) define(Object, key, { ...prior, value() { throw undefined; } });
+    for (const [key, prior] of native) define(nodeTypes, key, { ...prior, value() { throw undefined; } });
+    text = project(wrapper, original, true, 1, null, true);
+    project(new AggregateError([]), denied.proxy, true, 1, null, null);
+  } finally {
+    for (const [key, prior] of saved) define(Object, key, prior);
+    for (const [key, prior] of native) define(nodeTypes, key, prior);
+  }
+  assert.ok(text.includes("protoMatch=TypeError;code=UND_ERR_SOCKET;cause=native/Error/ECONNRESET"));
+  assert.deepEqual(seen, [["prototype", original], ["code", original], ["cause", original], ["prototype", original.cause], ["code", original.cause]]);
+  assert.deepEqual(proxyChecks, [original, original.cause, denied.proxy]); assert.deepEqual(branded, [original, original.cause]);
+  assert.equal(own(original, "name"), false);
+});
+test("reason display preserves falsey presence and stops at one cause, including aggregate cycles", () => {
+  const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError);
+  for (const reason of [undefined, null, false, 0, "", NaN, 0n, Symbol()]) {
+    const wrapper = new AggregateError([reason]);
+    const received = reason === null ? "null" : typeof reason;
+    assert.ok(project(wrapper, reason, true, 1, null, null).includes(`;kind=${received};`));
+    assert.equal(wrapper.errors.length, 1); assert.ok(Object.is(wrapper.errors[0], reason));
+    assert.ok(project(wrapper, reason, false, 0, null, null).includes(";kind=missing;"));
+  }
+  let touched = 0;
+  const root = new AggregateError([]), child = new AggregateError([root]);
+  root.errors.push(root); Object.defineProperty(root, "cause", { value: root, configurable: true });
+  assert.ok(project(new AggregateError([root]), root, true, 1, null, null).includes(";cause=self;"));
+  Object.defineProperty(root, "cause", { value: child });
+  Object.defineProperties(child, { cause: { get() { touched++; throw undefined; } }, errors: { get() { touched++; throw undefined; } } });
+  assert.ok(project(new AggregateError([root]), root, true, 1, null, null).includes(";cause=native/AggregateError/absent;"));
+  Object.defineProperty(root, "cause", { value: undefined });
+  assert.ok(project(new AggregateError([root]), root, true, 1, null, null).includes(";cause=undefined;"));
+  assert.equal(root.errors[0], root); assert.equal(touched, 0);
+});
+test("every allowed code and prototype fits the unchanged 192-byte ASCII display limit", () => {
+  const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError), texts = [];
+  for (const Ctor of reasonConstructors) for (const code of reasonCodes) {
+    const value = Object.assign(reasonError(Ctor), { code });
+    const text = project(new AggregateError([value]), value, true, 4, null, null);
+    assert.ok(text.includes(`protoMatch=${Ctor.name};code=${code};`)); texts.push(text);
+    const root = Object.assign(new ReferenceError(), { code: "UND_ERR_HEADERS_TIMEOUT", cause: value });
+    texts.push(project(new AggregateError([root]), root, true, 4, null, null));
+  }
+  for (const state of ["absent", "accessor", "undefined", "wrongtype", "unknown", ...reasonCodes])
+    assert.ok(state.length <= "UND_ERR_HEADERS_TIMEOUT".length);
+  for (const Ctor of reasonConstructors) assert.ok(Ctor.name.length <= "ReferenceError".length);
+  for (const kind of ["missing", "undefined", "null", "boolean", "number", "string", "bigint", "symbol", "proxy", "foreign", "native"])
+    assert.ok(kind.length <= "undefined".length);
+  const root = Object.assign(new ReferenceError(), { code: "UND_ERR_HEADERS_TIMEOUT",
+    cause: Object.assign(new ReferenceError(), { code: "UND_ERR_HEADERS_TIMEOUT" }) });
+  for (const kind of [0, 1, 2, 3, 4]) for (const a of [null, false, true]) for (const b of [null, false, true])
+    texts.push(project(new AggregateError([root]), root, true, kind, a, b));
+  for (const text of texts) { assert.match(text, /^[A-Za-z0-9_=/;]+$/); assert.ok(Buffer.byteLength(text) <= 192); }
+  assert.equal(Math.max(...texts.map(text => Buffer.byteLength(text))), 176);
+});
+async function xiaomiReasonDisplayCase(project, reason, kind = "read", associated = true) {
+  let ticks = 0;
+  const closed = Promise.withResolvers(), options = { observe: false, closed: closed.promise };
+  if (kind === "read" || kind === "cancel") options[kind] = () => Promise.reject(reason);
+  if (kind === "observer") options.read = () => Promise.resolve({ get done() { throw reason; } });
+  const f = xiaomiInertReader(options), reports = [];
+  f.proof = xiaomiObserveBody(f.body, undefined, (object, key, value) => { object[key] = value; },
+    (...args) => reports.push(args), () => ++ticks, project);
+  f.reader = f.body.getReader();
+  const owner = xiaomiReaderSnapshotOwner(f), operand = {};
+  const pending = f.reader.read(operand), cancel = f.reader.cancel(undefined);
+  assert.equal(f.proof.readers[0].operations[0].pending, pending);
+  if (kind === "closed") closed.reject(reason); else closed.resolve();
+  await Promise.allSettled([pending, cancel]); f.reader.releaseLock();
+  let error;
+  try { await f.proof.join(associated ? owner : undefined); } catch (caught) { error = caught; }
+  const snapshot = f.proof.failureSnapshot(), before = ticks;
+  if (error) await assert.rejects(f.proof.join(), caught => caught === error); else await f.proof.join();
+  assert.equal(ticks, before); assert.equal(f.proof.failureSnapshot(), snapshot);
+  return { f, error, snapshot, trace: { ticks, reports, subscriptions: [...f.subscriptions.values()],
+    calls: f.calls.map(row => [row.kind, row.receiver === (row.kind === "reader" ? f.body : f.reader), row.args.length, row.args[0] === operand]) } };
+}
+test("first associated reason display preserves real observation traces and is absent on success and Worker joins", async () => {
+  const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError), reason = new TypeError();
+  for (const kind of ["read", "cancel", "closed", "observer"]) {
+    const baseline = await xiaomiReasonDisplayCase(undefined, reason, kind); let count = 0;
+    const shown = await xiaomiReasonDisplayCase((...args) => { count++; return project(...args); }, reason, kind);
+    assert.equal(count, 1); assert.ok(shown.error.message.includes(`;source=${kind};`));
+    assert.equal(shown.error.errors[0], reason); assert.deepEqual(shown.trace, baseline.trace);
+    assert.deepEqual(shown.snapshot.value, baseline.snapshot.value);
+    let left, right; diagnostic.emit([xiaomiReaderControlRecord(baseline.snapshot.value)], true, text => { left = text; });
+    diagnostic.emit([xiaomiReaderControlRecord(shown.snapshot.value)], true, text => { right = text; }); assert.equal(left, right);
+  }
+  let unexpected = 0; const denied = () => { unexpected++; throw undefined; };
+  await xiaomiReasonDisplayCase(denied, reason, "read", false);
+  const success = await xiaomiReasonDisplayCase(denied, reason, "success");
+  assert.equal(success.error, undefined); assert.equal(success.snapshot, undefined); assert.equal(unexpected, 0);
+});
+test("projection and wrapper-write faults retain the original aggregate before an independent undefined report fault", async () => {
+  for (const reason of [undefined, false, null, 0, ""]) for (const updateFailure of [false, true]) {
+    let calls = 0, wrapper;
+    const project = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError);
+    const shown = await xiaomiReasonDisplayCase((...args) => {
+      calls++; wrapper = args[0];
+      if (!updateFailure) throw undefined;
+      Object.freeze(wrapper); return project(...args);
+    }, reason);
+    assert.equal(calls, 1); assert.equal(shown.error, wrapper); assert.ok(Object.is(wrapper.errors[0], reason));
+    assert.equal(shown.snapshot.errorPresent, true);
+    if (!updateFailure) assert.equal(shown.snapshot.error, undefined);
+    const post = xiaomiPostludeInertCase(new Map([[7, wrapper]]));
+    post.bindings.planAcquisitions[0].observation.failureSnapshot = () => shown.snapshot;
+    await assert.rejects(post.callback(), error => error.errors[0] === wrapper && Object.is(error.errors[1], shown.snapshot.error));
+    assert.equal(post.events.at(-1), "seal"); assert.equal(post.bindings.qualifiedControls.size, 0);
+  }
+});
+// END Xiaomi original reader reason display regressions.
+
 // BEGIN Xiaomi reader first-accounted gate regression.
 test("first reader failure follows accounting order rather than the lowest failed bit", async () => {
   const same = {}, packets = [], parent = new Function(proofCode + ";return xiaomiDiagnostic;")()(nodeTypes.isProxy);

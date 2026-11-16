@@ -543,11 +543,62 @@ function xiaomiSdkReaderDisposition(selection: any, reader: any, locked?: () => 
     && cancel[0].signalAbortedAtReject === true && cancel[0].signalReasonAtReject === reason
     && (!cancel[0].operandDefined || cancel[0].operands[0] === reason);
 }
+// Closed display of one retained original reason and, at most, its own-data cause.
+// protoMatch is immediate identity only, not an authentic class or origin claim.
+function xiaomiReaderReasonProjector(isProxy: (value: unknown) => boolean, isNativeError: (value: unknown) => boolean) {
+  const getPrototypeOf = Object.getPrototypeOf, descriptor = Object.getOwnPropertyDescriptor;
+  const hasOwn = Object.hasOwn, define = Object.defineProperty, Failure = Error;
+  const prototypes = [Error.prototype, TypeError.prototype, SyntaxError.prototype, ReferenceError.prototype,
+    RangeError.prototype, URIError.prototype, EvalError.prototype, AggregateError.prototype];
+  const labels = ["Error", "TypeError", "SyntaxError", "ReferenceError", "RangeError", "URIError", "EvalError", "AggregateError"];
+  const inspect = (value: unknown, present: boolean) => {
+    const kind = !present ? "missing" : value === null ? "null" : typeof value;
+    const out = { kind, protoMatch: "unknown", code: "unobserved" };
+    if (!present || value === null || !["object", "function"].includes(typeof value)) return out;
+    if (isProxy(value)) return { ...out, kind: "proxy" };
+    if (!isNativeError(value)) return { ...out, kind: "foreign" };
+    out.kind = "native";
+    const prototype = getPrototypeOf(value); // Never inspect or traverse this result.
+    for (let i = 0; i < prototypes.length; i++) if (prototype === prototypes[i]) { out.protoMatch = labels[i]; break; }
+    const field = descriptor(value, "code");
+    out.code = !field ? "absent" : !hasOwn(field, "value") ? "accessor"
+      : field.value === undefined ? "undefined" : typeof field.value !== "string" ? "wrongtype" : "unknown";
+    if (field && hasOwn(field, "value") && typeof field.value === "string") switch (field.value) {
+      case "ABORT_ERR": case "UND_ERR_ABORTED": case "UND_ERR_HEADERS_TIMEOUT":
+      case "ETIMEDOUT": case "ECONNRESET": case "ECONNREFUSED": case "EPIPE":
+      case "ERR_INVALID_STATE": case "UND_ERR_SOCKET": case "UND_ERR_BODY_TIMEOUT": case "UND_ERR_CONNECT_TIMEOUT":
+        out.code = field.value;
+    }
+    return out;
+  };
+  return (wrapper: AggregateError, reason: unknown, present: boolean, kind: number,
+    atInvoke: boolean | null, atReject: boolean | null) => {
+    const root = inspect(reason, present);
+    let cause = "unobserved";
+    if (root.kind === "native") {
+      const field = descriptor(reason, "cause");
+      if (!field) cause = "absent";
+      else if (!hasOwn(field, "value")) cause = "accessor";
+      else if (field.value === undefined) cause = "undefined";
+      else if (field.value === reason) cause = "self";
+      else {
+        const child = inspect(field.value, true);
+        cause = `${child.kind}/${child.protoMatch}/${child.code}`;
+      }
+    }
+    const source = kind === 1 ? "read" : kind === 2 ? "cancel" : kind === 3 ? "closed" : kind === 4 ? "observer" : "unknown";
+    const flag = (value: boolean | null) => value === true ? "t" : value === false ? "f" : "u";
+    const text = `readerReason=v1;source=${source};kind=${root.kind};protoMatch=${root.protoMatch};code=${root.code};cause=${cause};abortEq=${flag(atInvoke)}${flag(atReject)};origin=unknown`;
+    if (text.length > 192 || !/^[A-Za-z0-9_=/;]+$/.test(text)) throw new Failure("invalid Xiaomi reader reason display");
+    define(wrapper, "message", { value: `Xiaomi original reader outcomes [${text}]`, writable: true, configurable: true });
+    return text;
+  };
+}
 // Default (including the injected Worker) is strict. Only an explicitly bound SDK
 // selection can classify a terminal disposition after the original physical joins.
 function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal | null | undefined,
   install: (object: any, name: string, replacement: any) => void, report: (phase: string, ordinal: number, failed: boolean, error?: unknown) => void,
-  clock?: () => number) {
+  clock?: () => number, projectOriginalReason?: (wrapper: AggregateError, reason: unknown, present: boolean, kind: number, atInvoke: boolean | null, atReject: boolean | null) => unknown) {
   let sequence = 0; const tick = clock ?? (() => ++sequence), readers: any[] = [], faults: unknown[] = [];
   const originals: any[] = [], originalByPromise = new Map<any, any>(), observers: Promise<unknown>[] = [];
   let originalCursor = 0, observerCursor = 0, revision = 0, acceptedRevision = -1;
@@ -687,7 +738,12 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
             failed = true; joinAccepted = false;
             const error = new AggregateError(failures, "Xiaomi original reader outcomes"); firstFailure ??= error; currentFailure = error;
             if (!firstFailedJoin) {
-              try { firstFailedJoin = { value: xiaomiReaderFailureSnapshot(selected, readers, faults, trace), errorPresent: false }; }
+              try {
+                const value = xiaomiReaderFailureSnapshot(selected, readers, faults, trace);
+                if (value[0] === 1 && projectOriginalReason)
+                  projectOriginalReason(error, trace.reason, trace.present, trace.kind, value[15][6], value[15][7]);
+                firstFailedJoin = { value, errorPresent: false };
+              }
               catch (reportError) { firstFailedJoin = { error: reportError, errorPresent: true }; }
             }
             throw error;
@@ -762,6 +818,7 @@ function xiaomiRethrow(primary: unknown, report: () => void): never {
 }
 // END Xiaomi proof functions.
 
+const planReaderReasonProject = xiaomiReaderReasonProjector(nodeTypes.isProxy, nodeTypes.isNativeError);
 const planRows = xiaomiPlanCases(), planDiagnostic = xiaomiDiagnostic(nodeTypes.isProxy), controlFetch = globalThis.fetch;
 const originalPlanGuard = guardedTransport.fetchWithProviderHttpGuard, qualifiedControls = new Set<string>();
 const planUndici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici"), originalPlanFetch = planUndici.fetch;
@@ -822,7 +879,7 @@ beforeEach(() => {
         });
         if (result.response.body) row.observation = xiaomiObserveBody(result.response.body, options.signal ?? options.init?.signal,
           (object, name, replacement) => { vi.spyOn(object, name).mockImplementation(replacement); },
-          (phase, checkpoint, failed, error) => planRemember({ ...context, phase, checkpoint }, error, failed), planTick);
+          (phase, checkpoint, failed, error) => planRemember({ ...context, phase, checkpoint }, error, failed), planTick, planReaderReasonProject);
       } catch (error) { planObserverFaults.push(error); released(); }
     }, error => { row.state = "rejected"; row.settled = planTick(); row.reasonPresent = true; row.reason = error; released(); });
     return returned;
