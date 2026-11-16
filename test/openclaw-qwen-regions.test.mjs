@@ -22,7 +22,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)();
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -43,7 +43,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "d47986e7427610aa7c3d3532cc775cebd98754791152c11f57b59cdf1f883229";
+const qwenRunnerFixtureSha256 = "db8ff570cf5dcf9f2059a6a984964c926ff38297f9b344e7eaa4fff6e51ed5f7";
 const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
@@ -841,6 +841,278 @@ test("Qwen invocation route codec rejects impossible counts and context relation
   f.ledger.restore(); f.owner.restore();
 });
 // END Qwen observer failure witness pure tests.
+
+// BEGIN Qwen defining callable pure tests.
+function qwenCallableFixture(options = {}) {
+  const ledger = createQwenLedger(), model = {}, receiver = {}, hookResult = {}, calls = [];
+  const invocation = Object.freeze({ generation: ledger.generation, args: Object.freeze([model]) });
+  let context, getters = 0, activeHost;
+  const selected = function () { throw new Error("inert selected fetch must not run"); };
+  const host = {};
+  const build = function (...args) {
+    calls.push(["build", this, args]);
+    if (options.at === "build") throw options.reason;
+    return Object.hasOwn(options, "buildReturn") ? options.buildReturn : selected;
+  };
+  Object.defineProperty(host, "buildModelFetch", options.accessor
+    ? { configurable: true, enumerable: false, get() { getters++; return build; } }
+    : { value: build, configurable: true, enumerable: false, writable: false });
+  activeHost = options.host ?? host;
+  const lookup = function (...args) {
+    calls.push(["lookup", this, args]);
+    if (options.at === "lookup") throw options.reason;
+    return activeHost;
+  };
+  const hook = function (...args) {
+    calls.push(["hook", this, args]);
+    if (options.at === "hook") throw options.reason;
+    return hookResult;
+  };
+  const hostModule = {}, hookModule = { withOpenAIErrorResponseHook: hook };
+  Object.defineProperty(hostModule, "getAiTransportHost", options.exportGetter
+    ? { configurable: true, enumerable: true, get() { getters++; return lookup; } }
+    : { configurable: true, enumerable: true, writable: true, value: lookup });
+  const oldHost = Object.getOwnPropertyDescriptor(host, "buildModelFetch"), oldLookup = Object.getOwnPropertyDescriptor(hostModule, "getAiTransportHost");
+  const witness = createQwenCallableWitness(ledger, () => context, utilTypes.isProxy);
+  witness.bind(invocation); witness.install(hostModule, hookModule);
+  const run = fn => { const prior = context; context = invocation; try { return fn(); } finally { context = prior; } };
+  const client = () => run(() => {
+    const returned = Reflect.apply(hostModule.getAiTransportHost, receiver, [undefined]);
+    const value = Reflect.apply(returned.buildModelFetch, returned, [model, undefined, 7]);
+    return Reflect.apply(hookModule.withOpenAIErrorResponseHook, receiver, [value ?? selected, undefined, model]);
+  });
+  return { ledger, witness, invocation, model, receiver, hookResult, selected, host, hostModule, hookModule, calls, run, client,
+    getters: () => getters, oldHost, oldLookup, setHost(value) { activeHost = value; } };
+}
+
+test("Qwen defining callables preserve actual returns, receivers, arguments and descriptor flags", () => {
+  const f = qwenCallableFixture({ exportGetter: true });
+  assert.equal(f.getters(), 0);
+  assert.equal(f.client(), f.hookResult); assert.equal(f.getters(), 1);
+  assert.deepEqual(f.calls.map(row => row[0]), ["lookup", "build", "hook"]);
+  assert.equal(f.calls[0][1], f.receiver); assert.deepEqual(f.calls[0][2], [undefined]);
+  assert.equal(f.calls[1][1], f.host); assert.deepEqual(f.calls[1][2], [f.model, undefined, 7]);
+  assert.equal(f.calls[2][1], f.receiver); assert.deepEqual(f.calls[2][2], [f.selected, undefined, f.model]);
+  assert.deepEqual(f.witness.snapshot(f.invocation), [1,1,1,1,1,1,3]);
+  const descriptor = Object.getOwnPropertyDescriptor(f.host, "buildModelFetch");
+  for (const key of ["enumerable", "writable", "configurable"]) assert.equal(descriptor[key], f.oldHost[key]);
+  f.ledger.restore();
+  assert.deepEqual(Object.getOwnPropertyDescriptor(f.host, "buildModelFetch"), f.oldHost);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(f.hostModule, "getAiTransportHost"), f.oldLookup);
+});
+
+for (const at of ["lookup", "build", "hook"]) for (const reason of [undefined, {}]) test(`Qwen ${at} preserves original thrown presence and identity`, () => {
+  const f = qwenCallableFixture({ at, reason }); let threw = false;
+  try { f.client(); } catch (error) { threw = true; assert.equal(error, reason); }
+  assert.equal(threw, true);
+  const outcome = reason === undefined ? 2 : 3;
+  assert.deepEqual(f.witness.snapshot(f.invocation), at === "lookup" ? [1,outcome,0,0,0,0,1]
+    : at === "build" ? [1,1,outcome,0,0,0,3] : [1,1,1,1,outcome,1,3]);
+  assert.equal(f.calls.length, ["lookup", "build", "hook"].indexOf(at) + 1); f.ledger.restore();
+});
+
+for (const buildReturn of [null, undefined]) test("Qwen nullish build identifies only the associated source selection branch", () => {
+  const f = qwenCallableFixture({ buildReturn }); assert.equal(f.client(), f.hookResult);
+  assert.deepEqual(f.witness.snapshot(f.invocation), [1,1,1,buildReturn === null ? 2 : 3,1,2,3]);
+  assert.equal(f.calls[2][2][0], f.selected); f.ledger.restore();
+});
+
+test("Qwen installs on the actual returned host, never a prior active host", () => {
+  const f = qwenCallableFixture(), second = { buildModelFetch: () => f.selected };
+  f.setHost(second); assert.equal(f.client(), f.hookResult);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(f.host, "buildModelFetch"), f.oldHost);
+  const installed = second.buildModelFetch;
+  // Reuse the same host for another exact invocation without stacking wrappers.
+  const other = Object.freeze({ generation: f.ledger.generation, args: [f.model] }); f.witness.bind(other);
+  f.run(() => f.hostModule.getAiTransportHost()); assert.equal(second.buildModelFetch, installed);
+  assert.equal(f.witness.snapshot(f.invocation), null); f.ledger.restore();
+});
+
+test("Qwen host accessors and proxies stay unsupported without extra getter or trap evaluation", () => {
+  const f = qwenCallableFixture({ accessor: true }); assert.equal(f.getters(), 0);
+  assert.equal(f.client(), f.hookResult); assert.equal(f.getters(), 1);
+  assert.deepEqual(f.witness.snapshot(f.invocation), [1,1,0,0,1,0,1]); f.ledger.restore();
+  let traps = 0;
+  const proxy = new Proxy({}, { getOwnPropertyDescriptor() { traps++; throw undefined; } });
+  const p = qwenCallableFixture({ host: proxy }); p.run(() => p.hostModule.getAiTransportHost());
+  assert.deepEqual(p.witness.snapshot(p.invocation), [1,1,0,0,0,0,1]); assert.equal(traps, 0); p.ledger.restore();
+});
+
+test("Qwen immutable ESM namespaces remain unknown without recording or restoration work", async () => {
+  const namespace = await import("data:text/javascript," + encodeURIComponent(`
+    export const calls = [], lookupResult = {}, hookResult = {};
+    export function getAiTransportHost(...args) { calls.push(["lookup", this, args]); return lookupResult; }
+    export function withOpenAIErrorResponseHook(...args) { calls.push(["hook", this, args]); return hookResult; }
+  `));
+  assert.equal(utilTypes.isModuleNamespaceObject(namespace), true);
+  const names = ["getAiTransportHost", "withOpenAIErrorResponseHook"];
+  const descriptors = names.map(name => Object.getOwnPropertyDescriptor(namespace, name));
+  for (const descriptor of descriptors) {
+    assert.equal(descriptor.configurable, false); assert.equal(descriptor.writable, true);
+    assert.equal(Object.hasOwn(descriptor, "value"), true);
+  }
+  const ledger = createQwenLedger(), invocation = { generation: ledger.generation, args: [{}] };
+  let registrations = 0; const deferRestore = ledger.deferRestore;
+  ledger.deferRestore = function (...args) { registrations++; return Reflect.apply(deferRestore, this, args); };
+  const witness = createQwenCallableWitness(ledger, () => invocation, utilTypes.isProxy);
+  witness.bind(invocation); witness.install(namespace, namespace);
+  assert.equal(registrations, 0); assert.equal(namespace.calls.length, 0);
+  assert.deepEqual(ledger.failures().recording, []);
+  const receiver = {}, lookupArgs = [undefined], hookArgs = [() => {}, undefined, invocation.args[0]];
+  assert.equal(Reflect.apply(namespace.getAiTransportHost, receiver, lookupArgs), namespace.lookupResult);
+  assert.equal(Reflect.apply(namespace.withOpenAIErrorResponseHook, receiver, hookArgs), namespace.hookResult);
+  assert.equal(namespace.calls.length, 2);
+  for (let index = 0; index < names.length; index++) {
+    assert.deepEqual(Object.getOwnPropertyDescriptor(namespace, names[index]), descriptors[index]);
+    assert.equal(namespace[names[index]], descriptors[index].value);
+    assert.equal(namespace.calls[index][1], receiver);
+    assert.deepEqual(namespace.calls[index][2], index === 0 ? lookupArgs : hookArgs);
+  }
+  assert.deepEqual(witness.snapshot(invocation), [1,0,0,0,0,0,0]);
+  const original = Promise.resolve(namespace.hookResult);
+  assert.equal(ledger.observe("caller", original), original);
+  await ledger.drain(); assert.equal(ledger.operations[0].pending, original);
+  assert.equal(ledger.operations[0].state, "fulfilled"); ledger.restore(); await ledger.drain(); ledger.seal();
+  assert.deepEqual(ledger.failures().recording, []); assert.deepEqual(ledger.failures().restoration, []);
+});
+
+for (const mode of ["foreign_model", "foreign_receiver", "foreign_invocation", "duplicate", "reentrant", "wrong_hook"]) test(`Qwen ${mode} cannot supply a callable association`, () => {
+  const f = qwenCallableFixture();
+  if (mode === "reentrant") {
+    const host = { buildModelFetch() { f.hostModule.getAiTransportHost(); return f.selected; } }; f.setHost(host); f.client();
+  } else {
+    f.run(() => {
+      const host = f.hostModule.getAiTransportHost();
+      if (mode === "duplicate") f.hostModule.getAiTransportHost();
+      Reflect.apply(host.buildModelFetch, mode === "foreign_receiver" ? {} : host, [mode === "foreign_model" ? {} : f.model]);
+      f.hookModule.withOpenAIErrorResponseHook(mode === "wrong_hook" ? () => {} : f.selected, undefined, f.model);
+    });
+    if (mode === "foreign_invocation") f.host.buildModelFetch(f.model);
+  }
+  assert.equal(f.witness.snapshot(f.invocation), null); f.ledger.restore();
+});
+
+test("Qwen recording and restoration failures remain independent of an original undefined throw", () => {
+  const f = qwenCallableFixture({ at: "build", reason: undefined }), recording = {}, restored = f.ledger.deferRestore;
+  f.ledger.deferRestore = () => { throw recording; };
+  let threw = false; try { f.client(); } catch (error) { threw = true; assert.equal(error, undefined); }
+  assert.equal(threw, true); assert.deepEqual(f.ledger.failures().recording, [recording]);
+  f.ledger.deferRestore = restored;
+  Object.defineProperty(f.hostModule, "getAiTransportHost", { value: () => undefined });
+  assert.throws(() => f.ledger.restore(), error => Array.isArray(error.errors) && error.errors.length === 1);
+  assert.equal(f.ledger.failures().restoration.length, 1);
+});
+
+for (const reason of [undefined, {}]) test("Qwen original export getter throws once without being pre-read", () => {
+  const ledger = createQwenLedger(), invocation = { generation: ledger.generation, args: [{}] };
+  let reads = 0;
+  const target = {}; Object.defineProperty(target, "getAiTransportHost", { configurable: true, get() { reads++; throw reason; } });
+  const witness = createQwenCallableWitness(ledger, () => invocation, utilTypes.isProxy);
+  witness.bind(invocation); witness.install(target, { withOpenAIErrorResponseHook() {} }); assert.equal(reads, 0);
+  let threw = false; try { target.getAiTransportHost; } catch (error) { threw = true; assert.equal(error, reason); }
+  assert.equal(threw, true); assert.equal(reads, 1); assert.deepEqual(witness.snapshot(invocation), [1,0,0,0,0,0,1]); ledger.restore();
+});
+
+for (const reason of [undefined, {}]) test("Qwen passive descriptor recording failure never substitutes an original lookup return", async () => {
+  const ledger = createQwenLedger(), host = {}, model = {}, invocation = { generation: ledger.generation, args: [model] };
+  const module = { getAiTransportHost() { return host; } };
+  const witness = createQwenCallableWitness(ledger, () => invocation, value => { if (value === host) throw reason; return false; });
+  witness.bind(invocation); witness.install(module, { withOpenAIErrorResponseHook() {} });
+  assert.equal(module.getAiTransportHost(), host); assert.equal(ledger.failures().recording.length, 1);
+  assert.equal(ledger.failures().recording[0], reason);
+  await assert.rejects(ledger.drain(), error => error.errors.length === 1 && error.errors[0] === reason);
+  ledger.deferRestore(() => { throw undefined; });
+  assert.throws(() => ledger.restore(), error => error.errors.length === 1 && error.errors[0] === undefined);
+  await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === reason);
+});
+
+test("Qwen absent module interception, foreign invocations and repeated bindings remain unknown", () => {
+  const ledger = createQwenLedger(), invocation = { generation: ledger.generation, args: [{}] }, module = {};
+  Object.defineProperty(module, "getAiTransportHost", { value() { return {}; }, writable: false, configurable: false });
+  const witness = createQwenCallableWitness(ledger, () => invocation, utilTypes.isProxy);
+  witness.bind(invocation); witness.install(module, {});
+  assert.deepEqual(witness.snapshot(invocation), [1,0,0,0,0,0,0]); assert.equal(witness.snapshot({}), null);
+  witness.bind(invocation); assert.equal(witness.snapshot(invocation), null); ledger.restore();
+});
+
+test("Qwen host wrapper is installed once across two exact invocation identities", () => {
+  const ledger = createQwenLedger(), model = {}, host = { buildModelFetch() { return fetch; } }, fetch = () => {};
+  const a = { generation: ledger.generation, args: [model] }, b = { generation: ledger.generation, args: [model] };
+  let current = a; const witness = createQwenCallableWitness(ledger, () => current, utilTypes.isProxy);
+  const module = { getAiTransportHost: () => host }, hooks = { withOpenAIErrorResponseHook: fn => fn };
+  witness.bind(a); witness.bind(b); witness.install(module, hooks);
+  assert.equal(hooks.withOpenAIErrorResponseHook(module.getAiTransportHost().buildModelFetch(model), undefined, model), fetch);
+  const installed = host.buildModelFetch; current = b;
+  assert.equal(hooks.withOpenAIErrorResponseHook(module.getAiTransportHost().buildModelFetch(model), undefined, model), fetch);
+  assert.equal(host.buildModelFetch, installed);
+  assert.deepEqual(witness.snapshot(a), [1,1,1,1,1,1,3]); assert.deepEqual(witness.snapshot(b), [1,1,1,1,1,1,3]); ledger.restore();
+});
+
+function qwenCallableObserverFixture(mode = "host", reason) {
+  const ledger = createQwenLedger(), model = {}, calls = [];
+  let context, resolve, subscriptions = 0;
+  const storage = { disable() {}, getStore: () => context, run(value, fn) { const prior = context; context = value; try { return fn(); } finally { context = prior; } } };
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "synthetic-fixture" };
+  const owner = createQwenOwnership(storage, ledger, expected), response = { body: null };
+  const parent = new Promise(yes => { resolve = yes; }), then = parent.then;
+  parent.then = function (...args) { subscriptions++; return Reflect.apply(then, this, args); };
+  const fetch = owner.wrapFetch(function (...args) { calls.push([this, args]); return parent; });
+  const host = { buildModelFetch: () => mode === "fallback" ? undefined : fetch };
+  const hostModule = { getAiTransportHost: () => host }, hookModule = { withOpenAIErrorResponseHook: fn => fn };
+  owner.installCallables(hostModule, hookModule, utilTypes.isProxy);
+  if (mode === "guarded") ledger.response = () => { throw reason; };
+  const result = owner.invoke(() => {
+    const selected = mode === "unobserved" ? fetch : hookModule.withOpenAIErrorResponseHook(hostModule.getAiTransportHost().buildModelFetch(model) ?? fetch, undefined, model);
+    const call = () => Reflect.apply(selected, host, [expected.url, { method: "POST", headers: { authorization: "Bearer " + expected.credential } }, undefined]);
+    return mode === "guarded" ? owner.guard(() => call().then(() => ({ response, release: () => Promise.resolve() })), host, []) : call();
+  }, undefined, [model], {});
+  return { ledger, owner, response, parent, result, resolve, calls, subscriptions: () => subscriptions };
+}
+
+for (const mode of ["host", "fallback", "unobserved", "guarded"]) for (const reason of [undefined, {}]) test(`Qwen actual ${mode} callable snapshot survives first observer failure and bounded relay`, async () => {
+  const f = qwenCallableObserverFixture(mode, reason); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const record = f.ledger.observerRecord(rows[0].id);
+  assert.equal(record.v, 3);
+  assert.deepEqual(record.callable, mode === "unobserved" ? [1,0,0,0,0,0,1] : [1,1,1,mode === "fallback" ? 3 : 1,1,mode === "fallback" ? 2 : 1,3]);
+  assert.equal(f.calls.length, 1); assert.equal(f.subscriptions(), mode === "guarded" ? 4 : 3);
+  assert.equal(f.ledger.operations.find(row => row.kind === "fetch").pending, f.parent);
+  if (mode === "guarded") assert.equal(record.reasonDefined, reason !== undefined);
+  const first = JSON.stringify(record);
+  f.ledger.captureObserverFailure(f.parent, { raw: "must not replace first" }, {});
+  assert.equal(JSON.stringify(f.ledger.observerRecord(rows[0].id)), first);
+  const relay = createQwenFailureRelay(), witness = createQwenEntryWitness(value => relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)));
+  witness.moduleEvaluated(); rows.forEach(row => witness.registered(row.id)); witness.registrationComplete();
+  const active = witness.enter(rows[0].id), counts = { operations: f.ledger.operations.length, rejected: f.ledger.operations.filter(row => row.state === "rejected").length, pending: 0 };
+  active.at("owned_drain"); active.failed(undefined);
+  relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "fetch_observer", "failed", counts)));
+  relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record)); active.complete(counts);
+  rows.slice(1).forEach(row => relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts)));
+  const output = relay.output("failed"); assert.deepEqual(output.find(row => row.kind === "observer_failure"), record);
+  assert.equal(output.length, 10); assert.ok(output.map(qwenBoundaryAnnotation).every(line => Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(output.map(qwenBoundaryAnnotation).join("\n")) <= 8192);
+  f.ledger.restore(); f.owner.restore();
+});
+
+test("Qwen callable codec rejects contradictions and preserves historical schemas", async () => {
+  const f = qwenCallableObserverFixture(); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const record = f.ledger.observerRecord(rows[0].id), valid = record.callable;
+  for (const callable of [[1,0,1,1,1,1,3], [1,1,1,0,1,1,3], [1,1,1,1,1,2,3], [1,1,2,0,1,0,3],
+    [1,1,1,1,0,1,3], [1,1,1,1,1,1,1], [1,1,0,1,0,0,3], [1,1,1,1,1,0,3], [true,1,1,1,1,1,3], [...valid,0]]) {
+    assert.throws(() => qwenObserverRecord({ ...record, callable }));
+  }
+  let reads = 0; const accessor = [...valid]; Object.defineProperty(accessor, "2", { get() { reads++; throw undefined; } });
+  assert.throws(() => qwenObserverRecord({ ...record, callable: accessor })); assert.equal(reads, 0);
+  const proxy = new Proxy(valid, { ownKeys() { reads++; throw undefined; } });
+  assert.throws(() => qwenObserverRecord({ ...record, callable: proxy })); assert.equal(reads, 0);
+  assert.equal(qwenObserverRecord({ ...record, callable: null }).callable, null);
+  const { callable, ...v2 } = record; v2.v = 2; assert.deepEqual(qwenObserverRecord(v2), v2);
+  const { route, ...v1 } = v2; v1.v = 1; assert.deepEqual(qwenObserverRecord(v1), v1);
+  const wide = qwenObserverRecord({ ...record, case: rows.reduce((a, b) => a.id.length > b.id.length ? a : b).id,
+    parent: 65534, observer: 65535, acquisition: false, route: [1,65535,65535,65535,0,0,3,3,2] });
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(wide)) <= 768);
+  f.ledger.restore(); f.owner.restore();
+});
+// END Qwen defining callable pure tests.
 
 // BEGIN Qwen observer ownership pure tests.
 function qwenDeferred() {

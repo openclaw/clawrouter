@@ -3,6 +3,9 @@ import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plug
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import * as transport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import * as guard from "../../src/infra/net/fetch-guard.js";
+import * as aiHost from "../../packages/ai/src/host.js";
+import * as openAITransport from "../../packages/ai/src/transports/openai-transport-shared.js";
+import { types as utilTypes } from "node:util";
 import { expect, it, vi } from "vitest";
 import { makeInMemorySessionManager, makeModelSnapshotEntry } from "../../src/agents/embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
@@ -190,15 +193,133 @@ function createQwenLedger() {
     if (first.generation !== generation || !observer || observer.state !== "rejected" || !Object.is(observer.reason, first.reason)) {
       throw new Error("observer failure lacks settled original association");
     }
-    const { route, ...facts } = first.facts;
-    return qwenObserverRecord({ v: 2, kind: "observer_failure", case: id,
+    const { route, callable, ...facts } = first.facts;
+    const prior = { v: 2, kind: "observer_failure", case: id,
       parent: operations.indexOf(first.operation) + 1, observer: operations.indexOf(observer) + 1,
-      ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null });
+      ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
+    return qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
+    deferRestore(restore: () => void) { open(); if (restored) throw new Error("Qwen observer installation after restoration"); restorers.push(restore); },
     failures: () => ({ synchronous: [...synchronous], registration: [...registration], observer: [...observerFailures], ownership: [...ownershipFailures], restoration: [...restorationFailures], late: [...lateFailures], recording: [...recordingFailures] }),
     fail: (reason: unknown) => { open(); ownershipFailures.push(reason); } };
+}
+
+// Observe defining exports without eagerly evaluating an export getter. The
+// returned host alone supplies the build descriptor; no earlier host lookup or
+// global fetch read is performed. Descriptor custody is sampled, not authority.
+function createQwenCallableWitness(ledger: ReturnType<typeof createQwenLedger>, current: () => Invocation | undefined, isProxy: (value: any) => boolean) {
+  const rows = new Map<Invocation, any>(), hosts = new Map<object, any>();
+  const descriptors: Array<() => boolean> = [];
+  let lookupHeld: (() => boolean) | null = null, hookHeld: (() => boolean) | null = null;
+  const note = (fn: () => void) => { try { fn(); } catch (error) { ledger.recordingFailure(error); } };
+  const same = (a: PropertyDescriptor | undefined, b: PropertyDescriptor) => !!a
+    && ["value", "get", "set", "writable", "enumerable", "configurable"].every(key => (a as any)[key] === (b as any)[key]);
+  function install(target: any, name: string, wrap: (fn: Function) => Function, dataOnly: boolean) {
+    if (!target || !["object", "function"].includes(typeof target) || isProxy(target)) return null;
+    if (utilTypes.isModuleNamespaceObject(target)) return null;
+    const prior = Object.getOwnPropertyDescriptor(target, name);
+    if (!prior) return null;
+    let installed: PropertyDescriptor;
+    if (Object.hasOwn(prior, "value")) {
+      if (typeof prior.value !== "function" || !prior.configurable && !prior.writable) return null;
+      installed = { ...prior, value: wrap(prior.value) };
+    } else {
+      if (dataOnly || !prior.configurable || !prior.get || prior.set) return null;
+      const wrappers = new Map<Function, Function>();
+      installed = { ...prior, get: function (this: unknown, ...args: unknown[]) {
+        const original = Reflect.apply(prior.get!, this, args);
+        if (typeof original !== "function") return original;
+        let result: Function = original;
+        note(() => {
+          if (!wrappers.has(original)) wrappers.set(original, wrap(original));
+          result = wrappers.get(original)!;
+        });
+        return result;
+      } };
+    }
+    let applied = false;
+    const held = () => applied && same(Object.getOwnPropertyDescriptor(target, name), installed);
+    ledger.deferRestore(() => {
+      if (!applied) return;
+      if (!held()) throw new Error("Qwen callable descriptor custody changed");
+      Object.defineProperty(target, name, prior);
+    });
+    Object.defineProperty(target, name, installed); applied = true;
+    descriptors.push(held);
+    return held;
+  }
+  function row() { const invocation = current(); return invocation && rows.get(invocation); }
+  function begin(kind: string) {
+    let observed: any;
+    note(() => { observed = row(); if (observed) {
+      if (observed.busy || observed[kind] !== 0) observed.ambiguous = true;
+      observed.busy++;
+    } });
+    return observed;
+  }
+  function call(original: Function, receiver: unknown, args: unknown[], observed: any, kind: string, returned: (value: any) => void) {
+    let result;
+    try { result = Reflect.apply(original, receiver, args); }
+    catch (error) { note(() => { if (observed) { observed[kind] = error === undefined ? 2 : 3; observed.busy--; } }); throw error; }
+    note(() => { if (observed) { observed[kind] = 1; observed.busy--; returned(result); } });
+    return result;
+  }
+  function build(host: object) {
+    if (hosts.has(host)) return hosts.get(host);
+    const owned: any = { held: null, ambiguous: false }; hosts.set(host, owned);
+    owned.held = install(host, "buildModelFetch", original => function (this: unknown, ...args: unknown[]) {
+      const observed = begin("build");
+      note(() => {
+        if (!observed || observed.host !== host || this !== host || args[0] !== observed.model || observed.lookup !== 1) {
+          owned.ambiguous = true; if (observed) observed.ambiguous = true;
+        }
+      });
+      return call(original, this, args, observed, "build", value => {
+        observed.buildValue = value;
+        observed.kind = typeof value === "function" ? 1 : value === null ? 2 : value === undefined ? 3 : 4;
+      });
+    }, true);
+    return owned;
+  }
+  return {
+    bind(invocation: Invocation) {
+      if (rows.has(invocation)) { rows.get(invocation).ambiguous = true; return; }
+      rows.set(invocation, { model: invocation.args[0], lookup: 0, build: 0, kind: 0, hook: 0, relation: 0, busy: 0, ambiguous: false });
+    },
+    install(hostModule: object, hookModule: object) {
+      note(() => { lookupHeld = install(hostModule, "getAiTransportHost", original => function (this: unknown, ...args: unknown[]) {
+        const observed = begin("lookup");
+        return call(original, this, args, observed, "lookup", host => {
+          observed.host = host; observed.owned = build(host);
+        });
+      }, false); });
+      note(() => { hookHeld = install(hookModule, "withOpenAIErrorResponseHook", original => function (this: unknown, ...args: unknown[]) {
+        const observed = begin("hook");
+        note(() => { if (observed) {
+          if (args.length !== 3 || args[2] !== observed.model || observed.lookup !== 1) observed.ambiguous = true;
+          else if (observed.build >= 2 || observed.build === 0 && observed.owned?.held) observed.ambiguous = true;
+          else if (observed.build === 1) {
+            observed.relation = observed.kind === 1 && args[0] === observed.buildValue ? 1
+              : [2, 3].includes(observed.kind) && typeof args[0] === "function" ? 2 : 0;
+            if (!observed.relation) observed.ambiguous = true;
+          }
+        } });
+        return call(original, this, args, observed, "hook", () => {});
+      }, false); });
+    },
+    snapshot(invocation: Invocation | undefined) {
+      const observed = invocation && rows.get(invocation);
+      if (!observed || observed.ambiguous || observed.busy || observed.owned?.ambiguous || descriptors.some(held => !held())) return null;
+      const custody = (lookupHeld?.() && hookHeld?.() ? 1 : 0) | (observed.owned?.held?.() ? 2 : 0);
+      // 1 = associated invocation; outcomes 0/1/2/3 = unobserved/return/
+      // throw undefined/throw defined. Relation 2 identifies only the source
+      // nullish branch, never equality with an unobserved global fetch. Custody
+      // bits attest the two export descriptors and this host data descriptor.
+      return Object.freeze([1, observed.lookup, observed.build, observed.kind, observed.hook, observed.relation, custody]);
+    },
+  };
 }
 
 // Tokens follow actual asynchronous invocation ancestry, never a current case or
@@ -209,6 +330,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   // These private maps observe only this installed spy path. They never grant
   // ownership or infer native interception from a zero entry count.
   const contexts = new Map<object, Invocation>(), routes = new Map<Invocation, any>();
+  let callable: ReturnType<typeof createQwenCallableWitness> | undefined;
   let unknownEntry = false;
   function passive(record: () => void) {
     try { record(); } catch (error) { ledger.recordingFailure(error); }
@@ -239,7 +361,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     const invocation = Object.freeze({ generation: ledger.generation, caller, fn, receiver, args: Object.freeze([...args]) });
     invocations.add(invocation);
     const context = Object.freeze({ invocation });
-    passive(() => { contexts.set(context, invocation); routes.set(invocation, { provider: [], guard: [], created: [], failed: 0, undefinedFailed: 0 }); });
+    passive(() => { contexts.set(context, invocation); routes.set(invocation, { provider: [], guard: [], created: [], failed: 0, undefinedFailed: 0 }); callable?.bind(invocation); });
     return storage.run(context, () => Reflect.apply(fn, receiver, args)) as ReturnType<F>;
   }
   function guard(fn: Function, receiver: unknown, args: unknown[]) {
@@ -277,9 +399,10 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   function wrapFetch(original: Function) {
     return function (this: unknown, ...args: any[]) {
       let receipt: FetchReceipt | undefined, acquisition: Acquisition | undefined, acquisitionObserved = false, route: readonly number[] | null = null;
+      let callableInvocation: Invocation | undefined;
       try {
         const context = current(); acquisition = context.acquisition as Acquisition; acquisitionObserved = true;
-        passive(() => { route = routeAtFetch(context); });
+        passive(() => { route = routeAtFetch(context); if (callable) callableInvocation = contexts.get(context); });
         const [input, init] = args;
         const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -303,7 +426,8 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
           site = 6; responses.set(response, receipt!);
         } catch (error) {
           try { ledger.captureObserverFailure(pending, { site, seen, truthy, receipt: !!receipt,
-            acquisition: acquisitionObserved ? !!acquisition : null, route }, error); }
+            acquisition: acquisitionObserved ? !!acquisition : null, route,
+            ...(callable ? { callable: callable.snapshot(callableInvocation) } : {}) }, error); }
           catch (reportError) { ledger.recordingFailure(reportError); }
           throw error;
         }
@@ -320,6 +444,10 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     for (const reader of ledger.readers) if (!reader.owner || !fetches.has(reader.owner as FetchReceipt) || reader.generation !== ledger.generation || reader.response !== (reader.owner as FetchReceipt).response) incomplete();
   }
   return { invoke, guard, wrapFetch, verify, acquisitions, fetches,
+    installCallables(hostModule: object, hookModule: object, isProxy: (value: any) => boolean) {
+      callable = createQwenCallableWitness(ledger, () => contexts.get(storage.getStore()), isProxy);
+      callable.install(hostModule, hookModule);
+    },
     // Provider entry has no existing context read. Read once here; guard/fetch
     // reuse their original current() result without any additional ALS reads.
     providerEntry() { passive(() => { entry("provider", storage.getStore()); }); },
@@ -344,6 +472,23 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 3) {
+    if (Object.keys(value).at(-1) !== "callable") invalid();
+    const { callable, ...prior } = value, checked = qwenObserverRecord({ ...prior, v: 2 });
+    if (callable === null) return { ...checked, v: 3, callable: null };
+    if (utilTypes.isProxy(callable) || !Array.isArray(callable) || Reflect.ownKeys(callable).join() !== "0,1,2,3,4,5,6,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(callable);
+    if (Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const c = Array.from({ length: 7 }, (_, i) => fields[String(i)].value);
+    if (!c.every(Number.isSafeInteger) || c[0] !== 1 || c.slice(1, 3).some(n => n < 0 || n > 3)
+      || c[3] < 0 || c[3] > 4 || c[4] < 0 || c[4] > 3 || ![0, 1, 2].includes(c[5]) || c[6] < 0 || c[6] > 3
+      || (c[2] === 1) !== (c[3] !== 0) || c[1] !== 1 && (c.slice(2, 6).some(Boolean) || (c[6] & 2) !== 0)
+      || c[2] !== 0 && (c[6] & 2) === 0 || c[5] !== 0 && (c[2] !== 1 || c[4] === 0)
+      || c[4] !== 0 && c[2] === 0 && (c[6] & 2) !== 0
+      || c[5] === 1 && c[3] !== 1 || c[5] === 2 && ![2, 3].includes(c[3])
+      || c[2] >= 2 && c[4] !== 0 || c[2] === 1 && c[4] !== 0 && c[5] === 0) invalid();
+    return { ...checked, v: 3, callable: c };
   }
   if (value.v === 2) {
     if (Object.keys(value).at(-1) !== "route") invalid();
@@ -486,6 +631,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     witness.at("loader");
     const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
     witness.at("guard_hooks");
+    ownership.installCallables(aiHost, openAITransport, utilTypes.isProxy);
     vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: ownership.wrapFetch(undici.fetch) });
     vi.spyOn(transport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args: Parameters<typeof originalProviderGuard>) {
       ownership.providerEntry();
