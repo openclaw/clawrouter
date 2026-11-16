@@ -25,7 +25,7 @@ test("compiled provider declarations build and typecheck without client or Worke
   const options = { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"],
     types: [], strict: true, allowImportingTsExtensions: true };
   compile(root, "build", { ...options, declaration: true, emitDeclarationOnly: true, rootDir: repo, outDir: output },
-    [join(repo, "shared/provider-snapshot.ts")]);
+    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts")]);
   const files = readdirSync(output, { recursive: true }).map(file => file.replaceAll("\\", "/"));
   assert.ok(files.includes("shared/provider-snapshot.d.ts"));
   assert.ok(files.includes("shared/provider-model.d.ts"));
@@ -46,6 +46,11 @@ import type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPrice
 declare const portablePricing: [TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing];
 const legacyPricing: [LegacyTokenRates, LegacyLongContextPricing, LegacyServiceTierPricing, LegacyAnthropicPriceModifiers, LegacyTokenPricing, LegacyCharacterPricing, LegacyImageTokenPricing, LegacyModelPricing, LegacySuccessfulRequestPricing, LegacyOutcomeRequestPricing, LegacyImageRequestPricing, LegacyDeepSeekSearchRequestPricing, LegacyRequestPricing] = portablePricing;
 const roundTripPricing: typeof portablePricing = legacyPricing;
+import type { ManagedProtocol as LegacyManagedProtocol, ManagedFileLinks as LegacyManagedFileLinks, OutputTokenLimit as LegacyOutputTokenLimit, ToolPricing as LegacyToolPricing, CompiledEndpoint as LegacyCompiledEndpoint } from "./declarations/shared/provider-snapshot.js";
+import type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./declarations/packages/provider-plugin-contract/src/endpoints.js";
+declare const portableEndpoints: [ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint];
+const legacyEndpoints: [LegacyManagedProtocol, LegacyManagedFileLinks, LegacyOutputTokenLimit, LegacyToolPricing, LegacyCompiledEndpoint] = portableEndpoints;
+const roundTripEndpoints: typeof portableEndpoints = legacyEndpoints;
 declare const portableAuth: [AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport];
 const legacyAuth: [LegacyAuth, LegacyAuthorization, LegacyRefresh, LegacyTransportAuth, LegacyTransport] = portableAuth;
 const roundTripAuth: typeof portableAuth = legacyAuth;
@@ -60,7 +65,7 @@ const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
+export { roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });
