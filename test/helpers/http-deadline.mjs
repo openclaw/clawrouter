@@ -340,11 +340,18 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture-state") return fetch("https://upstream.fixture/state");
   if (path === "/fixture-ingress") return Response.json(ingress);
   if (path !== "/v1/responses") return handler.fetch(request, env, context);
-  const entry = ingress[request.headers.get("x-request-id")] = { receivedAt: Date.now(), abortedAt: request.signal.aborted ? Date.now() : null, returnedAt: null, status: null, failedAt: null };
+  const requestId = request.headers.get("x-request-id");
+  const entry = ingress[requestId] = { receivedAt: Date.now(), abortedAt: request.signal.aborted ? Date.now() : null, returnedAt: null, status: null, failedAt: null };
   request.signal.addEventListener("abort", () => { entry.abortedAt = Date.now(); }, { once: true });
   try {
     const response = await handler.fetch(request, env, context);
     entry.returnedAt = Date.now(); entry.status = response.status;
+    if (requestId === "deadline-cancel-json-pre-body-progress") {
+      // The direct socket needs the fixture's downstream compression contract.
+      const headers = new Headers(response.headers);
+      headers.set("content-encoding", "gzip"); headers.delete("content-length");
+      return new Response(response.body, { status: response.status, statusText: response.statusText, headers, encodeBody: "automatic" });
+    }
     return response;
   } catch (error) { entry.failedAt = Date.now(); throw error; }
 } };

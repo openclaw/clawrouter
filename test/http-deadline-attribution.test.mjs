@@ -504,3 +504,101 @@ test("HTTP direct request propagation represents both cleanup occurrences withou
     assert.equal(result.trace.filter(row => row[0] === "promise.allSettled").length, 1);
   }
 });
+
+// Execute the authored router wrapper with fake handler I/O and in-memory Node
+// Responses. Node does not implement Workers' encodeBody compression semantics.
+function extractedRouterFixture(handler, ResponseType = Response) {
+  const start = helperSource.indexOf("function routerFixture()");
+  const end = helperSource.indexOf("\nfunction upstreamFixture()", start);
+  const generated = vm.runInNewContext(helperSource.slice(start, end) + "\nrouterFixture()", { endpointMs: 500 });
+  const wrapper = generated.slice(generated.indexOf("const ingress = {};"));
+  const scope = { handler, Response: ResponseType, Headers, URL, Date };
+  vm.runInNewContext(wrapper.replace("export default", "globalThis.router ="), scope);
+  return { router: scope.router, ingress: vm.runInNewContext("ingress", scope) };
+}
+
+function routerRequest(requestId, path = "/v1/responses") {
+  const observations = { headerReads: 0, listeners: [] };
+  const request = {
+    url: `https://fixture.invalid${path}`,
+    headers: { get(name) { assert.equal(name, "x-request-id"); observations.headerReads++; return requestId; } },
+    signal: { aborted: false, addEventListener(...args) { observations.listeners.push(args); } },
+  };
+  return { request, observations };
+}
+
+test("HTTP gzip fixture establishes only downstream encoding and preserves the original response body", async () => {
+  const original = new Response("fixture payload", { status: 202, statusText: "Fixture Accepted", headers: {
+    "content-type": "application/json", "content-length": "15", "x-request-id": "owned", "x-fixture": "preserved",
+  } });
+  const before = [...original.headers], calls = [], constructions = [], env = {}, context = {};
+  const { request, observations } = routerRequest("deadline-cancel-json-pre-body-progress");
+  const handler = { async fetch(...args) { calls.push({ receiver: this, args }); return original; } };
+  let fixture;
+  class RecordedResponse extends Response {
+    constructor(body, init) {
+      assert.equal(fixture.ingress["deadline-cancel-json-pre-body-progress"].status, 202);
+      constructions.push({ body, init }); super(body, init);
+    }
+  }
+  fixture = extractedRouterFixture(handler, RecordedResponse);
+  const response = await fixture.router.fetch(request, env, context);
+  assert.notEqual(response, original); assert.equal(response instanceof Response, true);
+  assert.equal(response.body, original.body); assert.equal(response.body.locked, false);
+  assert.equal(response.status, 202); assert.equal(response.statusText, "Fixture Accepted");
+  assert.deepEqual([...response.headers], [...new Headers({ "content-type": "application/json", "content-encoding": "gzip", "x-request-id": "owned", "x-fixture": "preserved" })]);
+  assert.deepEqual([...original.headers], before);
+  assert.equal(constructions.length, 1); assert.equal(constructions[0].body, original.body);
+  assert.equal(constructions[0].init.encodeBody, "automatic");
+  assert.deepEqual(calls, [{ receiver: handler, args: [request, env, context] }]);
+  assert.equal(observations.headerReads, 1); assert.equal(observations.listeners.length, 1);
+});
+
+test("HTTP gzip fixture leaves every other scenario and unrelated route response identical", async () => {
+  const ids = scenarios.filter(scenario => scenario !== "cancel-json-pre-body-progress").map(scenario => `deadline-${scenario}`);
+  ids.push(null, "deadline-cancel-json-pre-body-progress-extra", "cancel-json-pre-body-progress");
+  for (const [id, path] of [...ids.map(id => [id, "/v1/responses"]), ["deadline-cancel-json-pre-body-progress", "/other"]]) {
+    const original = new Response("plain", { headers: { "content-length": "5", "x-fixture": "unchanged" } });
+    let calls = 0;
+    const handler = { async fetch() { calls++; return original; } };
+    class ForbiddenResponse { constructor() { assert.fail("unrelated response was replaced"); } }
+    const fixture = extractedRouterFixture(handler, ForbiddenResponse);
+    const { request, observations } = routerRequest(id, path);
+    assert.equal(await fixture.router.fetch(request, {}, {}), original); assert.equal(calls, 1);
+    assert.equal(original.headers.get("content-encoding"), null); assert.equal(original.headers.get("content-length"), "5");
+    assert.equal(observations.headerReads, path === "/v1/responses" ? 1 : 0);
+  }
+});
+
+test("HTTP gzip fixture preserves same-body cancellation and the independent ingress abort listener", async () => {
+  for (const reason of [undefined, { canceled: true }]) {
+    const cancellations = [];
+    const body = new ReadableStream({ pull() { assert.fail("wrapper pulled the body"); }, cancel(...args) { cancellations.push(args); } }, { highWaterMark: 0 });
+    const original = new Response(body);
+    const fixture = extractedRouterFixture({ async fetch() { return original; } });
+    const { request, observations } = routerRequest("deadline-cancel-json-pre-body-progress");
+    const response = await fixture.router.fetch(request, {}, {});
+    assert.equal(response.body, body); assert.equal(cancellations.length, 0);
+    await response.body.cancel(reason);
+    assert.equal(cancellations.length, 1); assert.equal(cancellations[0].length, 1); assert.equal(cancellations[0][0], reason);
+    const [name, listener, options] = observations.listeners[0];
+    assert.equal(name, "abort"); assert.equal(options.once, true);
+    assert.equal(fixture.ingress["deadline-cancel-json-pre-body-progress"].abortedAt, null);
+    listener();
+    assert.equal(typeof fixture.ingress["deadline-cancel-json-pre-body-progress"].abortedAt, "number");
+  }
+});
+
+test("HTTP gzip fixture retains handler and wrapping failures including undefined", async () => {
+  for (const reason of [undefined, {}]) for (const boundary of ["handler", "response"]) {
+    let calls = 0, constructions = 0;
+    const original = new Response("plain");
+    class FailingResponse { constructor() { constructions++; throw reason; } }
+    const fixture = extractedRouterFixture({ async fetch() { calls++; if (boundary === "handler") throw reason; return original; } }, FailingResponse);
+    const { request } = routerRequest("deadline-cancel-json-pre-body-progress");
+    assert.equal(await rejection(() => fixture.router.fetch(request, {}, {})), reason);
+    assert.equal(calls, 1); assert.equal(constructions, boundary === "response" ? 1 : 0);
+    assert.equal(typeof fixture.ingress["deadline-cancel-json-pre-body-progress"].failedAt, "number");
+    assert.equal(original.body.locked, false);
+  }
+});
