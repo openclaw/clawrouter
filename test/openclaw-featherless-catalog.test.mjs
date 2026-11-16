@@ -14,7 +14,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "1536faab19f2adf524b7ef1acef5c24501b35652";
 const manifests = readdirSync("providers").filter(path => path.endsWith(".provider.yaml")).sort().map(path => parse(readFileSync(`providers/${path}`, "utf8")));
-assert.equal(manifests.length, 87);
+assert.deepEqual(snapshot.providers.map(provider => provider.id).sort(), manifests.map(manifest => manifest.id).sort(), "compiled snapshot must contain every bundled provider manifest exactly once");
 assert.deepEqual(compileProviderSnapshot(manifests), snapshot);
 const provider = snapshot.providers.find(row => row.id === "featherless");
 const endpoint = provider.endpoints.find(row => row.id === "catalog");
