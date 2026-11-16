@@ -728,6 +728,65 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const {validatePrivateCheckpoint}=privateCheckpointFunctions();for(const code of [1,4,50])assert.throws(()=>validatePrivateCheckpoint({...cap,meta:[...cap.meta.slice(0,3),[2*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(code)],cap.meta[4]]}));
  });
 
+ // BEGIN Private defining module spy inert regressions
+ function privateDefiningFactory(transportHost,openAITransport,vi,object=Object){
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const helper=source.slice(source.indexOf("export function installPrivateDefiningSpy("),source.indexOf("// Defining-module observations only."));
+  const same=source.slice(source.indexOf("export function samePrivateDescriptor("),source.indexOf("export function privateCancelOperand("));
+  return new Function("transportHost","openAITransport","vi","isProxy","Object",stripTypeScriptTypes((helper+same).replace(/^export /gm,""),{mode:"strip"})+";return installPrivateDefiningSpy;")(transportHost,openAITransport,vi,privateNodeTypes.isProxy,object);
+ }
+ function privateDefiningFakeVi(options={}){
+  return {spyOn(module,name){
+   const original=Object.getOwnPropertyDescriptor(module,name);assert.equal(typeof original.value,"function");let implementation=original.value;
+   const mock=function(...args){return Reflect.apply(implementation,this,args);};
+   mock.mockImplementation=fn=>{implementation=fn;if(options.installThrows)throw options.reason;return mock;};
+   mock.mockRestore=()=>{if(options.restoreThrows)throw options.reason;Object.defineProperty(module,name,original);};
+   Object.defineProperty(module,name,{...original,value:mock});return mock;
+  }};
+ }
+ test("Private defining spies resolve only the two supported exports once and restore exactly",()=>{
+  for(const name of ["getAiTransportHost","withOpenAIErrorResponseHook"])for(const getter of [false,true]){
+   const module={},other={},restores=[],calls=[],receiver={},args=[{},undefined],returned={};let reads=0;
+   const original=function(...actual){calls.push([this,actual]);return returned;};
+   Object.defineProperty(module,name,getter?{configurable:true,enumerable:true,get(){reads++;return original;}}:{value:original,configurable:true,enumerable:true,writable:false});
+   const before=Object.getOwnPropertyDescriptor(module,name),install=privateDefiningFactory(name==="getAiTransportHost"?module:other,name==="withOpenAIErrorResponseHook"?module:other,privateDefiningFakeVi());
+   install(module,name,(fn,self,a)=>Reflect.apply(fn,self,a),restores);
+   assert.equal(Reflect.apply(module[name],receiver,args),returned);assert.deepEqual(calls,[[receiver,args]]);assert.equal(reads,getter?1:0);
+   restores[0]();assert.deepEqual(Object.getOwnPropertyDescriptor(module,name),before);assert.equal(reads,getter?1:0);assert.throws(()=>restores[0]());
+  }
+ });
+ test("Private defining spies reject foreign proxy inherited setter and mutated descriptors",()=>{
+  for(const mode of ["foreign","proxy","inherited","setter","nonconfigurable","nonfunction","mutation"]){
+   let reads=0,traps=0;const module={},other={},restores=[],fn=()=>{};
+   Object.defineProperty(module,"getAiTransportHost",{configurable:mode!=="nonconfigurable",enumerable:true,get(){reads++;if(mode==="mutation")Object.defineProperty(module,"getAiTransportHost",{value:fn,configurable:true});return mode==="nonfunction"?1:fn;},...(mode==="setter"?{set(){}}:{})});
+   const selected=mode==="proxy"?new Proxy(module,{getOwnPropertyDescriptor(){traps++;throw undefined;}}):mode==="inherited"?Object.create(module):module;
+   const install=privateDefiningFactory(mode==="foreign"?other:selected,other,privateDefiningFakeVi());
+   assert.throws(()=>install(selected,"getAiTransportHost",()=>{},restores));assert.equal(traps,0);assert.equal(reads,["nonfunction","mutation"].includes(mode)?1:0);assert.equal(restores.length,0);
+  }
+ });
+ test("Private defining spies preserve undefined original getter call and independent restoration failures",async()=>{
+  for(const at of ["getter","call","install"])for(const reason of [undefined,{}]){
+   const module={},restores=[];let calls=0,present=false,caught;
+   Object.defineProperty(module,"getAiTransportHost",{configurable:true,enumerable:true,get(){if(at==="getter")throw reason;return function(){calls++;if(at==="call")throw reason;};}});
+   const before=Object.getOwnPropertyDescriptor(module,"getAiTransportHost"),install=privateDefiningFactory(module,{},privateDefiningFakeVi({installThrows:at==="install",reason}));
+   try{install(module,"getAiTransportHost",(fn,self,args)=>Reflect.apply(fn,self,args),restores);module.getAiTransportHost();}catch(error){present=true;caught=error;}
+   assert.equal(present,true);assert.equal(caught,reason);assert.equal(calls,at==="call"?1:0);for(const restore of restores)restore();assert.deepEqual(Object.getOwnPropertyDescriptor(module,"getAiTransportHost"),before);
+  }
+  const module={getAiTransportHost(){}},restores=[],before=Object.getOwnPropertyDescriptor(module,"getAiTransportHost");
+  privateDefiningFactory(module,{},privateDefiningFakeVi({restoreThrows:true,reason:undefined}))(module,"getAiTransportHost",()=>{},restores);
+  let failure;try{await finishPrivateOwned(async()=>{throw undefined;},[restores[0],()=>{throw undefined;}]);}catch(error){failure=error;}
+  assert.deepEqual(failure.errors,[undefined,undefined,undefined]);assert.deepEqual(Object.getOwnPropertyDescriptor(module,"getAiTransportHost"),before);
+ });
+ test("Private defining spies preserve foreign replacement and both restoration failures",()=>{
+  const module={getAiTransportHost(){}},restores=[],foreign=()=>{},install=privateDefiningFactory(module,{},privateDefiningFakeVi());
+  install(module,"getAiTransportHost",()=>{},restores);module.getAiTransportHost=foreign;assert.throws(()=>restores[0]());assert.equal(module.getAiTransportHost,foreign);
+  const second={getAiTransportHost(){}},pending=[];let deny=false;
+  const object=Object.create(Object);object.defineProperty=(...args)=>{if(deny)throw undefined;return Object.defineProperty(...args);};
+  privateDefiningFactory(second,{},privateDefiningFakeVi({restoreThrows:true,reason:undefined}),object)(second,"getAiTransportHost",()=>{},pending);deny=true;
+  let failure;try{pending[0]();}catch(error){failure=error;}assert.deepEqual(failure.errors,[undefined,undefined]);
+ });
+ // END Private defining module spy inert regressions
+
  function privateSelectionFactory(){
   const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
   const a="export function createPrivateSelectionWitness(",b="// Invocation ownership,";assert.equal(source.split(a).length,2);

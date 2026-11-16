@@ -38,6 +38,39 @@ const nativeIdentity=Object.freeze({pin,node:process.version,platform:process.pl
 const controlReports=new Map<string,Map<Control,any>>(),qualifications=new Map<string,any>();
 let diagnosticCount=0,diagnosticBytes=0;
 
+// Only these two pinned defining namespaces may use Vitest's configurable
+// getter exports. Resolve once, then let spyOn read a temporary data descriptor;
+// returned-host buildModelFetch admission remains own-data-only.
+export function installPrivateDefiningSpy(module:any,name:string,observe:Function,restores:Function[]) {
+ if(!((module===transportHost&&name==="getAiTransportHost")||(module===openAITransport&&name==="withOpenAIErrorResponseHook"))||isProxy(module))throw Error("foreign Private defining module");
+ const original=Object.getOwnPropertyDescriptor(module,name);
+ if(!original||!original.configurable)throw Error("missing Private defining seam");
+ const data=Object.hasOwn(original,"value");
+ if(!data&&(!original.enumerable||typeof original.get!=="function"||original.set!==undefined))throw Error("unsupported Private defining getter");
+ const callable=data?original.value:Reflect.apply(original.get!,undefined,[]);
+ if(typeof callable!=="function"||!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),original))throw Error("changed Private defining seam");
+ const normalized=data?original:{value:callable,writable:true,enumerable:original.enumerable,configurable:true};
+ let owned=original,seam:ReturnType<typeof vi.spyOn>|undefined,active=true;
+ restores.push(()=>{
+  if(!active)throw Error("duplicate Private defining restoration");active=false;
+  if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),owned))throw Error("foreign Private defining seam");
+  const failures:unknown[]=[];
+  try{seam?.mockRestore();}catch(error){failures.push(error);}
+  try{
+   const current=Object.getOwnPropertyDescriptor(module,name);
+   if(!samePrivateDescriptor(current,normalized)&&!samePrivateDescriptor(current,owned))throw Error("foreign Private defining restoration");
+   Object.defineProperty(module,name,original);
+   if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),original))throw Error("incomplete Private defining restoration");
+  }catch(error){failures.push(error);}
+  if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"Private defining restoration failed");
+ });
+ if(!data){Object.defineProperty(module,name,normalized);owned=normalized;}
+ seam=vi.spyOn(module as any,name as any);owned=Object.getOwnPropertyDescriptor(module,name)!;
+ if(!samePrivateDescriptor(owned,{...normalized,value:seam}))throw Error("unexpected Private defining spy");
+ seam.mockImplementation(function(this:unknown,...args:unknown[]){return observe(callable,this,args);});
+ if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),owned))throw Error("changed Private defining spy");
+}
+
 // Defining-module observations only. Model identity binds a single original
 // invocation; the original transport context must independently match it before
 // publication. No lookup, model-fetch call or async-context read is added.
@@ -640,10 +673,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch)});
   if(selection){
    for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
-    const original=Object.getOwnPropertyDescriptor(module,name);if(!original||!Object.hasOwn(original,"value")||typeof original.value!=="function")throw Error("missing Private defining seam");
-    const seam=vi.spyOn(module as any,name as any);let owned=Object.getOwnPropertyDescriptor(module,name);
-    restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),owned))throw Error("foreign Private defining seam");seam.mockRestore();});
-    seam.mockImplementation(function(this:unknown,...args:unknown[]){return observe(original.value,this,args);});owned=Object.getOwnPropertyDescriptor(module,name);
+    installPrivateDefiningSpy(module,name,observe,restores);
    }
    restores.push(()=>selection.restore());
   }
