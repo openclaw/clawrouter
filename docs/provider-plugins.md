@@ -129,6 +129,13 @@ exported by `@clawrouter/provider-plugin-contract`. Core imports from
 package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
 as `GrantKind` for existing consumers.
 
+Authentication scheme, OAuth authorization/refresh configuration, and compiled
+grant-transport types also belong to the package. Existing imports of
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` from `shared/provider-snapshot.ts` remain supported.
+Credential storage, refresh ownership, runtime validation, and upstream calls
+remain host responsibilities.
+
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity

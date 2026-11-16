@@ -35,10 +35,14 @@ test("compiled provider declarations build and typecheck without client or Worke
   // This consumer imports emitted declarations without repository ambient types.
   const consumer = join(root, "consumer.ts");
   writeFileSync(consumer, `
-import type { GrantKind, ProviderSnapshot, CompiledProvider, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
+import type { AuthScheme as LegacyAuth, AuthorizationConfig as LegacyAuthorization, RefreshConfig as LegacyRefresh, GrantTransportAuth as LegacyTransportAuth, CompiledGrantTransport as LegacyTransport, GrantKind, ProviderSnapshot, CompiledProvider, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
 import type { GrantAccount, GrantExtraUsage } from "./declarations/shared/provider-observations.js";
 import type { ProviderProduct as LegacyProduct } from "./declarations/shared/provider-products.js";
 import type { ProviderGrantKind, ProviderProduct } from "./declarations/packages/provider-plugin-contract/src/products.js";
+import type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./declarations/packages/provider-plugin-contract/src/auth.js";
+declare const portableAuth: [AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport];
+const legacyAuth: [LegacyAuth, LegacyAuthorization, LegacyRefresh, LegacyTransportAuth, LegacyTransport] = portableAuth;
+const roundTripAuth: typeof portableAuth = legacyAuth;
 declare const portableProduct: ProviderProduct;
 declare const portableKind: ProviderGrantKind;
 const legacyProduct: LegacyProduct = portableProduct;
@@ -50,7 +54,7 @@ const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { provider, facts, account, usage, roundTripProduct, roundTripKind };
+export { provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });
