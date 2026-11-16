@@ -891,7 +891,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    const before=[Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook")];
    const fakeVi=privateDefiningFakeVi(),vi={spyOn(...args){if(++spies===2&&failSecond)throw undefined;return fakeVi.spyOn(...args);}};
    const installPrivateDefiningSpy=privateDefiningFactory(transportHost,openAITransport,vi);
-   let present=false;try{new Function("selection","transportHost","openAITransport","restores","installPrivateDefiningSpy",code)(h.w,transportHost,openAITransport,restores,installPrivateDefiningSpy);}catch(e){present=true;assert.equal(e,undefined);}
+   let present=false;try{new Function("selection","transportHost","openAITransport","restores","installPrivateDefiningSpy","callbacks",code)(h.w,transportHost,openAITransport,restores,installPrivateDefiningSpy,undefined);}catch(e){present=true;assert.equal(e,undefined);}
    assert.equal(present,failSecond);assert.equal(spies,2);assert.equal(restores.length,failSecond?2:3);
    if(!failSecond){assert.equal(Reflect.apply(transportHost.getAiTransportHost,h.receiver,[1,2]),h.host);const value=h.build();assert.equal(Reflect.apply(openAITransport.withOpenAIErrorResponseHook,h.receiver,[value,undefined,h.model]),h.closure);assert.equal(h.w.snapshot(h.invocation),6);assert.equal(calls.length,2);assert.equal(calls[0][0],h.receiver);}
    for(const restore of restores.toReversed())restore();
@@ -908,6 +908,137 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    for(const change of [{v:9},{case:4},{decl:4},{lane:"outer"},...[-1,8712,Number.NaN,Infinity,null,[],[1],"1",true].map(n=>({meta:[...cap.meta.slice(0,3),n,cap.meta[4]]}))])assert.throws(()=>validatePrivateCheckpoint({...cap,...change}));
   }
  });
+
+
+ // BEGIN Private callback V11 inert regressions
+ function privateCallbackFactory(object=Object){
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const code=source.slice(source.indexOf("export function createPrivateCallbackWitness("),source.indexOf("export function installPrivateDefiningSpy("));
+  return new Function("Object",stripTypeScriptTypes(code.replace(/^export /gm,""),{mode:"strip"})+";return createPrivateCallbackWitness;")(object);
+ }
+ function privateCallbackDecoded(word){
+  if(word===null)return null;const custody=[word%3,Math.floor(word/3)%3];word=Math.floor(word/9);const rows=[];
+  for(let k=0;k<3;k++){const n=k===2?word:word%81;word=Math.floor(word/81);const early=n%9,late=Math.floor(n/9),at=k===2&&late?Math.floor((late-1)/3)+1:late;rows.push([early?Math.floor((early-1)/4)+1:0,at?Math.floor((at-1)/4)+1:0,early?(early-1)%4+1:0,at?(at-1)%4+1:0,k===2&&late?(late-1)%3:0]);}
+  return {custody,rows};
+ }
+ function privateCallbackHarness(options={}){
+  const owner={},faults=[],model={},invocation=Object.freeze({owner,kind:"inference",args:Object.freeze([model])});
+  const w=privateCallbackFactory(options.object)(owner,options.proxyCheck??privateNodeTypes.isProxy,faults);
+  return {owner,faults,model,invocation,w,bind(){w.bind(invocation);},snapshot(){return privateCallbackDecoded(w.snapshot(invocation));}};
+ }
+ test("Private callback V11 distinguishes before binding and original entry outcomes without authority",()=>{
+  for(const reason of [undefined,{}]){
+   const h=privateCallbackHarness();const before=h.w.enter(2);h.w.threw(before,reason);h.bind();
+   assert.deepEqual(h.snapshot().rows[2],[1,0,reason===undefined?3:4,0,0]);
+   const first=h.w.enter(2);assert.deepEqual(h.snapshot().rows[2],[1,1,reason===undefined?3:4,1,0]);h.w.threw(first,reason);
+   assert.deepEqual(h.snapshot().rows[2],[1,1,reason===undefined?3:4,reason===undefined?3:4,0]);
+   const other=h.w.enter(2);h.w.returned(other);assert.deepEqual(h.snapshot().rows[2],[1,2,reason===undefined?3:4,reason===undefined?3:4,0]);
+   assert.equal(h.w.snapshot({}),null);assert.deepEqual(h.faults,[]);
+  }
+ });
+ test("Private callback V11 defining spies keep captured outside originals unobserved and restore getters",()=>{
+  for(const getter of [false,true]){
+   const h=privateCallbackHarness(),module={},restores=[],receiver={},args=[{},undefined],result={},calls=[];let reads=0;
+   const original=function(...a){calls.push([this,a]);return result;};
+   Object.defineProperty(module,"getAiTransportHost",getter?{configurable:true,enumerable:true,get(){reads++;return original;}}:{configurable:true,writable:true,value:original});
+   const before=Object.getOwnPropertyDescriptor(module,"getAiTransportHost");
+   privateDefiningFactory(module,{},privateDefiningFakeVi())(module,"getAiTransportHost",(fn,self,a)=>Reflect.apply(fn,self,a),restores,h.w);
+   h.bind();assert.equal(Reflect.apply(original,receiver,args),result);assert.deepEqual(h.snapshot(),{custody:[1,0],rows:[[0,0,0,0,0],[0,0,0,0,0],[0,0,0,0,0]]});
+   assert.equal(Reflect.apply(module.getAiTransportHost,receiver,args),result);assert.deepEqual(h.snapshot().rows[0],[0,1,0,2,0]);assert.deepEqual(calls,[[receiver,args],[receiver,args]]);
+   restores[0]();assert.deepEqual(Object.getOwnPropertyDescriptor(module,"getAiTransportHost"),before);assert.equal(reads,getter?1:0);
+  }
+ });
+ test("Private callback V11 descriptor replacement is permanent and never reads an export getter",()=>{
+  const h=privateCallbackHarness(),module={getAiTransportHost(){}},restores=[];let reads=0;
+  privateDefiningFactory(module,{},privateDefiningFakeVi())(module,"getAiTransportHost",(fn,self,args)=>Reflect.apply(fn,self,args),restores,h.w);h.bind();
+  const installed=Object.getOwnPropertyDescriptor(module,"getAiTransportHost");Object.defineProperty(module,"getAiTransportHost",{configurable:true,get(){reads++;throw undefined;}});
+  assert.equal(h.snapshot().custody[0],2);assert.equal(reads,0);assert.throws(()=>restores[0]());
+  Object.defineProperty(module,"getAiTransportHost",installed);assert.equal(h.snapshot().custody[0],2);
+ });
+ test("Private callback V11 original guard entry precedes all input reads and preserves undefined",()=>{
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const a=source.indexOf('function(this:unknown,...args:Parameters<typeof originalGuard>){'),b=source.indexOf(' as typeof originalGuard);spyDescriptor=',a);assert.ok(a>0&&b>a);
+  const code=stripTypeScriptTypes('const callback='+source.slice(a,b)+';',{mode:"strip"});
+  for(const reason of [undefined,{}]){
+   const h=privateCallbackHarness();h.bind();let reads=0,originalCalls=0;const w={sequence:0,acquisitions:[]};
+   const deps={callbacks:h.w,originalGuard(){originalCalls++;},w,signalHistory(){throw Error("unreached history");},record(){throw Error("unreached record");},returned(){},ownership:{},checkpoints:{},caseIndex:0,row:{},observer(){},transports:[],expect(){},patch(){}};
+   const callback=new Function(...Object.keys(deps),code+';return callback;')(...Object.values(deps));
+   const input={get signal(){reads++;throw reason;}};let present=false,caught;try{callback.call({},input);}catch(error){present=true;caught=error;}
+   assert.equal(present,true);assert.equal(caught,reason);assert.equal(reads,1);assert.equal(originalCalls,0);assert.equal(w.acquisitions.length,0);
+   assert.deepEqual(h.snapshot().rows[2],[0,1,0,reason===undefined?3:4,0]);assert.deepEqual(h.faults,[]);
+  }
+ });
+ test("Private callback V11 actual current binds only its existing invocation without extra context reads",()=>{
+  for(const mode of ["proper","restored","foreign"]){
+   const h=privateCallbackHarness(),acquisitions=[],originals=[],ledger={owner:h.owner,acquisitions,originals};let store,reads=0,dispatch=0;
+   const storage={getStore(){reads++;return store;},run(value,fn){const old=store;store=value;try{return fn();}finally{store=old;}},disable(){}};
+   const factory=new Function(stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')();
+   const owner=factory(storage,{owner:h.owner,ledger,acquisitions,originals,isProxy:privateNodeTypes.isProxy,callbacks:h.w});
+   const caller={owner:h.owner,kind:"inference",signal:undefined},traces=[];let capture;
+   owner.invoke(caller,"inference",()=>{capture=store.invocation;const outer=store,entry=h.w.enter(2),input={},guard=()=>{
+    const run=()=>{owner.transport({method:"POST"},t=>traces.push(t),h.faults);dispatch++;};
+    if(mode==="restored")return storage.run(outer,run);return run();
+   },a={input,guard,callbackEntry:entry};
+   if(mode==="foreign")h.w.associate(entry,{});
+   try{owner.guard(guard,undefined,[input],a);h.w.returned(entry);}catch(error){h.w.threw(entry,error);}
+   },undefined,[h.model,{},{}]);
+   const snap=privateCallbackDecoded(h.w.snapshot(capture));assert.equal(reads,2);assert.equal(dispatch,mode==="restored"?0:1);
+   if(mode==="foreign"){assert.equal(snap,null);assert.equal(h.faults.length,1);}else{assert.equal(snap.rows[2][4],1);assert.equal(snap.rows[2][3],mode==="restored"?4:2);}
+   if(mode==="restored")assert.deepEqual(traces[0].slice(0,6),[11,5,63,31,false,true]);
+  }
+ });
+ test("Private callback V11 nested foreign invocation never borrows the target binding",()=>{
+  const h=privateCallbackHarness(),acquisitions=[],originals=[],ledger={owner:h.owner,acquisitions,originals};let store,reads=0,calls=0,target;
+  const storage={getStore(){reads++;return store;},run(value,fn){const old=store;store=value;try{return fn();}finally{store=old;}},disable(){}};
+  const factory=new Function(stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')();
+  const own=factory(storage,{owner:h.owner,ledger,acquisitions,originals,isProxy:privateNodeTypes.isProxy,callbacks:h.w});
+  const caller={owner:h.owner,kind:"inference",signal:undefined},foreign={owner:h.owner,kind:"discovery",signal:undefined};
+  own.invoke(caller,"inference",()=>{target=store.invocation;
+   own.invoke(foreign,"discovery",()=>{const entry=h.w.enter(2),input={},guard=function(){calls++;return undefined;};
+    assert.equal(own.guard(guard,undefined,[input],{input,guard,callbackEntry:entry}),undefined);h.w.returned(entry);
+   },undefined,[{}]);
+  },undefined,[h.model,{},{}]);
+  assert.equal(reads,1);assert.equal(calls,1);assert.deepEqual(privateCallbackDecoded(h.w.snapshot(target)).rows[2],[0,1,0,2,2]);assert.deepEqual(h.faults,[]);
+ });
+ test("Private callback V11 independent observation and restoration faults preserve original undefined failures",async()=>{
+  for(const reason of [undefined,{}]){
+   const h=privateCallbackHarness({proxyCheck(){throw reason;}}),module={getAiTransportHost(){throw undefined;}},restores=[];
+   privateDefiningFactory(module,{},privateDefiningFakeVi({restoreThrows:true,reason:undefined}))(module,"getAiTransportHost",(fn,self,args)=>Reflect.apply(fn,self,args),restores,h.w);
+   let present=false,caught;try{module.getAiTransportHost();}catch(error){present=true;caught=error;}assert.equal(present,true);assert.equal(caught,undefined);assert.equal(h.faults[0],reason);
+   let all;try{await finishPrivateOwned(async()=>{throw caught;},[()=>{if(h.faults.length)throw new AggregateError(h.faults);},restores[0],()=>{throw undefined;}]);}catch(error){all=error;}
+   assert.equal(all.errors[0],undefined);assert.equal(all.errors[1].errors[0],reason);assert.equal(all.errors[2],undefined);assert.equal(all.errors[3],undefined);
+  }
+  let fail=false;const object=Object.create(Object);object.getOwnPropertyDescriptor=(...args)=>{if(fail)throw undefined;return Object.getOwnPropertyDescriptor(...args);};
+  const h=privateCallbackHarness({object}),module={getAiTransportHost(){}},restores=[];privateDefiningFactory(module,{},privateDefiningFakeVi())(module,"getAiTransportHost",(fn,self,a)=>Reflect.apply(fn,self,a),restores,h.w);h.bind();fail=true;
+  assert.equal(h.snapshot(),null);assert.deepEqual(h.faults,[undefined]);fail=false;assert.equal(h.snapshot(),null);restores[0]();
+ });
+ test("Private callback V11 reserved capsule preserves legacy condition and rejects contradictory encodings",()=>{
+  const validate=privateCheckpointFunctions().validatePrivateCheckpoint;
+  for(const reason of [undefined,{}])for(const before of [false,true]){
+   const w=privateCallbackHarness();if(before)w.w.returned(w.w.enter(0));w.bind();w.w.threw(w.w.enter(2),reason);
+   const word=w.w.snapshot(w.invocation),h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,reason,[11,5,63,31,false,reason!==undefined,129,0,word]);h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",reason);
+   const cap=h.records.find(v=>v.v===11);assert.ok(cap);validate(cap);assert.equal(Math.floor(cap.meta[3]/8712)-1,word);
+   const legacy={...cap,v:10,meta:[...cap.meta.slice(0,3),cap.meta[3]%8712,cap.meta[4]]};validate(legacy);
+   assert.equal(JSON.stringify(privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)})),JSON.stringify([cap]));
+   for(const records of [[cap,legacy],[legacy,cap]]){const lines=[],emit=privateAnnotationEmitter(x=>lines.push(x));records.forEach(emit);assert.ok(lines.every(x=>Buffer.byteLength(x)<=418));}
+   for(const value of [-1,8711,8712*13286026,NaN,Infinity,null,[],{},"1",true,8712+11])assert.throws(()=>validate({...cap,meta:[...cap.meta.slice(0,3),value,cap.meta[4]]}));
+   assert.ok(Buffer.byteLength(JSON.stringify(cap))<=375);
+  }
+ });
+ test("Private callback V11 closes original metadata shape before reconstruction and parent output",async()=>{
+  const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,5,63,31,false,false,129,0,0]);h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",undefined);
+  const cap=h.records.find(x=>x.v===11),validate=privateCheckpointFunctions().validatePrivateCheckpoint;assert.ok(cap);validate(cap);
+  const invalid=[...[{extra:true},null,7,[]].map(extra=>[...cap.meta,extra]),undefined,null,{},"metadata",
+   Object.assign({},cap.meta,{length:5}),...Array.from({length:5},(_,n)=>cap.meta.slice(0,n)),
+   ...Array.from({length:5},(_,n)=>{const sparse=[...cap.meta];delete sparse[n];return sparse;})];
+  for(const meta of invalid){const record={...cap,meta};assert.throws(()=>validate(record));
+   const child={stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(record)+"\n"};assert.throws(()=>privateCheckpointRecords(child));
+   const lines=[];let failure;try{await withPrivateNativeDiagnostics(()=>{throw child;},privateAnnotationEmitter(line=>lines.push(line)));}catch(error){failure=error;}
+   assert.ok(failure instanceof AggregateError);assert.equal(failure.errors[0],child);assert.equal(failure.errors.length,2);assert.deepEqual(lines,[]);
+  }
+  for(const extra of [{extra:true},null,7,[]])assert.throws(()=>validate({...cap,v:10,meta:[...cap.meta.slice(0,3),cap.meta[3]%8712,cap.meta[4],extra]}));
+ });
+ // END Private callback V11 inert regressions
 
 // END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
