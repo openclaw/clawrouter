@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Log, LogLevel } = require("miniflare");
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
+import { cleanupFixture } from "../../test/helpers/fixture-cleanup.mjs";
 
 // Real Worker + SQLite DOs. Only provider egress, clock, and named storage
 // failures are controlled. Explicit cold-state cases also seed one private
@@ -154,12 +155,13 @@ const upstream = `
 `;
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), "clawrouter-owner-"));
+  let mf;
   const logs = [];
+  t.after(() => cleanupFixture([() => { const current = mf; mf = undefined; return current?.dispose(); }, () => rm(dir, { recursive: true, force: true }), () => assert.doesNotMatch(logs.join("\n"), /fixture-(?:access|refresh|rotated|private)|fingerprint|[a-f0-9]{64}/, "no token, private provider body or fingerprint in runtime logs")]));
   class FixtureLog extends Log { log(message) { logs.push(message); } }
   const log = new FixtureLog(LogLevel.VERBOSE);
-  const options = { persistencePath: join(dir, "state"), log, upstreamDurableObjects: { UPSTREAM: { className: "Upstream", useSQLite: true } } };
-  let mf = await startWorkerdFixture(dir, router, upstream, options);
-  t.after(async () => { await mf.dispose(); await rm(dir, { recursive: true, force: true }); assert.doesNotMatch(logs.join("\n"), /fixture-(?:access|refresh|rotated|private)|fingerprint|[a-f0-9]{64}/, "no token, private provider body or fingerprint in runtime logs"); });
+  const options = { directRouter: true, persistencePath: join(dir, "state"), log, upstreamDurableObjects: { UPSTREAM: { className: "Upstream", useSQLite: true } } };
+  mf = await startWorkerdFixture(dir, router, upstream, options);
   const request = (path, method = "GET", body, headers = {}) => mf.dispatchFetch(`https://router.example${path}`, { method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json", origin: "https://router.example", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const base = "/v1/admin/upstream-grants/policies/pool/claude";
   const grant = { provider: "anthropic", kind: "subscription", accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: new Date(now + 300000).toISOString(), maintenance: { keepWarm: false } };
@@ -169,7 +171,7 @@ async function fixture(t) {
     materialize: () => request("/fixture/materialize", "POST", { key: "oauth/pool/claude", grant, providerId: "anthropic", force: false }),
     egress: async () => (await (await request("/fixture/provider")).json()), row,
     proxy: () => request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", max_tokens: 16, messages: [{ role: "user", content: "synthetic fixture" }] }, { authorization: "Bearer clawrouter-live-fixture-fixture-key" }),
-    state: async () => (await request("/fixture/state", "POST")).json(), configure: config => request("/fixture/provider", "POST", config), release: async () => { const response = await request("/fixture/provider", "POST", { release: true }); assert.equal((await response.json()).released, true, "provider response was held until release"); }, calls: async () => (await (await request("/fixture/provider")).json()).calls, rotate: () => request(base + "/refresh", "POST"), restart: async () => { await mf.dispose(); mf = await startWorkerdFixture(dir, router, upstream, options); }, http: () => mf.ready };
+    state: async () => (await request("/fixture/state", "POST")).json(), configure: config => request("/fixture/provider", "POST", config), release: async () => { const response = await request("/fixture/provider", "POST", { release: true }); assert.equal((await response.json()).released, true, "provider response was held until release"); }, calls: async () => (await (await request("/fixture/provider")).json()).calls, rotate: () => request(base + "/refresh", "POST"), restart: async () => { const current = mf; mf = undefined; await current.dispose(); mf = await startWorkerdFixture(dir, router, upstream, options); }, http: async () => (await mf.unsafeGetDirectURL("router")).origin };
 }
 async function until(check, message) {
   const deadline = Date.now() + 5000;
