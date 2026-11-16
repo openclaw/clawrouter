@@ -21,6 +21,8 @@
 
 ## Unreleased
 
+- Observe the Private E2 defining host and OpenAI fetch-selection seams without replacing the selected fetch or hook closure. Keep ambiguous chains unknown and preserve original ownership, retirement and accounting failures.
+
 - Distinguish recorded same-invocation guard acquisitions and retained context relations in Private transport-failure diagnostics, without changing ownership checks or inferring a runtime cause.
 
 - Identify the first original Private transport ownership condition or operand throw in the existing bounded failure capsule, preserving short-circuit evaluation, original errors and strict ownership gates.

@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { AuthProfileStore } from "../../src/agents/auth-profiles/types.js";
 import type { DispatcherAwareRequestInit } from "../../src/infra/net/runtime-fetch.js";
 import * as guard from "../../src/infra/net/fetch-guard.js";
+import * as transportHost from "../../packages/ai/src/host.js";
+import * as openAITransport from "../../packages/ai/src/transports/openai-transport-shared.js";
 
 const pin="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635";
 const origin=process.env.CLAWROUTER_CONTRACT_ORIGIN!;
@@ -35,6 +37,64 @@ const nativeIdentity=Object.freeze({pin,node:process.version,platform:process.pl
  undici:createRequire(import.meta.url)("undici/package.json").version,guard:originalGuard,fetch:originalUndiciFetch});
 const controlReports=new Map<string,Map<Control,any>>(),qualifications=new Map<string,any>();
 let diagnosticCount=0,diagnosticBytes=0;
+
+// Defining-module observations only. Model identity binds a single original
+// invocation; the original transport context must independently match it before
+// publication. No lookup, model-fetch call or async-context read is added.
+export function createPrivateSelectionWitness(owner:any,proxyCheck:Function,faults:unknown[],globalObject:any) {
+ let invocation:any,model:any,host:any,descriptor:any,installed:any,returned:any,selected:any;
+ let active=true,invalid=false,busy=false,lookupSeen=false,buildSeen=false,hookSeen=false,code=0;
+ let globalDescriptor:any;
+ const fail=(error:unknown)=>{invalid=true;faults.push(error);};
+ const observe=(fn:Function)=>{try{fn();}catch(error){fail(error);}};
+ const deny=()=>{invalid=true;};
+ const own=(object:any,key:string)=>{
+  if(!object||(typeof object!=="object"&&typeof object!=="function")||proxyCheck(object))return undefined;
+  const d=Object.getOwnPropertyDescriptor(object,key);return d&&Object.hasOwn(d,"value")?d:undefined;
+ };
+ const same=(a:any,b:any)=>!!a&&!!b&&["value","writable","enumerable","configurable"].every(k=>a[k]===b[k]);
+ const originalThrow=(reason:unknown)=>{code=reason===undefined?8:9;};
+ const build=function(this:unknown,...args:any[]){
+  const original=descriptor.value;let eligible=false;
+  observe(()=>{if(!active)throw Error("late Private model fetch");eligible=!invalid&&!busy&&!buildSeen&&this===host&&args[0]===model&&same(own(host,"buildModelFetch"),installed);
+   if(!eligible){deny();return;}buildSeen=true;busy=true;code=3;});
+  let value;try{value=Reflect.apply(original,this,args);}catch(reason){if(eligible)originalThrow(reason);throw reason;}finally{if(eligible)busy=false;}
+  observe(()=>{if(eligible&&!invalid){returned=value;code=4;}});return value;
+ };
+ return {
+  bind(i:any){observe(()=>{if(!active||invocation||!i||i.owner!==owner||i.kind!=="inference"||!Object.isFrozen(i)||!i.args[0]){deny();return;}
+   invocation=i;model=i.args[0];});},
+  globalDescriptor(d:any){observe(()=>{if(globalDescriptor||!d||!Object.hasOwn(d,"value")||typeof d.value!=="function"){deny();return;}globalDescriptor={...d};});},
+  lookup(fn:Function,receiver:unknown,args:any[]){
+   let eligible=false;
+   observe(()=>{if(!active)throw Error("late Private host lookup");if(!invocation)return;eligible=!invalid&&!busy&&!lookupSeen;
+    if(!eligible){deny();return;}lookupSeen=true;busy=true;});
+   let value;try{value=Reflect.apply(fn,receiver,args);}catch(reason){if(eligible)originalThrow(reason);throw reason;}finally{if(eligible)busy=false;}
+   observe(()=>{if(!eligible||invalid)return;const d=own(value,"buildModelFetch");
+    if(!d||!d.writable||!d.configurable||typeof d.value!=="function"){code=10;return;}
+    host=value;descriptor=d;installed={...d,value:build};Object.defineProperty(host,"buildModelFetch",installed);code=2;
+   });return value;
+  },
+  hook(fn:Function,receiver:unknown,args:any[]){
+   let eligible=false,kind=0;
+   observe(()=>{if(!active)throw Error("late Private hook selection");if(!invocation)return;eligible=!invalid&&!busy&&lookupSeen&&buildSeen&&!hookSeen&&code===4&&args[2]===model&&same(own(host,"buildModelFetch"),installed);
+    if(!eligible){deny();return;}hookSeen=true;busy=true;selected=args[0];if(typeof selected!=="function"){deny();return;}
+    if(returned!==null&&returned!==undefined){if(selected!==returned){deny();return;}kind=6;}
+    else{const current=own(globalObject,"fetch");if(!same(current,globalDescriptor)||selected!==globalDescriptor.value){deny();return;}kind=7;}
+    code=5;
+   });
+   let value;try{value=Reflect.apply(fn,receiver,args);}catch(reason){if(eligible)originalThrow(reason);throw reason;}finally{if(eligible)busy=false;}
+   observe(()=>{if(eligible&&!invalid)code=kind;});return value;
+  },
+  snapshot(i:any){if(!i||!invocation)return 0;if(i!==invocation){deny();return 1;}
+   observe(()=>{if(installed&&!same(own(host,"buildModelFetch"),installed))deny();
+    if(code===7&&!same(own(globalObject,"fetch"),globalDescriptor))deny();});return invalid?1:code;},
+  restore(){const failures:unknown[]=[];if(!active)failures.push(Error("duplicate Private selection restoration"));active=false;
+   if(host&&installed){try{if(!same(own(host,"buildModelFetch"),installed))throw Error("foreign Private host descriptor");Object.defineProperty(host,"buildModelFetch",descriptor);}catch(error){invalid=true;failures.push(error);}}
+   if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"Private selection restoration failed");
+  },
+ };
+}
 
 // Invocation ownership, not signal equality or a claim about C1's cause.
 // Every context is captured at the original call boundary; absent attachment fails closed.
@@ -93,6 +153,7 @@ export function createPrivateInvocationOwnership(storage:any,evidence?:any) {
   invoke(caller:any,kind:string,fn:Function,receiver:unknown,args:any[]){
    if(!active||!["discovery","inference"].includes(kind)||caller.kind!==kind||args[kind==="discovery"?0:2]?.signal!==caller.signal)throw Error("incomplete public caller");
    const invocation=Object.freeze({caller,signal:caller.signal,owner:caller.owner,kind,fn,receiver,args:Object.freeze([...args])});invocations.add(invocation);
+   if(kind==="inference")evidence?.selection?.bind(invocation);
    return storage.run(Object.freeze({invocation}),()=>Reflect.apply(fn,receiver,args));
   },
   guard(fn:Function,receiver:unknown,args:any[],a:any){
@@ -115,7 +176,7 @@ export function createPrivateInvocationOwnership(storage:any,evidence?:any) {
     t.context=context;t.invocation=context.invocation;t.acquisition=a;t.caller=context.invocation.kind==="inference"?context.invocation.caller:undefined;t.catalogInitiator=context.invocation.kind==="discovery"?context.invocation.caller:undefined;t.owner=context.invocation.owner;
     a.transport=t;transports.add(t);
    }catch(reason){
-    if(observe&&evaluated!==passed){try{const trace:any[]=[11,site,evaluated,passed,operand,reason!==undefined];if(evidence)trace.push(acquisitionSnapshot(retained,passed));observe(trace);}catch(error){observerFailures.push(error);}}
+    if(observe&&evaluated!==passed){try{const trace:any[]=[11,site,evaluated,passed,operand,reason!==undefined];if(evidence)trace.push(acquisitionSnapshot(retained,passed));if(evidence?.selection)trace.push((passed&8)!==0?evidence.selection.snapshot(retained.invocation):0);observe(trace);}catch(error){observerFailures.push(error);}}
     throw reason;
    }
   },
@@ -232,6 +293,7 @@ export function validatePrivateCheckpoint(record:any):void {
  const integer=(n:any,max:number)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
  const nullable=(n:any,max:number)=>n===null||integer(n,max);
  const conditionTuple=(p:any,version:number)=>{
+  if(version===10){if(!integer(p,8711))return false;const code=p%11,word=Math.floor(p/11);if(Math.floor(word/72)<4&&code!==0)return false;p=[word];version=9;}
   if(!Array.isArray(p)||p.length!==(version===9?1:2))return false;
   let m=p[0],f=p[1],n=0;
   if(version===9){if(!integer(p[0],791))return false;n=[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242][p[0]%18];f=Math.floor(p[0]/18);m=(2**(Math.floor(f/4)+1)-1)*2048+2**Math.floor(f/4)-1;
@@ -263,26 +325,26 @@ export function validatePrivateCheckpoint(record:any):void {
   }
   throw Error("unknown Private boundary capsule");
  }
- if(record?.v===2||record?.v===4||record?.v===5||record?.v===6||record?.v===7||record?.v===8||record?.v===9){
-  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5,6,7,8,9].includes(record.v)?["body"]:[]),...([5,6,7,8,9].includes(record.v)?["meta"]:[])];
+ if(record?.v===2||record?.v===4||record?.v===5||record?.v===6||record?.v===7||record?.v===8||record?.v===9||record?.v===10){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5,6,7,8,9,10].includes(record.v)?["body"]:[]),...([5,6,7,8,9,10].includes(record.v)?["meta"]:[])];
   if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
    !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
    !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
-  if(record.v===4||record.v===5||record.v===6||record.v===7||record.v===8||record.v===9){const b=record.body;
+  if(record.v===4||record.v===5||record.v===6||record.v===7||record.v===8||record.v===9||record.v===10){const b=record.body;
    if(record.lane!=="sdk"||record.phase!=="body"||record.case===null||record.decl===null||record.decl>=24||record.decl%4!==0||record.stages[4]!==3||record.owner!==null||record.receipt!==null||
     !Array.isArray(b)||b.length!==7||!integer(b[0],22)||![5,6,7].includes(b[1])||b[2]!==record.defined||!integer(b[3],4194303)||b[3]>=2**b[0]||!integer(b[4],3)||
     (b[0]<5&&b[4]!==0)||(b[0]<18&&(b[4]&2)!==0)||!nullable(b[5],3)||!(b[6]===null||tuple(b[6],4,x=>integer(x,65535)))||
     (b[1]===6&&(![5,18].includes(b[0])||(b[4]&(b[0]===5?1:2))!==0))||(b[5]!==null&&b[0]<20))throw Error("invalid Private EOF body span");
   }
-  if(record.v===5||record.v===6||record.v===7||record.v===8||record.v===9){const m=record.meta;
+  if(record.v===5||record.v===6||record.v===7||record.v===8||record.v===9||record.v===10){const m=record.meta;
    const field=(p:any,max:number)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],max)&&p[1]>0:p[1]===null);
    if(record.case!==0||record.decl!==0||!Array.isArray(m)||m.length!==(record.v>=6?5:4)||!field(m[0],2)||!field(m[1],10)||
     !Array.isArray(m[2])||m[2].length!==2||!integer(m[2][0],3)||(m[2][0]===1?!(Number.isInteger(m[2][1])&&m[2][1]>=100&&m[2][1]<=599):m[2][1]!==null)||
-    !(record.v===8||record.v===9?conditionTuple(m[3],record.v):
+    !(record.v===8||record.v===9||record.v===10?conditionTuple(m[3],record.v):
      m[3]===null||Array.isArray(m[3])&&m[3].length===3&&([1,2,3].includes(m[3][0])&&[1,2].includes(m[3][1])||record.v===7&&integer(m[3][0],20)&&m[3][0]>=4&&m[3][1]===1)&&typeof m[3][2]==="boolean")||
     (record.body[0]<14&&m[2][0]!==0)||(!(record.body[4]&2)&&(m[0][0]!==0||m[1][0]!==0)))throw Error("invalid Private result metadata span");
   }
-  if((record.v===6||record.v===7||record.v===8||record.v===9)&&(!fieldV6(record.meta[4])||(!(record.body[4]&2)&&record.meta[4][0]!==0)))throw Error("invalid Private wording span");
+  if((record.v===6||record.v===7||record.v===8||record.v===9||record.v===10)&&(!fieldV6(record.meta[4])||(!(record.body[4]&2)&&record.meta[4][0]!==0)))throw Error("invalid Private wording span");
   if(record.v===7&&!(record.meta[3]?.[0]>=4))throw Error("missing Private capture failure");
   if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
   if(record.receipt!==null){const r=record.receipt;
@@ -327,7 +389,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:first.meta===null?4:(first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+  send({v:b===null?2:first.meta===null?4:(typeof first.meta[3]==="number"?10:first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
    stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
@@ -338,7 +400,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null?null:[...v]);}if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null||typeof v==="number"?v:[...v]);}if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -402,9 +464,9 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   bodyCaptureFailure(index:number,owner:object,site:number,reason:unknown,condition:any=null){try{
    const b=bodyScopes.get(index);if(!b?.metadata||b.failed)return;metadata(index,owner);
    if(!Number.isSafeInteger(site)||site<4||site>20)throw Error("foreign Private capture site");
-   if(condition!==null&&!(site===11&&Array.isArray(condition)&&[6,7].includes(condition.length)&&condition[0]===11&&
+   if(condition!==null&&!(site===11&&Array.isArray(condition)&&[6,7,8].includes(condition.length)&&condition[0]===11&&
     Number.isSafeInteger(condition[1])&&condition[1]>=0&&condition[1]<=10&&condition[2]===2**(condition[1]+1)-1&&condition[3]===2**condition[1]-1&&
-    typeof condition[4]==="boolean"&&(condition[4]||![0,4].includes(condition[1]))&&condition[5]===(reason!==undefined)&&(condition.length===6||[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].includes(condition[6])&&(condition[1]<4?condition[6]===0:true))))throw Error("foreign Private ownership condition");
+    typeof condition[4]==="boolean"&&(condition[4]||![0,4].includes(condition[1]))&&condition[5]===(reason!==undefined)&&(condition.length===6||[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].includes(condition[6])&&(condition[1]<4?condition[6]===0:true))&&(condition.length!==8||Number.isSafeInteger(condition[7])&&condition[7]>=0&&condition[7]<=10&&(condition[1]>=4||condition[7]===0))))throw Error("foreign Private ownership condition");
    // V8 retains its two original integers. The validated original masks above
    // are exact short-circuit prefixes, so their site/flags plus the census index
    // losslessly encode all six observed fields in V9: flags*18+censusIndex.
@@ -412,7 +474,12 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    if(b.metadata.first===null){
     if(condition===null)b.metadata.first=[site,1,reason!==undefined];
     else{const m=condition[2]*2048+condition[3],f=condition[1]*4+(condition[4]?2:0)+(condition[5]?1:0);
-     b.metadata.first=condition.length===7?[f*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(condition[6])]:[m,f];}
+     const packed=f*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(condition[6]);
+     // V10 uses a scalar to retain both witnesses within the original byte cap.
+     // 0 unobserved, 1 invalid, 2 host, 3 build entered, 4 build returned, 5 hook entered,
+     // 6 host-returned fetch, 7 nullish fallback, 8/9 seam throw undefined/defined,
+     // 10 unsupported host descriptor. None exposes the lexical SSRF operand.
+     b.metadata.first=condition.length===8?packed*11+condition[7]:condition.length===7?[packed]:[m,f];}
    }
   }catch(error){invalidateMetadata(index);failures.push(error);}},
   bodyOperationFailure(index:number,owner:object,operation:Original,reason:unknown){try{const b=bodyScopes.get(index);if(!b?.metadata)return;
@@ -491,7 +558,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  checkpoints.mark(caseIndex,"owner","fulfilled");
  if(row.control==="eof")checkpoints.bindBody(caseIndex,row,w.originals);
  if(caseIndex===0)checkpoints.bindBodyMetadata(caseIndex,row,isProxy);
- const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage(),caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy}:undefined);
+ const selection=caseIndex===0?createPrivateSelectionWitness(w.owner,isProxy,w.observerFailures,globalThis):undefined;
+ const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage(),caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy,selection}:undefined);
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
   if(signal){const observed=()=>{history.abort=++w.sequence;history.reason=signal.reason;};if(signal.aborted)observed();else{signal.addEventListener("abort",observed,{once:true});restores.push(()=>signal.removeEventListener("abort",observed));}}return history;};
@@ -506,7 +574,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const track=<T>(kind:string,pending:Promise<T>):Promise<T>=>returned(record(kind),pending);
  const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}};
  const patch=(object:any,name:string,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
-  restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});};
+  restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});return ours;};
  const authoredAborts=new WeakMap<AbortSignal,any[]>();
  const caller=(signal:AbortSignal|undefined,kind:string)=>{const c=newPrivateInvocationCaller(w.owner,signal,kind);w.callers.push(c);
   const history=signal?authoredAborts.get(signal):undefined,prior=history?.at(-1);
@@ -568,7 +636,17 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  try{
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
-  patch(globalThis,"fetch",observedFetch(nativeFetch));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch)});
+  const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch));selection?.globalDescriptor(globalFetchDescriptor);
+  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch)});
+  if(selection){
+   for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
+    const original=Object.getOwnPropertyDescriptor(module,name);if(!original||!Object.hasOwn(original,"value")||typeof original.value!=="function")throw Error("missing Private defining seam");
+    const seam=vi.spyOn(module as any,name as any);let owned=Object.getOwnPropertyDescriptor(module,name);
+    restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),owned))throw Error("foreign Private defining seam");seam.mockRestore();});
+    seam.mockImplementation(function(this:unknown,...args:unknown[]){return observe(original.value,this,args);});owned=Object.getOwnPropertyDescriptor(module,name);
+   }
+   restores.push(()=>selection.restore());
+  }
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
    const input=args[0],a:any={guard:originalGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;

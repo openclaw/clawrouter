@@ -727,7 +727,130 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,0,1,0,true,false,0]);h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",undefined);const cap=h.records.find(x=>x.v===9);assert.ok(cap);assert.equal(cap.meta[3][0]%18,0);
   const {validatePrivateCheckpoint}=privateCheckpointFunctions();for(const code of [1,4,50])assert.throws(()=>validatePrivateCheckpoint({...cap,meta:[...cap.meta.slice(0,3),[2*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(code)],cap.meta[4]]}));
  });
- // END Private capture entry inert regressions
+
+ function privateSelectionFactory(){
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const a="export function createPrivateSelectionWitness(",b="// Invocation ownership,";assert.equal(source.split(a).length,2);
+  return new Function(stripTypeScriptTypes(source.slice(source.indexOf(a),source.indexOf(b)).replace(/^export /gm,""),{mode:"strip"})+";return createPrivateSelectionWitness;")();
+ }
+ function privateSelectionHarness(options={}){
+  const owner={},model={},receiver={},faults=[],calls=[],fetcher=function(){},globalObject={fetch:function(){}},closure=function(){};
+  let h,thrown=false;
+  const original=function(...args){calls.push(["build",this,args]);if(options.buildReentrant)h.lookup();if(options.buildThrows){thrown=true;throw options.reason;}return options.nullish?options.nullValue:options.globalReturn?globalObject.fetch:fetcher;};
+  let host={buildModelFetch:original};if(Object.hasOwn(options,"host"))host=options.host;
+  const before=host&&!privateNodeTypes.isProxy(host)?Object.getOwnPropertyDescriptor(host,"buildModelFetch"):undefined,invocation=Object.freeze({owner,kind:"inference",args:Object.freeze([model])});
+  const w=privateSelectionFactory()(owner,options.proxyCheck??privateNodeTypes.isProxy,faults,globalObject);
+  w.globalDescriptor(Object.getOwnPropertyDescriptor(globalObject,"fetch"));if(!options.deferBind)w.bind(invocation);
+  h={owner,model,receiver,host,before,invocation,w,faults,calls,fetcher,globalObject,closure,
+   lookup(){return w.lookup(function(...args){calls.push(["lookup",this,args]);if(options.lookupThrows)throw options.reason;return host;},receiver,[1,2]);},
+   build(){return Reflect.apply(host.buildModelFetch,host,[model,undefined,{sanitizeSse:true}]);},
+   hook(value){return w.hook(function(...args){calls.push(["hook",this,args]);if(options.hookThrows)throw options.reason;return closure;},receiver,[value,undefined,model]);},
+   run(){assert.equal(h.lookup(),host);const value=h.build();assert.equal(h.hook(value??globalObject.fetch),closure);return w.snapshot(invocation);},
+  };return h;
+ }
+ test("Private selection V10 preserves original host fetch closure receiver and arguments",()=>{
+  for(const options of [{},{nullish:true,nullValue:null},{nullish:true,nullValue:undefined},{globalReturn:true}]){
+   const h=privateSelectionHarness(options);assert.equal(h.run(),options.nullish?7:6);assert.equal(h.calls.length,3);
+   assert.equal(h.calls[0][1],h.receiver);assert.deepEqual(h.calls[0][2],[1,2]);assert.equal(h.calls[1][1],h.host);assert.equal(h.calls[1][2][0],h.model);
+   assert.equal(h.calls[2][1],h.receiver);assert.equal(h.calls[2][2][0],options.nullish||options.globalReturn?h.globalObject.fetch:h.fetcher);
+   h.w.restore();assert.deepEqual(Object.getOwnPropertyDescriptor(h.host,"buildModelFetch"),h.before);assert.deepEqual(h.faults,[]);
+  }
+ });
+ test("Private selection V10 missing callbacks remain unobserved and incomplete chains stay incomplete",()=>{
+  const h=privateSelectionHarness();assert.equal(h.w.snapshot(h.invocation),0);h.lookup();assert.equal(h.w.snapshot(h.invocation),2);h.build();assert.equal(h.w.snapshot(h.invocation),4);h.w.restore();
+ });
+ test("Private selection V10 rejects duplicate interleaved foreign and wrong selected identities",()=>{
+  for(const kind of ["lookup","build","hook","invocation","foreign-context","model","receiver","fetch","global-custody","nonfunction"]){
+   const h=privateSelectionHarness({nullish:kind==="global-custody"});h.lookup();const value=h.build();
+   if(kind==="lookup")h.lookup();if(kind==="build")h.build();if(kind==="hook")h.hook(value);
+   if(kind==="invocation")h.w.bind(Object.freeze({owner:h.owner,kind:"inference",args:[h.model]}));
+   if(kind==="foreign-context")assert.equal(h.w.snapshot({}),1);
+   if(kind==="model"||kind==="receiver")Reflect.apply(h.host.buildModelFetch,kind==="receiver"?{}:h.host,[kind==="model"?{}:h.model]);
+   if(kind==="global-custody")h.globalObject.fetch=function(){};
+   h.hook(kind==="fetch"?function(){}:kind==="nonfunction"?undefined:value??h.globalObject.fetch);
+   assert.equal(h.w.snapshot(h.invocation),1,kind);h.w.restore();
+  }
+ });
+ test("Private selection V10 unsupported hosts never invoke getters or Proxy traps",()=>{
+  let getters=0,traps=0;const inherited=Object.create({buildModelFetch(){}}),accessor={get buildModelFetch(){getters++;throw undefined;}},locked={};Object.defineProperty(locked,"buildModelFetch",{value(){},writable:false,configurable:false});
+  const proxy=new Proxy({},{getOwnPropertyDescriptor(){traps++;throw undefined;}});
+  for(const host of [null,undefined,inherited,accessor,locked,proxy]){const h=privateSelectionHarness({host,proxyCheck:privateNodeTypes.isProxy});
+   h.lookup();assert.equal(h.w.snapshot(h.invocation),10);h.w.restore();assert.equal(h.calls.length,1);}
+  assert.equal(getters,0);assert.equal(traps,0);
+ });
+ test("Private selection V10 original throws including undefined keep exact identity",()=>{
+  for(const at of ["lookup","build","hook"])for(const reason of [undefined,{}]){
+   const h=privateSelectionHarness({[at+"Throws"]:true,reason});let present=false,caught;
+   try{h.run();}catch(error){present=true;caught=error;}assert.equal(present,true);assert.equal(caught,reason);assert.equal(h.w.snapshot(h.invocation),reason===undefined?8:9);
+   assert.deepEqual(h.calls.map(x=>x[0]),["lookup","build","hook"].slice(0,["lookup","build","hook"].indexOf(at)+1));h.w.restore();
+  }
+ });
+ test("Private selection V10 reentrant and late original calls cannot revive a chain",()=>{
+  const h=privateSelectionHarness({buildReentrant:true});assert.equal(h.run(),1);h.w.restore();assert.equal(h.calls.filter(x=>x[0]==="lookup").length,2);
+  const late=privateSelectionHarness();late.run();const retained=late.host.buildModelFetch;late.w.restore();Reflect.apply(retained,late.host,[late.model]);assert.equal(late.w.snapshot(late.invocation),1);assert.equal(late.faults.length,1);
+  late.w.lookup(()=>late.host,undefined,[]);assert.equal(late.faults.length,2);
+ });
+ test("Private selection V10 restoration conflicts preserve independent original and undefined faults",async()=>{
+  const h=privateSelectionHarness();h.run();const foreign=function(){};h.host.buildModelFetch=foreign;let conflict;
+  try{h.w.restore();}catch(error){conflict=error;}assert.ok(conflict);assert.equal(h.host.buildModelFetch,foreign);assert.equal(h.w.snapshot(h.invocation),1);
+  const record=privateSelectionHarness({proxyCheck(){throw undefined;}});record.lookup();assert.deepEqual(record.faults,[undefined]);assert.equal(record.w.snapshot(record.invocation),1);
+  let aggregate;try{await finishPrivateOwned(async()=>{throw undefined;},[()=>{throw record.faults[0];},()=>{throw conflict;}]);}catch(error){aggregate=error;}assert.deepEqual(aggregate.errors,[undefined,undefined,conflict]);
+ });
+
+ test("Private selection V10 actual transport binds only the same original invocation",()=>{
+  for(const foreign of [false,true]){
+   const selection=privateSelectionHarness({deferBind:!foreign}),signal={},caller={owner:selection.owner,kind:"inference",signal};
+   let context,reads=0;const storage={getStore(){reads++;return context;},run(v,fn){const old=context;context=v;try{return fn();}finally{context=old;}},disable(){}};
+   const factory=new Function(stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+";return createPrivateInvocationOwnership;")();
+   const faults=[],ops=[],acs=[],w={owner:selection.owner,acquisitions:acs,originals:ops};
+   const o=factory(storage,{ledger:w,owner:w.owner,acquisitions:acs,originals:ops,isProxy:privateNodeTypes.isProxy,selection:selection.w}),trace=[];
+   let caught;try{o.invoke(caller,"inference",()=>{selection.lookup();const returned=selection.build();selection.hook(returned);o.transport({method:"POST"},x=>trace.push(x),faults);},undefined,[selection.model,null,{signal}]);}catch(e){caught=e;}
+   assert.ok(caught);assert.equal(reads,1);assert.equal(trace[0][7],foreign?1:6);assert.deepEqual(faults,[]);
+   const r=privateCaptureHarness();r.r.bodyCaptureFailure(0,r.row,11,caught,trace[0]);r.r.bodySite(0,r.row,20,1);r.r.mark(0,"body","rejected",caught);
+   assert.equal(r.records.find(v=>v.v===10).meta[3]%11,foreign?1:6);selection.w.restore();
+  }
+ });
+
+ test("Private selection V10 foreign invocation membership retains the original condition without observer faults",()=>{
+  const h=privateSelectionHarness(),faults=[],traces=[],owner=h.owner,acquisitions=[],originals=[];let snapshots=0;
+  const storage={getStore(){return {invocation:Object.freeze({owner,kind:"inference",args:[h.model]})};}};
+  const factory=new Function(stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+";return createPrivateInvocationOwnership;")();
+  const selection={snapshot(...args){snapshots++;return h.w.snapshot(...args);}};
+  const o=factory(storage,{ledger:{owner,acquisitions,originals},owner,acquisitions,originals,isProxy:privateNodeTypes.isProxy,selection});let caught;
+  try{o.transport({method:"POST"},t=>traces.push(t),faults);}catch(e){caught=e;}
+  assert.ok(caught);assert.deepEqual(traces,[[11,3,15,7,false,true,0,0]]);assert.equal(snapshots,0);assert.deepEqual(faults,[]);
+  const r=privateCaptureHarness();r.r.bodyCaptureFailure(0,r.row,11,caught,traces[0]);r.r.bodySite(0,r.row,20,1);r.r.mark(0,"body","rejected",caught);
+  assert.equal(r.r.failures.length,0);assert.ok(r.records.find(x=>x.v===10));h.w.restore();
+ });
+ test("Private selection V10 defining spy installation forwards originals and restores partial installation",()=>{
+  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
+  const a=source.indexOf('  if(selection){\n   for(const [module,name,observe]'),b=source.indexOf('  spy=vi.spyOn(guard',a);assert.ok(a>=0&&b>a);
+  const code=stripTypeScriptTypes(source.slice(a,b),{mode:"strip"});
+  for(const failSecond of [false,true]){
+   const h=privateSelectionHarness(),restores=[],calls=[];let spies=0;
+   const transportHost={getAiTransportHost(...args){calls.push([this,args]);return h.host;}},openAITransport={withOpenAIErrorResponseHook(...args){calls.push([this,args]);return h.closure;}};
+   const before=[Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook")];
+   const vi={spyOn(object,name){if(++spies===2&&failSecond)throw undefined;const d=Object.getOwnPropertyDescriptor(object,name);return {mockImplementation(fn){Object.defineProperty(object,name,{...d,value:fn});},mockRestore(){Object.defineProperty(object,name,d);}};}};
+   const samePrivateDescriptor=(a,b)=>JSON.stringify({...a,value:undefined})===JSON.stringify({...b,value:undefined})&&a.value===b.value;
+   let present=false;try{new Function("selection","transportHost","openAITransport","vi","restores","samePrivateDescriptor",code)(h.w,transportHost,openAITransport,vi,restores,samePrivateDescriptor);}catch(e){present=true;assert.equal(e,undefined);}
+   assert.equal(present,failSecond);
+   if(!failSecond){assert.equal(Reflect.apply(transportHost.getAiTransportHost,h.receiver,[1,2]),h.host);const value=h.build();assert.equal(Reflect.apply(openAITransport.withOpenAIErrorResponseHook,h.receiver,[value,undefined,h.model]),h.closure);assert.equal(h.w.snapshot(h.invocation),6);assert.equal(calls.length,2);assert.equal(calls[0][0],h.receiver);}
+   for(const restore of restores.toReversed())restore();
+   assert.deepEqual(Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),before[0]);assert.deepEqual(Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook"),before[1]);
+  }
+ });
+ test("Private selection V10 reserved producer and relay preserve V8 V9 and uncertainty",()=>{
+  const {validatePrivateCheckpoint}=privateCheckpointFunctions();
+  for(let code=0;code<=10;code++){
+   const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,5,63,31,false,false,129,code]);h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",undefined);
+   const cap=h.records.find(x=>x.v===10);assert.ok(cap);validatePrivateCheckpoint(cap);assert.equal(cap.meta[3]%11,code);
+   const lines=[],emit=privateAnnotationEmitter(line=>lines.push(line));emit(cap);assert.ok(Buffer.byteLength(lines[0])<=418);assert.ok(Buffer.byteLength(JSON.stringify(cap))<=375);
+   assert.equal(JSON.stringify(privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)+"\n"})),JSON.stringify([cap]));
+   for(const change of [{v:9},{case:4},{decl:4},{lane:"outer"},...[-1,8712,Number.NaN,Infinity,null,[],[1],"1",true].map(n=>({meta:[...cap.meta.slice(0,3),n,cap.meta[4]]}))])assert.throws(()=>validatePrivateCheckpoint({...cap,...change}));
+  }
+ });
+
+// END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
  function privateEOFSource(deps){
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
