@@ -19,6 +19,14 @@
 
 ## Unreleased
 
+- Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
+
+- Attribute HTTP deadline fixture failures to source-owned case and operation/assertion boundaries after joining original work and attempting independent cleanup. Preserve original reasons and strict accounting; missing diagnostic markers remain unknown.
+
+- Route client-disconnect fixtures through the existing direct workerd socket, preserving WebSocket and in-Worker controls and all cancellation and accounting assertions. Retain original failures while attempting fixture cleanup independently.
+
+- Export published model and request tariff types from the provider plugin contract while preserving existing shared imports.
+
 - Retain the first Xiaomi control reader-join predicates and private original-outcome identities in the existing bounded diagnostic record. Keep raw failures, physical retirement and accounting strict; skipped operands remain unobserved, and pre-relay diagnostics do not establish final cleanup or native cause.
 
 - Connect Xiaomi native disconnect controls directly to the fixture Worker and retain bounded first-postlude failure sites with independent reason-definedness summaries in the existing control records. Preserve original failures, strict retirement and accounting gates, and annotation quotas; native cancellation still requires hosted qualification.

@@ -160,7 +160,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), models.map(id => ["abliteration/" + id, id]));
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-client-"));
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     recordMetadata("fixture_ready");
     phase = "provision";
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -169,7 +169,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put("connections/abliteration", JSON.stringify({ providerId: "abliteration", enabled: true }));
-    origin = String(await mf.ready).replace(/\/$/, "");
+    origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     phase = "catalog_assert";
     const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-abliteration_m0_high-fixture-secret" } });
@@ -1095,13 +1095,13 @@ test("real native Abliteration Worker control binds partial-stream cancellation 
   const temporary = await mkdtemp(join(tmpdir(), "abliteration-bound-cancel-")); let mf, reader; const failures = [];
   try {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router"), id = "abliteration_cancel";
     await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", tenantId: "fixture", providers: ["abliteration"], models: [`abliteration/${models[0]}`],
       grantRouting: { eligibleGrants: { abliteration: ["abliteration"] }, environmentFallback: false }, monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false }));
     await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     await kv.put("connections/abliteration", JSON.stringify({ providerId: "abliteration", enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     const controller = new AbortController();
     const response = await fetch(origin + "/v1/native/abliteration/chat/completions", { method: "POST", headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret`, "content-type": "application/json" },
