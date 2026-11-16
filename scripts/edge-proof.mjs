@@ -363,7 +363,7 @@ export function createFinalCensusLedger(errors) {
     censusRow(token,pid,parent,group,start,state) { note(() => {
       if (!token) throw new Error("edge-proof: census-token");
       const index = censusStates.indexOf(state);
-      if (![pid,parent,group].every(n=>Number.isSafeInteger(n)&&n>=0) || pid<2 || typeof start!=="string" || !/^\d+$/.test(start) || typeof state!=="string" || state.length!==1 || index<0) token.invalid = true;
+      if (![pid,parent].every(n=>Number.isSafeInteger(n)&&n>=0) || !(Number.isSafeInteger(group) && (group>=0 || parent===0 && group===-1)) || pid<2 || typeof start!=="string" || !/^\d+$/.test(start) || typeof state!=="string" || state.length!==1 || index<0) token.invalid = true;
       token.count++; if(index>=0)token.counts[index]++;
       if(token.rows.length<512)token.rows.push({pid,parent,group,start,state:index+1});
     }); },
@@ -385,9 +385,14 @@ export function createFinalCensusLedger(errors) {
       const complete=final.count<=512, ids=new Set(final.rows.map(row=>row.pid)), priorPids=new Set([...history.values()].map(row=>row.pid));
       const ambiguous=ids.size!==final.rows.length;
       const rows=final.rows.slice(0,2).map(row=>{
-        const prior=ambiguous||historyUnknown?null:history.get(row.pid+":"+row.start), observed=ambiguous||historyUnknown?0:prior?1:priorPids.has(row.pid)?2:3;
-        const parent=row.parent===1?1:ambiguous||!complete?0:ids.has(row.parent)?2:3;
-        const group=row.group===row.pid?1:row.group===1?2:ambiguous||!complete?0:ids.has(row.group)?3:4;
+        const matched=ambiguous||historyUnknown?null:history.get(row.pid+":"+row.start);
+        // Historical wire versions couple a matched identity to three known
+        // comparisons. Keep the private identity, but report UNKNOWN if either
+        // sample lacks relationships; equal sentinels are not an unchanged group.
+        const prior=matched&&matched.group!==-1&&row.group!==-1?matched:null;
+        const observed=ambiguous||historyUnknown||matched&&!prior?0:prior?1:priorPids.has(row.pid)?2:3;
+        const parent=row.group===-1?0:row.parent===1?1:ambiguous||!complete?0:ids.has(row.parent)?2:3;
+        const group=row.group===-1?0:row.group===row.pid?1:row.group===1?2:ambiguous||!complete?0:ids.has(row.group)?3:4;
         const compare=key=>prior?(row[key]===prior[key]?1:2):0;
         return row.state+observed*16+parent*64+group*256+compare("state")*2048+compare("parent")*8192+compare("group")*32768;
       });
@@ -483,13 +488,19 @@ export function classifyCensusControl(row, controls, comparison) {
   if (!censusControls.has(controls)) refuse("census-control-authority");
   for (const [key, expected] of Object.entries(controls)) if (row.pid === expected.pid) {
     const startMismatch = row.start !== expected.start;
-    if (startMismatch || row.parent !== expected.parent || !["R", "S", "D", "I"].includes(row.state)) {
+    if (startMismatch || row.parent !== expected.parent || row.group === -1 || !["R", "S", "D", "I"].includes(row.state)) {
       try { refuse("census-control-drift"); }
       catch (error) { if (startMismatch) recordCensusComparison(comparison,controls,key,expected,row,error); throw error; }
     }
     return key;
   }
   return null;
+}
+function validStatRelationships(name, parent, group) {
+  // Linux do_task_stat initializes PPID=0/PGRP=-1 and emits that pair when
+  // lock_task_sighand fails. It is an unavailable relationship, not no process.
+  return Number.isSafeInteger(Number(name)) && Number(name)>0 &&
+    ([parent,group].every(value=>/^\d+$/.test(value)&&Number.isSafeInteger(Number(value))) || parent==="0"&&group==="-1");
 }
 export async function privateProcesses(recorder, controls, comparisonRecorder) {
   const comparison = beginCensusComparison(comparisonRecorder,controls);
@@ -513,7 +524,7 @@ export async function privateProcesses(recorder, controls, comparisonRecorder) {
       ownedNote(recorder,"sampleStage",5);
       const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
       ownedNote(recorder,"sampleStage",6);
-      if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,![fields[1], fields[2]].every(value => /^\d+$/.test(value)),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
+      if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,!validStatRelationships(name,fields[1],fields[2]),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
       ownedNote(recorder,"sampleStage",7);
       const row={ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] };
       const control = controls ? classifyCensusControl(row, controls, comparison) : null;
