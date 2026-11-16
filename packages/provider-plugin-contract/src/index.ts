@@ -5,6 +5,7 @@ export type { ProviderPackageIndex, ProviderPackageResource } from "./package-in
 export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderProductSummary } from "./product-metadata.ts";
 export type { ProviderGrantKind, ProviderProductBinding, ProviderProductOffer, ProviderOfferDefinition, ProviderOfferReference, ProviderProduct } from "./products.ts";
 export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./auth.ts";
+export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "./pricing.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 
