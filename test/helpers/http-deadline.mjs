@@ -4,28 +4,38 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWorkerdFixture } from "./workerd.mjs";
-import { cleanupFixture } from "./fixture-cleanup.mjs";
 
 const endpointMs = 500;
 const limit = 1_000_000;
 const secret = "http-deadline-fixture-secret";
 const headers = { authorization: `Bearer clawrouter-live-fixture-${secret}`, "content-type": "application/json" };
 
-export async function runHttpDeadlineCases(t, scenarios) {
-  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-http-deadline-"));
-  let mf;
+export async function runHttpDeadlineCases(t, scenarios, reportFailure) {
+  const attribution = httpDeadlineAttribution();
+  const shared = attribution.branch(null);
+  let temporary, mf;
   const primary = { failed: false, error: undefined };
   try {
+    shared.at("directory");
+    temporary = await mkdtemp(join(tmpdir(), "clawrouter-http-deadline-"));
+    shared.at("runtime_start");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
+    shared.at("policy_namespace");
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
+    shared.at("policy_setup");
     await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: 7, retainRequestContent: false }));
+    shared.at("credential_setup");
     await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    shared.at("connection_setup");
     await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    shared.at("direct_url");
+    const direct = await mf.unsafeGetDirectURL("router");
+    const origin = shared.sync("direct_origin", () => direct.origin);
+    shared.at("budget_namespace");
     const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router");
-    const read = async (path, signal) => {
+    const read = async (path, signal, readBranch) => {
       const response = await fetch(new URL(path, origin), { headers, signal: AbortSignal.any([AbortSignal.timeout(10_000), ...(signal ? [signal] : [])]) });
-      assert.equal(response.status, 200);
+      readBranch.assertion("check_01", () => assert.equal, () => [response.status, 200]);
       return response.json();
     };
     const ledgerFacts = () => Promise.all([["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]].map(async ([name, policyId]) => {
@@ -35,128 +45,270 @@ export async function runHttpDeadlineCases(t, scenarios) {
       return { spent: status.spentMicros, rows };
     }));
     for (const scenario of scenarios) {
-      let cleanupError;
+      let cleanupError, cleanupFailed = false;
+      const caseBranch = attribution.branch(scenario);
+      shared.at("case_registration");
       await t.test(scenario === "cancel-json" ? "cancel-json (unresolved whitespace cancellation)" : scenario, async () => {
-        const caller = new AbortController(), watchStop = new AbortController();
-        const requestId = `deadline-${scenario}`, cancellation = new Error("fixture caller after endpoint deadline retirement");
-        const streaming = scenario.includes("sse") || scenario === "first-event";
-        const canceled = scenario.startsWith("cancel-");
-        const preBodyProgress = scenario === "cancel-json-pre-body-progress";
-        const requireDeliveredBytes = canceled && scenario !== "cancel-json" && !preBodyProgress;
-        const timedOut = scenario === "headers" || scenario === "first-event";
-        const beforeUsage = await read("/v1/usage"), beforeLedgers = await ledgerFacts();
-        const previousReceipts = new Set(beforeUsage.usage.events.map(event => event.request_id));
-        const previousReservations = beforeLedgers.map(({ rows }) => new Set(rows.map(row => row.reservation_id)));
-        const addedRows = (ledgers, index) => ledgers[index].rows.filter(row => !previousReservations[index].has(row.reservation_id));
-        const safety = AbortSignal.timeout(15_000);
-        const client = { startedAt: null, headersAt: null, status: null, contentEncoding: null, firstBodyAt: null, lastBodyAt: null, bodyBytes: 0, completedAt: null, failedAt: null, errorName: null, abortRequestedAt: null, bytesAtAbort: null };
-        let usage, state, ingress, ledgers;
-        const diagnostics = () => JSON.stringify({ requestId, client, ingress, state, receipts: usage?.usage.events.filter(event => event.request_id === requestId), reservations: ledgers?.map((_, index) => addedRows(ledgers, index)) });
-        const facts = async () => {
-          usage = await read("/v1/usage"); state = (await read("/fixture-state"))[scenario];
-          ingress = (await read("/fixture-ingress"))[requestId];
-          ledgers = await ledgerFacts();
-          return usage.usage.events.some(event => event.request_id === requestId) && ledgers.every((_, index) => addedRows(ledgers, index).length > 0 && addedRows(ledgers, index).every(row => row.settled === 1)) && (state?.complete || state?.aborted || state?.canceled);
-        };
-        // Observe both sides without assuming that transport preserves write chunks.
-        // The original whitespace case deliberately retains its upstream-only trigger.
-        const watcher = canceled ? (async () => {
-          await until(async () => {
-            const progress = (await read("/fixture-state", watchStop.signal))[scenario];
-            return progress?.progressCount > 2 && progress.lastProgressAt - progress.startedAt > endpointMs * 2 && (!requireDeliveredBytes || client.bodyBytes > 0);
-          }, watchStop.signal, diagnostics);
-          watchStop.signal.throwIfAborted();
-          client.abortRequestedAt = Date.now(); client.bytesAtAbort = client.bodyBytes;
-          caller.abort(cancellation);
-        })() : Promise.resolve();
-        const request = (async () => {
-          client.startedAt = Date.now();
-          try {
-            const response = await fetch(new URL("/v1/responses", origin), {
-              method: "POST", headers: { ...headers, "x-request-id": requestId }, signal: AbortSignal.any([caller.signal, safety]),
-              body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, stream: streaming }),
-            });
-            client.headersAt = Date.now(); client.status = response.status; client.contentEncoding = response.headers.get("content-encoding");
-            assert.equal(response.status, timedOut ? 502 : 200);
-            assert.equal(response.headers.get("x-request-id"), requestId);
-            const reader = response.body.getReader(), decoder = new TextDecoder();
-            let text = "";
-            try {
-              while (true) {
-                const part = await reader.read();
-                if (part.done) { client.completedAt = Date.now(); return text + decoder.decode(); }
-                if (part.value.byteLength) { client.firstBodyAt ??= Date.now(); client.lastBodyAt = Date.now(); client.bodyBytes += part.value.byteLength; }
-                text += decoder.decode(part.value, { stream: true });
-              }
-            } finally { reader.releaseLock(); }
-          } catch (error) { client.failedAt = Date.now(); client.errorName = error.name; throw error; }
-        })();
+        caseBranch.at("case_setup");
         try {
-          if (canceled) await Promise.all([watcher, assert.rejects(request, error => {
-            assert.equal(caller.signal.reason, cancellation);
-            assert.equal(safety.aborted, false, "the safety timeout is not the intended caller cancellation");
-            return error === cancellation || error.name === "AbortError";
-          })]);
-          else {
-            const text = await request;
-            if (timedOut) assert.equal(JSON.parse(text).error.code, "provider_unavailable");
-            else assert.ok(streaming ? text.includes('"type":"response.completed"') : JSON.parse(text).status === "completed");
-          }
-          await until(facts, undefined, diagnostics);
-          const receipts = usage.usage.events.filter(event => !previousReceipts.has(event.request_id));
-          assert.equal(receipts.length, 1); assert.equal(receipts[0].request_id, requestId);
-          const receipt = receipts[0];
-          assert.equal(usage.usage.events.filter(event => event.request_id === requestId).length, 1);
-          assert.equal(receipt.status, timedOut ? "timeout" : canceled ? "client_error" : "success");
-          assert.equal(receipt.status_code, timedOut ? 502 : 200);
-          assert.equal(receipt.actual_cost_micros, 7); assert.equal(receipt.cost_basis, "policy_fixed");
-          assert.equal(receipt.total_tokens, timedOut || canceled ? null : 2);
-          assert.equal(usage.usage.summary.actualCostMicros, beforeUsage.usage.summary.actualCostMicros + 7);
-          if (timedOut || canceled) assert.ok(state.aborted || state.canceled);
-          else { assert.equal(state.complete, true); assert.equal(state.aborted || state.canceled, false); }
-          if (!timedOut) {
-            assert.ok(state.progressCount > 2, "upstream must make progress across the declared deadline");
-            assert.ok(state.lastProgressAt - state.startedAt > endpointMs * 2);
-          }
-          if (requireDeliveredBytes) {
-            assert.ok(client.bytesAtAbort > 0, "the active-delivery case must observe body bytes before cancellation");
-            assert.ok(client.firstBodyAt <= client.abortRequestedAt);
-          }
-          if (preBodyProgress) {
-            assert.equal(client.status, 200); assert.equal(client.contentEncoding, "gzip");
-            assert.equal(client.bytesAtAbort, 0); assert.equal(client.firstBodyAt, null);
-            assert.ok(client.headersAt <= client.abortRequestedAt);
-            assert.notEqual(ingress.abortedAt, null); assert.ok(ingress.abortedAt >= client.abortRequestedAt);
-            assert.equal(state.aborted, true); assert.equal(state.complete, false);
-            if (state.firstPayloadAt !== null) {
-              assert.ok(client.abortRequestedAt < state.firstPayloadAt);
-              assert.ok(state.firstPayloadAt - state.startedAt >= 2_000);
+          const caller = new AbortController(), watchStop = new AbortController();
+          const requestId = `deadline-${scenario}`, cancellation = new Error("fixture caller after endpoint deadline retirement");
+          const streaming = scenario.includes("sse") || scenario === "first-event";
+          const canceled = scenario.startsWith("cancel-");
+          const preBodyProgress = scenario === "cancel-json-pre-body-progress";
+          const requireDeliveredBytes = canceled && scenario !== "cancel-json" && !preBodyProgress;
+          const timedOut = scenario === "headers" || scenario === "first-event";
+          caseBranch.at("baseline_usage");
+          const beforeUsage = await read("/v1/usage", undefined, caseBranch);
+          caseBranch.at("baseline_ledgers");
+          const beforeLedgers = await ledgerFacts();
+          caseBranch.at("baseline_selection");
+          const previousReceipts = new Set(beforeUsage.usage.events.map(event => event.request_id));
+          const previousReservations = beforeLedgers.map(({ rows }) => new Set(rows.map(row => row.reservation_id)));
+          const addedRows = (ledgers, index) => ledgers[index].rows.filter(row => !previousReservations[index].has(row.reservation_id));
+          const safety = AbortSignal.timeout(15_000);
+          const client = { startedAt: null, headersAt: null, status: null, contentEncoding: null, firstBodyAt: null, lastBodyAt: null, bodyBytes: 0, completedAt: null, failedAt: null, errorName: null, abortRequestedAt: null, bytesAtAbort: null };
+          let usage, state, ingress, ledgers;
+          const diagnostics = () => JSON.stringify({ requestId, client, ingress, state, receipts: usage?.usage.events.filter(event => event.request_id === requestId), reservations: ledgers?.map((_, index) => addedRows(ledgers, index)) });
+          const facts = async () => {
+            usage = await read("/v1/usage", undefined, caseBranch); state = (await read("/fixture-state", undefined, caseBranch))[scenario];
+            ingress = (await read("/fixture-ingress", undefined, caseBranch))[requestId];
+            ledgers = await ledgerFacts();
+            return usage.usage.events.some(event => event.request_id === requestId) && ledgers.every((_, index) => addedRows(ledgers, index).length > 0 && addedRows(ledgers, index).every(row => row.settled === 1)) && (state?.complete || state?.aborted || state?.canceled);
+          };
+          // Observe both sides without assuming that transport preserves write chunks.
+          // The original whitespace case deliberately retains its upstream-only trigger.
+          const watchBranch = attribution.branch(scenario);
+          const watcher = canceled ? (async () => {
+            try {
+              watchBranch.at("watch_progress");
+              await until(async () => {
+                const progress = (await read("/fixture-state", watchStop.signal, watchBranch))[scenario];
+                return progress?.progressCount > 2 && progress.lastProgressAt - progress.startedAt > endpointMs * 2 && (!requireDeliveredBytes || client.bodyBytes > 0);
+              }, watchStop.signal, diagnostics);
+              watchBranch.at("watch_stop_check");
+              watchStop.signal.throwIfAborted();
+              watchBranch.at("watch_bookkeeping");
+              client.abortRequestedAt = Date.now(); client.bytesAtAbort = client.bodyBytes;
+              watchBranch.at("watch_caller_abort");
+              caller.abort(cancellation);
+            } catch (error) { watchBranch.failed(error); throw error; }
+          })() : Promise.resolve();
+          const requestBranch = attribution.branch(scenario);
+          const requestCleanupFailures = [];
+          const request = (async () => {
+            client.startedAt = Date.now();
+            try {
+              requestBranch.at("request_fetch");
+              const response = await fetch(new URL("/v1/responses", origin), {
+                method: "POST", headers: { ...headers, "x-request-id": requestId }, signal: AbortSignal.any([caller.signal, safety]),
+                body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, stream: streaming }),
+              });
+              requestBranch.sync("response_bookkeeping", () => {
+                client.headersAt = Date.now(); client.status = response.status; client.contentEncoding = response.headers.get("content-encoding");
+              });
+              requestBranch.assertion("check_02", () => assert.equal, () => [response.status, timedOut ? 502 : 200]);
+              requestBranch.assertion("check_03", () => assert.equal, () => [response.headers.get("x-request-id"), requestId]);
+              const reader = requestBranch.sync("reader_acquire", () => response.body.getReader());
+              const readerFailure = { failed: false, error: undefined };
+              let text = "";
+              try {
+                requestBranch.at("reader_decoder");
+                const decoder = new TextDecoder();
+                while (true) {
+                  requestBranch.at("reader_read");
+                  const part = await reader.read();
+                  requestBranch.at("reader_result");
+                  if (part.done) { client.completedAt = Date.now(); return text + decoder.decode(); }
+                  if (part.value.byteLength) { client.firstBodyAt ??= Date.now(); client.lastBodyAt = Date.now(); client.bodyBytes += part.value.byteLength; }
+                  text += decoder.decode(part.value, { stream: true });
+                }
+              } catch (error) {
+                readerFailure.failed = true; readerFailure.error = error;
+                if (!canceled) requestBranch.failed(error);
+                throw error;
+              } finally {
+                try { requestBranch.sync("reader_release", () => reader.releaseLock()); }
+                catch (error) {
+                  requestCleanupFailures.push({ reason: error, represented: false });
+                  httpDeadlineThrow(readerFailure.failed ? [readerFailure.error, error] : [error]);
+                }
+              }
+            } catch (error) {
+              // The original canceled-request rejection is expected until its
+              // existing expectation validates it. Do not witness every catch.
+              if (!canceled) requestBranch.failed(error);
+              try {
+                requestBranch.sync("request_failure_bookkeeping", () => {
+                  client.failedAt = Date.now(); client.errorName = error.name;
+                });
+              } catch (bookkeepingError) {
+                requestCleanupFailures.push({ reason: bookkeepingError, represented: false });
+                httpDeadlineThrow([error, bookkeepingError]);
+              }
+              throw error;
             }
+          })();
+          const bodyFailures = [];
+          try {
+            caseBranch.at(canceled ? "cancellation_join" : "request_join");
+            if (canceled) await Promise.all([watcher, caseBranch.assertion("check_04", () => assert.rejects, () => [request, error => {
+              caseBranch.assertion("check_05", () => assert.equal, () => [caller.signal.reason, cancellation]);
+              caseBranch.assertion("check_06", () => assert.equal, () => [safety.aborted, false, "the safety timeout is not the intended caller cancellation"]);
+              return caseBranch.sync("cancellation_match_operand", () => error === cancellation || error.name === "AbortError");
+            }])]);
+            else {
+              let text;
+              try { text = await request; }
+              catch (error) {
+                // This direct await propagates the request's complete failure
+                // graph. Mark its occurrences by this path, never by reason.
+                for (const occurrence of requestCleanupFailures) occurrence.represented = true;
+                throw error;
+              }
+              if (timedOut) caseBranch.assertion("check_07", () => assert.equal, () => [JSON.parse(text).error.code, "provider_unavailable"]);
+              else caseBranch.assertion("check_08", () => assert.ok, () => [streaming ? text.includes('"type":"response.completed"') : JSON.parse(text).status === "completed"]);
+            }
+            caseBranch.at("settlement");
+            await until(facts, undefined, diagnostics);
+            caseBranch.at("receipt_selection");
+            const receipts = usage.usage.events.filter(event => !previousReceipts.has(event.request_id));
+            caseBranch.assertion("check_09", () => assert.equal, () => [receipts.length, 1]); caseBranch.assertion("check_10", () => assert.equal, () => [receipts[0].request_id, requestId]);
+            const receipt = receipts[0];
+            caseBranch.assertion("check_11", () => assert.equal, () => [usage.usage.events.filter(event => event.request_id === requestId).length, 1]);
+            caseBranch.assertion("check_12", () => assert.equal, () => [receipt.status, timedOut ? "timeout" : canceled ? "client_error" : "success"]);
+            caseBranch.assertion("check_13", () => assert.equal, () => [receipt.status_code, timedOut ? 502 : 200]);
+            caseBranch.assertion("check_14", () => assert.equal, () => [receipt.actual_cost_micros, 7]); caseBranch.assertion("check_15", () => assert.equal, () => [receipt.cost_basis, "policy_fixed"]);
+            caseBranch.assertion("check_16", () => assert.equal, () => [receipt.total_tokens, timedOut || canceled ? null : 2]);
+            caseBranch.assertion("check_17", () => assert.equal, () => [usage.usage.summary.actualCostMicros, beforeUsage.usage.summary.actualCostMicros + 7]);
+            if (timedOut || canceled) caseBranch.assertion("check_18", () => assert.ok, () => [state.aborted || state.canceled]);
+            else { caseBranch.assertion("check_19", () => assert.equal, () => [state.complete, true]); caseBranch.assertion("check_20", () => assert.equal, () => [state.aborted || state.canceled, false]); }
+            if (!timedOut) {
+              caseBranch.assertion("check_21", () => assert.ok, () => [state.progressCount > 2, "upstream must make progress across the declared deadline"]);
+              caseBranch.assertion("check_22", () => assert.ok, () => [state.lastProgressAt - state.startedAt > endpointMs * 2]);
+            }
+            if (requireDeliveredBytes) {
+              caseBranch.assertion("check_23", () => assert.ok, () => [client.bytesAtAbort > 0, "the active-delivery case must observe body bytes before cancellation"]);
+              caseBranch.assertion("check_24", () => assert.ok, () => [client.firstBodyAt <= client.abortRequestedAt]);
+            }
+            if (preBodyProgress) {
+              caseBranch.assertion("check_25", () => assert.equal, () => [client.status, 200]); caseBranch.assertion("check_26", () => assert.equal, () => [client.contentEncoding, "gzip"]);
+              caseBranch.assertion("check_27", () => assert.equal, () => [client.bytesAtAbort, 0]); caseBranch.assertion("check_28", () => assert.equal, () => [client.firstBodyAt, null]);
+              caseBranch.assertion("check_29", () => assert.ok, () => [client.headersAt <= client.abortRequestedAt]);
+              caseBranch.assertion("check_30", () => assert.notEqual, () => [ingress.abortedAt, null]); caseBranch.assertion("check_31", () => assert.ok, () => [ingress.abortedAt >= client.abortRequestedAt]);
+              caseBranch.assertion("check_32", () => assert.equal, () => [state.aborted, true]); caseBranch.assertion("check_33", () => assert.equal, () => [state.complete, false]);
+              if (state.firstPayloadAt !== null) {
+                caseBranch.assertion("check_34", () => assert.ok, () => [client.abortRequestedAt < state.firstPayloadAt]);
+                caseBranch.assertion("check_35", () => assert.ok, () => [state.firstPayloadAt - state.startedAt >= 2_000]);
+              }
+            }
+            caseBranch.at("ledger_selection");
+            for (const [index, { spent, rows }] of ledgers.entries()) {
+              caseBranch.assertion("check_36", () => assert.equal, () => [spent, beforeLedgers[index].spent + 7]); caseBranch.assertion("check_37", () => assert.equal, () => [rows.length, beforeLedgers[index].rows.length + 1]);
+              const added = addedRows(ledgers, index);
+              caseBranch.assertion("check_38", () => assert.equal, () => [added.length, 1]);
+              caseBranch.assertion("check_39", () => assert.deepEqual, () => [added[0], { reservation_id: added[0].reservation_id, settled: 1, dispatch_started: 1, reserved_micros: 7 }]);
+            }
+          } catch (error) {
+            bodyFailures.push(error); caseBranch.failed(error);
+          } finally {
+            try { caseBranch.sync("cleanup_watch_abort", () => watchStop.abort()); }
+            catch (error) { bodyFailures.push(error); }
+            try { caseBranch.sync("cleanup_caller_abort", () => caller.abort()); }
+            catch (error) { bodyFailures.push(error); }
+            caseBranch.at("cleanup_join");
+            try { await Promise.allSettled([request, watcher]); }
+            catch (error) { bodyFailures.push(error); caseBranch.failed(error); }
+            // Promise.all may have failed on the watcher first. Preserve each
+            // independent request-cleanup occurrence after the original join.
+            for (const occurrence of requestCleanupFailures) {
+              if (!occurrence.represented) {
+                bodyFailures.push(occurrence.reason);
+                occurrence.represented = true;
+              }
+            }
+            // Keep the original drain and diagnostic, even after independent
+            // failures. An undefined drain reason still stops the outer sequence.
+            caseBranch.at("cleanup_settlement");
+            try { await until(facts, undefined, diagnostics); }
+            catch (error) {
+              cleanupFailed = true; cleanupError = error;
+              bodyFailures.push(error); caseBranch.failed(error);
+            }
+            try {
+              caseBranch.sync("cleanup_diagnostic", () => t.diagnostic(diagnostics()));
+            } catch (error) { bodyFailures.push(error); }
           }
-          for (const [index, { spent, rows }] of ledgers.entries()) {
-            assert.equal(spent, beforeLedgers[index].spent + 7); assert.equal(rows.length, beforeLedgers[index].rows.length + 1);
-            const added = addedRows(ledgers, index);
-            assert.equal(added.length, 1);
-            assert.deepEqual(added[0], { reservation_id: added[0].reservation_id, settled: 1, dispatch_started: 1, reserved_micros: 7 });
-          }
-        } finally {
-          watchStop.abort(); caller.abort();
-          await Promise.allSettled([request, watcher]);
-          // Drain this request's upstream and accounting before taking another
-          // baseline, even when a case assertion fails.
-          try { await until(facts, undefined, diagnostics); }
-          catch (error) { cleanupError = error; throw error; }
-          finally { t.diagnostic(diagnostics()); }
-        }
+          httpDeadlineThrow(bodyFailures);
+        } catch (error) { caseBranch.failed(error); throw error; }
       });
-      if (cleanupError) throw cleanupError;
+      if (cleanupFailed) throw cleanupError;
     }
   } catch (error) {
-    primary.error = error; primary.failed = true;
-    throw error;
+    primary.error = error; primary.failed = true; shared.failed(error);
   } finally {
-    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+    try {
+      await cleanupHttpDeadlineFixture([
+        ["runtime_dispose", () => mf?.dispose()],
+        ["directory_remove", () => temporary === undefined ? undefined : rm(temporary, { recursive: true, force: true })],
+      ], primary, shared);
+    } catch (error) { primary.error = error; primary.failed = true; }
   }
+  const failures = primary.failed ? [primary.error] : [];
+  const witness = attribution.first();
+  if (witness !== undefined && reportFailure !== undefined) {
+    try { await reportFailure(witness); }
+    catch (error) { failures.push(error); }
+  }
+  httpDeadlineThrow(failures);
+}
+
+// Private identities never enter reporter messages or source sentinels.
+function httpDeadlineAttribution() {
+  let first;
+  const cases = new Set(["json", "sse", "headers", "first-event", "cancel-json-active", "cancel-sse", "cancel-json-pre-body-progress"]);
+  const capture = (scenario, site, reason) => {
+    first ??= Object.freeze({ scenario: cases.has(scenario) ? scenario : null, site, reasonPresent: true, reasonDefined: reason !== undefined, reason });
+  };
+  return {
+    first: () => first,
+    branch(scenario) {
+      let current = "unknown";
+      return {
+        at(site) { current = site; },
+        failed(reason) { capture(scenario, current, reason); },
+        sync(site, operation) {
+          try { return operation(); }
+          catch (reason) { capture(scenario, site, reason); throw reason; }
+        },
+        assertion(site, callee, argumentsList) {
+          let boundary = `${site}_operands`;
+          try {
+            const method = callee(), args = argumentsList();
+            boundary = `${site}_assertion`;
+            return Reflect.apply(method, assert, args);
+          } catch (reason) { capture(scenario, boundary, reason); throw reason; }
+        },
+      };
+    },
+  };
+}
+
+function httpDeadlineThrow(failures) {
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "HTTP deadline fixture independent failures");
+}
+
+// Same awaited cleanup order as cleanupFixture, with owner-local catch sites.
+async function cleanupHttpDeadlineFixture(steps, primary, branch) {
+  const failures = [];
+  for (const [site, step] of steps) {
+    branch.at(site);
+    try { await step(); }
+    catch (error) { failures.push(error); branch.failed(error); }
+  }
+  if (failures.length && primary.failed) failures.unshift(primary.error);
+  httpDeadlineThrow(failures);
 }
 
 async function until(predicate, signal, diagnostics = () => "") {

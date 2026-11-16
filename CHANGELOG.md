@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Attribute HTTP deadline fixture failures to source-owned case and operation/assertion boundaries after joining original work and attempting independent cleanup. Preserve original reasons and strict accounting; missing diagnostic markers remain unknown.
+
 - Route client-disconnect fixtures through the existing direct workerd socket, preserving WebSocket and in-Worker controls and all cancellation and accounting assertions. Retain original failures while attempting fixture cleanup independently.
 
 - Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
