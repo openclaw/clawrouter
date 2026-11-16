@@ -21,6 +21,8 @@
 
 ## Unreleased
 
+- Preserve DeepSeek runner context when a native helper fails after partial SDK capsule reporting, and report exactly which capsule names remain unobserved without interpreting those omissions as case outcomes. Keep original failures, cleanup, and reporting limits unchanged.
+
 - Drain DeepSeek fixture request work, original reads/cancels and retained observer tails before reporting independent join failures, including undefined reasons.
 
 - Preserve original cancellation rejections and independent cleanup/reporting failures in the DeepSeek held-upstream diagnostic, including undefined reasons.

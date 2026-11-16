@@ -27,6 +27,27 @@ assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
 const failureProtocol = new Function(stripTypeScriptTypes(sdkText.slice(protocolStart, protocolEnd)) + "; return deepSeekFailureProtocol;")()();
 assert.equal(failureProtocol.pin, sourceHead); assert.deepEqual(failureProtocol.cases, scenarios);
 
+// Bits index the frozen capsule names, not native invocation or verdict states.
+function deepSeekSummaryRecord(input) {
+  assert.ok(input && typeof input === "object" && !nodeTypes.isProxy(input));
+  const descriptors = Object.getOwnPropertyDescriptors(input);
+  const fields = ["v", "source", "records", "failedRecords", "omittedRecords", "cleanupFailures", "reportingFailures", "unobservedCapsuleMask"];
+  assert.deepEqual(Reflect.ownKeys(descriptors), fields);
+  assert.ok(fields.every(key => Object.hasOwn(descriptors[key], "value")));
+  const row = Object.fromEntries(fields.map(key => [key, descriptors[key].value]));
+  assert.equal(row.v, 2); assert.equal(row.source, "summary");
+  assert.equal(failureProtocol.cases.length, 26);
+  for (const key of fields.slice(2)) assert.ok(Number.isSafeInteger(row[key]) && row[key] >= 0);
+  assert.ok(row.records <= 26 && row.failedRecords <= row.records);
+  assert.ok(row.cleanupFailures <= 65535 && row.reportingFailures <= 65535);
+  assert.equal(row.omittedRecords, row.records - (row.failedRecords ? 1 : 0));
+  assert.ok(row.unobservedCapsuleMask < 2 ** 26);
+  let unobserved = 0;
+  for (let index = 0; index < 26; index++) if (row.unobservedCapsuleMask & (1 << index)) unobserved++;
+  assert.equal(row.records + unobserved, 26);
+  return row;
+}
+
 function deepSeekDiagnostics(write = line => process.stdout.write(line)) {
   const rows = new Map(), faults = [];
   let runner, primary, cleanup = 0, finished = false, bytes = 0, inputBytes = 0;
@@ -65,15 +86,16 @@ function deepSeekDiagnostics(write = line => process.stdout.write(line)) {
     finish() {
       if (finished) return []; finished = true;
       const failed = [...rows.values()].filter(row => row.failurePresent);
-      if (!primary && !failed.length && !faults.length) return [];
+      if (!primary && !failed.length && !faults.length && rows.size === failureProtocol.cases.length) return [];
       const commands = [];
       const command = row => "::error title=DeepSeek contract diagnostic::" + JSON.stringify(row).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
       if (failed.length) commands.push(command({ source: "sdk", ...failed[0] }));
       if (primary) commands.push(command({ v: 1, source: "outer", ...primary }));
       // Startup supplements never substitute a case outcome or a missing resource observation.
-      if (rows.size === 0 && runner) commands.push(runnerStartupCommand(runner));
-      commands.push(command({ v: 1, source: "summary", records: rows.size, failedRecords: failed.length,
-        omittedRecords: rows.size - (failed.length ? 1 : 0), cleanupFailures: cleanup, reportingFailures: faults.length }));
+      if (runner && (primary?.phase === "helper" || rows.size < failureProtocol.cases.length)) commands.push(runnerStartupCommand(runner));
+      const unobservedCapsuleMask = failureProtocol.cases.reduce((mask, name, index) => rows.has(name) ? mask : mask | (1 << index), 0);
+      commands.push(command(deepSeekSummaryRecord({ v: 2, source: "summary", records: rows.size, failedRecords: failed.length,
+        omittedRecords: rows.size - (failed.length ? 1 : 0), cleanupFailures: cleanup, reportingFailures: faults.length, unobservedCapsuleMask })));
       assert.ok(commands.length <= 9);
       for (const line of commands) protect(() => { const n = Buffer.byteLength(line); assert.ok(n <= 768 && bytes + n <= 8192); bytes += n; write(line); });
       return faults;

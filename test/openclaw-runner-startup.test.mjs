@@ -116,8 +116,8 @@ test("held original child stays held; cleanup and reporting preserve ordered und
 
 const dsStart = fixture.toString().indexOf("// BEGIN DeepSeek failure capsule."), dsEnd = fixture.toString().indexOf("// END DeepSeek failure capsule.");
 const ds = new Function(stripTypeScriptTypes(fixture.toString().slice(dsStart, dsEnd)) + "; return deepSeekFailureProtocol;")()();
-function dsSession(write) {
-  const text = outer.slice(outer.indexOf("function deepSeekDiagnostics("), outer.indexOf("function deferred("));
+function dsSession(write, source = outer) {
+  const text = source.slice(source.indexOf("function deepSeekSummaryRecord("), source.indexOf("function deferred("));
   const h = harness();
   return new Function("assert", "Buffer", "nodeTypes", "failureProtocol", "runnerStartupRecord", "runnerStartupCommand", text + "; return deepSeekDiagnostics;")(
     assert, Buffer, types, ds, h.runnerStartupRecord, h.runnerStartupCommand)(write);
@@ -176,7 +176,7 @@ test("DS missing fixture entry uses startup evidence; SDK capsule outranks clean
   const owner = ds.owner("abort", line => raw.push(line)); owner.at("body"); owner.failed(undefined); owner.finish();
   const original = Object.assign(new Error("not projected"), { stdout: raw.join(""), stderr: "" });
   session.runner(h.packet()); session.failed(original, "helper"); for (let i = 0; i < 40; i++) session.cleanup(undefined);
-  assert.deepEqual(session.finish(), []); assert.ok(lines[0].includes('"source":"sdk"')); assert.ok(!lines.some(line => line.includes("OpenClaw runner startup")));
+  assert.deepEqual(session.finish(), []); assert.ok(lines[0].includes('"source":"sdk"')); assert.ok(lines.some(line => line.includes("OpenClaw runner startup")));
   assert.ok(lines.length <= 10 && Buffer.byteLength(lines.join("")) <= 8192); assert.ok(!lines.join("").includes("not projected"));
 });
 
@@ -208,3 +208,107 @@ test("DS original join retains its command and subscriptions and does not credit
   assert.equal(calls, 2); assert.deepEqual(thenCalls, { close: 2, cancel: 2 });
   assert.equal(record.phase, "worker_receipt"); assert.equal(record.failurePresent, true); assert.deepEqual(record.close, [1, 0]);
 });
+
+// BEGIN partial capsule runner regression tests.
+function dsCommands(lines) {
+  return lines.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2).trim()));
+}
+function feedCapsules(session, missing = [], failed = []) {
+  for (const name of ds.cases) {
+    if (missing.includes(name)) continue;
+    const owner = ds.owner(name, line => session.diagnostic(line));
+    if (failed.includes(name)) { owner.at("body"); owner.failed(undefined); }
+    assert.deepEqual(owner.finish(), []);
+  }
+}
+function dsSummary(input) {
+  const text = outer.slice(outer.indexOf("function deepSeekSummaryRecord("), outer.indexOf("function deepSeekDiagnostics("));
+  return new Function("assert", "nodeTypes", "failureProtocol", text + "; return deepSeekSummaryRecord;")(assert, types, ds)(input);
+}
+
+test("DS partial capsules retain existing runner evidence and the exact unobserved capsule bit", async () => {
+  const h = harness({ reason: "failed" }); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  const oldCondition = "if (runner && (primary?.phase === \"helper\" || rows.size < failureProtocol.cases.length))";
+  assert.ok(outer.includes(oldCondition));
+  const old = outer.replace(oldCondition, "if (rows.size === 0 && runner)");
+  const oldLines = [], prior = dsSession(line => oldLines.push(line), old);
+  feedCapsules(prior, ["abort"]); prior.runner(h.packet()); prior.failed(undefined, "helper"); prior.finish();
+  assert.equal(dsCommands(oldLines).some(row => row.source === "runner"), false);
+  for (const name of ds.cases) {
+    const lines = [], session = dsSession(line => lines.push(line));
+    feedCapsules(session, [name]); session.runner(h.packet()); session.failed(undefined, "helper");
+    assert.deepEqual(session.finish(), []);
+    const rows = dsCommands(lines), summary = rows.find(row => row.source === "summary");
+    assert.equal(rows.find(row => row.source === "runner").reason, "failed");
+    assert.equal(rows.find(row => row.source === "outer").reasonDefined, false);
+    assert.equal(summary.records, 25); assert.equal(summary.failedRecords, 0);
+    assert.equal(summary.unobservedCapsuleMask, 1 << ds.cases.indexOf(name));
+    assert.equal(summary.omittedRecords, 25); assert.equal(Object.hasOwn(summary, "passedCases"), false);
+  }
+});
+
+test("DS complete capsule inventory cannot suppress a helper or hook failure's runner context", async () => {
+  const h = harness({ reason: "failed" }); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  const lines = [], session = dsSession(line => lines.push(line)); feedCapsules(session);
+  session.runner(h.packet()); session.failed({}, "helper"); session.finish();
+  const rows = dsCommands(lines); assert.equal(rows.find(row => row.source === "runner").reason, "failed");
+  assert.equal(rows.find(row => row.source === "summary").unobservedCapsuleMask, 0);
+  const quiet = [], complete = dsSession(line => quiet.push(line)); feedCapsules(complete); complete.runner(h.packet());
+  assert.deepEqual(complete.finish(), []); assert.deepEqual(quiet, []);
+  const incomplete = [], partial = dsSession(line => incomplete.push(line)); feedCapsules(partial, ["default"]); partial.runner(h.packet());
+  assert.deepEqual(partial.finish(), []); assert.ok(dsCommands(incomplete).some(row => row.source === "runner"));
+});
+
+test("DS absent and partial runner facts stay unknown alongside partial capsules", async () => {
+  const h = harness(); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  const records = h.packet().records.slice(0, 1), bytes = Buffer.from(records.map(JSON.stringify).join("\n") + "\n");
+  const partial = { complete: false, records, bytes: bytes.length, sha256: sha256(bytes) };
+  const absent = { reporter: "absent", complete: false, records: [], bytes: 0, sha256: null };
+  for (const packet of [undefined, absent, partial]) {
+    const lines = [], session = dsSession(line => lines.push(line)); feedCapsules(session, ["abort"]);
+    if (packet) session.runner(packet); session.failed(undefined, "helper"); session.finish();
+    const row = dsCommands(lines).find(row => row.source === "runner");
+    if (!packet) assert.equal(row, undefined);
+    else { assert.equal(row.complete, false); assert.equal(row.reason, null); assert.equal(row.results, null); }
+  }
+});
+
+test("DS original undefined failure survives independent cleanup and report faults", async () => {
+  const h = harness(); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  const lines = [], report = {}, session = dsSession(line => { lines.push(line); if (line.includes('"source":"sdk"')) throw report; });
+  feedCapsules(session, ["abort"], ["default"]); session.runner(h.packet()); session.failed(undefined, "helper"); session.cleanup(undefined);
+  const failures = session.finish(); assert.equal(failures.length, 1); assert.equal(failures[0], report);
+  const rows = dsCommands(lines); assert.equal(rows[0].source, "sdk"); assert.equal(rows.find(row => row.source === "outer").reasonDefined, false);
+  assert.equal(rows.find(row => row.source === "summary").cleanupFailures, 1); assert.ok(rows.some(row => row.source === "runner"));
+});
+
+test("DS duplicate capsules and foreign or invalid runner packets remain reporting failures", async () => {
+  const h = harness(); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  for (const invalid of [{ ...h.packet(), sha256: "f".repeat(64) }, { ...h.packet(), records: [{ ...h.packet().records[0], binding: { ...h.packet().records[0].binding, pin: "f".repeat(40) } }, ...h.packet().records.slice(1)] }]) {
+    const lines = [], session = dsSession(line => lines.push(line)); feedCapsules(session, ["abort"]); session.runner(invalid); session.failed(undefined, "helper");
+    assert.ok(session.finish().length > 0); assert.equal(dsCommands(lines).some(row => row.source === "runner"), false);
+  }
+  const lines = [], session = dsSession(line => lines.push(line)); feedCapsules(session, ["abort"]); feedCapsules(session, ds.cases.slice(1));
+  session.failed(undefined, "helper"); assert.ok(session.finish().length > 0);
+  const summary = dsCommands(lines).find(row => row.source === "summary"); assert.equal(summary.records, 25); assert.equal(summary.reportingFailures, 1);
+});
+
+test("DS capsule summary validates closed masks without granting verdicts and retains quotas", async () => {
+  const h = harness({ errors: [undefined], reason: "failed" }); await h.runOpenClawConsumer({ diagnostic() {} }, h.options);
+  const lines = [], session = dsSession(line => lines.push(line)); feedCapsules(session, ["abort"], ["default"]);
+  session.runner(h.packet()); session.failed(undefined, "helper"); session.finish();
+  const summary = dsCommands(lines).find(row => row.source === "summary"); assert.deepEqual(dsSummary(summary), summary);
+  for (const patch of [{ v: 1 }, { source: "sdk" }, { unobservedCapsuleMask: -1 }, { unobservedCapsuleMask: 2 ** 26 },
+    { unobservedCapsuleMask: 0 }, { unobservedCapsuleMask: true }, { records: 26 }, { failedRecords: 26 }, { omittedRecords: 25 },
+    { cleanupFailures: null }, { cleanupFailures: 65536 }, { reportingFailures: Infinity }, { private: "forbidden" }]) assert.throws(() => dsSummary({ ...summary, ...patch }));
+  let getters = 0; assert.throws(() => dsSummary({ ...summary, get records() { getters++; throw undefined; } })); assert.equal(getters, 0);
+  assert.throws(() => dsSummary(new Proxy(summary, { ownKeys() { throw undefined; } })));
+  assert.throws(() => dsSummary(Object.fromEntries(Object.entries(summary).reverse())));
+  const widest = dsSummary({ v: 2, source: "summary", records: 0, failedRecords: 0, omittedRecords: 0,
+    cleanupFailures: 65535, reportingFailures: 65535, unobservedCapsuleMask: 2 ** 26 - 1 });
+  assert.equal(Object.hasOwn(widest, "invokedCases"), false);
+  const command = "::error title=DeepSeek contract diagnostic::" + JSON.stringify(widest) + "\n";
+  assert.ok(Buffer.byteLength(command) <= 768); assert.ok(lines.length <= 9);
+  assert.ok(lines.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+});
+// END partial capsule runner regression tests.
