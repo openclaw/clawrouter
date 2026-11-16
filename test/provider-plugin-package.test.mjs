@@ -32,7 +32,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
     "LICENSE", "README.md", "dist/conformance.d.ts", "dist/conformance.js", "dist/index.d.ts", "dist/index.js",
-    "dist/package-index.d.ts", "dist/package-index.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "package.json",
+    "dist/package-index.d.ts", "dist/package-index.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.deepEqual(manifest.dependencies ?? {}, {});
@@ -52,15 +52,27 @@ assert.equal(PROVIDER_CONFORMANCE_SCHEMA, "clawrouter.provider-conformance.v1");
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
 import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
-  type ProviderProductSummary, type ProviderConformanceScenario, type ProviderConformanceExecution,
+  type ProviderProductSummary, type ProviderGrantKind, type ProviderProduct, type ProviderProductBinding,
+  type ProviderProductOffer, type ProviderOfferDefinition, type ProviderOfferReference, type ProviderConformanceScenario, type ProviderConformanceExecution,
   type ProviderConformanceValidation } from "@clawrouter/provider-plugin-contract";
 const descriptor: ProviderPluginDescriptor = parseProviderPluginDescriptor({});
 const product: ProviderProductSummary = { id: "api", displayName: "API", commercialModel: "metered", authenticationMethod: "api-key" };
+const kind: ProviderGrantKind = "subscription";
+const binding: ProviderProductBinding = { type: "grant-transport", grantKind: kind };
+const selection: ProviderProductOffer = { endpoint: "invoke", capability: "tool.invoke", models: null };
+const fullProduct: ProviderProduct = { ...product, binding, endpoints: ["invoke"], offers: [selection] };
+const definition: ProviderOfferDefinition = { id: "offer", providerId: "example", productId: product.id,
+  endpoint: "invoke", capability: "tool.invoke", model: null, qualification: "declared" };
+const reference: ProviderOfferReference = { id: definition.id, productId: definition.productId };
+// @ts-expect-error Protocol labels cannot be used as credential classifications.
+const invalidKind: ProviderGrantKind = "rest";
+// @ts-expect-error Authored offers cannot claim runtime qualification.
+const invalidQualification: ProviderOfferDefinition["qualification"] = "eligible";
 const index: ProviderPackageIndex = { schema: "clawrouter.provider-package-index.v1", packages: [] };
 declare const scenario: ProviderConformanceScenario;
 declare const validation: ProviderConformanceValidation;
 declare const execution: ProviderConformanceExecution;
-export { descriptor, product, index, scenario, validation, execution };
+export { descriptor, product, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
 `);
   writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, noEmit: true },
