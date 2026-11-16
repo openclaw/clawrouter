@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { APIPromise } from "openai/core/api-promise";
 import { APIError } from "openai/core/error";
 import { Stream as OpenAIStream } from "openai/core/streaming";
+import { Completions as OpenAICompletions } from "openai/resources/chat/completions";
 import { VERSION as openAIVersion } from "openai/version";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
@@ -53,7 +54,7 @@ export function createBifrostFetchObserver(fetcher:Function,capture:Function,obs
 export function createBifrostProviderErrorOrigin(d:any) {
  const requests=new WeakMap<object,any>(),responses=new WeakMap<object,any>(),patches:any[]=[],records:any[]=[];
  const faults:unknown[]=[],restoration:unknown[]=[],undelivered:unknown[]=[],chunks:any[]=[];
- let request:any,stream:any,iterator:any,controller:any,response:any,originError:any,originPayload:any,finished=false,invalid=false,seal:any;
+ let creation:any,request:any,stream:any,iterator:any,controller:any,response:any,originError:any,originPayload:any,finished=false,invalid=false,seal:any;
  let responseCalls=0,factoryCalls=0,iteratorCalls=0,bytes=0,firstFaultSite=0;
  const aborts:any[]=[];
  const object=(v:any)=>v!==null&&(typeof v==="object"||typeof v==="function")&&!d.isProxy(v);
@@ -94,13 +95,22 @@ export function createBifrostProviderErrorOrigin(d:any) {
   deny(){invalid=true;},
   install(){
    need(d.version==="7.43.0");
-   const requestMethod=method(d.OpenAI.prototype,"request"),asResponse=method(d.APIPromise.prototype,"asResponse"),factory=method(d.Stream,"fromSSEResponse");
+    const create=method(d.Completions.prototype,"create"),requestMethod=method(d.OpenAI.prototype,"request"),asResponse=method(d.APIPromise.prototype,"asResponse"),factory=method(d.Stream,"fromSSEResponse"),iterate=method(d.Stream.prototype,Symbol.asyncIterator);
+    patch(d.Completions.prototype,"create",function(this:any,...args:any[]){
+     let invocation:any;guard(()=>{invocation=current();},2);if(!invocation)return Reflect.apply(create,this,args);
+     let owned:any;guard(()=>{active();need(!creation&&object(this)&&Object.getPrototypeOf(this)===d.Completions.prototype);
+      owned=creation={invocation,resource:this,args:[...args],request:undefined,returned:undefined};},3);
+     let value;try{value=d.storage.run({creation:owned},()=>Reflect.apply(create,this,args));}catch(e){guard(()=>{fail(e);});throw e;}
+     guard(()=>{need(!!owned&&owned===creation&&owned.request===request&&request?.creation===owned&&request.originalReturned&&
+      object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype&&value!==request.originalReturned);
+      owned.returned=request.returned=value;requests.set(value,request);},4);return value;
+    });
    patch(d.OpenAI.prototype,"request",function(this:any,...args:any[]){
     let invocation:any;guard(()=>{invocation=current();},2);if(!invocation)return Reflect.apply(requestMethod,this,args);
-    let owned:any;guard(()=>{active();need(!request&&object(this)&&Object.getPrototypeOf(this)===d.OpenAI.prototype);
-     owned=request={invocation,client:this,args:[...args],guards:[],returned:undefined};},3);
+     let owned:any;guard(()=>{active();need(!request&&creation&&d.storage.getStore()?.creation===creation&&creation.invocation===invocation&&object(this)&&Object.getPrototypeOf(this)===d.OpenAI.prototype);
+      owned=request={creation,invocation,client:this,args:[...args],guards:[],originalReturned:undefined,returned:undefined};creation.request=owned;},3);
     let value;try{value=d.storage.run({request:owned},()=>Reflect.apply(requestMethod,this,args));}catch(e){guard(()=>{fail(e);});throw e;}
-    guard(()=>{need(!!owned&&object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype);owned.returned=value;requests.set(value,owned);},4);return value;
+     guard(()=>{need(!!owned&&object(value)&&Object.getPrototypeOf(value)===d.APIPromise.prototype);owned.originalReturned=value;},4);return value;
    });
    patch(d.APIPromise.prototype,"asResponse",function(this:any,...args:any[]){
     let owned:any;guard(()=>{owned=object(this)?requests.get(this):undefined;},5);if(!owned)return Reflect.apply(asResponse,this,args);
@@ -121,13 +131,15 @@ export function createBifrostProviderErrorOrigin(d:any) {
      });
     });
     let value;try{value=Reflect.apply(factory,this,args);}catch(e){guard(()=>{fail(e);});throw e;}
-    guard(()=>{need(!stream&&object(value)&&Object.getPrototypeOf(value)===d.Stream.prototype&&own(value,"controller")===controller);stream=value;
-     const iterate=method(value,Symbol.asyncIterator);patch(value,Symbol.asyncIterator,function(this:any,...operands:any[]){
-      let result;try{result=Reflect.apply(iterate,this,operands);}catch(e){guard(()=>{fail(e);});throw e;}
-      guard(()=>{need(this===stream&&current()===request.invocation);bindIterator(result);});return result;
-     });
-    });return value;
+     guard(()=>{need(!stream&&object(value)&&Object.getPrototypeOf(value)===d.Stream.prototype&&own(value,"controller")===controller);stream=value;});return value;
    });
+    // The SDK normalizer captures this public prototype method before assigning
+    // its own iterator wrapper. We never patch or restore that SDK-owned property.
+    patch(d.Stream.prototype,Symbol.asyncIterator,function(this:any,...args:any[]){
+     if(this!==stream)return Reflect.apply(iterate,this,args);
+     let result;try{result=Reflect.apply(iterate,this,args);}catch(e){guard(()=>{fail(e);});throw e;}
+     guard(()=>{need(current()===request.invocation);bindIterator(result);});return result;
+    });
   },
   guard(a:any){guard(()=>{const context=d.storage.getStore();if(!context?.request)return;active();need(context.request===request&&request.guards.length===0);request.guards.push(a);},6);},
   read(o:any){guard(()=>{if(o.kind!=="read"||o.state!=="fulfilled"||o.reader?.transport?.method!=="POST")return;active();
@@ -157,9 +169,10 @@ export function createBifrostProviderErrorOrigin(d:any) {
     w.retirementProof?.source?.producer?.joined,w.retirementProof?.source?.producer?.failures,w.retirementProof?.source?.producer?.faults,
     w.retirementProof?.observation?.owner,w.retirementProof?.observation?.usageObserved,
     ...(w.retirementProof?.observation?.phases??[]).flat(),...(w.retirementProof?.source?.producer?.roles??[]).flat(),
-    request,request?.returned,request?.invocation,request?.guards[0],response,stream,iterator,controller,aborts.length,faults.length,restoration.length];
+     creation,creation?.resource,creation?.args,...(creation?.args??[]),creation?.invocation,creation?.request,creation?.returned,
+     request,request?.creation,request?.originalReturned,request?.returned,request?.invocation,request?.guards[0],response,stream,iterator,controller,aborts.length,faults.length,restoration.length];
    let value:any;guard(()=>{
-    need(finished&&!invalid&&restoredDescriptors()&&request&&request.guards.length===1&&responseCalls===1&&factoryCalls===1&&iteratorCalls===1);
+    need(finished&&!invalid&&restoredDescriptors()&&creation&&request&&creation.request===request&&request.creation===creation&&creation.returned===request.returned&&request.originalReturned!==request.returned&&request.guards.length===1&&responseCalls===1&&factoryCalls===1&&iteratorCalls===1);
     const a=request.guards[0],t=a.transport,r=t?.readers[0];need(t&&r&&a.invocation===request.invocation&&bifrostInvocationBound(w,t)&&a.inputSignal===controller.signal);
     const rejected=records.filter(o=>o.state==="rejected"),o=rejected[0];need(rejected.length===1&&o.kind==="next"&&records.every(x=>x===o||x.state==="fulfilled")&&object(o.reason)&&Object.getPrototypeOf(o.reason)===d.APIError.prototype);
     need(records.filter(x=>x.kind==="response").length===1&&records.find(x=>x.kind==="response").value===response&&records.every(x=>x.kind!=="throw"));
@@ -818,7 +831,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   const frame=(v:any)=>"data: "+JSON.stringify(v)+"\n\n";
   const expectedWire=frame({id:"chat_fixture",object:"chat.completion.chunk",created:1,model:"tenant/opaque-a",choices:[{index:0,delta:{role:"assistant",content:"synthetic-prefix"},finish_reason:null}]})+
    frame({error:{message:"synthetic-provider-error",type:"server_error"}});
-  providerOrigin=createBifrostProviderErrorOrigin({OpenAI,APIPromise,APIError,Stream:OpenAIStream,version:openAIVersion,
+   providerOrigin=createBifrostProviderErrorOrigin({OpenAI,APIPromise,APIError,Stream:OpenAIStream,Completions:OpenAICompletions,version:openAIVersion,
    storage:new AsyncLocalStorage(),owner:w.owner,caller:()=>c,invocation:()=>invocationStorage.getStore()?.invocation,
    isProxy:types.isProxy,objectPrototype:Object.prototype,next:()=>++w.sequence,fault:(e:unknown)=>w.observerFailures.push(e),observer,
    signal:bifrostSignalEvidence,pendingRead:()=>{const pending=originals.filter(o=>o.kind==="read"&&o.reader?.transport?.method==="POST"&&o.state==="pending");return pending.length===1?pending[0]:undefined;},

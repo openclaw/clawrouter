@@ -62,18 +62,20 @@ export function bifrostProviderOriginInertHarness(f, options={}) {
  ga.context=Object.freeze({invocation:gi,acquisition:ga});gt.context=ga.context;ga.transport=gt;ga.response=gResponse;ga.result={response:gResponse};w.acquisitions.push(ga);w.transports.push(gt);
  const gr={owner,original:{},body:gBody,transport:gt,unlocks:1,unlockFailed:false};gr.unlockReceiver=gr.original;gt.readers.push(gr);
  const gc=original("closed",{reader:gr,receiver:gr.original});gr.closed=gc.pending;gr.unlockAt=next();
- let store,origin,api,iterator,stream,A,current=invocation,lastNext,lastResponse;
+ let store,origin,api,iterator,stream,A,current=invocation,lastNext,lastResponse,parseResponse;
  class APIError extends Error {constructor(data,h){super("inert");if(arguments.length===4){data=arguments[1];h=arguments[3];}Object.assign(this,{error:data,headers:h,status:undefined,code:undefined,param:undefined,type:data.type});A=this;}}
  class APIPromise {
-  constructor(p=Promise.resolve({response})){this.responsePromise=p;}
+  constructor(client,p,parseResponse){this.client=client;this.responsePromise=p??Promise.resolve({response});this.parseResponse=parseResponse;}
+  _thenUnwrap(transform){return new APIPromise(this.client,this.responsePromise,async(client,props)=>transform(await this.parseResponse(client,props),props));}
   asResponse(...args){counts.response++;calls.push(["response",this,args]);return lastResponse=Promise.resolve(response);}
   then(){counts.parse++;throw Error("eager APIPromise parse");}
  }
  class OpenAI {
   request(...args){return this.responsePromise(this.makeRequest(...args));}
-  makeRequest(...args){counts.request++;calls.push(["request",this,args]);origin.guard(a);return Promise.resolve({response});}
-  responsePromise(p){return api=new APIPromise(p);}
+  makeRequest(...args){counts.request++;calls.push(["request",this,args]);origin.guard(a);return Promise.resolve({response,controller,options:{stream:true}});}
+  responsePromise(p){return api=new APIPromise(this,p,parseResponse??((_client,props)=>Stream.fromSSEResponse(props.response,controller,this)));}
  }
+ class Completions {constructor(client){this._client=client;}create(...args){return this._client.request(...args)._thenUnwrap(value=>value);}}
  options.sourcePublic?.({OpenAI,APIPromise});if(options.sourceError)APIError=options.sourceError();
  class Stream {
   constructor(c,controller){if(controller){this.iterator=c;this.controller=controller;}else this.controller=c;}
@@ -97,19 +99,21 @@ export function bifrostProviderOriginInertHarness(f, options={}) {
  if(options.sourceFactory){const factory=options.sourceFactory({Stream,APIError,source(){let at=0;return {async next(){if(at++===0){origin.read(prefix);return {done:false,value:{event:null,data:'{"choices":[]}'}};}return {done:false,value:{event:null,data:options.sseData??'{"error":{"message":"synthetic-provider-error","type":"server_error"}}'}};},async return(){settleNative();return {done:true};},[Symbol.asyncIterator](){return this;}};}});
   Stream.fromSSEResponse=function(...args){counts.factory++;calls.push(["factory",this,args]);return stream=Reflect.apply(factory,this,args);};
  }
- const d={OpenAI,APIPromise,APIError,Stream,version:"7.43.0",owner,caller:()=>caller,invocation:()=>current,
+ parseResponse=options.sourceChain?.({OpenAI,APIPromise,Completions,Stream,counts});
+ const d={OpenAI,APIPromise,APIError,Stream,Completions,version:"7.43.0",owner,caller:()=>caller,invocation:()=>current,
   storage:{run(value,fn){store=value;return fn();},getStore:()=>store},isProxy:types.isProxy,objectPrototype:Object.prototype,next,fault:e=>w.observerFailures.push(e),observer:p=>w.observers.push(p),
   signal:s=>({observed:true,aborted:s.aborted,reason:s.reason}),pendingRead:()=>read.state==="pending"?read:undefined,
   uint8:types.isUint8Array,length:v=>v.byteLength,copy:v=>Buffer.from(v),wire:chunks=>Buffer.concat(chunks).toString("utf8"),expectedWire:wire};
  options.dependencies?.(d);origin=f.createBifrostProviderErrorOrigin(d);w.origin=origin;
  const finish=async()=>{await Promise.allSettled(origin.records.flatMap(o=>o.pending?[o.pending]:[]));await Promise.allSettled(w.observers);origin.finish();w.restored=true;};
- return {w,E,headers,response,a,t,r,read,closed,controller,counts,calls,d,origin,APIError,OpenAI,APIPromise,Stream,
+ const create=(...args)=>new Completions(new OpenAI()).create(...args);
+ return {w,E,headers,response,a,t,r,read,closed,controller,counts,calls,d,origin,APIError,OpenAI,APIPromise,Stream,Completions,create,
   get A(){return A;},setCurrent:v=>{current=v;},get invocation(){return invocation;},
-  async drive(){origin.install();const client=new OpenAI(),arg={owned:true},p=client.request(arg);assert.equal(p,api);assert.equal(counts.parse,0);
+  async drive(){origin.install();const client=new OpenAI(),arg={owned:true,stream:true},p=new Completions(client).create(arg);assert.notEqual(p,api);assert.equal(p.responsePromise,api.responsePromise);assert.equal(counts.parse,0);
    const responseP=p.asResponse();assert.equal(responseP,options.sourcePublic?origin.records.at(-1).pending:lastResponse);const res=await responseP;assert.equal(res,response);
-   const result=Stream.fromSSEResponse(res,controller,client);assert.equal(result,stream);const iter=result[Symbol.asyncIterator]();assert.equal(iter,iterator);
-   const first=iter.next();assert.equal(first,options.sourceFactory?origin.records.at(-1).pending:lastNext);await first;const second=iter.next();assert.equal(second,options.sourceFactory?origin.records.at(-1).pending:lastNext);await assert.rejects(second,e=>{A=e;return true;});
-   await finish();assert.equal(counts.parse,0);return this;},finish,
+   const result=options.sourceChain?await p:Stream.fromSSEResponse(res,controller,client);assert.equal(result,stream);const iter=result[Symbol.asyncIterator]();if(!options.sourceChain)assert.equal(iter,iterator);
+   const first=iter.next();if(!options.sourceChain)assert.equal(first,options.sourceFactory?origin.records.at(-1).pending:lastNext);await first;const second=iter.next();if(!options.sourceChain)assert.equal(second,options.sourceFactory?origin.records.at(-1).pending:lastNext);await assert.rejects(second,e=>{A=e;return true;});
+   await finish();assert.equal(counts.parse,options.sourceChain?1:0);return this;},finish,
  };
 }
 export async function bifrostProviderOriginInertCases(assert) {
@@ -157,13 +161,56 @@ export async function bifrostProviderOriginInertCases(assert) {
  await run("an unrelated invocation retains original public returns",async()=>{const h=bifrostProviderOriginInertHarness(f);h.origin.install();h.setCurrent(undefined);const client=new h.OpenAI(),p=client.request({foreign:true});
   assert.equal(Object.getPrototypeOf(p),h.APIPromise.prototype);assert.equal(h.counts.parse,0);const response=await p.asResponse();assert.equal(response,h.response);h.origin.finish();assert.equal(h.origin.records.length,0);});
  await run("original synchronous undefined response failure is unchanged",async()=>{let calls=0;const h=bifrostProviderOriginInertHarness(f,{sourcePublic:({APIPromise})=>{APIPromise.prototype.asResponse=function(){calls++;throw undefined;};}});
-  h.origin.install();const p=new h.OpenAI().request({});let caught=false;try{p.asResponse();}catch(e){caught=true;assert.equal(e,undefined);}h.origin.finish();assert.equal(caught,true);assert.equal(calls,1);assert.equal(h.origin.records[0].state,"threw");assert.equal(h.origin.records[0].reason,undefined);});
+  h.origin.install();const p=h.create({});let caught=false;try{p.asResponse();}catch(e){caught=true;assert.equal(e,undefined);}h.origin.finish();assert.equal(caught,true);assert.equal(calls,1);assert.equal(h.origin.records[0].state,"threw");assert.equal(h.origin.records[0].reason,undefined);});
  await run("observer delivery failure cannot replace the original return",async()=>{let result;const h=bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.observer=()=>{throw undefined;};d.fault=()=>{throw "inert reporter";};}});
-  h.origin.install();const p=new h.OpenAI().request({});result=p.asResponse();assert.equal(result,h.origin.records[0].pending);await result;
+  h.origin.install();const p=h.create({});result=p.asResponse();assert.equal(result,h.origin.records[0].pending);await result;
   let caught;try{h.origin.finish();}catch(e){caught=e;}assert.ok(types.isNativeError(caught));assert.deepEqual(Array.from(caught.errors),[undefined,"inert reporter"]);});
  return passed;
 }
 test("Bifrost provider-error origin and exact negative vector (inert)",async()=>{assert.equal((await bifrostProviderOriginInertCases(assert)).length,45);});
+export function bifrostInertPublicCreateChain({APIPromise,Completions,Stream,counts}) {
+ APIPromise.prototype.parse=function(){if(!this.parsedPromise){counts.parse++;this.parsedPromise=this.responsePromise.then(props=>this.parseResponse(this.client,props));}return this.parsedPromise;};
+ APIPromise.prototype.then=function(...args){return Reflect.apply(Promise.prototype.then,this.parse(),args);};
+ Completions.prototype.create=function(...args){return this._client.request(...args)._thenUnwrap(stream=>{
+  // Same authored capture/assignment shape as OpenAI 7.43's normalizer.
+  const iterator=stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator]=async function*(){for await(const chunk of {[Symbol.asyncIterator]:iterator})yield chunk;};return stream;
+ });};
+ return (client,props)=>Stream.fromSSEResponse(props.response,props.controller,client);
+}
+export async function bifrostPublicCreateInertCases(assert) {
+ const f=bifrostNativeEvaluator(),passed=[],run=async(name,fn)=>{await fn();passed.push(name);};
+ await run("public derived promise and authored normalizer retain the origin",async()=>{
+  const h=await bifrostProviderOriginInertHarness(f,{sourceChain:bifrostInertPublicCreateChain}).drive();
+  assert.ok(f.bifrostProviderErrorVector(h.w));assert.equal(h.counts.request,1);assert.equal(h.counts.parse,1);assert.equal(h.counts.iterate,1);assert.equal(h.counts.abort,2);
+  assert.ok(Object.hasOwn(h.Stream.prototype,Symbol.asyncIterator));assert.equal(h.origin.summary()[11],0);
+ });
+ for(const [name,alter] of Object.entries({
+  foreign_resource:d=>{d.Completions=class{create(){}};},
+  foreign_return:d=>{const create=d.Completions.prototype.create;d.Completions.prototype.create=function(...args){const value=Reflect.apply(create,this,args);return Object.create(value);};},
+  extra_request:d=>{const create=d.Completions.prototype.create;d.Completions.prototype.create=function(...args){const value=Reflect.apply(create,this,args);this._client.request(...args);return value;};},
+ }))await run(name,async()=>{
+  const h=bifrostProviderOriginInertHarness(f,{sourceChain:bifrostInertPublicCreateChain,dependencies:alter});
+  try{await h.drive();}catch{await h.finish().catch(()=>{});}assert.equal(f.bifrostProviderErrorVector(h.w),undefined);
+ });
+ for(const reason of [{},undefined])await run("original create throw is unchanged",()=>{
+  const h=bifrostProviderOriginInertHarness(f);let calls=0;h.Completions.prototype.create=function(){calls++;throw reason;};h.origin.install();
+  let caught=false;try{h.create({});}catch(e){caught=true;assert.equal(e,reason);}h.origin.finish();
+  assert.equal(caught,true);assert.equal(calls,1);assert.equal(h.w.observerFailures[0],reason);
+ });
+ await run("create receiver arguments and original return are unchanged",()=>{
+  const h=bifrostProviderOriginInertHarness(f),client=new h.OpenAI(),resource=new h.Completions(client),args=[{},{}];let seen,value,calls=0;
+  const original=h.Completions.prototype.create;h.Completions.prototype.create=function(...values){calls++;seen=[this,...values];return value=Reflect.apply(original,this,values);};
+  h.origin.install();const returned=Reflect.apply(resource.create,resource,args);assert.equal(returned,value);assert.equal(calls,1);assert.deepEqual(seen,[resource,...args]);assert.equal(h.counts.parse,0);h.origin.finish();
+ });
+ for(const target of ["create","iterate"])await run("owned public descriptor replacement remains fatal",async()=>{
+  const h=bifrostProviderOriginInertHarness(f,{sourceChain:bifrostInertPublicCreateChain});const finish=h.origin.finish;
+  h.origin.finish=()=>{if(target==="create")h.Completions.prototype.create=()=>{};else h.Stream.prototype[Symbol.asyncIterator]=()=>{};return finish();};
+  await h.drive();assert.equal(f.bifrostProviderErrorVector(h.w),undefined);assert.ok(h.w.observerFailures.length);
+ });
+ return passed;
+}
+test("Bifrost public create and authored iterator normalization (inert)",async()=>{assert.equal((await bifrostPublicCreateInertCases(assert)).length,9);});
 export async function bifrostOriginJoinInertCases(assert, source) {
  const start=source.indexOf(" let at=0,seen=0,originAt=0;"),end=source.indexOf(' checkpoints.mark(caseIndex,"original_join","fulfilled");',start);
  assert.ok(start>=0&&end>start);const join=new Function("originals","w","providerOrigin","return (async()=>{"+source.slice(start,end)+"})();");
@@ -196,7 +243,7 @@ export async function bifrostOriginFirstFaultInertCases(assert) {
   assert.ok(f.bifrostProviderErrorVector(h.w));assert.equal(site(h),0);assert.equal(h.origin.summary()[9],0);});
  for(const reason of [{},undefined])await run("invocation fault retains original definedness",async()=>{
   const h=await bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.invocation=()=>{throw reason;};}}).drive();
-  assert.equal(site(h),2);assert.equal(h.w.observerFailures[0],reason);assert.equal(h.origin.summary()[10],reason===undefined?1:0);assert.equal(h.counts.request,1);denied(h);});
+  assert.equal(site(h),2);assert.equal(h.w.observerFailures[0],reason);assert.equal(h.origin.summary()[10],reason===undefined?2:0);assert.equal(h.counts.request,1);denied(h);});
  await run("client binding precedes the independent returned-promise fault",async()=>{
   const h=bifrostProviderOriginInertHarness(f);h.origin.install();const returned={};let calls=0;
   const receiver={makeRequest(){calls++;return returned;},responsePromise(value){assert.equal(value,returned);return value;}};
@@ -204,18 +251,18 @@ export async function bifrostOriginFirstFaultInertCases(assert) {
   assert.equal(site(h),3);assert.equal(h.origin.summary()[9],2);const first=h.w.observerFailures[0];h.origin.finish();
   assert.equal(h.w.observerFailures[0],first);assert.equal(site(h),3);denied(h);});
  await run("returned-promise binding preserves the original value",async()=>{
-  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const client=new h.OpenAI(),returned={};client.responsePromise=()=>returned;
-  assert.equal(client.request(17),returned);assert.equal(site(h),4);assert.equal(h.counts.request,1);h.origin.finish();denied(h);});
+  const h=bifrostProviderOriginInertHarness(f);const client=new h.OpenAI(),returned={};client.responsePromise=()=>returned;
+  h.Completions.prototype.create=function(...args){return client.request(...args);};h.origin.install();assert.equal(new h.Completions(client).create(17),returned);assert.equal(site(h),4);assert.equal(h.counts.request,1);h.origin.finish();denied(h);});
  await run("response lookup failure forwards the original method",async()=>{
-  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const p=new h.OpenAI().request({});const reason={};
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const p=h.create({});const reason={};
   h.d.isProxy=value=>{if(value===p)throw reason;return types.isProxy(value);};const returned=p.asResponse();
   assert.equal(await returned,h.response);assert.equal(site(h),5);assert.equal(h.w.observerFailures[0],reason);assert.equal(h.counts.response,1);h.origin.finish();denied(h);});
  await run("factory response lookup failure forwards once",async()=>{
-  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const client=new h.OpenAI(),p=client.request({});await p.asResponse();
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();const client=new h.OpenAI(),p=new h.Completions(client).create({});await p.asResponse();
   h.d.isProxy=value=>{if(value===h.response)throw undefined;return types.isProxy(value);};const stream=h.Stream.fromSSEResponse(h.response,h.controller,client);
   assert.equal(Object.getPrototypeOf(stream),h.Stream.prototype);assert.equal(site(h),5);assert.equal(h.w.observerFailures[0],undefined);assert.equal(h.counts.factory,1);await h.finish();denied(h);});
  await run("guard attachment fault remains distinct from later faults",async()=>{
-  const h=bifrostProviderOriginInertHarness(f);h.origin.install();new h.OpenAI().request({});h.origin.guard(h.a);
+  const h=bifrostProviderOriginInertHarness(f);h.origin.install();h.create({});h.origin.guard(h.a);
   const first=h.w.observerFailures[0];assert.equal(site(h),6);h.origin.read({kind:"read",state:"fulfilled",reader:{transport:{method:"POST"}},value:{}});
   assert.equal(h.origin.summary()[9],2);assert.equal(h.w.observerFailures[0],first);assert.equal(site(h),6);h.origin.finish();denied(h);});
  await run("read validation keeps accessor untouched and first fault",async()=>{
@@ -236,7 +283,7 @@ export async function bifrostOriginFirstFaultInertCases(assert) {
   h.origin.finish();assert.equal(site(h),1);assert.equal(h.origin.summary()[11],1);denied(h);});
  await run("observer delivery fault uses unknown without losing undefined",async()=>{
   const h=bifrostProviderOriginInertHarness(f,{dependencies:d=>{d.observer=()=>{throw undefined;};}});h.origin.install();
-  const p=new h.OpenAI().request({}),returned=p.asResponse();assert.equal(returned,h.origin.records[0].pending);await returned;
+  const p=h.create({}),returned=p.asResponse();assert.equal(returned,h.origin.records[0].pending);await returned;
   assert.equal(site(h),1);assert.equal(h.w.observerFailures[0],undefined);await h.finish();denied(h);});
  await run("late read cannot revive a seal or change the first site",async()=>{
   const h=await bifrostProviderOriginInertHarness(f).drive();assert.ok(f.bifrostProviderErrorVector(h.w));

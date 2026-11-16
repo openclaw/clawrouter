@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Bind Bifrost origin evidence to the original public chat-completion return and observe the SDK's original prototype iterator through authored normalization. Preserve lazy parsing, original returns and failures, exact restoration, and independent native retirement and financial gates.
+
 - Record the first Bifrost SDK origin-witness fault site in the existing bounded diagnostics, preserving original failures and strict native, retirement and financial qualification.
 
 - Bind Bifrost's explicit negative SSE cases to their original public SDK response, iterator and controller before admitting the exact same-reader rejection vector. Keep raw failures, independent Worker retirement and financial assertions, with fail-closed origin and restoration checks.
