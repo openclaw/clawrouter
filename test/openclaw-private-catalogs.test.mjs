@@ -661,6 +661,72 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   try{await finishPrivateOwned(()=>{throw r.caught;},[()=>{throw r.observerFailures[0];},()=>{throw undefined;}]);}catch(e){all=e;}
   assert.deepEqual(all.errors,[undefined,undefined,undefined]);
  });
+ // V9 uses the existing private ledger, never another storage/native read.
+ function privateAcquisitionHarness({mode="restore",reason={},phase="in-call",foreign=false,recordThrow=false,reportThrow=false,source,mutate}={}){
+  const factory=new Function('"use strict";'+stripTypeScriptTypes(privateOwnershipSource(source).replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')();
+  const acquisitions=[],originals=[],faults=[],traces=[],row={},signal={},caller={owner:row,kind:"inference",signal};let store,reads=0,guardCalls=0,nativeCalls=0,sequence=0,caught,present=false;
+  const storage={getStore(){reads++;return store;},run(value,fn){const old=store;store=value;try{return fn();}finally{store=old;}},disable(){store=undefined;}};
+  const input={},args=[input],guard=function(){guardCalls++;return guardedBody();};let guardedBody;
+  const evidence={ledger:{owner:row,acquisitions,originals},owner:row,acquisitions,originals,guard,isProxy(value){if(recordThrow&&value===originals[0])throw undefined;return privateNodeTypes.isProxy(value);}};
+  const ownership=factory(storage,evidence),transport=()=>{ownership.transport({method:mode==="proper"?"GET":"POST"},v=>{traces.push(v);if(reportThrow)throw undefined;},faults);nativeCalls++;return reason;};
+  const invoke=fn=>ownership.invoke(caller,"inference",fn,undefined,[null,null,{signal}]);
+  const acquire=fn=>{const a={guard,input,invoke:++sequence},o={kind:"guard",owner:row,acquisition:a,receiver:undefined,args,invoke:++sequence,state:"pending",returnAt:0,settle:0,returned:undefined};a.operation=o;acquisitions.push(a);originals.push(o);guardedBody=()=>{
+    if(phase!=="in-call"){const pending={};o.pending=pending;o.returned=pending;a.pending=pending;o.returnAt=++sequence;if(phase==="settled"){o.state="fulfilled";o.settle=++sequence;}}
+    if(foreign)a.owner={};if(mutate)mutate({a,o,acquisitions,originals,store,evidence});return fn();};return ownership.guard(guard,undefined,args,a);};
+  try{
+   if(mode==="other"||mode==="other-one")invoke(()=>acquire(()=>reason));
+   invoke(()=>{const outer=store;
+    if(mode==="bypass"||mode==="other")return transport();
+    if(mode==="multi")acquire(()=>reason);
+    return acquire(()=>mode==="proper"||mode==="healthy"?transport():storage.run(outer,transport));});
+  }catch(error){present=true;caught=error;}
+  return {traces,faults,present,caught,reads,guardCalls,nativeCalls,acquisitions,originals,ownership,storage};
+ }
+ test("Private acquisition V9 separates the same V8 failure from bypass and context restoration",()=>{
+  const bypass=privateAcquisitionHarness({mode:"bypass"}),restore=privateAcquisitionHarness();
+  assert.deepEqual(bypass.traces[0].slice(0,6),restore.traces[0].slice(0,6));assert.equal(bypass.traces[0][6],1);assert.equal(restore.traces[0][6],50);
+  assert.deepEqual([bypass.reads,bypass.guardCalls,bypass.nativeCalls],[1,0,0]);assert.deepEqual([restore.reads,restore.guardCalls,restore.nativeCalls],[2,1,0]);
+  const proper=privateAcquisitionHarness({mode:"proper"}),healthy=privateAcquisitionHarness({mode:"healthy"});assert.equal(proper.traces[0][6],42);assert.equal(healthy.present,false);assert.equal(healthy.nativeCalls,1);assert.equal(healthy.traces.length,0);
+ });
+ test("Private acquisition V9 keeps invocation census and pending original-call phases distinct",()=>{
+  for(const [mode,code]of [["other",129],["other-one",178],["multi",3]]){const h=privateAcquisitionHarness({mode});assert.equal(h.traces[0][6],code);assert.equal(h.nativeCalls,0);}
+  for(const [phase,code]of [["in-call",50],["returned",82],["settled",114]])assert.equal(privateAcquisitionHarness({phase}).traces[0][6],code);
+  const h=privateAcquisitionHarness();h.acquisitions[0].context={};h.originals.push({});assert.equal(h.traces[0][6],50);
+ });
+ test("Private acquisition V9 denies foreign contradictory and duplicate private ledger references",()=>{
+  const mutations=[({a})=>a.context={},({a})=>a.invocation={},({a})=>a.guard=()=>{},({o})=>o.owner={},({o})=>o.acquisition={},({o})=>o.args=[{}],({o})=>o.state="other",({o})=>o.settle=1,
+   ({a,acquisitions})=>acquisitions.push(a),({o,originals})=>originals.push(o),({originals})=>originals.push({kind:"guard",acquisition:{}}),({a})=>a.pending={},({o,originals})=>originals.push({...o}),({evidence})=>evidence.ledger.originals=[],({evidence})=>evidence.ledger.acquisitions=[],({a})=>Object.defineProperty(a,"context",{get(){throw Error("getter must not run");}}),({a})=>a.context=new Proxy({}, {get(){throw Error("proxy must not run");}})];
+  for(const mutate of mutations){const h=privateAcquisitionHarness({mutate});assert.equal(h.traces[0][6],4);assert.equal(h.nativeCalls,0);assert.deepEqual(h.faults,[]);}
+  assert.equal(privateAcquisitionHarness({foreign:true}).traces[0][6],4);
+  let traps=0;const h=privateAcquisitionHarness({mutate({a}){a.context=new Proxy({}, {isExtensible(){traps++;throw undefined;},ownKeys(){traps++;throw undefined;}});}});assert.equal(h.traces[0][6],4);assert.equal(traps,0);assert.deepEqual(h.faults,[]);
+ });
+ test("Private acquisition V9 bookkeeping and writer failures remain independent of original failure",async()=>{
+  for(const options of [{recordThrow:true},{reportThrow:true}]){const h=privateAcquisitionHarness(options);assert.equal(h.present,true);assert.deepEqual(h.faults,[undefined]);assert.equal(h.nativeCalls,0);let result;
+   try{await finishPrivateOwned(()=>{throw h.caught;},[()=>{throw h.faults[0];},()=>{throw undefined;}]);}catch(e){result=e;}
+   assert.deepEqual(result.errors,[h.caught,undefined,undefined]);}
+ });
+ test("Private acquisition V9 original emitter relay and closed schema retain unknowns",()=>{
+  const {validatePrivateCheckpoint}=privateCheckpointFunctions();
+  for(const mode of ["bypass","restore","proper","other","other-one","multi"])for(const phase of ["in-call","returned","settled"]){const h=privateAcquisitionHarness({mode,phase}),r=privateCaptureHarness();
+   r.r.bodyCaptureFailure(0,r.row,11,h.caught,h.traces[0]);r.r.bodySite(0,r.row,20,1);r.r.mark(0,"body","rejected",h.caught);const cap=r.records.find(x=>x.v===9);assert.ok(cap);validatePrivateCheckpoint(cap);
+   const commands=[],emit=privateAnnotationEmitter(x=>commands.push(x));emit(cap);assert.ok(Buffer.byteLength(JSON.stringify(cap))<=375);assert.ok(Buffer.byteLength(commands[0])<=418);
+   const rows=privateCheckpointRecords({stdout:"PRIVATE_CHECKPOINT "+JSON.stringify(cap)});assert.equal(JSON.stringify(rows),JSON.stringify([cap]));
+   for(const word of [-1,792,null,"50",false,Infinity])assert.throws(()=>validatePrivateCheckpoint({...cap,meta:[...cap.meta.slice(0,3),[word],cap.meta[4]]}));
+   assert.throws(()=>validatePrivateCheckpoint({...cap,case:4}));assert.throws(()=>validatePrivateCheckpoint({...cap,v:8}));
+  }
+ });
+ test("Private acquisition V9 actual operand throws retain undefined and do not reread context",()=>{
+  const factory=new Function('"use strict";'+stripTypeScriptTypes(privateOwnershipSource().replace(/^export /gm,""),{mode:"strip"})+';return createPrivateInvocationOwnership;')();
+  for(const site of [0,3,4])for(const reason of [undefined,{}]){let store,gets=0,operandGets=0,caught,present=false;const traces=[],faults=[],row={},acquisitions=[],originals=[];
+   const storage={getStore(){gets++;if(site===0)throw reason;return store;},run(v,fn){store=v;return fn();},disable(){}},evidence={ledger:{owner:row,acquisitions,originals},owner:row,acquisitions,originals,guard:()=>{},isProxy:privateNodeTypes.isProxy},owner=factory(storage,evidence);
+   try{if(site!==0)owner.invoke({owner:row,kind:"inference",signal:null},"inference",()=>{const original=store;store={};Object.defineProperty(store,site===3?"invocation":"acquisition",{get(){operandGets++;throw reason;}});if(site===4)store.invocation=original.invocation;owner.transport({},v=>traces.push(v),faults);},undefined,[null,null,{signal:null}]);else owner.transport({},v=>traces.push(v),faults);}catch(e){present=true;caught=e;}
+   assert.equal(present,true);assert.equal(caught,reason);assert.equal(gets,1);assert.equal(operandGets,site===0?0:1);assert.equal(traces[0][4],true);assert.equal(traces[0][5],reason!==undefined);assert.equal(traces[0][6],site===4?1:0);assert.deepEqual(faults,[]);
+  }
+ });
+ test("Private acquisition V9 operand throws and absent invocation cannot invent a census",()=>{
+  const h=privateCaptureHarness();h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,0,1,0,true,false,0]);h.r.bodySite(0,h.row,20,1);h.r.mark(0,"body","rejected",undefined);const cap=h.records.find(x=>x.v===9);assert.ok(cap);assert.equal(cap.meta[3][0]%18,0);
+  const {validatePrivateCheckpoint}=privateCheckpointFunctions();for(const code of [1,4,50])assert.throws(()=>validatePrivateCheckpoint({...cap,meta:[...cap.meta.slice(0,3),[2*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(code)],cap.meta[4]]}));
+ });
  // END Private capture entry inert regressions
  // BEGIN Private EOF body witness inert regressions
  function privateEOFSource(deps){

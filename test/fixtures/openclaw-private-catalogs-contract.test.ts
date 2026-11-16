@@ -47,12 +47,45 @@ export function createPrivateFetchObserver(fetcher:Function,capture:Function,obs
   try{receipt.returned(original);}catch(error){observerFailures.push(error);}return original;
  };
 }
-export function createPrivateInvocationOwnership(storage:any) {
+export function createPrivateInvocationOwnership(storage:any,evidence?:any) {
  const invocations=new WeakSet<object>(),acquisitions=new WeakSet<object>(),transports=new WeakSet<object>(),responses=new WeakMap<object,any>();
  let active=true;
- const current=(at?:Function)=>{const value=at?at(0,()=>storage.getStore()):storage.getStore();
-  if(at?at(1,()=>!active,true)||at(2,()=>!value,true)||at(3,()=>!invocations.has(value.invocation),true):
+ const current=(at?:Function,retained?:any)=>{const value=at?at(0,()=>storage.getStore()):storage.getStore();
+  if(at?at(1,()=>!active,true)||at(2,()=>!value,true)||at(3,()=>!invocations.has(retained?(retained.invocation=value.invocation):value.invocation),true):
    !active||!value||!invocations.has(value.invocation))throw Error("incomplete invocation context");return value;};
+ // Diagnostic-only private census. No WeakSet query, context reread or native
+ // operand is added. Zero records cannot identify a foreign module or a bypass.
+ // Bits: 0..2 UNKNOWN/zero/one/multiple/contradictory; 3..4 context
+ // unobserved/same/different; 5..6 unobserved/in-call/returned-pending/settled;
+ // 7 means a different recorded invocation also exists, never the current owner.
+ const acquisitionSnapshot=(retained:any,passed:number)=>{
+  if(!evidence||(passed&8)===0)return 0;
+  const missing={},bad={};
+  const own=(o:any,k:string)=>{if(!o||typeof o!=="object"||evidence.isProxy(o))throw bad;
+   const d=Object.getOwnPropertyDescriptor(o,k);if(!d)return missing;if(!Object.hasOwn(d,"value"))throw bad;return d.value;};
+  const list=(a:any)=>{const n=own(a,"length");if(!Array.isArray(a)||!Number.isSafeInteger(n)||n<0||n>4096)throw bad;
+   return Array.from({length:n},(_,i)=>{const v=own(a,String(i));if(v===missing)throw bad;return v;});};
+  try{
+   const invocation=retained.invocation,owner=evidence.owner,rows=list(evidence.acquisitions),ops=list(evidence.originals);
+   if(own(evidence.ledger,"owner")!==owner||own(evidence.ledger,"acquisitions")!==evidence.acquisitions||own(evidence.ledger,"originals")!==evidence.originals||own(invocation,"owner")!==owner||new Set(rows).size!==rows.length||new Set(ops).size!==ops.length)throw bad;
+   let count=0,context=0,phase=0,other=0;
+   for(const a of rows){const i=own(a,"invocation"),c=own(a,"context"),o=own(a,"operation"),state=own(o,"state"),ret=own(o,"returnAt"),settle=own(o,"settle");
+    if(own(i,"owner")!==owner||own(a,"owner")!==owner||own(c,"invocation")!==i||own(c,"acquisition")!==a||!Object.isFrozen(i)||!Object.isFrozen(c)||own(a,"guard")!==evidence.guard||
+     !ops.includes(o)||own(o,"owner")!==owner||own(o,"kind")!=="guard"||own(o,"acquisition")!==a||list(own(o,"args"))[0]!==own(a,"input")||
+     !Number.isSafeInteger(own(a,"invoke"))||own(a,"invoke")<1||!Number.isSafeInteger(own(o,"invoke"))||own(o,"invoke")<=own(a,"invoke")||
+     !Number.isSafeInteger(ret)||ret<0||!Number.isSafeInteger(settle)||settle<0||!["pending","fulfilled","rejected","threw"].includes(state))throw bad;
+    let at=0;
+    if(state==="pending"){
+     if(settle!==0)throw bad;
+     if(ret===0){if(own(o,"pending")!==missing||own(a,"pending")!==missing)throw bad;at=1;}
+     else{const pending=own(o,"pending");if(pending===missing||pending!==own(o,"returned")||pending!==own(a,"pending")||ret<=own(o,"invoke"))throw bad;at=2;}
+    }else{if(settle<=own(o,"invoke")||ret!==0&&ret<=own(o,"invoke"))throw bad;at=3;}
+    if(i===invocation){count++;context=c===retained.context?1:2;phase=at;}else other=128;
+   }
+   for(const o of ops)if(own(o,"kind")==="guard"){const a=own(o,"acquisition");if(!rows.includes(a)||own(a,"operation")!==o)throw bad;}
+   return count===0?1+other:count===1?2+context*8+phase*32+other:3+other;
+  }catch(error){if(error===bad)return 4;throw error;}
+ };
  const bound=(t:any)=>{const a=t.acquisition,i=t.invocation;
   return active&&transports.has(t)&&acquisitions.has(a)&&invocations.has(i)&&a.invocation===i&&t.context===a.context&&
    t.context?.invocation===i&&t.context?.acquisition===a&&a.transport===t&&(i.kind==="inference"?t.caller===i.caller:t.caller===undefined&&t.catalogInitiator===i.caller)&&t.owner===i.owner;};
@@ -71,18 +104,18 @@ export function createPrivateInvocationOwnership(storage:any) {
   transport(t:any,observe?:Function,observerFailures:unknown[]=[]){
    // V8 observes only these original evaluations. False condition operands pass;
    // read sites 0/4 pass on return. No skipped predicate is evaluated for reporting.
-   let site=0,evaluated=0,passed=0,operand=false;
+   let site=0,evaluated=0,passed=0,operand=false;const retained:any={};
    const at=(id:number,fn:Function,condition=false)=>{site=id;evaluated|=2**id;operand=true;
-    const value=fn();operand=false;if(!condition||!value)passed|=2**id;return value;};
+    const value=fn();if(id===0)retained.context=value;operand=false;if(!condition||!value)passed|=2**id;return value;};
    try{
-    const context=current(at),a=at(4,()=>context.acquisition);
+    const context=current(at,retained),a=at(4,()=>context.acquisition);
     if(at(5,()=>!a,true)||at(6,()=>!acquisitions.has(a),true)||at(7,()=>a.context!==context,true)||
      at(8,()=>a.transport,true)||at(9,()=>transports.has(t),true)||
      at(10,()=>(t.method==="POST"?"inference":t.method==="GET"?"discovery":"invalid")!==context.invocation.kind,true))throw Error("incomplete transport ownership");
     t.context=context;t.invocation=context.invocation;t.acquisition=a;t.caller=context.invocation.kind==="inference"?context.invocation.caller:undefined;t.catalogInitiator=context.invocation.kind==="discovery"?context.invocation.caller:undefined;t.owner=context.invocation.owner;
     a.transport=t;transports.add(t);
    }catch(reason){
-    if(observe&&evaluated!==passed){try{observe([11,site,evaluated,passed,operand,reason!==undefined]);}catch(error){observerFailures.push(error);}}
+    if(observe&&evaluated!==passed){try{const trace:any[]=[11,site,evaluated,passed,operand,reason!==undefined];if(evidence)trace.push(acquisitionSnapshot(retained,passed));observe(trace);}catch(error){observerFailures.push(error);}}
     throw reason;
    }
   },
@@ -198,6 +231,13 @@ export function validatePrivateCheckpoint(record:any):void {
  const phases=["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow","callback","selection","owner","postlude","registration"];
  const integer=(n:any,max:number)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
  const nullable=(n:any,max:number)=>n===null||integer(n,max);
+ const conditionTuple=(p:any,version:number)=>{
+  if(!Array.isArray(p)||p.length!==(version===9?1:2))return false;
+  let m=p[0],f=p[1],n=0;
+  if(version===9){if(!integer(p[0],791))return false;n=[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242][p[0]%18];f=Math.floor(p[0]/18);m=(2**(Math.floor(f/4)+1)-1)*2048+2**Math.floor(f/4)-1;
+   if(![0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].includes(n)||Math.floor(f/4)<4&&n!==0)return false;}
+  return integer(m,4193279)&&integer(f,43)&&Math.floor(m/2048)===2**(Math.floor(f/4)+1)-1&&m%2048===2**Math.floor(f/4)-1&&((f&2)!==0||![0,4].includes(Math.floor(f/4)));
+ };
  const fieldV6=(p:any)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],12)&&p[1]>0:p[1]===null);
  const tuple=(a:any,length:number,valid:(x:any)=>boolean)=>Array.isArray(a)&&a.length===length&&a.every(valid);
  if(record?.v===3){
@@ -223,28 +263,26 @@ export function validatePrivateCheckpoint(record:any):void {
   }
   throw Error("unknown Private boundary capsule");
  }
- if(record?.v===2||record?.v===4||record?.v===5||record?.v===6||record?.v===7||record?.v===8){
-  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5,6,7,8].includes(record.v)?["body"]:[]),...([5,6,7,8].includes(record.v)?["meta"]:[])];
+ if(record?.v===2||record?.v===4||record?.v===5||record?.v===6||record?.v===7||record?.v===8||record?.v===9){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5,6,7,8,9].includes(record.v)?["body"]:[]),...([5,6,7,8,9].includes(record.v)?["meta"]:[])];
   if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
    !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
    !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
-  if(record.v===4||record.v===5||record.v===6||record.v===7||record.v===8){const b=record.body;
+  if(record.v===4||record.v===5||record.v===6||record.v===7||record.v===8||record.v===9){const b=record.body;
    if(record.lane!=="sdk"||record.phase!=="body"||record.case===null||record.decl===null||record.decl>=24||record.decl%4!==0||record.stages[4]!==3||record.owner!==null||record.receipt!==null||
     !Array.isArray(b)||b.length!==7||!integer(b[0],22)||![5,6,7].includes(b[1])||b[2]!==record.defined||!integer(b[3],4194303)||b[3]>=2**b[0]||!integer(b[4],3)||
     (b[0]<5&&b[4]!==0)||(b[0]<18&&(b[4]&2)!==0)||!nullable(b[5],3)||!(b[6]===null||tuple(b[6],4,x=>integer(x,65535)))||
     (b[1]===6&&(![5,18].includes(b[0])||(b[4]&(b[0]===5?1:2))!==0))||(b[5]!==null&&b[0]<20))throw Error("invalid Private EOF body span");
   }
-  if(record.v===5||record.v===6||record.v===7||record.v===8){const m=record.meta;
+  if(record.v===5||record.v===6||record.v===7||record.v===8||record.v===9){const m=record.meta;
    const field=(p:any,max:number)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],max)&&p[1]>0:p[1]===null);
    if(record.case!==0||record.decl!==0||!Array.isArray(m)||m.length!==(record.v>=6?5:4)||!field(m[0],2)||!field(m[1],10)||
     !Array.isArray(m[2])||m[2].length!==2||!integer(m[2][0],3)||(m[2][0]===1?!(Number.isInteger(m[2][1])&&m[2][1]>=100&&m[2][1]<=599):m[2][1]!==null)||
-    !(record.v===8?Array.isArray(m[3])&&m[3].length===2&&integer(m[3][0],4193279)&&integer(m[3][1],43)&&
-     Math.floor(m[3][0]/2048)===2**(Math.floor(m[3][1]/4)+1)-1&&m[3][0]%2048===2**Math.floor(m[3][1]/4)-1&&
-     ((m[3][1]&2)!==0||![0,4].includes(Math.floor(m[3][1]/4))):
+    !(record.v===8||record.v===9?conditionTuple(m[3],record.v):
      m[3]===null||Array.isArray(m[3])&&m[3].length===3&&([1,2,3].includes(m[3][0])&&[1,2].includes(m[3][1])||record.v===7&&integer(m[3][0],20)&&m[3][0]>=4&&m[3][1]===1)&&typeof m[3][2]==="boolean")||
     (record.body[0]<14&&m[2][0]!==0)||(!(record.body[4]&2)&&(m[0][0]!==0||m[1][0]!==0)))throw Error("invalid Private result metadata span");
   }
-  if((record.v===6||record.v===7||record.v===8)&&(!fieldV6(record.meta[4])||(!(record.body[4]&2)&&record.meta[4][0]!==0)))throw Error("invalid Private wording span");
+  if((record.v===6||record.v===7||record.v===8||record.v===9)&&(!fieldV6(record.meta[4])||(!(record.body[4]&2)&&record.meta[4][0]!==0)))throw Error("invalid Private wording span");
   if(record.v===7&&!(record.meta[3]?.[0]>=4))throw Error("missing Private capture failure");
   if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
   if(record.receipt!==null){const r=record.receipt;
@@ -289,7 +327,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:first.meta===null?4:(first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+  send({v:b===null?2:first.meta===null?4:(first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
    stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
@@ -364,13 +402,18 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   bodyCaptureFailure(index:number,owner:object,site:number,reason:unknown,condition:any=null){try{
    const b=bodyScopes.get(index);if(!b?.metadata||b.failed)return;metadata(index,owner);
    if(!Number.isSafeInteger(site)||site<4||site>20)throw Error("foreign Private capture site");
-   if(condition!==null&&!(site===11&&Array.isArray(condition)&&condition.length===6&&condition[0]===11&&
+   if(condition!==null&&!(site===11&&Array.isArray(condition)&&[6,7].includes(condition.length)&&condition[0]===11&&
     Number.isSafeInteger(condition[1])&&condition[1]>=0&&condition[1]<=10&&condition[2]===2**(condition[1]+1)-1&&condition[3]===2**condition[1]-1&&
-    typeof condition[4]==="boolean"&&(condition[4]||![0,4].includes(condition[1]))&&condition[5]===(reason!==undefined)))throw Error("foreign Private ownership condition");
-   // V8's fixed capture site is 11. Pack the two actual 11-bit masks and
-   // condition site plus operand-throw/defined bits without widening the slot.
-   if(b.metadata.first===null)b.metadata.first=condition===null?[site,1,reason!==undefined]:
-    [condition[2]*2048+condition[3],condition[1]*4+(condition[4]?2:0)+(condition[5]?1:0)];
+    typeof condition[4]==="boolean"&&(condition[4]||![0,4].includes(condition[1]))&&condition[5]===(reason!==undefined)&&(condition.length===6||[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].includes(condition[6])&&(condition[1]<4?condition[6]===0:true))))throw Error("foreign Private ownership condition");
+   // V8 retains its two original integers. The validated original masks above
+   // are exact short-circuit prefixes, so their site/flags plus the census index
+   // losslessly encode all six observed fields in V9: flags*18+censusIndex.
+   // Decoding a validated prefix is not reevaluating an ownership predicate.
+   if(b.metadata.first===null){
+    if(condition===null)b.metadata.first=[site,1,reason!==undefined];
+    else{const m=condition[2]*2048+condition[3],f=condition[1]*4+(condition[4]?2:0)+(condition[5]?1:0);
+     b.metadata.first=condition.length===7?[f*18+[0,1,3,4,42,50,74,82,106,114,129,131,170,178,202,210,234,242].indexOf(condition[6])]:[m,f];}
+   }
   }catch(error){invalidateMetadata(index);failures.push(error);}},
   bodyOperationFailure(index:number,owner:object,operation:Original,reason:unknown){try{const b=bodyScopes.get(index);if(!b?.metadata)return;
    if(b.failed)return;metadata(index,owner);const site=["guard","fetch","read"].indexOf(operation.kind)+1;if(!site)return;
@@ -448,7 +491,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  checkpoints.mark(caseIndex,"owner","fulfilled");
  if(row.control==="eof")checkpoints.bindBody(caseIndex,row,w.originals);
  if(caseIndex===0)checkpoints.bindBodyMetadata(caseIndex,row,isProxy);
- const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage());
+ const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage(),caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy}:undefined);
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
   if(signal){const observed=()=>{history.abort=++w.sequence;history.reason=signal.reason;};if(signal.aborted)observed();else{signal.addEventListener("abort",observed,{once:true});restores.push(()=>signal.removeEventListener("abort",observed));}}return history;};

@@ -21,6 +21,8 @@
 
 ## Unreleased
 
+- Distinguish recorded same-invocation guard acquisitions and retained context relations in Private transport-failure diagnostics, without changing ownership checks or inferring a runtime cause.
+
 - Identify the first original Private transport ownership condition or operand throw in the existing bounded failure capsule, preserving short-circuit evaluation, original errors and strict ownership gates.
 
 - Classify exact pinned-source wording from the already observed Private EOF result in a bounded diagnostic enum, without retaining message text or treating a wording match as error origin, cause or retirement proof.
