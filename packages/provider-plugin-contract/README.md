@@ -1,6 +1,6 @@
 # Provider plugin contract
 
-Data-only descriptors, conformance fixtures, package indexes, and product/offer declarations
+Data-only descriptors, conformance fixtures, package indexes, product/offer declarations, and authentication configuration
 for ClawRouter provider packages. No Worker, filesystem, network, or runtime
 dependencies. Validation does not authorize a provider or qualify its execution.
 
@@ -30,6 +30,10 @@ import {
   type ProviderPackageIndex,
   type ProviderProduct,
   type ProviderOfferDefinition,
+  type AuthScheme,
+  type AuthorizationConfig,
+  type RefreshConfig,
+  type CompiledGrantTransport,
 } from "@clawrouter/provider-plugin-contract";
 ```
 
@@ -42,3 +46,7 @@ manifest compiler, package loader, conformance runner, or provider assets.
 are static declarations. `ProviderGrantKind` retains the legacy `api_key`,
 `oauth`, and `subscription` credential classifications. Neither declares
 protocol support, admission, live entitlement, or an executable offer.
+
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` describe host configuration. They do not store runtime
+credentials, perform OAuth exchanges, refresh tokens, or certify setup support.

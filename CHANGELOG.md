@@ -23,6 +23,8 @@
 
 - Retain bounded Xiaomi control-witness and original ownership summaries before rejecting failed control responses, without changing retirement, producer or accounting acceptance. Preserve independent diagnostic failures and the existing relay request count.
 
+- Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
+
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
 - Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
