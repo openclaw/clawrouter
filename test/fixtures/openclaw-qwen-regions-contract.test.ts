@@ -7,6 +7,8 @@ import * as aiHost from "../../packages/ai/src/host.js";
 import * as openAITransport from "../../packages/ai/src/transports/openai-transport-shared.js";
 import { types as utilTypes } from "node:util";
 import { expect, it, vi } from "vitest";
+// Resolved only by the hash-bound, invocation-owned Qwen native config.
+import { sink as valueSink, contract as valueContract } from "virtual:clawrouter-qwen-values";
 import { makeInMemorySessionManager, makeModelSnapshotEntry } from "../../src/agents/embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
@@ -193,11 +195,13 @@ function createQwenLedger() {
     if (first.generation !== generation || !observer || observer.state !== "rejected" || !Object.is(observer.reason, first.reason)) {
       throw new Error("observer failure lacks settled original association");
     }
-    const { route, callable, ...facts } = first.facts;
+    const { route, callable, valueSnapshot, ...facts } = first.facts;
     const prior = { v: 2, kind: "observer_failure", case: id,
       parent: operations.indexOf(first.operation) + 1, observer: operations.indexOf(observer) + 1,
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
-    return qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
+    const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
+    return valueSnapshot === undefined ? checked
+      : qwenObserverRecord({ ...checked, v: 4, values: valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -331,6 +335,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   // ownership or infer native interception from a zero entry count.
   const contexts = new Map<object, Invocation>(), routes = new Map<Invocation, any>();
   let callable: ReturnType<typeof createQwenCallableWitness> | undefined;
+  let values: { bind: (invocation: Invocation) => void; snapshot: (invocation: Invocation | undefined) => unknown; close: () => unknown[] } | undefined;
   let unknownEntry = false;
   function passive(record: () => void) {
     try { record(); } catch (error) { ledger.recordingFailure(error); }
@@ -361,7 +366,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     const invocation = Object.freeze({ generation: ledger.generation, caller, fn, receiver, args: Object.freeze([...args]) });
     invocations.add(invocation);
     const context = Object.freeze({ invocation });
-    passive(() => { contexts.set(context, invocation); routes.set(invocation, { provider: [], guard: [], created: [], failed: 0, undefinedFailed: 0 }); callable?.bind(invocation); });
+    passive(() => { contexts.set(context, invocation); routes.set(invocation, { provider: [], guard: [], created: [], failed: 0, undefinedFailed: 0 }); callable?.bind(invocation); values?.bind(invocation); });
     return storage.run(context, () => Reflect.apply(fn, receiver, args)) as ReturnType<F>;
   }
   function guard(fn: Function, receiver: unknown, args: unknown[]) {
@@ -399,10 +404,10 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   function wrapFetch(original: Function) {
     return function (this: unknown, ...args: any[]) {
       let receipt: FetchReceipt | undefined, acquisition: Acquisition | undefined, acquisitionObserved = false, route: readonly number[] | null = null;
-      let callableInvocation: Invocation | undefined;
+      let callableInvocation: Invocation | undefined, valueInvocation: Invocation | undefined;
       try {
         const context = current(); acquisition = context.acquisition as Acquisition; acquisitionObserved = true;
-        passive(() => { route = routeAtFetch(context); if (callable) callableInvocation = contexts.get(context); });
+        passive(() => { route = routeAtFetch(context); if (callable) callableInvocation = contexts.get(context); if (values) valueInvocation = contexts.get(context); });
         const [input, init] = args;
         const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -427,7 +432,8 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
         } catch (error) {
           try { ledger.captureObserverFailure(pending, { site, seen, truthy, receipt: !!receipt,
             acquisition: acquisitionObserved ? !!acquisition : null, route,
-            ...(callable ? { callable: callable.snapshot(callableInvocation) } : {}) }, error); }
+            ...(callable ? { callable: callable.snapshot(callableInvocation) } : {}),
+            ...(values ? { valueSnapshot: () => values!.snapshot(valueInvocation) } : {}) }, error); }
           catch (reportError) { ledger.recordingFailure(reportError); }
           throw error;
         }
@@ -444,6 +450,10 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     for (const reader of ledger.readers) if (!reader.owner || !fetches.has(reader.owner as FetchReceipt) || reader.generation !== ledger.generation || reader.response !== (reader.owner as FetchReceipt).response) incomplete();
   }
   return { invoke, guard, wrapFetch, verify, acquisitions, fetches,
+    installValues(claim: (current: () => Invocation | undefined) => NonNullable<typeof values>) {
+      values = claim(() => contexts.get(storage.getStore()));
+    },
+    takeValueFailures() { return values?.close() ?? []; },
     installCallables(hostModule: object, hookModule: object, isProxy: (value: any) => boolean) {
       callable = createQwenCallableWitness(ledger, () => contexts.get(storage.getStore()), isProxy);
       callable.install(hostModule, hookModule);
@@ -472,6 +482,26 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 4) {
+    if (Object.keys(value).at(-1) !== "values") invalid();
+    const { values, ...prior } = value, checked = qwenObserverRecord({ ...prior, v: 3 });
+    if (values === null) return { ...checked, v: 4, values: null };
+    if (utilTypes.isProxy(values) || !Array.isArray(values)
+      || Reflect.ownKeys(values).join() !== "0,1,2,3,4,5,6,7,8,9,10,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(values);
+    if (fields.length.value !== 11 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const v = Array.from({ length: 11 }, (_, i) => fields[String(i)].value);
+    if (v[0] !== 1 || typeof v[1] !== "string" || !/^[a-f0-9]{64}$/.test(v[1])
+      || !v.slice(2).every(Number.isSafeInteger) || v[2] < 1 || v[2] > 206
+      || v[3] < 0 || v[3] > 8 || v[7] < 0 || v[7] > 8 || v[9] !== 3 || v[10] !== 0
+      || ![0, 11, 15].includes(v[4]) || ![0, 3].includes(v[8])
+      || (v[3] === 0) !== (v[4] === 0) || (v[7] === 0) !== (v[8] === 0)
+      || v[3] !== 0 && v[3] === v[7] || v[3] === 0 && v[7] === 0
+      || (v[4] === 0 ? v[5] !== 0 || v[6] !== 0
+        : v[5] !== (v[4] === 11 ? 1 : 2) || v[6] < 1 || v[6] > 9)
+      || v[4] === 11 && v[6] <= 2) invalid();
+    return { ...checked, v: 4, values: v };
   }
   if (value.v === 3) {
     if (Object.keys(value).at(-1) !== "callable") invalid();
@@ -632,6 +662,8 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
     witness.at("guard_hooks");
     ownership.installCallables(aiHost, openAITransport, utilTypes.isProxy);
+    ownership.installValues(current => valueSink.claim(valueContract,
+      qwenRegionCases().findIndex(candidate => candidate.id === row.id) + 1, current));
     vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: ownership.wrapFetch(undici.fetch) });
     vi.spyOn(transport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args: Parameters<typeof originalProviderGuard>) {
       ownership.providerEntry();
@@ -721,6 +753,9 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
   }
   try { await ledger.drain(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
   try { ledger.seal(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
+  // Append diagnostic faults only AFTER all original drains/restoration failures.
+  // No new original subscriptions, context propagation or ownership receipts.
+  for (const error of ownership.takeValueFailures()) { witness.failed(error); failures.push(error); }
   witness.at("report");
   for (const error of entryWitness.takeErrors()) { witness.failed(error); failures.push(error); }
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");

@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Add invocation-bound Qwen native value observations at two hash-pinned SDK callsites, using in-memory overlays and a bounded first-failure record. Preserve the SDK pin, original ownership and retirement assertions; missing or ambiguous observations remain unknown and do not establish a native fix or qualification.
+
 - Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
 
 - Attribute HTTP deadline fixture failures to source-owned case and operation/assertion boundaries after joining original work and attempting independent cleanup. Preserve original reasons and strict accounting; missing diagnostic markers remain unknown.

@@ -26,9 +26,30 @@ function count(value) {
   assert.ok(Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000, "bounded runner count");
 }
 export function validateBinding(binding) {
-  keys(binding, [...Object.keys(runnerContract), "fixtureSha256", "reporterSha256", "nonce"]);
+  keys(binding, [...Object.keys(runnerContract), "fixtureSha256", "reporterSha256", "nonce",
+    ...(Object.hasOwn(binding, "callsite") ? ["callsite"] : [])]);
   for (const [key, value] of Object.entries(runnerContract)) assert.equal(binding[key], value, "unsupported native runner plan");
   for (const key of ["fixtureSha256", "reporterSha256", "nonce"]) assert.match(binding[key], hashPattern);
+  if (Object.hasOwn(binding, "callsite")) {
+    const c = binding.callsite;
+    keys(c, ["schema", "nonce", "pin", "target", "helperSHA", "fixtureSHA", "contract", "virtualSHA", "sources", "configSHA"]);
+    assert.equal(c.schema, "qwen-value-overlay.v1");
+    assert.equal(c.nonce, binding.nonce); assert.equal(c.pin, binding.pin);
+    assert.equal(c.target, binding.target); assert.equal(c.fixtureSHA, binding.fixtureSha256);
+    for (const key of ["helperSHA", "contract", "virtualSHA", "configSHA"]) assert.match(c[key], hashPattern);
+    const originals = [
+      { path: "packages/ai/src/providers/openai-provider-client.ts", sha256: "0c049068171de83e25e8c12cbbe9c24ad984280776ed47f3554e7beb50997e41" },
+      { path: "src/agents/provider-transport-dispatcher-pool.ts", sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" },
+    ];
+    assert.ok(Array.isArray(c.sources) && c.sources.length === 2);
+    c.sources.forEach((row, index) => {
+      keys(row, ["path", "sha256", "outputSHA"]);
+      assert.equal(row.path, originals[index].path); assert.equal(row.sha256, originals[index].sha256);
+      assert.match(row.outputSHA, hashPattern);
+    });
+    assert.equal(c.contract, sha256(JSON.stringify({ schema: c.schema, nonce: c.nonce, pin: c.pin,
+      helperSHA: c.helperSHA, fixtureSHA: c.fixtureSHA, originals })), "worker contract/nonce binding");
+  }
   return binding;
 }
 
@@ -159,6 +180,16 @@ export default class NativeRunnerReporter {
     this.#binding = validateBinding(JSON.parse(plan.toString("utf8")));
     assert.equal(sha256(readFileSync(fileURLToPath(import.meta.url))), this.#binding.reporterSha256);
     assert.equal(sha256(readFileSync(join(this.#root, this.#binding.target))), this.#binding.fixtureSha256);
+    if (this.#binding.callsite) {
+      const directory = dirname(this.#file), c = this.#binding.callsite;
+      assert.equal(dirname(directory), this.#root, "owned explicit config root");
+      assert.equal(sha256(readFileSync(join(directory, "callsite-observer.mjs"))), c.helperSHA);
+      assert.equal(sha256(readPrivateFile(join(directory, "worker-values.mjs"), 65536)), c.virtualSHA);
+      assert.equal(sha256(readPrivateFile(join(directory, "qwen-callsite.config.ts"), 8192)), c.configSHA);
+      // Output hashes bind source supplied to Vite, not final emitted JS or
+      // activation. Activation is observed separately inside the worker sink.
+      for (const row of c.sources) assert.equal(sha256(readFileSync(join(this.#root, row.path))), row.sha256);
+    }
     const fd = openSync(this.#file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     let primaryFailed = false; let primaryError;
     try { this.#inode = fstatSync(fd).ino; }

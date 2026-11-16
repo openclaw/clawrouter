@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, dirname } from "node:path";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { types as utilTypes } from "node:util";
@@ -12,6 +13,9 @@ import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer, settleRunnerReport } from "./helpers/openclaw-consumer.mjs";
+import { createQwenValueSink, clientValueAnchor, guardValueAnchor, clientValueExpression, guardValueExpression,
+  qwenValueSources, qwenValueModule, qwenValueConfigText, qwenValueArgv, makeQwenValuePlan,
+  overlayQwenValueSource, createQwenValuePlugin, readQwenValueInput, qwenValuePin, qwenValueTarget } from "./helpers/openclaw-qwen-callsite-observer.mjs";
 import { parseRunnerReport, runnerContract, validateBinding } from "./helpers/openclaw-runner-reporter.mjs";
 
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -43,8 +47,9 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "db8ff570cf5dcf9f2059a6a984964c926ff38297f9b344e7eaa4fff6e51ed5f7";
-const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
+const qwenRunnerFixtureSha256 = "cc24b35b678e752ab8097cf2694fc46c943cd40ecb5b97ca1a41d0ca49ac1808";
+const qwenRunnerReporterSha256 = "351d2c199b6aa09124073b8c8b9e58d195abe1f462ac40e8a7b72c544476b40a";
+const qwenValueObserverSha256 = "5ef84f755d8e3082e46c9886b3a8c2cbf69fd745c4ef5f995cdca203b014d738";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -90,6 +95,7 @@ function projectQwenRunnerReport(original) {
   assert.ok(Array.isArray(packet.records) && packet.records[0]?.kind === "init");
   const binding = validateBinding(packet.records[0].binding);
   assert.equal(binding.fixtureSha256, qwenRunnerFixtureSha256); assert.equal(binding.reporterSha256, qwenRunnerReporterSha256);
+  if (binding.callsite) assert.equal(binding.callsite.helperSHA, qwenValueObserverSha256);
   // The helper already matched the private invocation nonce. Reuse its parser;
   // public records disclose neither that nonce nor any private report location.
   const bytes = Buffer.from(packet.records.map(record => JSON.stringify(record)).join("\n") + "\n");
@@ -101,7 +107,8 @@ function projectQwenRunnerReport(original) {
   const result = [
     { kind: "runner_binding", observed: true, pin: sourceHead, target: runnerContract.target,
       fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256,
-      reportBytes: checked.bytes, reportSha256: checked.sha256 },
+      reportBytes: checked.bytes, reportSha256: checked.sha256,
+      ...(binding.callsite ? { valueContract: binding.callsite.contract, overlayConfigSHA: binding.callsite.configSHA } : {}) },
     { kind: "runner_summary", status: checked.complete ? "complete" : "partial", complete: checked.complete,
       phases: checked.records.filter(record => record.kind === "phase").map(record => ({ phase: record.phase, count: record.count })),
       readyCallbacks: end?.ready ?? callbacks?.ready ?? 0, resultCallbacks: end?.results ?? callbacks?.results ?? 0,
@@ -308,7 +315,15 @@ function createQwenFailureRelay() {
       failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }, ...(runner ?? qwenUnobservedRunner("unobserved")), status()];
     // Reserve the witness for the same first failed case atomically with entry,
     // completion and helper/runner summaries. Absence conveys no local proof.
-    if (firstFailed && observerFailures.has(firstFailed.case)) essential.push(JSON.parse(observerFailures.get(firstFailed.case)));
+    if (firstFailed && observerFailures.has(firstFailed.case)) {
+      const observer = JSON.parse(observerFailures.get(firstFailed.case));
+      if (observer.v === 4 && observer.values !== null) {
+        const binding = runner?.find(record => record.kind === "runner_binding");
+        // Missing/foreign actual reporter binding never admits a worker claim.
+        if (!binding?.observed || binding.valueContract !== observer.values[1]) observer.values = null;
+      }
+      essential.push(observer);
+    }
     const room = 9 - essential.length, result = [...essential, ...failures.slice(0, room)];
     if (failures.length > room) result.push({ kind: "overflow", omitted: failures.length - room });
     const commands = result.map(qwenBoundaryAnnotation);
@@ -1802,7 +1817,7 @@ test("registered Qwen regional SDK through shipping Worker and SQLite", { skip: 
     await readControl(f, "/fixture/setup", relay.record);
     await relay.runChild(sink => runOpenClawConsumer(sink, { source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT, sourceHead, fixture, testPath: "extensions/qwen/worker-regions-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_SDK_SOURCE_HEAD: sourceHead, QWEN_API_KEY: "synthetic-poison-client" },
-      runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, onReport: relay.runnerReport } }));
+      runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, valueObserverSha256: qwenValueObserverSha256, onReport: relay.runnerReport } }));
   }, [{ phase: "worker", run: async report => {
     if (!f) return;
     const failures = [];
@@ -1860,3 +1875,380 @@ test("shipping regional Worker rejects missing, empty, foreign and invalid selec
 });
 
 export { routerScript, upstreamScript, qwenRegionCases, createQwenLedger, startFixture, readControl, assertProof };
+
+// Execute the emitted expressions, not a second implementation. Native remains
+// separately gated; these controls need only built-in modules and fixture code.
+function qwenValueHarness(currentOverride) {
+  const contract = "a".repeat(64), invocation = Object.freeze({});
+  const sink = createQwenValueSink(contract);
+  sink.activate(1, contract); sink.activate(2, contract);
+  const claim = sink.claim(contract, 1, currentOverride ?? (() => invocation));
+  claim.bind(invocation);
+  return { contract, invocation, sink, claim };
+}
+const qwenClientExpression = expression => new Function("__qwenValues", "env", `
+  with (env) {
+    return new OpenAI({
+      apiKey: apiKey, baseURL: baseURL, defaultHeaders: defaultHeaders,
+      fetch: hook(${expression}, onResponse, model),
+    });
+  }
+`);
+const qwenGuardExpression = expression => new Function("__qwenValues", "env", `with (env) { return ${expression}; }`);
+function qwenCaught(run) {
+  try { return { failed: false, value: run() }; }
+  catch (reason) { return { failed: true, reason }; }
+}
+
+test("Qwen value expressions preserve constructor, hook, getter, receiver and nullish order", () => {
+  for (const value of [undefined, null, false, true, 0, -0, NaN, 1, "", "x", 0n, Symbol("value"), {}, () => {}]) {
+    const fallback = Object.freeze({});
+    const exercise = observed => {
+      const h = qwenValueHarness(), trace = [], model = {};
+      const host = { get buildModelFetch() {
+        trace.push("build_get");
+        return function (received) { trace.push("build_call"); assert.equal(this, host); assert.equal(received, model); return value; };
+      } };
+      const env = {
+        get OpenAI() { trace.push("constructor_get"); return function (options) { trace.push("constructor_call"); return options; }; },
+        get apiKey() { trace.push("apiKey"); return "synthetic"; },
+        get baseURL() { trace.push("baseURL"); return undefined; },
+        get defaultHeaders() { trace.push("headers"); return undefined; },
+        get hook() { trace.push("hook_get"); return function (selected, response, received) {
+          trace.push("hook_call"); assert.equal(this, env); assert.equal(received, model); return selected;
+        }; },
+        getAiTransportHost() { trace.push("lookup"); return host; }, model,
+        globalThis: { get fetch() { trace.push("fallback_get"); return fallback; } },
+        get onResponse() { trace.push("onResponse"); return undefined; },
+      };
+      const result = qwenClientExpression(observed ? clientValueExpression : clientValueAnchor)(h.sink, env);
+      assert.ok(Object.is(result.fetch, value == null ? fallback : value));
+      const record = h.claim.snapshot(h.invocation);
+      assert.deepEqual(h.claim.close(), []);
+      return { trace, record };
+    };
+    const original = exercise(false), observed = exercise(true);
+    assert.deepEqual(observed.trace, original.trace);
+    assert.deepEqual(observed.trace.slice(0, 5), ["constructor_get", "apiKey", "baseURL", "headers", "hook_get"]);
+    assert.equal(observed.trace.filter(v => v === "fallback_get").length, value == null ? 1 : 0);
+    assert.equal(observed.record[4], value == null ? 15 : 11);
+    assert.equal(observed.record[5], value == null ? 2 : 1);
+    assert.equal(observed.record[10], 0);
+  }
+});
+
+test("Qwen original noncallables, throws and promises survive value observation", () => {
+  const reasons = [undefined, null, false, 0, -0, NaN, "", Symbol("failure"), new Error("synthetic")];
+  for (const reason of reasons) for (const where of ["lookup", "build_get", "build_call", "fallback", "guard"]) {
+    const run = observed => {
+      const h = qwenValueHarness(); let called = 0;
+      const host = { get buildModelFetch() {
+        if (where === "build_get") throw reason;
+        return () => { called++; if (where === "build_call") throw reason; return undefined; };
+      } };
+      const env = { OpenAI: function (v) { return v; }, apiKey: "", baseURL: "", defaultHeaders: {},
+        hook: v => v, onResponse: undefined, model: {},
+        getAiTransportHost() { if (where === "lookup") throw reason; return host; },
+        globalThis: { get fetch() { if (where === "fallback") throw reason; return undefined; } },
+        options: {}, getProviderTransportDispatcherPool: () => ({}),
+        fetchWithSsrFGuard() { throw reason; } };
+      const result = qwenCaught(() => where === "guard"
+        ? qwenGuardExpression(observed ? guardValueExpression : guardValueAnchor)(h.sink, env)
+        : qwenClientExpression(observed ? clientValueExpression : clientValueAnchor)(h.sink, env));
+      assert.equal(result.failed, true); assert.ok(Object.is(result.reason, reason));
+      assert.deepEqual(h.claim.close(), []);
+      return called;
+    };
+    assert.equal(run(true), run(false));
+  }
+  for (const noncallable of [undefined, null, false, 0, {}, "x"]) {
+    const h = qwenValueHarness(), model = {};
+    const env = { OpenAI: function (v) { return v; }, apiKey: "", baseURL: "", defaultHeaders: {},
+      hook: v => v, onResponse: undefined, model, globalThis: {},
+      getAiTransportHost: () => ({ buildModelFetch: noncallable }) };
+    for (const expression of [clientValueAnchor, clientValueExpression]) {
+      const result = qwenCaught(() => qwenClientExpression(expression)(h.sink, env));
+      assert.equal(result.failed, true); assert.ok(result.reason instanceof TypeError);
+    }
+  }
+  let subscriptions = 0;
+  const original = { get then() { subscriptions++; throw new Error("must not subscribe"); } };
+  const h = qwenValueHarness(), env = { options: {}, getProviderTransportDispatcherPool: () => ({}),
+    fetchWithSsrFGuard: () => original };
+  assert.equal(qwenGuardExpression(guardValueExpression)(h.sink, env), original);
+  assert.equal(subscriptions, 0); assert.equal(h.claim.snapshot(h.invocation)[8], 3);
+  assert.deepEqual(h.claim.close(), []);
+});
+
+test("Qwen dispatcher callee, spread, pool and receiver order remains original", () => {
+  const run = observed => {
+    const h = qwenValueHarness(), trace = [], pool = {}, promise = Promise.resolve("synthetic");
+    const env = {
+      get fetchWithSsrFGuard() { trace.push("callee_get"); return function (options) {
+        trace.push("guard_call"); assert.equal(this, env); assert.equal(options.dispatcherPool, pool); return promise;
+      }; },
+      get options() { trace.push("options_get"); return { get url() { trace.push("spread_url"); return "synthetic"; },
+        get dispatcherPool() { trace.push("spread_old_pool"); return null; } }; },
+      get getProviderTransportDispatcherPool() { trace.push("pool_get"); return () => { trace.push("pool_call"); return pool; }; },
+    };
+    const result = qwenGuardExpression(observed ? guardValueExpression : guardValueAnchor)(h.sink, env);
+    assert.equal(result, promise); assert.deepEqual(h.claim.close(), []);
+    return trace;
+  };
+  assert.deepEqual(run(true), run(false));
+  assert.deepEqual(run(true), ["callee_get", "options_get", "spread_url", "spread_old_pool", "pool_get", "pool_call", "guard_call"]);
+});
+
+test("Qwen evaluation entry catches hidden reentry before the first outer tap", () => {
+  const h = qwenValueHarness(), returned = Promise.resolve("inner");
+  const run = qwenGuardExpression(guardValueExpression);
+  const inner = { options: {}, getProviderTransportDispatcherPool: () => ({}), fetchWithSsrFGuard: () => returned };
+  let innerResult, outerCalls = 0;
+  const outer = { get options() {
+    return { get url() { innerResult = run(h.sink, inner); throw undefined; } };
+  }, getProviderTransportDispatcherPool: () => ({}), fetchWithSsrFGuard() { outerCalls++; } };
+  const failure = qwenCaught(() => run(h.sink, outer));
+  assert.equal(failure.failed, true); assert.equal(failure.reason, undefined);
+  assert.equal(innerResult, returned); assert.equal(outerCalls, 0);
+  assert.equal(h.claim.snapshot(h.invocation), null); assert.deepEqual(h.claim.close(), []);
+  // Both finally blocks retired: a distinct next case records normally.
+  const next = {}, claim = h.sink.claim(h.contract, 2, () => next); claim.bind(next);
+  assert.equal(run(h.sink, inner), returned); assert.equal(claim.snapshot(next)[8], 3);
+  assert.deepEqual(claim.close(), []);
+  for (const site of ["lookup", "build"]) {
+    const x = qwenValueHarness(); let nested = false;
+    const runClient = qwenClientExpression(clientValueExpression);
+    const env = { OpenAI: function (v) { return v; }, apiKey: "", baseURL: "", defaultHeaders: {},
+      hook: v => v, onResponse: undefined, model: {}, globalThis: {},
+      getAiTransportHost() {
+        if (!nested && site === "lookup") { nested = true; runClient(x.sink, env); throw undefined; }
+        return { buildModelFetch() {
+          if (!nested && site === "build") { nested = true; runClient(x.sink, env); throw undefined; }
+          return false;
+        } };
+      } };
+    const result = qwenCaught(() => runClient(x.sink, env));
+    assert.equal(result.failed, true); assert.equal(result.reason, undefined);
+    assert.equal(x.claim.snapshot(x.invocation), null); assert.deepEqual(x.claim.close(), []);
+  }
+});
+
+test("Qwen sink faults are nonthrowing and retained after original falsey failures", async () => {
+  for (const failingRead of [1, 4]) {
+    let reads = 0, calls = 0;
+    const invocation = {}, h = qwenValueHarness(() => { if (++reads === failingRead) throw undefined; return invocation; });
+    h.claim.bind(invocation);
+    const returned = Object.freeze({});
+    const env = { options: {}, getProviderTransportDispatcherPool: () => ({}), fetchWithSsrFGuard() { calls++; return returned; } };
+    assert.equal(qwenGuardExpression(guardValueExpression)(h.sink, env), returned);
+    assert.equal(calls, 1); assert.equal(h.claim.snapshot(invocation), null);
+    const errors = h.claim.close(); assert.deepEqual(errors, [undefined]);
+    const failure = await finish(() => { throw false; }, [() => { throw new AggregateError(errors, "synthetic reporting"); }])
+      .then(() => assert.fail("must reject"), error => error);
+    assert.equal(failure.errors[0], false); assert.deepEqual(failure.errors[1].errors, [undefined]);
+  }
+  const missing = createQwenValueSink("a".repeat(64)), result = {};
+  assert.equal(missing.result(missing.begin(2), result), result); missing.finish(null);
+  const foreign = qwenValueHarness(), token = foreign.sink.begin(2);
+  assert.equal(foreign.sink.argument({}, result), result); foreign.sink.finish(token);
+  assert.equal(foreign.claim.snapshot(foreign.invocation), null); foreign.claim.close();
+});
+
+test("Qwen nonce activation, duplicate, late and interleaved evaluations stay UNKNOWN", () => {
+  for (const corrupt of ["activation", "foreign", "duplicate", "late", "interleaved", "partial"]) {
+    const h = qwenValueHarness(), value = {};
+    if (corrupt === "activation") h.sink.activate(1, h.contract);
+    if (corrupt === "foreign") h.sink.activate(2, "b".repeat(64));
+    const token = h.sink.begin(2);
+    h.sink.argument(token, value);
+    if (corrupt !== "partial") h.sink.result(token, value);
+    if (corrupt === "interleaved") { const inner = h.sink.begin(1); h.sink.finish(inner); }
+    h.sink.finish(token);
+    if (corrupt === "duplicate") { const extra = h.sink.begin(2); h.sink.finish(extra); }
+    if (corrupt === "late") h.sink.result(token, value);
+    assert.equal(h.claim.snapshot(h.invocation), null); h.claim.close();
+  }
+});
+
+test("Qwen value taps do not inspect objects or add ledger operations, ticks or drains", async () => {
+  const run = async observed => {
+    const h = qwenValueHarness(), ledger = createQwenLedger(), trace = [];
+    let propertyReads = 0, subscriptions = 0;
+    const value = new Proxy({}, { get() { propertyReads++; throw undefined; }, getPrototypeOf() { throw undefined; } });
+    // Construct the promise without assimilating the hostile value.
+    const pending = Promise.resolve("synthetic");
+    const then = pending.then;
+    Object.defineProperty(pending, "then", { value: function (...args) { subscriptions++; return Reflect.apply(then, this, args); } });
+    const env = { options: {}, getProviderTransportDispatcherPool: () => value,
+      fetchWithSsrFGuard() { trace.push("guard"); return pending; } };
+    const result = qwenGuardExpression(observed ? guardValueExpression : guardValueAnchor)(h.sink, env);
+    assert.equal(result, pending);
+    const original = ledger.observe("caller", result);
+    ledger.follow("caller_observer", original, [() => { trace.push("observer"); }]);
+    queueMicrotask(() => trace.push("tick"));
+    await ledger.drain(); ledger.restore(); await ledger.drain(); ledger.seal();
+    assert.deepEqual(h.claim.close(), []);
+    return { trace, propertyReads, subscriptions, operations: ledger.operations.map(row => [row.kind, row.state]),
+      observers: ledger.observers.length, readers: ledger.readers.length };
+  };
+  assert.deepEqual(await run(true), await run(false));
+});
+
+test("Qwen v4 value grammar stays bounded and rejects forged associations", () => {
+  const base = { v: 3, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1] };
+  for (const branch of [1, 2]) for (const type of [1,2,3,4,5,6,7,8,9]) {
+    if (branch === 1 && type <= 2) continue;
+    const row = { ...base, v: 4, values: [1, "a".repeat(64), 206, 7, branch === 1 ? 11 : 15, branch, type, 8, 3, 3, 0] };
+    assert.deepEqual(qwenObserverRecord(row), row);
+    assert.ok(Buffer.byteLength("QWEN_OBSERVER_V1 " + JSON.stringify(row)) <= 768);
+    assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(row)) <= 768);
+  }
+  for (const change of [v => v[10] = 1, v => v[9] = 1, v => v[4] = 3, v => v[7] = v[3],
+    v => v[2] = 207, v => v[1] = "foreign", v => v.push(0), v => v.length = 12, v => v.length = 0xffffffff]) {
+    const values = [1, "a".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0]; change(values);
+    const malformed = { ...base, v: 4, values };
+    assert.throws(() => qwenObserverRecord(malformed));
+    assert.throws(() => qwenBoundaryAnnotation(qwenObserverRecord(malformed)));
+  }
+  let reads = 0;
+  const values = new Proxy([], { ownKeys() { reads++; throw undefined; } });
+  assert.throws(() => qwenObserverRecord({ ...base, v: 4, values })); assert.equal(reads, 0);
+});
+
+const qwenValueOriginals = [
+  "import OpenAI from \"openai\";\nimport { getAiTransportHost } from \"../host.js\";\nimport {\n  resolveOpenAIClientBaseUrl,\n  withOpenAIErrorResponseHook,\n} from \"../transports/openai-transport-shared.js\";\nimport type { Model, ModelRequestHeaders, StreamOptions } from \"../types.js\";\nimport { isCloudflareProvider, resolveCloudflareBaseUrl } from \"./cloudflare.js\";\n\nexport function createOpenAIProviderClient(\n  model: Model<\"openai-completions\" | \"openai-responses\">,\n  apiKey: string,\n  headers: ModelRequestHeaders,\n  optionsHeaders?: ModelRequestHeaders,\n  onResponse?: StreamOptions[\"onResponse\"],\n): OpenAI {\n  // Merge options headers last so they can override defaults\n  if (optionsHeaders) {\n    Object.assign(headers, optionsHeaders);\n  }\n\n  const defaultHeaders =\n    model.provider === \"cloudflare-ai-gateway\"\n      ? {\n          ...headers,\n          Authorization: headers.Authorization ?? null,\n          \"cf-aig-authorization\": `Bearer ${apiKey}`,\n        }\n      : headers;\n\n  const baseUrl = isCloudflareProvider(model.provider)\n    ? resolveCloudflareBaseUrl(model)\n    : model.baseUrl;\n  return new OpenAI({\n    apiKey,\n    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),\n    dangerouslyAllowBrowser: true,\n    defaultHeaders,\n    maxRetries: 0,\n    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.\n    fetch: withOpenAIErrorResponseHook(\n      getAiTransportHost().buildModelFetch(model) ?? globalThis.fetch,\n      onResponse,\n      model,\n    ),\n  });\n}\n",
+  "import {\n  fetchWithSsrFGuard,\n  type GuardedFetchOptions,\n  type GuardedFetchResult,\n} from \"../infra/net/fetch-guard.js\";\nimport { PinnedDispatcherPool } from \"../infra/net/pinned-dispatcher-pool.js\";\nimport { setProviderTransportDispatcherPoolActive } from \"./provider-runtime-lifecycle.js\";\n\nlet activePool: PinnedDispatcherPool | undefined;\n\n/** Reuse provider connections without exposing their lifecycle-owned pool to callers. */\nexport function fetchWithProviderHttpGuard(\n  options: Omit<GuardedFetchOptions, \"dispatcherPool\">,\n): Promise<GuardedFetchResult> {\n  return fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  });\n}\n\n/** Returns the current process-lifecycle provider dispatcher pool generation. */\nfunction getProviderTransportDispatcherPool(): PinnedDispatcherPool {\n  if (!activePool) {\n    activePool = new PinnedDispatcherPool();\n    setProviderTransportDispatcherPoolActive(true);\n  }\n  return activePool;\n}\n\n/** Closes the current generation while allowing an in-process Gateway restart to create another. */\nexport async function closeProviderTransportDispatcherPool(): Promise<void> {\n  const pool = activePool;\n  if (pool) {\n    await pool.closeAll();\n    if (activePool === pool) {\n      activePool = undefined;\n      setProviderTransportDispatcherPoolActive(false);\n    }\n  }\n}\n"
+].map(text => Buffer.from(text));
+const qwenValueHash = bytes => createHash("sha256").update(bytes).digest("hex");
+
+test("Qwen loader binds exact originals, overlay inputs, cache nonce and native argv", () => {
+  const helperBytes = readFileSync(new URL("./helpers/openclaw-qwen-callsite-observer.mjs", import.meta.url));
+  const fixtureSHA = qwenRunnerFixtureSha256, helperSHA = qwenValueHash(helperBytes);
+  const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA, fixtureSHA, originals: qwenValueOriginals });
+  assert.equal(bundle.plan.pin, sourceHead); assert.equal(bundle.plan.target, runnerContract.target);
+  for (let i = 0; i < 2; i++) {
+    assert.equal(qwenValueHash(qwenValueOriginals[i]), qwenValueSources[i].sha256);
+    assert.equal(qwenValueHash(bundle.outputs[i]), bundle.plan.sources[i].outputSHA);
+    assert.equal(bundle.outputs[i].split(i ? guardValueExpression : clientValueExpression).length, 2);
+    assert.throws(() => overlayQwenValueSource(i + 1, Buffer.concat([qwenValueOriginals[i], Buffer.from(" ")]), bundle.plan.contract));
+  }
+  const second = makeQwenValuePlan({ nonce: "b".repeat(64), helperSHA, fixtureSHA, originals: qwenValueOriginals });
+  assert.notEqual(second.plan.contract, bundle.plan.contract); assert.notEqual(second.configSHA, bundle.configSHA);
+  assert.notEqual(second.plan.virtualSHA, bundle.plan.virtualSHA);
+  assert.ok(bundle.config.includes('import base from "../test/vitest/vitest.extension-providers.config.ts"'));
+  assert.ok(bundle.config.includes('export default { ...base, plugins: [...(base.plugins ?? []), plugin] }'));
+  assert.equal(bundle.config, qwenValueConfigText(bundle.plan));
+  const directory = "/fixture/sdk/.clawrouter-runner-report-control";
+  const reporters = ["--reporter=default", "--reporter=" + directory + "/reporter.mjs", "--outputFile=" + directory + "/report.jsonl"];
+  assert.deepEqual(qwenValueArgv(directory, runnerContract.target, reporters), [
+    "scripts/run-vitest.mjs", "run", "--config", directory + "/qwen-callsite.config.ts",
+    runnerContract.target, "--maxWorkers=1", ...reporters]);
+  assert.throws(() => qwenValueArgv(directory, "extensions/foreign/test.ts", reporters));
+  assert.throws(() => qwenValueArgv("/fixture/foreign", runnerContract.target, reporters));
+  const binding = { ...runnerContract, fixtureSha256: fixtureSHA, reporterSha256: qwenRunnerReporterSha256,
+    nonce: "a".repeat(64), callsite: { ...bundle.plan, configSHA: bundle.configSHA } };
+  assert.equal(validateBinding(binding), binding);
+  assert.ok(Buffer.byteLength(JSON.stringify(binding)) < 4096);
+  for (const mutate of [c => c.nonce = "b".repeat(64), c => c.sources.reverse(),
+    c => c.sources[0].outputSHA = "bad", c => c.extra = true, c => c.target = "foreign"]) {
+    const changed = structuredClone(binding); mutate(changed.callsite); assert.throws(() => validateBinding(changed));
+  }
+
+  // Exercise the actual plugin function with private input reads replaced by a
+  // closed fake filesystem. No native imports, loaders or filesystem effects.
+  const files = new Map([
+    [directory + "/callsite-observer.mjs", helperBytes],
+    [directory + "/worker-values.mjs", Buffer.from(bundle.virtualSource)],
+    [directory + "/qwen-callsite.config.ts", Buffer.from(bundle.config)],
+    ...qwenValueSources.map((row, i) => ["/fixture/sdk/" + row.path, qwenValueOriginals[i]]),
+  ]);
+  const fakeRead = (path, expected, mode) => {
+    assert.ok(files.has(path)); const bytes = files.get(path);
+    assert.equal(qwenValueHash(bytes), expected);
+    if (path.startsWith(directory)) assert.ok(mode === 0o400 || mode === 0o600);
+    return bytes;
+  };
+  const pluginFactory = new Function("assert", "fileURLToPath", "realpathSync", "resolve", "dirname", "join",
+    "readQwenValueInput", "qwenValueSources", "hash", "qwenValuePin", "qwenValueTarget", "validHash",
+    "overlayQwenValueSource", "qwenValueConfigText", "qwenValueModule",
+    "return (" + createQwenValuePlugin.toString() + ");")(
+      assert, url => new URL(url).pathname, value => value.replace(/\/$/, ""), resolve, dirname, join,
+      fakeRead, qwenValueSources, qwenValueHash, qwenValuePin, qwenValueTarget,
+      value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value),
+      overlayQwenValueSource, qwenValueConfigText, qwenValueModule);
+  const plugin = pluginFactory(new URL("file:///fixture/sdk/"), new URL("file://" + directory + "/"), bundle.plan);
+  let cacheKey; plugin.configureVitest({ defineCacheKeyGenerator(fn) { cacheKey = fn({ id: "any-dependency" }); } });
+  assert.match(cacheKey, /^[a-f0-9]{64}$/);
+  const first = "/fixture/sdk/" + qwenValueSources[0].path;
+  const virtual = plugin.resolveId(qwenValueModule, first);
+  assert.equal(plugin.load(virtual).code, bundle.virtualSource);
+  assert.equal(plugin.load(first).code, bundle.outputs[0]);
+  assert.throws(() => plugin.resolveId(qwenValueModule, "/fixture/sdk/foreign.ts"));
+  assert.throws(() => plugin.load(first + "?foreign"));
+  assert.throws(() => plugin.load("\0clawrouter:qwen-values:" + "b".repeat(64)));
+  files.set(directory + "/worker-values.mjs", Buffer.from("foreign"));
+  assert.throws(() => pluginFactory(new URL("file:///fixture/sdk/"), new URL("file://" + directory + "/"), bundle.plan));
+});
+
+test("Qwen private input custody and falsey read/close faults are independent", () => {
+  const bytes = Buffer.from("synthetic"), digest = qwenValueHash(bytes);
+  for (const fault of ["none", "read", "close", "both", "mode", "link", "owner", "changed", "oversize", "hash"]) {
+    const events = [], original = undefined, retained = false;
+    let statCount = 0;
+    const stat = () => {
+      statCount++;
+      return { isFile: () => true, mode: fault === "mode" ? 0o644 : 0o600,
+        uid: fault === "owner" ? 2 : 1, nlink: fault === "link" ? 2 : 1, dev: 1, ino: 1,
+        size: fault === "oversize" ? 65537 : bytes.length, mtimeMs: fault === "changed" ? statCount : 1, ctimeMs: 1 };
+    };
+    const reader = new Function("openSync", "constants", "fstatSync", "assert", "Buffer", "readSync",
+      "closeSync", "hash", "process", "return (" + readQwenValueInput.toString() + ");")(
+        () => { events.push("open"); return 1; }, { O_RDONLY: 1, O_NOFOLLOW: 2, O_NONBLOCK: 4 }, stat, assert, Buffer,
+        (_fd, output, offset) => {
+          events.push("read"); if (fault === "read" || fault === "both") throw original;
+          if (offset === bytes.length) return 0; bytes.copy(output, offset); return bytes.length;
+        },
+        () => { events.push("close"); if (fault === "close" || fault === "both") throw retained; },
+        qwenValueHash, { getuid: () => 1 });
+    const result = qwenCaught(() => reader("owned", fault === "hash" ? "0".repeat(64) : digest, 0o600));
+    assert.equal(events.filter(v => v === "close").length, 1);
+    if (fault === "none") assert.deepEqual(result.value, bytes);
+    else assert.equal(result.failed, true);
+    if (fault === "both") assert.deepEqual(result.reason.errors, [original, retained]);
+    if (fault === "read") assert.equal(result.reason, original);
+    if (fault === "close") assert.equal(result.reason, retained);
+  }
+});
+
+test("Qwen value claims travel only with the original first failed observer and matching runner", async () => {
+  const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
+    fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
+  for (const match of [true, false]) {
+    const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
+    h.relay.runnerReport(qwenRunnerPacket("complete", records => {
+      records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
+    }));
+    const witness = h.witness.enter(rows[0].id), counts = { operations: 2, rejected: 1, pending: 0 };
+    witness.at("owned_drain"); witness.failed(undefined);
+    h.relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "fetch_observer", "failed", counts)) + "\n");
+    const record = { v: 4, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+      site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+      failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+      values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0] };
+    h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
+    for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
+    const packet = h.relay.output("failed"), projected = packet.find(row => row.kind === "observer_failure");
+    assert.deepEqual(projected.values, match ? record.values : null);
+    assert.equal(packet.length, 10); assert.equal(h.relay.complete(), false);
+    const commands = packet.map(qwenBoundaryAnnotation);
+    assert.ok(commands.every(line => Buffer.byteLength(line) <= 768));
+    assert.ok(Buffer.byteLength(commands.join("\n")) <= 8192);
+  }
+  const successful = entryHarness(); successful.witness.moduleEvaluated(); successful.register();
+  const witness = successful.witness.enter(rows[0].id), counts = { operations: 2, rejected: 0, pending: 0 };
+  successful.relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "caller", "passed", counts)) + "\n");
+  witness.complete(counts);
+  assert.equal(successful.relay.output("failed").some(row => row.kind === "observer_failure"), false);
+});
