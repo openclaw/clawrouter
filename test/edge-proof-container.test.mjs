@@ -3233,7 +3233,7 @@ async function ownedLedgerFactory(overrides={},supplied) {
     setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},setInterval:(fn,ms)=>{const t={fn,ms};intervals.push(t);return t;},
     clearTimeout:t=>calls.push(["clearTimeout",t]),clearInterval:t=>calls.push(["clearInterval",t]),...overrides};
   for(const name of ["readdir","readFile","spawn","setTimeout","setInterval","clearTimeout","clearInterval","refuse","createHash"])assert.equal(typeof bindings[name],"function",name);
-  const api=new Function(...Object.keys(bindings),body+"return {privateProcesses,runOwnedProcess,createOwnedProcessLedger,requireProcessSuccess};")(...Object.values(bindings));
+  const api=new Function(...Object.keys(bindings),body+"return {privateProcesses,runOwnedProcess,createOwnedProcessLedger,requireProcessSuccess,bindCensusControls,createCensusComparisonWitness};")(...Object.values(bindings));
   return {...api,bindings,fields,calls,timers,intervals,signals,child,environment,command,args};
 }
 test("owned ledger actual sampler preserves each original phase predicate and undefined failure",async()=>{
@@ -3245,7 +3245,7 @@ test("owned ledger actual sampler preserves each original phase predicate and un
     [{readdir:async()=>[{toString(){throw undefined;}}]},3,0,0,0],
     [{readFile:async()=>{throw undefined;}},4,0,0,0],
     [{readFile:async()=>({lastIndexOf(){throw undefined;}})},5,0,0,0],
-    [{Number:()=>{throw undefined;}},7,0,0,0],
+    [{readFile:async()=>({lastIndexOf:()=>0,slice:()=>({split:()=>{let reads=0;return {0:"S",19:"123",2:"12",get 1(){if(++reads===2)throw undefined;return "1";}};}})})},7,0,0,0],
     [{readFile:async()=>{throw{get code(){throw undefined;}};}},8,0,0,0],
   ];
   for(const [overrides,stage,leaf,seen,passed] of vectors){
@@ -3545,7 +3545,10 @@ test("stat ESRCH outside the original read stays fatal with the same reason and 
     if(phase==="directory")override.readdir=async()=>{throw reason;};
     if(phase==="path"){let conversions=0;override.readdir=async()=>[{toString(){if(++conversions===1)return"12";throw reason;}}];}
     if(phase==="shape")override.refuse=()=>{throw reason;};
-    if(phase==="row")override.Number=()=>{throw reason;};
+    if(phase==="row")override.readFile=async()=>{
+      reads++;let parentReads=0;
+      return {lastIndexOf:()=>0,slice:()=>({split:()=>({0:"S",19:"123",2:"12",get 1(){if(++parentReads===2)throw reason;return "1";}})})};
+    };
     const f=await ownedLedgerFactory(override),rec=f.createOwnedProcessLedger();let failed=false;
     try{await f.privateProcesses(rec);}catch(error){failed=true;assert.equal(error,reason);rec.error(2,error);}
     assert.ok(failed);assert.equal(rec.finish()[1][1],{directory:2,path:4,parse:5,shape:6,row:7}[phase]);assert.equal(getters,phase==="directory"?0:1);assert.equal(reads,["directory","path"].includes(phase)?0:1);
@@ -3691,6 +3694,119 @@ async function censusActualProcess(monitorRows,finalRows,{stdout="",reason,failF
 }
 const censusRow = (pid=12,start="123",state="S",parent=1,group=pid)=>({pid,start,state,parent,group});
 const censusDecode = n=>[n%16,(n>>4)&3,(n>>6)&3,(n>>8)&7,(n>>11)&3,(n>>13)&3,(n>>15)&3];
+// BEGIN proc-stat unavailable relationship regressions. Every proc read is fake.
+test("proc stat kernel unavailable pair retains the original row and all workload states",async()=>{
+  for(const state of censusStates){
+    const row=censusRow(12,"123",state,0,-1),f=await censusActualProcess([row],[row]),t=f.result.ownedCensus;
+    assert.deepEqual(f.result.remaining,[row]);assert.deepEqual(f.result.observed.get("12:123"),row);
+    assert.equal(f.result.errors.length,0);assert.deepEqual(f.result.observerErrors,[]);assert.deepEqual(f.result.ownedCode,[1,0,0]);
+    assert.deepEqual(t.slice(0,7),[1,1,7,1,1,0,0]);
+    assert.deepEqual(censusDecode(t[8][0]),[censusStates.indexOf(state)+1,0,0,0,0,0,0]);
+    assert.equal(t[7].reduce((a,b)=>a+b,0),1);validateFinalCensus(t,1,true,0,f.result.ownedTrace);
+    assert.throws(()=>f.requireProcessSuccess(f.result),error=>error instanceof AggregateError&&error.errors.length===1);
+    assert.equal(f.reads.length,2);assert.equal(f.calls.filter(r=>r[0]==="kill").length,0);
+  }
+});
+test("proc stat unavailable relationships never become historical unchanged comparisons",async()=>{
+  const known=censusRow(),unknown=censusRow(12,"123","S",0,-1);
+  for(const [prior,next,expected] of [
+    [unknown,known,[2,0,1,1,0,0,0]], [known,unknown,[2,0,0,0,0,0,0]], [unknown,unknown,[2,0,0,0,0,0,0]],
+    [unknown,censusRow(12,"124","Z",0,-1),[4,2,0,0,0,0,0]],
+    [unknown,censusRow(13,"125","R",0,-1),[1,3,0,0,0,0,0]],
+  ]){
+    const f=await censusActualProcess([prior],[next]);assert.deepEqual(censusDecode(f.result.ownedCensus[8][0]),expected);
+    assert.deepEqual([...f.result.observed.keys()],[prior.pid+":"+prior.start]);
+    validateFinalCensus(f.result.ownedCensus,1,true,0,f.result.ownedTrace);assert.throws(()=>f.requireProcessSuccess(f.result));
+  }
+  const f=await ownedLedgerFactory(),rec=f.createOwnedProcessLedger();
+  f.fields[1]="0";f.fields[2]="-1";rec.censusObserved(await f.privateProcesses(rec));
+  f.fields[1]="1";f.fields[2]="12";rec.censusObserved(await f.privateProcesses(rec));
+  rec.censusClose();rec.censusFinal();rec.censusResult(await f.privateProcesses(rec));
+  // A later, complete monitor observation can supply the subsequent comparison.
+  assert.deepEqual(censusDecode(rec.censusFinish()[8][0]),[2,1,1,1,1,1,1]);
+});
+test("proc stat only the exact unavailable pair survives strict shape and safe integer checks",async()=>{
+  const bad=[
+    ["12","0","-2"],["12","1","-1"],["12","-1","-1"],["12","00","-1"],
+    ["12","0","-01"],["12","0","-1\t"],["12","0","+1"],["12","0","1.0"],
+    ["12","0",""],["12","0","x"],["12","x","12"],
+    ["12","9007199254740992","12"],["12","0","9007199254740992"],["9007199254740992","0","-1"],
+  ];
+  for(const [name,parent,group] of bad){
+    let reads=0;const fields=Array(20).fill("0");fields[0]="S";fields[1]=parent;fields[2]=group;fields[19]="123";
+    const f=await ownedLedgerFactory({readdir:async()=>[name],readFile:async()=>{reads++;return name+" (inert) "+fields.join(" ");}}),rec=f.createOwnedProcessLedger();
+    let failed=false,reason;try{await f.privateProcesses(rec);}catch(error){failed=true;reason=error;}
+    assert.equal(failed,true,JSON.stringify([name,parent,group]));assert.ok(reason instanceof Error&&!(reason instanceof ReferenceError));
+    assert.match(reason.message,/private-process-state-unknown/);assert.equal(reads,1);
+    rec.error(2,reason);rec.request(1,"SIGTERM");rec.skipped();
+    const trace=rec.finish();assert.deepEqual(trace[1],[2,6,1,3,7,3,true]);assert.deepEqual(rec.code(),[1,1,14]);validateOwnedTrace(trace,1,[false,false]);
+  }
+  const f=await ownedLedgerFactory();f.fields[1]=f.fields[2]=String(Number.MAX_SAFE_INTEGER);
+  assert.equal((await f.privateProcesses())[0].group,Number.MAX_SAFE_INTEGER);
+});
+test("proc stat unavailable controls cannot be excluded or mint the start comparison witness",async()=>{
+  for(const role of ["reaper","coordinator"]){
+    const rows=[censusRow(1,"10","S",0,1),censusRow(2,"20","S",1,2)];
+    const target=rows[role==="reaper"?0:1];target.parent=0;target.group=-1;
+    const f=await ownedLedgerFactory({process:{platform:"linux",pid:2,ppid:1},readdir:async()=>["1","2"],readFile:async path=>{
+      const row=rows.find(row=>path===`/proc/${row.pid}/stat`),fields=Array(20).fill("0");
+      fields[0]=row.state;fields[1]=String(row.parent);fields[2]=String(row.group);fields[19]=row.start;
+      return row.pid+" (inert) "+fields.join(" ");
+    }}),controls=f.bindCensusControls({pid:1,parent:0,start:"10"},{pid:2,parent:1,start:"20"});
+    let observed=0;const witness=f.createCensusComparisonWitness(controls,role,()=>{observed++;});
+    let failed=false,reason;try{await f.privateProcesses(undefined,controls,witness.recorder);}catch(error){failed=true;reason=error;}
+    assert.equal(failed,true);assert.match(reason.message,/census-control-drift/);assert.equal(observed,0);
+    assert.throws(()=>witness.requireRejected(true,reason),error=>error===reason);
+    target.parent=role==="reaper"?0:1;target.group=target.pid;assert.deepEqual(await f.privateProcesses(undefined,controls),[]);
+    target.start="99";await assert.rejects(f.privateProcesses(undefined,controls),/census-control-drift/);
+  }
+});
+test("proc stat unavailable rows preserve held monitor joins and independent original failures",async()=>{
+  const row=censusRow(12,"123","Z",0,-1),held=await censusActualProcess([row],[row],{held:true});
+  assert.equal(held.result.closed,true);assert.equal(held.result.ownedCensus[2],7);assert.equal(held.reads.length,2);
+  for(const reason of [new Error("inert original"),undefined]){
+    const child=await censusActualProcess([row],[row],{hasChildError:true,childError:reason});
+    assert.deepEqual(child.result.errors,[reason]);assert.equal(child.result.ownedTrace[1][0],8);assert.throws(()=>child.requireProcessSuccess(child.result));
+    const final=await censusActualProcess([row],[row],{failFinal:true,reason});
+    assert.deepEqual(final.result.errors,[reason]);assert.equal(final.result.remaining,null);
+    validateFinalCensus(final.result.ownedCensus,null,true,1,final.result.ownedTrace);
+    const monitor=await censusActualProcess([row],[row],{failMonitor:true,monitorReason:reason,expectedStops:1});
+    assert.deepEqual(monitor.result.errors,[reason]);assert.deepEqual(monitor.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);
+    assert.equal(censusDecode(monitor.result.ownedCensus[8][0])[1],0);
+  }
+  const fault=await censusActualProcess([row],[row],{fault:true});
+  assert.equal(fault.result.remaining.length,1);assert.ok(fault.result.observerErrors.includes(undefined));
+  assert.equal(fault.result.ownedCensus[3],null);assert.equal(fault.result.ownedCensus[9],3);assert.throws(()=>fault.requireProcessSuccess(fault.result));
+});
+test("proc stat unavailable rows retain neighbors bounds ambiguity and foreign observation rejection",async()=>{
+  const row=censusRow(12,"123","S",0,-1),neighbors=[row,censusRow(13,"124","Z"),censusRow(14,"125","R")];
+  const f=await censusActualProcess([],neighbors);assert.deepEqual(f.result.remaining,neighbors);
+  assert.deepEqual(f.result.ownedCensus.slice(3,6),[3,2,1]);assert.equal(f.result.ownedCensus[7].reduce((a,b)=>a+b,0),3);
+  const many=Array.from({length:513},(_,i)=>censusRow(i+2,String(i),"S",0,-1));
+  const bounded=await censusActualProcess([],many);assert.deepEqual(bounded.result.ownedCensus.slice(3,6),[513,2,511]);
+  assert.equal(bounded.result.ownedCensus[9],2);validateFinalCensus(bounded.result.ownedCensus,513,true,0,bounded.result.ownedTrace);
+  const capacity=await censusActualProcess(many,[many[0]],{expectedStops:1});assert.equal(capacity.result.errors.length,1);assert.equal(capacity.result.ownedTrace[1][0],4);
+  assert.throws(()=>capacity.requireProcessSuccess(capacity.result));
+  const duplicate=await censusActualProcess([],[row,row]);assert.equal(duplicate.result.ownedCensus[9],0);assert.equal(censusDecode(duplicate.result.ownedCensus[8][0])[1],0);
+  const a=f.createOwnedProcessLedger(),b=f.createOwnedProcessLedger();
+  f.fields[1]="0";f.fields[2]="-1";const rows=await f.privateProcesses(a);b.censusClose();b.censusFinal();b.censusResult(rows);
+  assert.deepEqual(b.censusFinish(),[1,1,7,null,0,null,0,null,[],0]);
+  for(const invalid of [censusRow(12,"123","S",1,-1),censusRow(12,"123","S",0,-2),censusRow(12,"123","S",0,Number.MAX_SAFE_INTEGER+1)]){
+    const rec=f.createOwnedProcessLedger(),token=rec.censusBegin();rec.censusRow(token,invalid.pid,invalid.parent,invalid.group,invalid.start,invalid.state);
+    const rows=[invalid];rec.censusSample(token,rows);rec.censusClose();rec.censusFinal();rec.censusResult(rows);assert.equal(rec.censusFinish()[3],null);
+  }
+});
+test("proc stat unavailable census saturation never substitutes for the original count",async()=>{
+  const f=await ownedLedgerFactory(),rec=f.createOwnedProcessLedger(),rows=[],token=rec.censusBegin();
+  for(let i=0;i<65536;i++)rec.censusRow(token,i+2,0,-1,String(i),"Z");
+  rec.censusSample(token,rows);rec.censusClose();rec.censusFinal();rec.censusResult(rows);
+  const census=rec.censusFinish();assert.equal(census[3],65535);assert.equal(census[6]&1,1);
+  assert.equal(census[7][3],65535);assert.equal(census[9],2);
+  assert.ok(census[8].every(code=>censusDecode(code).slice(2).every(value=>value===0)));
+  assert.throws(()=>validateFinalCensus(census,65536,true,0,rec.finish()));
+  assert.ok(Buffer.byteLength(JSON.stringify(census))<512);
+});
+// END proc-stat unavailable relationship regressions.
 test("final census actual sampler and process preserve every state and complete relation group",async()=>{
   for(const state of censusStates){const row=censusRow(12,"123",state),f=await censusActualProcess([row],[row]),t=f.result.ownedCensus;
     assert.equal(f.result.code,0);assert.equal(f.result.closed,true);assert.equal(f.result.errors.length,0);assert.equal(f.result.remaining.length,1);assert.throws(()=>f.requireProcessSuccess(f.result));
