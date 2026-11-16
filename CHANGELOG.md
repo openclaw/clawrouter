@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Join the existing LiteLLM fixture producer proof before sampling final active, cancellation and expiry counters. Preserve strict retirement and accounting assertions, original request counts and independent cleanup failures; this corrects test ordering without attributing a historical native failure.
+
 - Retain bounded Xiaomi control-witness and original ownership summaries before rejecting failed control responses, without changing retirement, producer or accounting acceptance. Preserve independent diagnostic failures and the existing relay request count.
 
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
