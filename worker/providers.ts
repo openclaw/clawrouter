@@ -416,7 +416,9 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
 // Keep the existing 429/503 and Retry-After contract. A known reset is only a
 // possible recovery: another window, stale observation or credential can block it.
 function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | undefined, model?: string | null, exclusions = ""): HttpError {
-  const message = `provider ${provider.id} has no available scoped upstream grant${model ? ` for model ${JSON.stringify(model.slice(0, 256))}` : ""}${exclusions}${retryAt ? `; earliest possible retry at ${retryAt} (eligibility rechecked on retry)` : ""}`;
+  // Resolved templates can contain private operator configuration, not caller input.
+  const publicModel = provider.models.find(entry => entry.upstream === model && !entry.upstream.includes("${"))?.upstream;
+  const message = `provider ${provider.id} has no available scoped upstream grant${publicModel ? ` for model ${JSON.stringify(publicModel.slice(0, 256))}` : ""}${exclusions}${retryAt ? `; earliest possible retry at ${retryAt} (eligibility rechecked on retry)` : ""}`;
   const waitMs = retryAt ? Date.parse(retryAt) - Date.now() : NaN;
   if (!Number.isFinite(waitMs)) return new HttpError(503, "upstream_grant_pool_unavailable", message);
   return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });

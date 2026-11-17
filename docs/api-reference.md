@@ -770,8 +770,9 @@ example eligibility restrictions, unsupported transports, exhausted windows
 without a reset, stale observations under `staleState: "deny"`, or grants whose
 credentials failed with HTTP 401/403) it remains HTTP 503 without
 `Retry-After`. The error envelope and code are unchanged. The message names
-the requested upstream model (bounded to 256 characters), when present, and
-labels any deadline as the **earliest possible retry**, with eligibility
+the requested upstream model (bounded to 256 characters) only when it matches
+a literal catalog model; resolved operator templates and uncatalogued values
+are omitted. It labels any deadline as the **earliest possible retry**, with eligibility
 rechecked on retry. It is not a confirmed upstream reset.
 For `poolStatus: "visible"`, an already-authorized admission snapshot can also
 supply observed scoped exclusion counts. These count one observed primary

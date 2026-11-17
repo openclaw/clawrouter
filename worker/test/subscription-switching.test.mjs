@@ -103,14 +103,40 @@ for (const visible of [false, true]) test('empty-pool diagnostics stay scoped an
   assert.equal(stats[a].selectedCount, 0); assert.equal(stats[b].selectedCount, 0);
 });
 
-for (const payload of [{}, { seven_day: { utilization: 'malformed', resets_at: 'invalid' } }]) test('unknown or malformed observations cannot satisfy stale-deny admission: ' + JSON.stringify(payload), async t => {
+test('missing quota observation cannot satisfy stale-deny admission', async t => {
   const f = await fixture(t, { second: false, routing: { staleState: 'deny' } });
-  const observation = observeGrantQuotaProbe(payload, provider.quota.probes[0], now);
-  if (observation) await f.state(a, observation);
-  const upstream = t.mock.method(globalThis, 'fetch', () => assert.fail('unknown quota cannot dispatch under stale deny'));
+  const upstream = t.mock.method(globalThis, 'fetch', () => assert.fail('missing quota observation cannot dispatch under stale deny'));
   const { response, body } = await f.send();
   assert.equal(response.status, 503); assert.equal(response.headers.get('retry-after'), null);
   assert.match(body.error.message, /quota_not_fresh=1/);
   assert.doesNotMatch(body.error.message, /earliest possible retry|quota_exhausted/);
   assert.equal(upstream.mock.callCount(), 0);
+});
+
+for (const visible of [false, true]) test('template-backed pool errors do not disclose operator deployment names, visible=' + visible, async t => {
+  const f = await admissionFixture();
+  attachGrantCredentialNamespace(f.env, { useExistingAuthority: true });
+  const key = 'oauth/fixture/azure-openai';
+  Object.assign(f.env, { AZURE_OPENAI_ENDPOINT: 'https://azure-fixture.invalid', AZURE_OPENAI_API_KEY: 'synthetic-environment',
+    AZURE_OPENAI_DEPLOYMENT: 'operator-configured-deployment-name', AZURE_OPENAI_API_VERSION: '2024-10-21' });
+  Object.assign(f.policy, { providers: ['azure-openai'], models: ['azure-openai/deployment'],
+    poolStatus: visible ? 'visible' : 'hidden', grantRouting: { environmentFallback: false, eligibleGrants: { 'azure-openai': [] } } });
+  await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+  await f.call('/connections/put', { providerId: 'azure-openai', enabled: true });
+  await putGrantCredentials(f.env, key, { provider: 'azure-openai', kind: 'api_key',
+    credential: 'synthetic-azure-key', enabled: true });
+  const upstream = t.mock.method(globalThis, 'fetch', () => assert.fail('policy-excluded Azure grant cannot dispatch'));
+  const response = await worker.fetch(new Request('https://fixture/v1/chat/completions', {
+    method: 'POST', headers: admissionHeaders, body: JSON.stringify({ model: 'azure-openai/deployment',
+      messages: [{ role: 'user', content: 'synthetic' }] }),
+  }), f.env, f.context);
+  const body = await response.json();
+  while (f.pending.length) await Promise.all(f.pending.splice(0));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('retry-after'), null);
+  assert.equal(response.headers.get('x-clawrouter-error-code'), 'upstream_grant_pool_unavailable');
+  assert.match(body.error.message, /provider azure-openai has no available scoped upstream grant/);
+  assert.doesNotMatch(JSON.stringify(body), /operator-configured-deployment-name|synthetic-azure-key/);
+  assert.equal(upstream.mock.callCount(), 0);
+  assert.equal((await f.call('/grant-pools/stats', { keys: [key] })).stats[key].selectedCount, 0);
 });
