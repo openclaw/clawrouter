@@ -718,8 +718,9 @@ test("Desktop failed catalog refresh and root commit retain the last usable gene
 const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
 const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
 const nativeVersion = nativeBinary ? (await promisify(execFile)(nativeBinary, ["--version"], { env: { PATH: process.env.PATH }, timeout: 20_000, maxBuffer: 1024 })).stdout.trim() : null;
-// Keep both pinned account/read shapes exact, including the new nullable field.
-const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0"].includes(nativeVersion);
+// Keep versioned account/read shapes exact, including nullable routing and user ID.
+const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0", "codex-cli 0.169.0"].includes(nativeVersion);
+const hasUserId = nativeVersion === "codex-cli 0.169.0";
 for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle preserves auth and clears GUI tier (${shape})`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
   const f = await desktopFixture(t), origin = f.connect[2], requests = [];
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
@@ -757,7 +758,7 @@ for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle pre
       assert.equal(resolve(f.home, config.model_catalog_json), resolve(f.home, (await f.read()).model_catalog_json));
       assert.equal(config.service_tier, "priority", "setup must preserve the preexisting tier preference");
       assert.ok((await client.rpc("model/list", {})).data.some((entry) => entry.model === "gpt-6-astra"));
-      assert.deepEqual(await client.rpc("account/read", { refreshToken: false }), { account: null, requiresOpenaiAuth: false, ...(hasWorkspaceRouting ? { workspaceRouting: null } : {}) });
+      assert.deepEqual(await client.rpc("account/read", { refreshToken: false }), { account: null, requiresOpenaiAuth: false, ...(hasWorkspaceRouting ? { workspaceRouting: null } : {}), ...(hasUserId ? { userId: null } : {}) });
       const auth = await client.rpc("getAuthStatus", { includeToken: false, refreshToken: false });
       assert.equal(auth.authMethod, null);
       assert.equal(auth.requiresOpenaiAuth, false);
