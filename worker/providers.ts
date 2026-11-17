@@ -15,7 +15,7 @@ import snapshotJson from "./generated/provider-snapshot.json" with { type: "json
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
-import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { currentGrantRuntime, filterGrantCandidates, grantRoutingPolicy, grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cache.ts";
@@ -223,7 +223,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   if (video && !selected) miniMaxVideoDenied();
   if (search && !selected) miniMaxSearchDenied();
   if (!selected && resolution.hasConfiguredGrant) {
-    const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt);
+    const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt, requirement?.model, poolExclusions(provider, auth, excludedGrantKeys, pinned, requirement));
     if (video || wan || !auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
     try { if (requirement) assertOperationConfiguration(requirement, null, env, owner); configuredUpstream(provider, null, env, undefined, owner); }
     catch (error) { if (isPreparationLimit(error)) throw error; throw unavailable(); }
@@ -413,13 +413,31 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-// A pool whose grants are only cooling down or awaiting a quota reset is a rate
-// limit: answer like a native provider, with the earliest recovery as Retry-After.
-function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | undefined): HttpError {
-  const message = `provider ${provider.id} has no available scoped upstream grant`;
+// Keep the existing 429/503 and Retry-After contract. A known reset is only a
+// possible recovery: another window, stale observation or credential can block it.
+function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | undefined, model?: string | null, exclusions = ""): HttpError {
+  const message = `provider ${provider.id} has no available scoped upstream grant${model ? ` for model ${JSON.stringify(model.slice(0, 256))}` : ""}${exclusions}${retryAt ? `; earliest possible retry at ${retryAt} (eligibility rechecked on retry)` : ""}`;
   const waitMs = retryAt ? Date.parse(retryAt) - Date.now() : NaN;
   if (!Number.isFinite(waitMs)) return new HttpError(503, "upstream_grant_pool_unavailable", message);
   return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });
+}
+
+// Error-path only: reuse an already authorized snapshot, never fetch inventory
+// or widen an admission/private reply. Hidden pools reveal no counts. Legacy or
+// authoritative replies without a snapshot keep the generic scoped error.
+function poolExclusions(provider: CompiledProvider, auth: AuthorizedIdentity, excluded: ReadonlySet<string>, pinned?: PinnedGrant, requirement?: GrantRequirement): string {
+  if (auth.policy.poolStatus !== "visible") return "";
+  const admission = proxyAdmission(auth), snap = admission?.snapshots?.[provider.id], pool = admission?.pools[provider.id];
+  if (!snap || !pool || pool.unavailable || admission?.policy?.policyId !== auth.policyId) return "";
+  const routing = grantRoutingPolicy(auth.policy.grantRouting);
+  const counts = new Map<string, number>();
+  const candidates = grantsVisibleToPolicies(snap.candidates.flatMap(entry => entry.grant ? [{ key: entry.key, grant: entry.grant }] : []), [{ policyId: auth.policyId, policy: auth.policy }])
+    .filter(entry => (!Object.hasOwn(routing.eligibleGrants, provider.id) || routing.eligibleGrants[provider.id].includes(entry.key.split("/").at(-1)!))
+      && (pinned === undefined || entry.key === pinned.key) && (!requirement || grantSupports(requirement, entry.grant)))
+    .map(entry => ({ ...entry, runtimeState: currentGrantRuntime(entry.grant, pool.states[entry.key]) }));
+  filterGrantCandidates(provider.id, candidates, excluded, routing, pinned?.key, requirement, Date.now(), false,
+    reason => counts.set(reason, (counts.get(reason) ?? 0) + 1));
+  return counts.size ? "; observed scoped exclusions: " + [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([reason, count]) => `${reason}=${count}`).join(", ") : "";
 }
 
 async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, owner?: PreparationAdmission): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {

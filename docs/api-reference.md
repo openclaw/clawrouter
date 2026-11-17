@@ -699,7 +699,8 @@ enabled and credential status, plan, account (`email`, `rateLimitTier`,
 `subscriptionStatus`), quota `windows` (`id`, `window`, `models`,
 `remainingPercent`, `resetAt`, `observedAt`), extra usage (`enabled`,
 `usedCredits`, `monthlyLimit`, `currency`, `spendLimitReached`), per-model
-`eligibility`, `lastSelectedAt`, and `selectedCount`. Unknown facts are null.
+`eligibility`, additive per-model `exclusionReasons`, `lastSelectedAt`, and
+`selectedCount`. Unknown facts are null.
 Account emails are intentionally visible to holders when the administrator opts
 in. No access/refresh tokens, credential fields, raw provider payloads, or full
 storage keys are returned.
@@ -725,6 +726,13 @@ usable capacity); disabled grants are never eligible, and missing or invalid
 credentials use `reauth_required`. Eligibility reports quota/credential availability, not priority
 selection, transport readiness or a budget reservation. Observations and usage
 are advisory snapshots, not an atomic upstream quota guarantee.
+`exclusionReasons` retains that eligibility enum while distinguishing
+`provider_mismatch`, `policy_disabled`, `grant_disabled`, `reauth_required`,
+`credential_unavailable`, `cooldown`, `shared_quota_exhausted`,
+`model_quota_exhausted`, `shared_quota_reserve`, `model_quota_reserve`,
+`stale_quota`, and `quota_unknown`; eligible entries have a null reason.
+An eligible unknown/stale observation under `staleState: "allow"` is not
+confirmed headroom. A model-only exhausted window does not exhaust other models.
 
 ### Subscription routing and quota
 
@@ -754,14 +762,23 @@ payloads are excluded. A probe HTTP 429 keeps the last reading and honors
 `Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
 
 When a configured pool has no eligible grant, HTTP requests fail with
-`upstream_grant_pool_unavailable`. If every grant that could serve the operation
-is excluded only by an active rate-limit or quota cooldown or by quota windows
-with published resets, the status is HTTP 429 with `Retry-After` set to the
-whole seconds until the earliest such grant becomes eligible. Otherwise (for
+`upstream_grant_pool_unavailable`. If at least one otherwise usable grant has
+a possible recovery from a rate-limit cooldown or published quota reset, the
+status is HTTP 429 with `Retry-After` set to the whole seconds until the earliest
+such recovery. If no candidate has a known recovery (for
 example eligibility restrictions, unsupported transports, exhausted windows
 without a reset, stale observations under `staleState: "deny"`, or grants whose
 credentials failed with HTTP 401/403) it remains HTTP 503 without
-`Retry-After`. The JSON error body is the same in both cases.
+`Retry-After`. The error envelope and code are unchanged. The message names
+the requested upstream model (bounded to 256 characters), when present, and
+labels any deadline as the **earliest possible retry**, with eligibility
+rechecked on retry. It is not a confirmed upstream reset.
+For `poolStatus: "visible"`, an already-authorized admission snapshot can also
+supply observed scoped exclusion counts. These count one observed primary
+quota/health exclusion per configured, policy-eligible candidate, not every
+possible failure or total account inventory. Hidden pools and paths without an
+existing snapshot omit counts; no extra inventory read or auth/private response
+fields are introduced. Keys, account IDs and shared-owner identities are absent.
 
 `Retry-After` is ClawRouter's own re-admission time, not a provider promise.
 A provider 429 without timing cools a grant for ClawRouter's 60-second

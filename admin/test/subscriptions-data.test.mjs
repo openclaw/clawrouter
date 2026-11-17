@@ -11,8 +11,8 @@ const grant = { key: "oauth/pool/max", scope: "policies", scopeId: "pool", token
 ] };
 
 test("subscriptions show model-specific free quota and reserve eligibility", () => {
-  assert.deepEqual(modelHeadroom(grant, "sonnet", policy, now), { free: 60, eligible: true, stale: false });
-  assert.deepEqual(modelHeadroom(grant, "fable", policy, now), { free: 0, eligible: false, stale: false });
+  assert.deepEqual(modelHeadroom(grant, "sonnet", policy, now), { free: 60, eligible: true, stale: false, reason: null });
+  assert.deepEqual(modelHeadroom(grant, "fable", policy, now), { free: 0, eligible: false, stale: false, reason: "model_quota_exhausted" });
   assert.equal(modelHeadroom({ ...grant, quotaWindows: [{ limit: 100, remaining: 10, resetAt: null }] }, "opus", policy, now).eligible, false);
   assert.equal(modelHeadroom({ ...grant, credentialStatus: "reauth_required" }, "sonnet", policy, now).eligible, false);
   assert.equal(modelHeadroom({ ...grant, enabled: false }, "sonnet", policy, now).eligible, false);
@@ -68,4 +68,25 @@ test("fail-closed family eligibility requires an applicable live window", () => 
   const scoped = { ...grant, quotaWindows: [grant.quotaWindows[1]] };
   assert.equal(modelHeadroom(scoped, "sonnet", strict, now).eligible, false);
   assert.equal(modelHeadroom({ ...grant, quotaWindows: [{ limit: 100, remaining: 100, resetAt: "2020-01-01T00:00:00Z" }] }, "sonnet", strict, now).eligible, false);
+});
+
+test("exclusion reasons distinguish disabled, credential, shared, model and reserve limits", () => {
+  const reason = (fields, selectedPolicy = policy) => modelHeadroom({ ...grant, ...fields }, "fable", selectedPolicy, now).reason;
+  assert.equal(reason({ enabled: false, usable: false }), "grant_disabled");
+  assert.equal(reason({}, { ...policy, enabled: false }), "policy_disabled");
+  assert.equal(reason({ credentialStatus: "reauth_required", usable: false }), "reauth_required");
+  assert.equal(reason({ usable: false }), "credential_unavailable");
+  assert.equal(reason({ cooldownUntil: new Date(now + 60000).toISOString() }), "cooldown");
+  assert.equal(reason({ quotaWindows: [{ limit: 100, remaining: 0, resetAt: null }] }), "shared_quota_exhausted");
+  assert.equal(reason({ quotaWindows: [{ limit: 100, remaining: 10, resetAt: null }] }), "shared_quota_reserve");
+  assert.equal(reason({ quotaWindows: [{ limit: 100, remaining: 10, resetAt: null, models: ["fable"] }] }), "model_quota_reserve");
+  const strict = { ...policy, grantRouting: { ...policy.grantRouting, staleState: "deny" } };
+  assert.equal(reason({ quotaWindows: [] }, strict), "quota_unknown");
+  assert.equal(reason({ quotaObservedAt: new Date(now - 600000).toISOString(), quotaWindows: [grant.quotaWindows[0]] }, strict), "stale_quota");
+});
+
+test("malformed quota percentages never display healthy headroom", () => {
+  for (const fields of [{ limit: -1 }, { limit: Infinity }, { remaining: NaN }, { remaining: -1 }, { resetAt: "not-a-date" }]) {
+    assert.equal(quotaFree({ limit: 100, remaining: 80, resetAt: null, ...fields }, now), null);
+  }
 });
