@@ -25,7 +25,7 @@ test("compiled provider declarations build and typecheck without client or Worke
   const options = { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"],
     types: [], strict: true, allowImportingTsExtensions: true };
   compile(root, "build", { ...options, declaration: true, emitDeclarationOnly: true, rootDir: repo, outDir: output },
-    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts")]);
+    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts")]);
   const files = readdirSync(output, { recursive: true }).map(file => file.replaceAll("\\", "/"));
   assert.ok(files.includes("shared/provider-snapshot.d.ts"));
   assert.ok(files.includes("shared/provider-model.d.ts"));
@@ -51,6 +51,12 @@ import type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, 
 declare const portableEndpoints: [ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint];
 const legacyEndpoints: [LegacyManagedProtocol, LegacyManagedFileLinks, LegacyOutputTokenLimit, LegacyToolPricing, LegacyCompiledEndpoint] = portableEndpoints;
 const roundTripEndpoints: typeof portableEndpoints = legacyEndpoints;
+import type { GrantQuotaKind as LegacyGrantQuotaKind, CompiledQuotaWindow as LegacyCompiledQuotaWindow, CompiledQuotaProbeWindow as LegacyCompiledQuotaProbeWindow, CompiledQuotaProbe as LegacyCompiledQuotaProbe, CompiledQuotaConfig as LegacyCompiledQuotaConfig } from "./declarations/shared/provider-snapshot.js";
+import type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe as PortableQuotaProbe, CompiledQuotaConfig } from "./declarations/packages/provider-plugin-contract/src/quota.js";
+import type { GrantAccount as PortableAccount, GrantExtraUsage as PortableExtraUsage } from "./declarations/packages/provider-plugin-contract/src/observations.js";
+declare const portableQuota: [GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, PortableQuotaProbe, CompiledQuotaConfig, PortableAccount, PortableExtraUsage];
+const legacyQuota: [LegacyGrantQuotaKind, LegacyCompiledQuotaWindow, LegacyCompiledQuotaProbeWindow, LegacyCompiledQuotaProbe, LegacyCompiledQuotaConfig, GrantAccount, GrantExtraUsage] = portableQuota;
+const roundTripQuota: typeof portableQuota = legacyQuota;
 declare const portableAuth: [AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport];
 const legacyAuth: [LegacyAuth, LegacyAuthorization, LegacyRefresh, LegacyTransportAuth, LegacyTransport] = portableAuth;
 const roundTripAuth: typeof portableAuth = legacyAuth;
@@ -65,7 +71,7 @@ const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
+export { roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });
