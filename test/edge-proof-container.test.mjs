@@ -4317,7 +4317,7 @@ async function ownershipFixture(overrides = {}) {
 test("ownership actual helpers separate current package observations from frozen materialization", async () => {
   const f = await ownershipFixture(), { plan, contextHash } = await f.run();
   assert.equal(plan.version, 3); assert.equal(plan.current.commit, f.commit); assert.equal(plan.current.tree, f.tree);
-  assert.equal(plan.current.files.length, 16); assert.equal(plan.current.files.filter(row => row.path.startsWith("packages/")).length, 12);
+  assert.equal(plan.current.files.length, 18); assert.equal(plan.current.files.filter(row => row.path.startsWith("packages/")).length, 14);
   assert.equal(plan.current.scope, "observed-not-installed-or-native-qualified");
   assert.equal(plan.frozen.commit, edgeProof.sourceSha); assert.equal(plan.frozen.files.length, 4);
   for (const path of ["pnpm-workspace.yaml", "pnpm-lock.yaml"]) {
@@ -4329,7 +4329,7 @@ test("ownership actual helpers separate current package observations from frozen
   assert.equal(contextHash, f.sha(JSON.stringify(plan)));
 });
 test("ownership rejects incomplete current workspace/package inventory and Git byte drift", async () => {
-  for (const path of ["packages/provider-plugin-contract/package.json", "packages/provider-plugin-contract/src/index.ts", "packages/provider-plugin-contract/src/products.ts", "packages/provider-plugin-contract/src/auth.ts", "packages/provider-plugin-contract/src/endpoints.ts", "packages/provider-plugin-contract/src/pricing.ts", "pnpm-workspace.yaml", "admin/package.json"]) {
+  for (const path of ["packages/provider-plugin-contract/package.json", "packages/provider-plugin-contract/src/index.ts", "packages/provider-plugin-contract/src/products.ts", "packages/provider-plugin-contract/src/auth.ts", "packages/provider-plugin-contract/src/quota.ts", "packages/provider-plugin-contract/src/observations.ts", "packages/provider-plugin-contract/src/endpoints.ts", "packages/provider-plugin-contract/src/pricing.ts", "pnpm-workspace.yaml", "admin/package.json"]) {
     const f = await ownershipFixture(); f.entries.delete(path); await assert.rejects(f.run()); assert.equal(f.writes.length, 0);
   }
   for (const change of [f => f.entries.set("packages/provider-plugin-contract/extra.ts", f.entries.get("package.json")), f => f.disk.set("/checkout/pnpm-lock.yaml", f.frozenBlobs.get("pnpm-lock.yaml").bytes), f => f.entries.get("package.json").blob = "0".repeat(40), f => f.entries.get("package.json").mode = "120000"]) {

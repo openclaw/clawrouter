@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
+
 - Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.
 
 - Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
