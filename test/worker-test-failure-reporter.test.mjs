@@ -1802,8 +1802,13 @@ test("workflow preserves typecheck order, the full default-concurrency glob and 
   const scripts = workflow.jobs["script-tests"], step = scripts.steps.find(step => step.name === "Script tests with bounded failure identities");
   assert.equal(scripts["timeout-minutes"], 10);
   assert.equal(step.run, "node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs");
-  assert.equal(step.if, undefined);
-  assert.equal(scripts.steps.at(-1), step);
+  const validation = scripts.steps.at(-1);
+  assert.equal(scripts.steps.indexOf(validation), scripts.steps.indexOf(step) + 1);
+  assert.equal(validation.name, "Validate native preflight workflow expression contexts");
+  for (const gate of [step, validation]) {
+    assert.equal(gate.if, undefined);
+    assert.equal(gate["continue-on-error"], undefined);
+  }
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:scripts"], "node --test test/*.test.mjs");
   for (const file of ["scripts/worker-test-failure-reporter.mjs", "test/worker-test-failure-reporter.test.mjs", ".github/workflows/ci.yml"]) assert.equal(affectsOpenClawContract(file), false);
 });
