@@ -91,8 +91,11 @@ jobs:
           if [ "$CODEX_VERSION" = 0.155.0 ]; then
             echo "CLAWROUTER_DESKTOP_FIXTURE_OUTPUT=$RUNNER_TEMP/codex-desktop-fixture" >> "$GITHUB_ENV"
           fi
+      - name: Fetch released Codex connection writer for upgrade proof
+        if: matrix.version == '0.169.0'
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 608050e4e4dae5ebc93919e0759ffb4bf0664528
       - name: Native client through real router and ledgers
-        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs test/codex-remote-upgrade.test.mjs
       - name: Synthetic native rehearsal saved-client contract
         if: matrix.version == '0.164.0'
         run: node --test test/native-rehearsal.test.mjs
