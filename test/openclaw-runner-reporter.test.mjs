@@ -11,6 +11,7 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 import NativeRunnerReporter, { parseRunnerReport, projectRunnerError, readPrivateFile, reportByteLimit, runnerContract, sha256, validateBinding } from "./helpers/openclaw-runner-reporter.mjs";
 import { settleRunnerReport, validateRunnerRequest, withCopiedConsumerFixture, withNativeRunnerReport } from "./helpers/openclaw-consumer.mjs";
+import { makeQwenValuePlan, qwenValueArgv, qwenValueSources } from "./helpers/openclaw-qwen-callsite-observer.mjs";
 
 const reporterPath = fileURLToPath(new URL("./helpers/openclaw-runner-reporter.mjs", import.meta.url));
 const reporterSha256 = sha256(readFileSync(reporterPath));
@@ -245,27 +246,37 @@ test("default-off launch retains the exact S9 command, options and diagnostic by
 
 test("opt-in launch forces plain rendering after caller env without changing the child contract", async () => {
   const sourceText = readFileSync(new URL("./helpers/openclaw-consumer.mjs", import.meta.url), "utf8");
-  const start = sourceText.indexOf("async extraArgs => {");
+  const start = sourceText.indexOf("async (extraArgs, valueDirectory) => {");
   const end = sourceText.indexOf("\n      });", start);
   assert.ok(start > 0 && end > start);
   const execFile = {}, result = {}, env = { NO_COLOR: "0", FORCE_COLOR: "1", CLAWROUTER_CONTRACT_ORIGIN: "https://fixture.invalid" };
-  const process = { env: { PATH: "fixture-bin", HOME: "fixture-home", TMPDIR: "fixture-tmp" } };
+  const process = { execPath: "/fixture/node", env: { PATH: "fixture-bin", HOME: "fixture-home", TMPDIR: "fixture-tmp" } };
+  const directory = "/fixture-source/.clawrouter-runner-report-owned";
+  const reporters = ["--reporter=default", "--reporter=fixture-reporter"];
+  let valueMode = false, rejected = false;
   let calls = 0;
   const launch = runInNewContext("(" + sourceText.slice(start, end) + "\n})", {
-    source: "fixture-source", testPath: runnerContract.target, env, process, execFile,
+    source: "fixture-source", testPath: runnerContract.target, env, process, execFile, qwenValueArgv,
     promisify(original) {
       assert.equal(original, execFile);
       return (command, args, options) => {
-        calls++; assert.equal(command, "pnpm");
-        assert.deepEqual(Array.from(args), ["test", runnerContract.target, "--maxWorkers=1", "--reporter=default", "--reporter=fixture-reporter"]);
+        calls++; assert.equal(command, valueMode ? process.execPath : "pnpm");
+        assert.deepEqual(Array.from(args), valueMode
+          ? ["scripts/run-vitest.mjs", "run", "--config", join(directory, "qwen-callsite.config.ts"), runnerContract.target, "--maxWorkers=1", ...reporters]
+          : ["test", runnerContract.target, "--maxWorkers=1", ...reporters]);
         assert.deepEqual(JSON.parse(JSON.stringify(options)), { cwd: "fixture-source", timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
           env: { ...process.env, CI: "true", ...env, NO_COLOR: "1" } });
-        return Promise.resolve(result);
+        return rejected ? Promise.reject(undefined) : Promise.resolve(result);
       };
     },
   });
-  assert.equal(await launch(["--reporter=default", "--reporter=fixture-reporter"]), result);
-  assert.equal(calls, 1); assert.equal(env.NO_COLOR, "0");
+  for (valueMode of [false, true]) {
+    rejected = false;
+    assert.equal(await launch(reporters, valueMode ? directory : undefined), result);
+    rejected = true;
+    await assert.rejects(launch(reporters, valueMode ? directory : undefined), error => error === undefined);
+  }
+  assert.equal(calls, 4); assert.equal(env.NO_COLOR, "0");
 });
 
 test("unqualified fixture bytes reject before child or report-directory acquisition", async t => {
@@ -282,51 +293,125 @@ test("Qwen runner digest matches the current fixture through the original pre-ex
   const outer = readFileSync(new URL("./openclaw-qwen-regions.test.mjs", import.meta.url), "utf8");
   const declared = outer.match(/^const qwenRunnerFixtureSha256 = "([a-f0-9]{64})";$/m)?.[1];
   const declaredReporter = outer.match(/^const qwenRunnerReporterSha256 = "([a-f0-9]{64})";$/m)?.[1];
-  assert.ok(declared && declaredReporter);
-  assert.equal(outer.split("runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, onReport: relay.runnerReport }").length, 2);
+  const declaredObserver = outer.match(/^const qwenValueObserverSha256 = "([a-f0-9]{64})";$/m)?.[1];
+  assert.ok(declared && declaredReporter && declaredObserver);
+  assert.equal(outer.split("runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, valueObserverSha256: qwenValueObserverSha256, onReport: relay.runnerReport }").length, 2);
+  const observerUrl = new URL("./helpers/openclaw-qwen-callsite-observer.mjs", import.meta.url);
+  const observerBytes = readFileSync(observerUrl);
+  assert.equal(sha256(observerBytes), declaredObserver);
+  // Reuse the pinned inert source literals without importing the dependency-backed outer test.
+  const originalsStart = outer.indexOf("const qwenValueOriginals = [");
+  const originalsEnd = outer.indexOf("\nconst qwenValueHash =", originalsStart);
+  assert.ok(originalsStart > 0 && originalsEnd > originalsStart);
+  const originals = runInNewContext(outer.slice(originalsStart, originalsEnd) + "; qwenValueOriginals", { Buffer });
+  for (let i = 0; i < qwenValueSources.length; i++) assert.equal(sha256(originals[i]), qwenValueSources[i].sha256);
   const helperUrl = new URL("./helpers/openclaw-consumer.mjs", import.meta.url);
   const helperSource = readFileSync(helperUrl, "utf8");
   const start = helperSource.indexOf("export async function withNativeRunnerReport(");
   const end = helperSource.indexOf("\nexport async function withCopiedConsumerFixture(", start);
   assert.ok(start >= 0 && end > start);
   const implementation = helperSource.slice(start, end).replace(/^export /, "");
-  assert.equal(implementation.split("import.meta.url").length, 2);
+  assert.equal(implementation.split("import.meta.url").length, 3);
   const reporterBytes = readFileSync(reporterPath);
   const stale = "47ef4694ff45c89cac41bcaa1168b6eb26d78cc21a095b9c1999baac2e41a3db";
-  for (const [digest, accepted] of [[stale, false], [declared, true]]) {
-    const files = new Map(), reads = [], effects = [], result = {};
+  for (const mode of ["stale-fixture", "default", "values", "stale-observer", "child-undefined", "foreign-file", "child-and-cleanup"]) {
+    const digest = mode === "stale-fixture" ? stale : declared;
+    const valueMode = mode !== "default";
+    const accepted = mode !== "stale-fixture" && mode !== "stale-observer";
+    const files = new Map(), stats = new Map(), reads = [], effects = [], result = {};
+    const removed = [], cleanupError = {};
     const directory = "/fixture-source/.clawrouter-runner-report-owned";
+    const put = (path, bytes, mode) => {
+      files.set(path, bytes);
+      stats.set(path, { ino: stats.size + 1, dev: 1, uid: process.getuid(), nlink: 1, mode, isFile: () => true });
+    };
     const scope = { assert, URL, helperUrl, fileURLToPath, join, resolve, sha256, runnerContract, validateBinding,
-      validateRunnerRequest, settleRunnerReport, parseRunnerReport, reportByteLimit,
+      validateRunnerRequest, settleRunnerReport, parseRunnerReport, reportByteLimit, process, makeQwenValuePlan, qwenValueSources,
       randomBytes: size => Buffer.alloc(size),
-      async readFile(path) { reads.push(path); assert.ok(path === reporterPath || path === fixtureUrl); return path === reporterPath ? reporterBytes : fixtureBytes; },
+      async readFile(path) {
+        const key = path instanceof URL ? path.href : path;
+        reads.push(key);
+        assert.ok([reporterPath, fixtureUrl.href, observerUrl.href].includes(key));
+        return key === reporterPath ? reporterBytes : key === fixtureUrl.href ? fixtureBytes : observerBytes;
+      },
+      readQwenValueInput(path, expected) {
+        const index = qwenValueSources.findIndex(row => join("/fixture-source", row.path) === path);
+        assert.ok(index >= 0); assert.equal(expected, qwenValueSources[index].sha256);
+        assert.equal(sha256(originals[index]), expected); reads.push(path); return originals[index];
+      },
       async mkdtemp(prefix) { effects.push("directory"); assert.equal(prefix, "/fixture-source/.clawrouter-runner-report-"); return directory; },
       async chmod(path, mode) { effects.push("chmod"); assert.equal(path, directory); assert.equal(mode, 0o700); },
-      async writeFile(path, bytes, options) { effects.push("write"); assert.equal(options.flag, "wx"); files.set(path, bytes); },
+      async writeFile(path, bytes, options) {
+        effects.push("write"); assert.equal(options.flag, "wx"); assert.equal(files.has(path), false);
+        assert.equal(options.mode, ["reporter.mjs", "callsite-observer.mjs"].some(name => path === join(directory, name)) ? 0o400 : 0o600);
+        put(path, bytes, options.mode);
+      },
+      async lstat(path) { assert.ok(stats.has(path)); return stats.get(path); },
       readPrivateFile(path, limit) { effects.push("collect"); assert.equal(limit, reportByteLimit); assert.ok(files.has(path)); return files.get(path); },
-      async rm(path, options) { effects.push("remove"); assert.equal(path, directory); assert.equal(options.recursive, true); },
+      async rm(path, options) {
+        effects.push("remove");
+        if (!valueMode) { assert.equal(path, directory); assert.deepEqual(options, { recursive: true }); files.clear(); return; }
+        assert.equal(options, undefined); assert.ok(files.has(path)); removed.push(path); files.delete(path);
+        if (mode === "child-and-cleanup" && path === join(directory, "plan.json")) throw cleanupError;
+      },
+      async readdir(path) { effects.push("list"); assert.equal(path, directory); return [...files.keys()].map(file => file.slice(directory.length + 1)); },
+      async rmdir(path) { effects.push("rmdir"); assert.equal(path, directory); assert.equal(files.size, 0); },
+      execFileSync(command, args, options) {
+        effects.push("clean"); assert.equal(command, "git"); assert.deepEqual(args, ["diff", "--quiet", "HEAD", "--"]);
+        assert.deepEqual(options, { cwd: "/fixture-source" });
+      },
     };
     // Only import.meta is supplied as data; the original validation and lifecycle body is intact.
-    const run = new Function(...Object.keys(scope), `return (${implementation.replace("import.meta.url", "helperUrl")});`)(...Object.values(scope));
+    const run = new Function(...Object.keys(scope), `return (${implementation.replaceAll("import.meta.url", "helperUrl")});`)(...Object.values(scope));
     const pending = run({ source: "/fixture-source", sourceHead: runnerContract.pin, testPath: runnerContract.target, fixture: fixtureUrl, env: {},
       runnerReport: { expectedInvocations: 1, fixtureSha256: digest, reporterSha256: declaredReporter,
-        onReport(packet) { effects.push("publish"); assert.equal(packet.complete, true); assert.equal(packet.records[0].binding.fixtureSha256, declared); } } }, async args => {
+        ...(valueMode ? { valueObserverSha256: mode === "stale-observer" ? "f".repeat(64) : declaredObserver } : {}),
+        onReport(packet) { effects.push("publish"); assert.equal(packet.complete, true); assert.equal(packet.records[0].binding.fixtureSha256, declared); } } }, async (args, valueDirectory) => {
       effects.push("execute");
+      assert.equal(valueDirectory, valueMode ? directory : undefined);
       assert.deepEqual(args, ["--reporter=default", `--reporter=${join(directory, "reporter.mjs")}`, `--outputFile=${join(directory, "report.jsonl")}`]);
       const binding = JSON.parse(files.get(join(directory, "plan.json")));
       assert.equal(sha256(files.get(join(directory, "reporter.mjs"))), declaredReporter);
+      if (valueMode) {
+        assert.equal(sha256(files.get(join(directory, "callsite-observer.mjs"))), declaredObserver);
+        assert.equal(sha256(files.get(join(directory, "worker-values.mjs"))), binding.callsite.virtualSHA);
+        assert.equal(sha256(files.get(join(directory, "qwen-callsite.config.ts"))), binding.callsite.configSHA);
+      }
       const records = [{ kind: "init", binding, seq: 0 }, { kind: "end", reason: "passed", ready: 0, results: 0, errors: 0, omitted: 0, complete: true, seq: 1 }];
-      files.set(join(directory, "report.jsonl"), Buffer.from(records.map(row => JSON.stringify(row)).join("\n") + "\n"));
+      put(join(directory, "report.jsonl"), Buffer.from(records.map(row => JSON.stringify(row)).join("\n") + "\n"), 0o600);
+      if (mode === "foreign-file") {
+        const path = join(directory, "reporter.mjs"); stats.set(path, { ...stats.get(path), ino: 999 });
+      }
+      if (mode === "child-undefined" || mode === "child-and-cleanup") throw undefined;
       return result;
     });
     if (accepted) {
-      assert.equal(await pending, result); assert.equal(declared, sha256(fixtureBytes));
-      assert.deepEqual(effects, ["directory", "chmod", "write", "write", "execute", "collect", "remove", "publish"]);
+      if (mode === "child-undefined") await assert.rejects(pending, error => error === undefined);
+      else if (mode === "child-and-cleanup") await assert.rejects(pending, error => {
+        assert.deepEqual(error.errors, [undefined, cleanupError]); return true;
+      });
+      else if (mode === "foreign-file") await assert.rejects(pending, error => {
+        assert.equal(error.errors.length, 2); assert.equal(error.errors[0].code, "ERR_ASSERTION");
+        assert.equal(error.errors[1].code, "ERR_ASSERTION"); return true;
+      });
+      else assert.equal(await pending, result);
+      assert.equal(declared, sha256(fixtureBytes));
+      if (valueMode) {
+        const names = ["plan.json", "reporter.mjs", "callsite-observer.mjs", "worker-values.mjs", "qwen-callsite.config.ts", "report.jsonl"];
+        assert.deepEqual(removed, names.filter(name => mode !== "foreign-file" || name !== "reporter.mjs").map(name => join(directory, name)));
+        assert.deepEqual([...files.keys()], mode === "foreign-file" ? [join(directory, "reporter.mjs")] : []);
+        assert.deepEqual(effects, ["directory", "chmod", ...Array(5).fill("write"), "execute", "collect",
+          ...Array(mode === "foreign-file" ? 5 : 6).fill("remove"), "list", ...(mode === "foreign-file" ? [] : ["rmdir"]), "clean", "publish"]);
+      } else assert.deepEqual(effects, ["directory", "chmod", "write", "write", "execute", "collect", "remove", "publish"]);
     } else {
-      await assert.rejects(pending, error => error.code === "ERR_ASSERTION" && error.actual === sha256(fixtureBytes) && error.expected === stale);
+      await assert.rejects(pending, error => error.code === "ERR_ASSERTION" &&
+        error.actual === (mode === "stale-fixture" ? sha256(fixtureBytes) : declaredObserver) &&
+        error.expected === (mode === "stale-fixture" ? stale : "f".repeat(64)));
       assert.deepEqual(effects, []);
     }
-    assert.deepEqual(reads, [reporterPath, fixtureUrl]);
+    assert.deepEqual(reads, [reporterPath, fixtureUrl.href,
+      ...(valueMode && mode !== "stale-fixture" ? [observerUrl.href] : []),
+      ...(valueMode && accepted ? qwenValueSources.map(row => join("/fixture-source", row.path)) : [])]);
   }
 });
 
