@@ -42,6 +42,12 @@ capabilities:
   - id: image.generate
     endpoint: image_generate
     methods: [POST]
+  - id: audio.speech
+    endpoint: speech_generate_content
+    methods: [POST]
+  - id: audio.speech
+    endpoint: speech_interactions
+    methods: [POST]
 endpoints:
   music_generate:
     method: POST
@@ -85,6 +91,21 @@ endpoints:
     requestFormat: google.image_generate
     responseFormat: google.image
     timeoutMs: 600000
+  speech_generate_content:
+    method: POST
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.speech_generate_content
+    responseFormat: google.speech_generate_content
+    timeoutMs: 120000
+  speech_interactions:
+    method: POST
+    path: /v1beta/interactions
+    pathParams: []
+    requestFormat: google.speech_interactions
+    responseFormat: google.speech_interactions
+    nativeProxy: false
+    timeoutMs: 120000
 models:
   entries:
     - id: google/gemini-3.5-flash
@@ -556,6 +577,66 @@ models:
       displayName: "Lyria 3 Pro Preview"
       upstream: lyria-3-pro-preview
       capabilities: [audio.generate]
+    - id: google/gemini-3.1-flash-tts-preview
+      upstream: gemini-3.1-flash-tts-preview
+      capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech_generate_content:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/speech-generation
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            input: [text]
+    - id: google/gemini-2.5-flash-preview-tts
+      upstream: gemini-2.5-flash-preview-tts
+      capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech_generate_content:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/speech-generation
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            input: [text]
+    - id: google/gemini-2.5-pro-preview-tts
+      upstream: gemini-2.5-pro-preview-tts
+      capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech_generate_content:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/speech-generation
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            input: [text]
+    - id: google/gemini-3.8-flash-tts
+      upstream: gemini-3.8-flash-tts
+      capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech_interactions:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/speech-generation
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            input: [text]
+    - id: google/gemini-3.8-flash-lite-tts
+      upstream: gemini-3.8-flash-lite-tts
+      capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech_interactions:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/speech-generation
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

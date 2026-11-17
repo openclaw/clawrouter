@@ -1,6 +1,131 @@
 # Changelog
 
+- Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
+
+- Retain the independently decoded reaper outcome and exact private receipt-write result in the existing attach diagnostic. Record the coordinator’s first escaping post-permit boundary and independent FINISH outcome without interpreting process causes or granting receipt or retirement credit. Preserve original failures, complete-capture custody and historical diagnostics.
+
+- Preserve the held-ACK fixture's original process errors, including undefined reasons, before its independent qualification failure. Keep the expected timeout-negative route and all native closure, census and retirement gates unchanged; add inert coverage using the original coordinator and process supervisor.
+
+- Query the GCC cc1 version with the combined print-and-exit options and retain its stderr version line from the same synchronous command result. Keep other tool queries, strict version validation, build-input closure and native qualification gates unchanged. This corrects the source-proven silent-stdout contract mismatch without attributing the previous hosted failure or claiming native qualification.
+
+- Identify the original reaper preparation operation that rejects through the existing bounded preparation failure record. Preserve original errors, command order and qualification gates; concurrent file inventories remain aggregate observations, and this diagnostic adds no native qualification credit.
+
+- Add an explicitly owned PID1 reaper with an authenticated drain acknowledgment before the final packaging census. Bind the compiled helper and exact coordinator identity; retain strict rejection of every remaining workload process, original native child joins and independent physical retirement. Retain the coordinator's original exit or signal separately from supervisor faults through the source-owned private terminal channel; join actual socket CLOSE on failed shutdown before raising late independent failures, retaining an independent end-call throw even when it first emits an error event. Require private invocation-bound evidence of the original control start-identity comparison before accepting a census-substitution negative; unrelated read or observer failures remain fatal. Wire hosted live/Z census and both-control substitution counterexamples alongside orphan reaping, FD custody and held-ACK checks. Hosted compilation and native fixtures require fresh qualification.
+
+- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation, a pinned-image packaging job with independent host process and cgroup admission, and strict native-client retirement controls. Keep the image build’s pnpm store explicitly outside the sealed source input. Preserve original attach outcomes and identity-bound init-prerequisite diagnostics separately from readiness and physical retirement, including invocation-owned guard, exact mount-predicate and prerequisite failure detail with consistent captured enum evidence; admit only fully validated readonly directory-mask alias groups and require descriptor-bound observed emptiness before READY, joining original Node closes while native errno remains unobservable and retaining mixed asynchronous/synchronous close failures in closed diagnostics. Record the first parent admission predicate or prerequisite failure independently of child readiness, without changing custody or retirement gates. Qualify parent-observed cgroup roots against the same observer namespace and owned unified membership, preserving strict child-self roots and comparing BigInt directory identities only within the qualified parent mapping. Parse unrelated parent filesystem roots as bounded opaque fields while retaining every canonical mountpoint for selection and overmount checks; selected metadata roots remain canonical before path arithmetic, and cgroup and child roots retain their strict contracts. Retain covered parent mount rows, rejecting every stack related to validated per-container metadata or cgroup authorities before selection and physical binding; unrelated parent stacks do not weaken strict child uniqueness or overmount checks. Bind every parent physical device to its admitted mount row using the source-qualified GNU/Linux 64-bit device encoding, without comparing target-superblock devices. Both observation windows and retirement fail closed on missing or stale custody; this is sampled-state evidence, not continuous ABA-free custody or a measured kernel-version guarantee. Project identity-bound child packaging wrapper failures and the original receipt parser boundary separately from reporting errors, preserving complete-capture requirements and independent retirement failures. Record the original receipt-line count bucket and first projector validation failure without interpreting rejected payloads or weakening acceptance. Include bounded expected-versus-observed lifecycle input context only after complete field validation, and exercise the actual builder reporting path with inert operations. Preserve a source-bound builder close group, including original process outcomes and received-byte capture fingerprints, when builder lifecycle validation fails or an admitted rejection identifies its exact builder close, report occurrence, or forwarded builder failure; these child-reported facts do not establish lifecycle, retained-text completeness, host custody, or an operating-system cause. Record the original builder sampler error boundary and owned termination requests separately, preserving undefined failures, ignored ESRCH outcomes, capture fingerprints, and independent observation failures in a bounded lossless receipt; a returned signal request does not prove delivery or explain the observed close signal. Validate error-required stop reasons and deadline/interruption flags against their original mutation sites in both private close frames and V13 receipts, including skipped dispatches. Retain a catch-bound display class for the originally evaluated error-code operand, separating property-access throws from read failures without extra property reads or interpreting labels as native errno. Tolerate ESRCH only from the original private-PID stat read when its task disappears, preserving later-phase failures, prior PID/start observations, and independent final-census and cgroup retirement gates. Retain a bounded final-census state and sampled-history relation group with existing builder outcomes, without exposing process identities or treating sampled relations as ownership or retirement proof. Reject census history contradicted by any recorded monitor stop, suppress census details after observer faults, and reconcile final-sample rejection definedness with its original trace. Separate current workspace/package observations from verified frozen install bytes in the isolated proof context, binding both owners and their complete input inventories without substituting checkout files or claiming current-package qualification. Capture the builder’s original TypeScript and esbuild children through the pinned Node diagnostics channel before library acquisition, then ref and join their actual close events after library shutdown. Preserve independent child and observer failures without changing the strict live-or-zombie final census or treating a library stop promise as native completion. Retain unresolved close obligations and observers across absent-PID spawn errors, uncertain listener installation and capture loss; only an observed original close discharges a captured child, and ambiguous no-future-close states remain unqualified under the existing outer supervisor. Require both preceding builders’ complete protocol summaries to reconcile with their exact forwarded records before projecting Wrangler facts; contradictory counts remain unknown. Retain a complete source-bound Wrangler edge/upstream close result with both capture fingerprints and the original qualification outcome, separately from wrapper reporting failures; project the existing invocation-local stop trace, once-observed code operand and bounded final-census state/history relations atomically with those Wrangler results, denying qualification independently on observer failures. Sampled relations do not establish process ownership, cause or physical retirement, and every nonempty live-or-zombie census remains fatal. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
+
+- Retain same-reader Worker rejection identities and join original synthetic producer observations before reporting LiteLLM retirement failures.
+- Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
+
 ## Unreleased
+
+- Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
+
+- Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.
+
+- Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
+
+- Attribute HTTP deadline fixture failures to source-owned case and operation/assertion boundaries after joining original work and attempting independent cleanup. Preserve original reasons and strict accounting; missing diagnostic markers remain unknown.
+
+- Route client-disconnect fixtures through the existing direct workerd socket, preserving WebSocket and in-Worker controls and all cancellation and accounting assertions. Retain original failures while attempting fixture cleanup independently.
+
+- Export published model and request tariff types from the provider plugin contract while preserving existing shared imports.
+
+- Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
+
+- Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
+
+- Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
+- Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
+
+- Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.
+
+- Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
+
+- Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.
+
+- Preflight complete LiteLLM retirement diagnostic groups before emission, falling back to validated coarse evidence without widening relational admission or changing test verdicts.
+
+- Qualify LiteLLM metadata cancellation with an explicitly owned HTTP/1 reset after request-owned readiness, retaining strict ingress, producer retirement and accounting checks; generic fetch-abort coverage remains unqualified.
+
+- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; validate each operation’s exact owner and complete census references, rejecting inconsistent sets without changing retirement checks.
+
+- Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
+
+- Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
+
+- Retain bounded metadata caller-abort failure stages alongside native Worker test identities, preserving strict retirement checks and independent cleanup failures.
+
+- Distinguish joined partial-delivery read outcomes from Worker retirement failures only after exact producer cancellation and observer joins; retain raw rejections and independent SDK, SQLite and cleanup checks.
+
+- Preserve pending Worker reason unknowns and project retained response/body bindings without additional native body getter calls.
+
+- Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.
+
+- Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.
+
+- Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
+
+- Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.
+
+- Correct LiteLLM canonical catalog cache expectations and bind held readiness to original request reads, preserving all discovery joins after control or release failures.
+
+- Distinguish source-qualified native stored-error data outcomes from LiteLLM local handle-retirement failures while retaining independent Worker and accounting checks.
+
+- Join LiteLLM captured transport and guard originals, observer derivatives, and independent cleanup checks even when observer registration fails.
+
+- Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.
+
+- Join replayed response reads and cancellation before releasing readers, preserving independent source and delivery retirement failures.
+
+- Build and pack the provider plugin contract as a standalone ESM package with TypeScript declarations for external provider tooling.
+
+- Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
+
+- Run provider plugin REST JSON conformance fixtures with named API-key headers, using host-owned synthetic credentials and rejecting client credential injection.
+
+- Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
+
+- Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
+
+- Discard Fusion adviser drafts that exceed the proposal character limit instead of injecting a truncated answer, preserving completed usage and existing synthesis fallback.
+
+- Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
+
+- Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.
+
+- Preserve generated token usage in local Fusion smoke receipts before grading, so a grader failure cannot discard completed inference costs.
+
+- Load validated, data-only scheduling tables in the experimental Fusion vote CLI, with canonical fallback for unseen states.
+
+- Expose opt-in adaptive Fusion vote ordering through the endpoint client, retaining settled usage when selection fails.
+
+- Allow an opt-in adaptive worker selector in the experimental Fusion vote runner while preserving canonical full-panel answers.
+
+- Identify the rejected edit, source path, and missing or ambiguous anchor in Fusion draft-repair feedback without recording source text or applying a partial patch.
+
+- Allow single-draft Fusion benchmark controls without a supplied reproducer, preserving independent acceptance grading and fixed-model cost receipts.
+
+- Document tiny-first Fusion compute savings and the separate failed latency gate, including matched controls and verification costs.
+
+- Document the corrected local Fusion code-plan comparison, including oracle repairs, failed promotion gates and an aliasing defect missed by value tests.
+
+- Record the negative tiny-model prefix-guidance screen, separating answer-format failures from arithmetic results and including both model controls and compute costs.
+
+- Add an explicit fixed-choice Fusion client for compatible Chat Completions endpoints, with lazy calls, bounded deadlines and partial usage receipts.
+
+- Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
+
+- Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
+
+- Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
+
+- Pin reported default generation parameters in local Fusion comparisons so changes invalidate the run even when model weights stay the same.
+
+- Pin local Fusion server and prompt-rendering metadata, and reject completed comparisons when those inputs change during a run.
+
+- Retain incomplete Fusion pair acceptance receipts and completed agent diagnostics while stopping further paid arms.
 
 - Preserve access to later Fusion repository search matches with explicit truncation, continuation lines, and validated search ranges.
 
@@ -448,6 +573,7 @@
 - Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+- Declare native Levanto Sage, Liquid AI and TypeSafe decision provider routes with isolated credentials and typed codec fixtures, including explicit text/JSON Sage batch support metadata without inferred batch limits or prices; actual provider, catalog and DecisionV2 qualification remain separate.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
 - Declare scoped Vydra Jobs submission/retrieval/cancellation and validate returned workflow identity, preserving cancellation/refund uncertainty and unqualified upstream-dollar costs.
@@ -575,6 +701,7 @@
 - Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Qualify finite native Bedrock embedding declarations against the landed family codecs and signed runtime, retaining exact registered identities, text-only inputs and unknown costs.
 - Reject non-null Titan Multimodal error messages before exposing embeddings or usage, including empty and malformed values, while preserving other Bedrock families.
+- Declare nine frozen native Bedrock text embedding identities with primary provenance and unknown tariffs, preserving generic Invoke and excluding unqualified Titan Multimodal delivery. Select an explicit passthrough route for unknown native path models independently of declaration order, without treating known ineligible cards as unknown. Accept explicitly requested Cohere v3 float envelopes alongside legacy arrays, retaining complete vector validation and original native responses.
 - Add bounded native Bedrock embedding response validation with original regional destination binding, complete vector delivery and qualified Titan input counts; shared signing, dispatch and memory acceptance remain separately qualified.
 - Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Expose the existing Bedrock embedding model recognizer for shared route guards without duplicating family or inference-profile parsing rules.
@@ -686,6 +813,7 @@
 - Dispatch qualified Google unary speech through its complete-response wrapper, preserving original credentials, transport-specific model eligibility, preview expiry and conservative audio settlement.
 - Reuse shared Google output-audio classification in pricing and keep both native speech formats unpriced at admission and settlement, preserving policy-fixed charges and frozen preview qualification.
 - Qualify the frozen Google speech declaration formats and unpriced model identities, preserving shared transport/expiry eligibility and keeping ambiguous native Interactions discovery closed.
+- Declare the five frozen Google unary speech models on their qualified GenerateContent or manifest-only Interactions routes, retaining preview expiry and unknown audio-dollar costs.
 - Add frozen Lyria unary music codecs and sanitized native fixtures, preserving image-conditioned prompts, atomic track/lyrics delivery and explicit no-replay and unknown-cost boundaries.
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
 - Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
@@ -707,6 +835,7 @@
 - Qualify manifest-only Cerebras and NVIDIA public catalog declarations with fixed metadata factories and normalized fact arrays, preserving private caller binding and withholding native-route activation.
 - Reject registered catalog protocol declarations with mismatched wire pairs, noncanonical list/retrieve capabilities, missing GET or streaming transports before Worker execution, while preserving generic endpoint defaults and existing catalog exposure restrictions.
 - Add isolated public catalog orchestration for Cerebras, NVIDIA, Chutes and Venice with original-owner checks before every fetch and publication, one caller deadline and final current-policy filtering; shared dispatch activation remains separate.
+- Declare owner-bound public model catalogs for Cerebras, NVIDIA, Chutes and Venice, preserving manifest-only fact projections versus native envelopes and keeping inference credentials off public requests. Add registered-client discovery coverage for exact formats, original-key isolation, authoritative empty catalogs and physical reader retirement.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Qualify DeepInfra’s eight frozen model dispositions and original-account model discovery, preserving the existing Chat seed and withholding the known GLM-5.1 alias until runtime availability integration.
 - Add the six frozen Baseten Chat identities with qualified image inputs and native reasoning/tool replay fixtures; keep decision-only identities out of Chat and unknown prices unset.
@@ -726,6 +855,7 @@
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.
 - Dispatch complete Featherless catalogs through the original keyed grant, revalidate every page and final policy, and hold bounded capacity through atomic catalog serialization and delivery.
+- Declare the Featherless complete-catalog manifest route with original-grant keyed scanning, preserving all existing Chat cards and unknown pricing without inventing native pagination.
 - Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
 - Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
@@ -757,6 +887,8 @@
 - Complete the frozen Volcengine PAYG Chat roster while preserving its existing seed, closing deprecated identities and keeping dated standard models separate from Coding Plan aliases and tariffs.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
+- Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
+- Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
@@ -764,6 +896,8 @@
 - Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
 - Fix Tencent TokenHub model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Providers: qualify four frozen Abliteration Chat cards, native project discovery and canonical reasoning controls; retain the deprecated Large identity and project credential boundary.
+- Verify actual Abliteration static catalog, both stream hooks, effort ladders and tool/image replay through Worker/SQLite with original-key isolation and conservative usage.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
 - Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
@@ -773,6 +907,7 @@
 - Wire Requesty managed catalogs through original-owner discovery authorization, preserving native facts and final policy filtering with bounded reads, cancellation and delivery capacity.
 - Add a bounded Requesty managed-catalog request/reader leaf preserving native policy identities and unknown facts, without activating discovery or inferring current prices or entitlements.
 - Qualify the paired Requesty managed-catalog compiler contract with its fixed original-key GET route, model-less metadata selector and closed override surface; provider activation remains separate.
+- Declare Requesty native and manifest managed-model discovery under the original global gateway grant, preserving Chat cards and raw observations without inferred prices, limits or account entitlement.
 - Expose Vercel gateway Messages at the Anthropic SDK-compatible public path while keeping its original gateway dispatch path, credential and catalog offer.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
 - Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
@@ -791,6 +926,7 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Declare LiteLLM model discovery and literal versioned native aliases through its configured gateway and original managed key, preserving first capability bindings, opaque aliases and current-policy filtering without inferring prices or context limits.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
 - Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
 - Compile the ElevenLabs offer and exercise actual OpenClaw TTS/Talk through the Worker with scoped proxy credentials, complete MP3 delivery, caller deadlines, controlled cancellation and conservative accounting; keep unattended speech smokes unresolved.

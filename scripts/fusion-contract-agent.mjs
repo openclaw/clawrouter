@@ -144,7 +144,8 @@ export async function runSingleDraft(task, image, _strategy, trialId, config, in
     catch (error) {
       const status = ['invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size'].includes(error.message)
         ? error.message : 'invalid_edits';
-      actions.push({ action: 'draft', status });
+      actions.push({ action: 'draft', status,
+        ...(status === 'search_must_match_once' ? { rejectedEdit: error.cause } : {}) });
     }
     if (patched) {
       const start = performance.now();
@@ -181,13 +182,19 @@ export async function runRefinedDraft(task, image, strategy, trialId, config, in
     files = validateEdits(task, result.files);
     turns += result.turns; toolMs += result.toolMs; actions.push(...result.actions);
     if (result.outcome !== 'draft_submitted') {
-      const status = result.actions.findLast(action => action.action === 'draft')?.status;
+      const rejected = result.actions.findLast(action => action.action === 'draft');
+      const status = rejected?.status;
       const guidance = status === 'provider_truncated'
         ? 'The previous response exceeded the output limit. Return a shorter patch with small, focused edits.'
         : status === 'search_must_match_once'
           ? 'Each search must match exactly once in the supplied current source. Copy exact, unique anchors.'
           : 'Return valid JSON with 1–8 exact search/replace edits to the declared editable files.';
-      feedback = `No edits from the previous response were applied. ${guidance} Work from the supplied current source; do not assume the previous patch exists.`;
+      const detail = rejected?.rejectedEdit;
+      const location = status === 'search_must_match_once' && task.editPaths.includes(detail?.path)
+        && Number.isInteger(detail.index) && detail.index >= 0 && detail.index < 8
+        && ['missing', 'ambiguous'].includes(detail.match)
+        ? ` Edit ${detail.index + 1} in ${detail.path} matched ${detail.match === 'missing' ? 'no locations' : 'multiple locations'}.` : '';
+      feedback = `No edits from the previous response were applied.${location} ${guidance} Work from the supplied current source; do not assume the previous patch exists.`;
       result = { ...result, publicPassed: false };
       actions.push({ action: 'draft_check', status: 'not_applied' });
       continue;

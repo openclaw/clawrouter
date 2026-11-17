@@ -25,7 +25,7 @@ test("compiled provider declarations build and typecheck without client or Worke
   const options = { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"],
     types: [], strict: true, allowImportingTsExtensions: true };
   compile(root, "build", { ...options, declaration: true, emitDeclarationOnly: true, rootDir: repo, outDir: output },
-    [join(repo, "shared/provider-snapshot.ts")]);
+    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts")]);
   const files = readdirSync(output, { recursive: true }).map(file => file.replaceAll("\\", "/"));
   assert.ok(files.includes("shared/provider-snapshot.d.ts"));
   assert.ok(files.includes("shared/provider-model.d.ts"));
@@ -35,14 +35,43 @@ test("compiled provider declarations build and typecheck without client or Worke
   // This consumer imports emitted declarations without repository ambient types.
   const consumer = join(root, "consumer.ts");
   writeFileSync(consumer, `
-import type { ProviderSnapshot, CompiledProvider, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
+import type { AuthScheme as LegacyAuth, AuthorizationConfig as LegacyAuthorization, RefreshConfig as LegacyRefresh, GrantTransportAuth as LegacyTransportAuth, CompiledGrantTransport as LegacyTransport, GrantKind, ProviderSnapshot, CompiledProvider, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
 import type { GrantAccount, GrantExtraUsage } from "./declarations/shared/provider-observations.js";
+import type { ProviderProduct as LegacyProduct } from "./declarations/shared/provider-products.js";
+import type { ProviderGrantKind, ProviderProduct } from "./declarations/packages/provider-plugin-contract/src/products.js";
+import type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./declarations/packages/provider-plugin-contract/src/auth.js";
+import type { TokenRates as LegacyTokenRates, LongContextPricing as LegacyLongContextPricing, ServiceTierPricing as LegacyServiceTierPricing, AnthropicPriceModifiers as LegacyAnthropicPriceModifiers, TokenPricing as LegacyTokenPricing, CharacterPricing as LegacyCharacterPricing, ImageTokenPricing as LegacyImageTokenPricing, ModelPricing as LegacyModelPricing } from "./declarations/shared/provider-model.js";
+import type { SuccessfulRequestPricing as LegacySuccessfulRequestPricing, OutcomeRequestPricing as LegacyOutcomeRequestPricing, ImageRequestPricing as LegacyImageRequestPricing, DeepSeekSearchRequestPricing as LegacyDeepSeekSearchRequestPricing, RequestPricing as LegacyRequestPricing } from "./declarations/shared/request-pricing.js";
+import type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "./declarations/packages/provider-plugin-contract/src/pricing.js";
+declare const portablePricing: [TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing];
+const legacyPricing: [LegacyTokenRates, LegacyLongContextPricing, LegacyServiceTierPricing, LegacyAnthropicPriceModifiers, LegacyTokenPricing, LegacyCharacterPricing, LegacyImageTokenPricing, LegacyModelPricing, LegacySuccessfulRequestPricing, LegacyOutcomeRequestPricing, LegacyImageRequestPricing, LegacyDeepSeekSearchRequestPricing, LegacyRequestPricing] = portablePricing;
+const roundTripPricing: typeof portablePricing = legacyPricing;
+import type { ManagedProtocol as LegacyManagedProtocol, ManagedFileLinks as LegacyManagedFileLinks, OutputTokenLimit as LegacyOutputTokenLimit, ToolPricing as LegacyToolPricing, CompiledEndpoint as LegacyCompiledEndpoint } from "./declarations/shared/provider-snapshot.js";
+import type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./declarations/packages/provider-plugin-contract/src/endpoints.js";
+declare const portableEndpoints: [ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint];
+const legacyEndpoints: [LegacyManagedProtocol, LegacyManagedFileLinks, LegacyOutputTokenLimit, LegacyToolPricing, LegacyCompiledEndpoint] = portableEndpoints;
+const roundTripEndpoints: typeof portableEndpoints = legacyEndpoints;
+import type { GrantQuotaKind as LegacyGrantQuotaKind, CompiledQuotaWindow as LegacyCompiledQuotaWindow, CompiledQuotaProbeWindow as LegacyCompiledQuotaProbeWindow, CompiledQuotaProbe as LegacyCompiledQuotaProbe, CompiledQuotaConfig as LegacyCompiledQuotaConfig } from "./declarations/shared/provider-snapshot.js";
+import type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe as PortableQuotaProbe, CompiledQuotaConfig } from "./declarations/packages/provider-plugin-contract/src/quota.js";
+import type { GrantAccount as PortableAccount, GrantExtraUsage as PortableExtraUsage } from "./declarations/packages/provider-plugin-contract/src/observations.js";
+declare const portableQuota: [GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, PortableQuotaProbe, CompiledQuotaConfig, PortableAccount, PortableExtraUsage];
+const legacyQuota: [LegacyGrantQuotaKind, LegacyCompiledQuotaWindow, LegacyCompiledQuotaProbeWindow, LegacyCompiledQuotaProbe, LegacyCompiledQuotaConfig, GrantAccount, GrantExtraUsage] = portableQuota;
+const roundTripQuota: typeof portableQuota = legacyQuota;
+declare const portableAuth: [AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport];
+const legacyAuth: [LegacyAuth, LegacyAuthorization, LegacyRefresh, LegacyTransportAuth, LegacyTransport] = portableAuth;
+const roundTripAuth: typeof portableAuth = legacyAuth;
+declare const portableProduct: ProviderProduct;
+declare const portableKind: ProviderGrantKind;
+const legacyProduct: LegacyProduct = portableProduct;
+const legacyKind: GrantKind = portableKind;
+const roundTripProduct: ProviderProduct = legacyProduct;
+const roundTripKind: ProviderGrantKind = legacyKind;
 declare const snapshot: ProviderSnapshot;
 const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { provider, facts, account, usage };
+export { roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });

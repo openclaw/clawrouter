@@ -84,6 +84,12 @@ no test titles, source or error text. They identify reported label paths, not
 authenticated tests, and do not alter acceptance or replace test-count checks.
 Older receipts without fingerprints remain readable.
 
+If final acceptance returns an incomplete receipt, the pair checkpoint retains
+that receipt and the completed agent diagnostics, including the patch digest.
+It excludes generated source. The trial keeps an error status and zero score,
+and the campaign stops before another paid arm. An incomplete receipt cannot
+establish a quality or cost comparison.
+
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
 the controls. It also compares the candidate with a task-independent random
@@ -385,6 +391,11 @@ failed the no-regression screen. The default allowance remains 10. These are
 three development tasks, not independent holdout evidence.
 
 ### Single-draft supplied checks
+
+For baseline calibration without a supplied reproducer, combine
+`FUSION_PAIR_EXECUTOR=single-draft` with `FUSION_PAIR_CONTROLS_ONLY=1`.
+Each fixed model gets one patch attempt and independent acceptance grading.
+No candidate or fallback runs, so these receipts do not establish a Fusion gain.
 
 `FUSION_PAIR_POLICY=contract-draft` uses one cheap-model call to propose
 1–8 exact source edits. It receives the original editable source, declared

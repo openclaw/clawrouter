@@ -60,6 +60,19 @@ for (const phase of ['agent', 'grade-failed', 'grade-passed', 'grade-missing-val
       assert.equal(saved.records[0].status, 'error');
       assert.equal(saved.records[0].errorCode, 'incomplete_test_run');
       assert.equal(saved.records[0].score, 0);
+      if (phase === 'agent') {
+        assert.equal(saved.records[0].verdict, undefined);
+        assert.equal(saved.records[0].patchDigest, undefined);
+      } else {
+        assert.deepEqual(saved.records[0].verdict, {
+          ...(phase === 'grade-missing-valid' ? {} : { valid: false }),
+          passed: phase !== 'grade-failed', tests: 3, skipped: 0,
+        });
+        assert.equal(saved.records[0].patchDigest, 'f'.repeat(64));
+        assert.equal(saved.records[0].outcome, 'submitted');
+        assert.equal(saved.records[0].publicPassed, true);
+        assert.equal(saved.records[0].files, undefined);
+      }
       assert.equal(saved.calls.length, 1);
       assert.ok(Number.isSafeInteger(saved.calls[0].costMicros));
       assert.ok(!JSON.stringify(saved).includes('sentinel'));
@@ -914,7 +927,7 @@ test('a policy-only ablation never calls baseline workers or claims a paired rep
 });
 
 
-test('single-draft executor is explicit, restricted to supplied checks, and persisted', async () => {
+test('single-draft executor requires supplied checks when a candidate runs, and is persisted', async () => {
   const { root, options } = await fixture();
   try {
     for (const executor of ['unknown', null, 3]) await assert.rejects(runPairBenchmark({ ...options, executor }), /invalid_pair_executor/);
@@ -936,6 +949,32 @@ test('single-draft executor is explicit, restricted to supplied checks, and pers
     assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).executor, 'single-draft');
     assert.equal(pairModel('contract-provided-strong', roles.cheap, config), config.strong);
     assert.equal(pairModel('contract-provided-cheap', roles.strong, config), config.cheap);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('single-draft fixed controls need no supplied reproducer or candidate', async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, controlsOnly: true, executor: 'single-draft',
+      config: { ...config, maxCalls: 2, campaignBudgetMicros: config.priorCostMicros + 2 * config.trialBudgetMicros },
+      grade, fetcher: success,
+      contractAgent: async () => { assert.fail('candidate must not run'); },
+      agent: async (task, _image, _strategy, id, _settings, invoke) => {
+        assert.equal(task.reproducer, undefined);
+        seen.push(id.split(':').at(-1));
+        await invoke(id, roles.cheap, body, signal);
+        return { ...repaired(), outcome: 'draft_submitted' };
+      },
+    });
+    assert.deepEqual(seen, ['cheap', 'strong']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong]);
+    assert.deepEqual(state.records.map(row => [row.strategy, row.score, row.calls]), [['cheap', 1, 1], ['strong', 1, 1]]);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+    assert.equal(saved.executor, 'single-draft');
+    assert.equal(saved.controlsOnly, true);
+    assert.equal(saved.complete, true);
+    assert.throws(() => analyzePairRun(saved), /incomplete_pair_run/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

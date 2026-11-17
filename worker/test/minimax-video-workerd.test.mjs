@@ -339,7 +339,7 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
   let ok=false,error;try{await readVideoJson(request,owner.controlSignal,'input',owner.registerInput);ok=true;}catch(e){error=e.code??e.name;}finally{await owner.finish();}
   return Response.json({ok,error,reads,maxBacking,charged:bodyBudgetCharged()});
  }
- if(!['/call','/held','/scenario','/max-held','/partial-input'].includes(u.pathname))return new Response(null,{status:404});
+ if(!['/call','/held','/scenario','/max-held','/partial-input','/file-held'].includes(u.pathname))return new Response(null,{status:404});
  const target=u.searchParams.get('target');if(!target?.startsWith('/v1/'))return new Response(null,{status:400});
  const headers=new Headers(request.headers);headers.set('authorization','Bearer clawrouter-live-fixture-fixture-secret');
  const a=fresh(u.searchParams.get('mode')??'normal');
@@ -367,6 +367,11 @@ export default {async fetch(request,bindings,ctx){const env={...bindings,...ACCE
  cancel(reason){a.inputCancels=(a.inputCancels??0)+1;return r.cancel(reason);},releaseLock(){a.inputUnlocks=(a.inputUnlocks??0)+1;r.releaseLock();}};};}
 
  if(u.pathname==='/call')return worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
+ if(u.pathname==='/file-held'){
+  const response=await worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
+  // Hold the original validated output before the engine can consume it.
+  try{await gate(a,'output');return response;}catch(error){await response.body?.cancel(error);throw error;}
+ }
  if(u.pathname==='/max-held'){
   ctx.waitUntil((async()=>{const response=await worker.fetch(new Request('https://router.example'+target,{method:request.method,headers,body:request.body,signal:request.signal}),controlled(env,a),ctx);
    a.status=response.status;a.locator=response.headers.get('x-clawrouter-background-recovery');a.ready.resolve();await gate(a,'output');const reader=response.body.getReader();try{for(;;){const part=await reader.read();if(part.done)break;a.reads++;}}finally{reader.releaseLock();}a.results++;})().catch(e=>{a.error=e.code??e.name;a.results++;a.ready.resolve();}));
@@ -969,15 +974,28 @@ test("actual isolated current-CN V4: exact host after restart, original files, S
     }
     const metadata = await call("/v1/native/minimax/v1/files/retrieve?file_id=" + task + "1", null, { "x-clawrouter-job-id": task });
     assert.equal(metadata.status, 200, await metadata.clone().text()); await metadata.text(); await idle();
-    const file = await call(filePath, null, { "x-clawrouter-job-id": task });
-    const originalFileBody = file.body, bodyObservations = [];
-    const observeBody = stage => bodyObservations.push({ model, manifest, stage, bodyUsed: file.bodyUsed, locked: file.body?.locked ?? null, sameBody: file.body === originalFileBody });
-    observeBody("received"); if (file.status !== 200) assert.fail(await file.text());
-    assert.equal(file.headers.get("content-type"), "video/mp4"); assert.equal((await json("/state")).charged, 96 * MiB); observeBody("after-state");
-    assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
-    observeBody("after-contend"); observeBody("before-read");
-    let fileBytes; try { fileBytes = await file.arrayBuffer(); } catch (error) { console.error(JSON.stringify(bodyObservations)); throw error; }
-    assert.deepEqual(new Uint8Array(fileBytes), mp4(16 * MiB)); state = await idle(); assert.equal(state.releases, 1); previousFile = filePath;
+    const mode = "current-cn-file-" + model + "-" + manifest, outputGate = mode + "/output", entered = io.entered(outputGate);
+    let fileSettled = false, fileConsumed = false;
+    const pendingFile = call(filePath, null, { "x-clawrouter-job-id": task }, "file-held", mode);
+    void pendingFile.then(() => { fileSettled = true; }, () => { fileSettled = true; });
+    try {
+      await Promise.race([entered, pendingFile.then(() => { throw Error("file response settled before the output gate"); })]);
+      assert.equal(fileSettled, false);
+      assert.equal((await json("/state")).charged, 96 * MiB);
+      assert.deepEqual(await json("/contend"), { allowed: false, charged: 96 * MiB });
+      assert.equal(fileSettled, false);
+      io.release(outputGate);
+      const file = await pendingFile, originalFileBody = file.body, bodyObservations = [];
+      const observeBody = stage => bodyObservations.push({ model, manifest, stage, bodyUsed: file.bodyUsed, locked: file.body?.locked ?? null, sameBody: file.body === originalFileBody });
+      observeBody("received"); if (file.status !== 200) assert.fail(await file.text());
+      assert.equal(file.headers.get("content-type"), "video/mp4"); observeBody("before-read");
+      let fileBytes; try { fileBytes = await file.arrayBuffer(); fileConsumed = true; } catch (error) { console.error(JSON.stringify(bodyObservations)); throw error; }
+      assert.deepEqual(new Uint8Array(fileBytes), mp4(16 * MiB)); state = await idle(); assert.equal(state.releases, 1); previousFile = filePath;
+    } finally {
+      io.release(outputGate);
+      const file = await pendingFile.catch(() => null);
+      if (!fileConsumed && file?.body) await file.body.cancel();
+    }
     for (const [value, expected] of [[body, 303], [manifest ? { body: { ...body.body, prompt: "changed" } } : { ...body, prompt: "changed" }, 409]]) {
       const repeat = await call(target, value, { "idempotency-key": key }); assert.equal(repeat.status, expected, await repeat.clone().text()); await repeat.text(); await idle();
     }

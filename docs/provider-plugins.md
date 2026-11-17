@@ -41,10 +41,19 @@ my-provider/
 ```
 
 The descriptor contract is exported from
-`packages/provider-plugin-contract/src/index.ts`. The package is currently
-private, source-only, and not registered as a workspace or published to npm.
-Node 24+ can import the source using native TypeScript stripping. This first
-contract needs no dependency install and performs no I/O.
+`packages/provider-plugin-contract/src/index.ts`. The package is a private
+workspace package with compiled ESM JavaScript and TypeScript declarations. It is not published to npm. Build and pack a local
+archive for use outside this repository:
+
+```sh
+pnpm --filter @clawrouter/provider-plugin-contract pack --pack-destination /tmp
+```
+
+Install that archive in a separate project and import
+`@clawrouter/provider-plugin-contract`. Its runtime has no dependencies and needs
+no TypeScript loader. See the [package README](../packages/provider-plugin-contract/README.md).
+Repository tooling can still import the source directly with Node 24+ native
+TypeScript stripping. The contract performs no I/O.
 
 ```ts
 import { parseProviderPluginDescriptor, providerPluginFiles } from
@@ -108,17 +117,53 @@ admission rules before rendering or serving resources.
 ## Compiled provider contract
 
 [`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot, endpoint, model, auth, and quota declarations. Build tools and
-future package compilers can import these types without importing Worker
-bindings, credential records, or adapter implementations. Existing imports from
+v1 snapshot and model declarations, and re-exports portable endpoint, auth,
+and quota declarations. Build tools and future package compilers can import these
+types without importing Worker bindings, credential records, or adapter
+implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
+
+Full product, binding, offer selection, and compiled offer declaration types are
+exported by `@clawrouter/provider-plugin-contract`. Core imports from
+`shared/provider-products.ts` remain type-only compatibility exports. The
+package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
+as `GrantKind` for existing consumers.
+
+Authentication scheme, OAuth authorization/refresh configuration, and compiled
+grant-transport types also belong to the package. Existing imports of
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` from `shared/provider-snapshot.ts` remain supported.
+Credential storage, refresh ownership, runtime validation, and upstream calls
+remain host responsibilities.
 
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
+
+Endpoint declarations also belong to the package: `CompiledEndpoint`,
+`ManagedProtocol`, `ManagedFileLinks`, `OutputTokenLimit`, and `ToolPricing`.
+Existing imports from `shared/provider-snapshot.ts` remain supported. These
+compiled types preserve path, format, streaming, lifecycle, and limit fields;
+they do not replace manifest validation or host dispatch and admission.
+
+Quota probe and response-header declarations belong to the package through
+`CompiledQuotaConfig`, `CompiledQuotaProbe`, `CompiledQuotaProbeWindow`,
+`CompiledQuotaWindow`, and `GrantQuotaKind`. `GrantAccount` and `GrantExtraUsage`
+also belong to the package; `shared/provider-observations.ts` preserves existing
+imports. These are provider-reported observations and extraction recipes.
+Polling, freshness, credentials, budgets, and admission remain host-owned.
+
+### Portable tariff declarations
+
+The contract package exports `ModelPricing`, `RequestPricing`, and their component
+types. Existing imports from `shared/provider-model.ts` and
+`shared/request-pricing.ts` remain supported through type-only exports. These are
+published tariff declarations; runtime policy overrides, admission, and settlement
+remain host-owned. This does not add a model-catalogue importer or change price
+units, nullable values, or provider-specific qualifications.
 
 ### Explicit products
 
@@ -425,7 +470,8 @@ falls back to the network. Packages supply data only. They cannot provide code,
 credentials, or host bindings.
 
 The first execution scope is deliberately narrow: model-free `rest_json`
-providers, one required `Authorization: Bearer ${secret}` API-key scheme, one
+providers, one required API-key scheme (either `Authorization: Bearer ${secret}`
+or a named `api_key` header such as `X-API-Key`), one
 `*_API_KEY` configuration value, one fixed HTTPS base URL, and unambiguous literal
 native POST routes. OAuth, grant transports, model catalogs, streaming, lifecycle
 endpoints, and stream/error adapters are rejected before any scenario runs.
@@ -434,8 +480,12 @@ A fixture's client path is relative to the provider's native mount. For example,
 `/v1/invoke` runs at `/v1/native/example/v1/invoke`. Upstream paths include the
 complete path and query sent to the provider. The host owns client authorization
 and supplies the synthetic upstream key `synthetic-conformance-key`; fixtures
-can assert `authorization: Bearer synthetic-conformance-key` upstream. Ambient
-API keys are never copied into the fixture environment.
+can assert `authorization: Bearer synthetic-conformance-key` upstream, or the
+configured API-key header with value `synthetic-conformance-key`. Header names
+in manifests are case-insensitive; fixture header names must be lowercase. Client fixtures cannot supply either host authorization
+or the selected API-key header. Header API-key scenarios also reject an
+additional upstream `Authorization` header. Query-string keys remain unsupported.
+Ambient API keys are never copied into the fixture environment.
 
 Each scenario must cause exactly one upstream call with redirects disabled.
 The runner compares method, origin, path, asserted headers, and exact JSON body;

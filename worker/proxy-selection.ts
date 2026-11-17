@@ -318,15 +318,29 @@ export function nativeModelEndpoint(provider: CompiledProvider, matching: Compil
     && endpoint.request_format === "openai.chat_completions" && endpoint.response_format === "openai.chat_completions")
     && body !== null && typeof body === "object" && !Array.isArray(body) && "model" in body && typeof body.model === "string" ? body.model : null;
   if (!pathModel && !bodyModel) return;
+  let recognized = false;
+  const pathIdentities = new Set<string>();
   const qualified = candidates.filter(endpoint => {
     const params = nativeParams(endpoint, path), value = bodyModel ?? params.model ?? params.deployment;
+    if (pathModel) {
+      pathIdentities.add(params.model ?? params.deployment ?? "");
+      if (params.model !== undefined && params.deployment !== undefined) pathIdentities.add(params.deployment);
+    }
     const model = provider.models.find(model => model.upstream === value);
     // A router alias is not an upstream model assertion on an overlapping native
     // path. Manifest routes continue to resolve their explicit router selector.
     if (!model && provider.models.some(model => model.id === value))
       throw new HttpError(400, "native_model_alias_unsupported", "overlapping native routes require the selected upstream model identity");
+    // A known but ineligible card is not an unknown passthrough model. Keep the
+    // literal native-prefix identity rule aligned with providerModel, without
+    // invoking its passthrough synthesis or resolving template identities.
+    recognized ||= !!model || provider.models.some(row => !row.id.includes("${") && !row.upstream.includes("${")
+      && provider.routing.modelPrefixes.some(prefix => row.id === prefix + value));
     return model && modelSupportsEndpoint(provider, model, endpoint);
   });
   if (qualified.length > 1) throw new HttpError(409, "native_route_ambiguous", "native model matches multiple declared operations");
-  return qualified[0];
+  if (qualified.length || recognized || !pathModel || pathIdentities.size !== 1 || pathIdentities.has("")) return qualified[0];
+  const passthrough = candidates.filter(endpoint => endpoint.modelPassthrough);
+  if (passthrough.length > 1) throw new HttpError(409, "native_route_ambiguous", "native model matches multiple passthrough operations");
+  return passthrough[0];
 }

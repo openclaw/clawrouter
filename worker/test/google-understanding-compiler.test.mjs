@@ -20,11 +20,13 @@ function fixture(modes = ["audio", "video"], isolated = false) {
   const manifest = structuredClone(existing), model = manifest.models.entries.find(model => model.upstream === wire.model);
   assert.ok(model, "the qualified frozen card is already declared");
   if (isolated) {
-    // Keep provider-wide negative cases independent of the image/music guard order.
-    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate"].includes(row.endpoint));
+    // Keep provider-wide negative cases independent of the image/music/speech guard order.
+    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate", "speech_generate_content", "speech_interactions"].includes(row.endpoint));
     delete manifest.endpoints.image_generate;
     delete manifest.endpoints.music_generate;
-    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate"].includes(id)));
+    delete manifest.endpoints.speech_generate_content;
+    delete manifest.endpoints.speech_interactions;
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate", "audio.speech"].includes(id)));
   }
   for (const mode of modes) {
     const id = `inline_${mode}`;

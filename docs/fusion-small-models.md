@@ -75,6 +75,16 @@ Declare the profile before generation and use it for every compared arm.
 It supplements public examples; independent hidden grading is still required.
 Changing a profile creates a new experiment, not a revision of historical scores.
 
+Local repository calls also record `runtimeTimingsNs` from the local server:
+`total`, `load`, `promptEval`, and `generation`, all in nanoseconds.
+`runtimeTimingStatus` distinguishes `available`, `missing`, and `invalid` metadata.
+Per-task and per-strategy totals stay `null` if any dispatched call lacks valid
+timings or a total exceeds the safe integer range. Missing timings never count
+as zero. For inference-only comparisons, add `promptEval` and `generation`;
+report model loading separately. These server measurements do not replace call
+or agent wall time, which includes other overhead. Existing receipts cannot
+reconstruct these measurements from `elapsedMs`.
+
 Local repository scores require a completed agent outcome as well as independent
 acceptance: `submitted` for legacy and grounded execution, or `verified` for
 checked execution. A patch left at a turn limit, deadline, or missing outcome
@@ -118,6 +128,53 @@ claiming free inference. Do not tune and report on the same task families.
 Do not start by training TRINITY, adding a third frontier worker, or asking an
 expensive judge to grade every cheap draft. Those choices add costs before we
 know whether the worker pool contains useful complementary answers.
+
+## Pairwise evidence packing
+
+`scripts/fusion-evidence-packing.mjs` selects a document set from a supplied
+linear model over document pairs. It is an offline experiment tool; it does not
+read document text, extract features, train a model, call a provider, or change
+the production Fusion profile.
+
+Provide every unordered pair exactly once, with indices in ascending order.
+Each feature vector must match the head's `weights`, `mean`, and positive
+`scale` vectors. The scorer standardizes features, computes pair logits, and
+selects the set containing the most total softmax pair mass. Input pair order
+does not affect ties; the lowest lexicographic document set wins.
+
+```json
+{
+  "version": 1,
+  "documentCount": 3,
+  "limit": 2,
+  "head": { "weights": [1], "mean": [0], "scale": [1] },
+  "pairs": [
+    { "indices": [0, 1], "features": [0] },
+    { "indices": [0, 2], "features": [2] },
+    { "indices": [1, 2], "features": [1] }
+  ]
+}
+```
+
+```sh
+node scripts/fusion-evidence-packing.mjs /path/to/evidence.json
+```
+
+This example selects indices `[0, 2]`. The returned `retainedPairMass` is mass
+assigned by the supplied model, not a calibrated probability that the selected
+documents contain the answer. Do not use it as an accuracy guarantee.
+
+The contract accepts 2–10 documents and 1–32 features. `limit` defaults to four
+documents, or all documents when fewer than four are available. It may be any
+integer from two through `documentCount`. The CLI accepts one regular JSON file
+of at most 2 MiB. Unknown fields, missing or duplicate pairs, nonfinite values,
+and arithmetic overflow are rejected. No prompts or answers belong in this file.
+
+Train the supplied head and choose its features on development data. Freeze
+them before evaluating a fresh cohort. Compare equal-size sets from lexical,
+semantic and relevance-only controls, then measure downstream answer quality,
+token use and selector overhead. A retrieval gain alone does not qualify a
+Fusion configuration for activation.
 
 ## Offline opportunity command
 
@@ -317,7 +374,13 @@ have a passing oracle and failing broken baseline, and identify cached immutable
 Docker images. A passing repair must execute the same test and skipped-test
 counts as the qualified oracle. The runner does not download models, images or dependencies.
 The local transport validates both model identities before execution and checks
-their digests again afterward. It never invokes a paid provider. Role labels
+their digests again afterward. Each model pin also records the Ollama server
+version, optional renderer/parser names and template source, and SHA-256 hashes of
+the chat template and any reported default parameters. Raw templates and parameter
+text are not saved. Missing parameter metadata is recorded as null. Both named renderers and
+older Go-template servers are supported. Runtime, default-parameter or thinking-capability changes
+at the final check leave the run incomplete; these start/end checks cannot detect
+a transient change that is reverted between checks. It never invokes a paid provider. Role labels
 inside the reused harness map explicitly to these local model pins.
 
 Set `FUSION_LOCAL_OUTPUT_TOKENS` to an integer from 1 through 8,192 to change the
@@ -1397,3 +1460,415 @@ failures and a complete passing repaired acceptance suite before inference.
 This is a development transfer case for an already studied cleanup pattern.
 It does not establish independent generalization or a Fusion quality gain.
 The workload adds no provider calls and changes no production strategy.
+
+### Short-prefix guidance screen
+
+A local screen on 2026-11-14 tested whether a short start from a stronger model
+could help a tiny model finish an arithmetic problem. This is a fixed-budget,
+zero-shot adaptation of [LLM Shepherding](https://arxiv.org/abs/2601.22132), not a
+reproduction of its trained hint-selection policy or few-shot setup.
+
+The student was `qwen3:0.6b` (digest
+`7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435`);
+the teacher was `qwen3.5:4b` (digest
+`7f3251fa6878a78a606bcb3c074283306e5ad2ea411a7774a9dd98a4bc7f2d13`).
+Both used Ollama 0.40.11, `think: false`, temperature 0, top-p 1, repeat penalty 1,
+seed 20261114, a 4,096-token context, and a 768-token final-output cap. Hints had
+a separate 64-token cap. A hint was the beginning of an ordinary answer, not a
+separately requested plan. Intentional hint truncation was allowed; final
+answers had to finish normally.
+
+The cohort was the first 16 questions in ascending SHA-256 order of UTF-8
+`prefix-hint-v1|` followed by the question, from the official
+[GSM8K test file](https://github.com/openai/grade-school-math/blob/b0bb162abedc65e1fdd8e93ed090fd7598ee68bc/grade_school_math/data/test.jsonl).
+All 1,319 questions were eligible. The source Git blob was
+`e4c2ff4942b9a78bd74f04141224c11e28d12dc9`; selection used no model outcomes.
+Ground-truth answers were used only by the grader.
+
+Each question had four arms: student alone, teacher alone, teacher prefix then
+student, and student prefix then student. Prefixes were generated independently
+of the full-answer controls. The four arms rotated execution order by question.
+All received the same problem and instruction to show a concise calculation and
+end with `#### <numeric answer>`. Continuations also received their prefix as
+potentially mistaken context and were asked for a complete solution. The study
+completed 96 question calls plus two warmups, with no retries or incomplete
+final outputs. Responses and usage were recorded before grading.
+
+| Arm | Frozen strict score | Post-hoc numeric diagnostic | Normalized compute seconds |
+| --- | ---: | ---: | ---: |
+| Student alone | 1/16 | 9/16 | 5.200 |
+| Teacher alone | 12/16 | 13/16 | 11.709 |
+| Teacher prefix, student finish | 3/16 | 12/16 | 13.390 |
+| Student prefix, student finish | 1/16 | 7/16 | 8.087 |
+
+The frozen grader required exactly one line containing `####` followed only by
+a number. The tiny model often copied the literal `<numeric answer>` placeholder
+or added currency/LaTeX formatting. Its strict score therefore mixes arithmetic
+errors with format failures. The separate, post-hoc diagnostic accepts exactly
+one numeric literal after exactly one `####` marker, including formatting or
+units. It does not search the preceding reasoning for a correct number and does
+not replace the frozen score. Under that diagnostic, teacher hints rescued four
+student failures; three hints did not already contain a final-answer marker.
+
+Compute is a local proxy: native prompt-evaluation plus generation duration.
+Each ordinary request pays the maximum observed original-prompt prefill for its
+model and question; each continuation pays at least that prefill. This limits
+benefits from control-warmed prompt caches. Even without that adjustment, mixed
+compute was 12.821 seconds versus 11.706 for the teacher alone. Shared-server
+wall time was 21.367 versus 20.800 seconds; it is not a deployment latency result.
+
+The predeclared gate required mixed quality within one answer of the teacher,
+at least two answers above each student control, at least two student failures
+rescued without a final-answer marker in the hint, and compute at most 80% of the
+teacher. The recipe failed. Even the more permissive diagnostic leaves it below
+the teacher while using 14.35% more normalized compute. No larger confirmation,
+production policy, or default change follows from this screen. API spend was
+zero; local compute was still consumed. GSM8K arithmetic is a capability screen,
+not evidence of repository-repair quality.
+
+### Corrected code-plan development screen, 2026-11-14
+
+A bounded local comparison tested Qwen3-Coder 30B plans with a
+Qwen2.5-Coder 3B Instruct Q4_K_M implementation worker. It retained 16 selected
+MBPP+ tasks and compared direct generation with both same-model planning
+controls. Plans allowed 64 output tokens; implementations allowed 1,024.
+Generation was greedy, with thinking disabled and an 8,192-token context.
+Both plans were generated before any implementation. The same large-model
+plan fed the mixed and large-model self-plan arms, with its cost charged to each.
+
+This is a corrected development study, **not an untouched MBPP+ score**.
+The original run stopped after finding an unsound reference for task 620:
+its order-dependent algorithm could accept a chain without pairwise divisibility.
+A sorted positive-integer oracle, checked against 19,531 exhaustive small cases,
+corrected seven expanded expected outputs. Tasks 294 and 305 received explicit
+contract clarifications before their first model calls. All 16 tasks remained.
+The continuation reused 41 responses only after exact request-body matching,
+then made 73 new local calls. Original artifacts were preserved.
+
+| Policy | Value-test acceptance | Normalized native seconds | Native plus grading seconds |
+| --- | ---: | ---: | ---: |
+| 3B direct | 10/16 | 11.825 | 27.003 |
+| 30B direct | 13/16 | 22.124 | 36.973 |
+| 30B plan → 3B code | 13/16 | 19.718 | 35.455 |
+| 3B plan → 3B code | 10/16 | 12.613 | 26.770 |
+| 30B plan → 30B code | 14/16 | 40.074 | 55.073 |
+
+Native time is the server's prompt-evaluation plus generation duration. Each
+phase pays at least the largest observed base-prompt prefill for its model and
+task, limiting benefits from cache warming by another arm. The final column
+also includes isolated executable grading and its container startup. These
+are local resource proxies, not production latency or dollar savings. Replayed
+responses retain their original timings, so this is not a continuous wall-time
+comparison.
+
+The frozen gate **failed**. Mixed planning repaired four failed small-model
+value tests, but lost two large-model successes and finished below the
+large-model self-plan control. Its native ratio was 0.891; with grading it was
+0.959. Both exceed the predeclared 0.8 ceiling. All 114 logical calls have complete
+response and usage receipts; none required a paid API call.
+
+Value tests also miss some real defects. A separate, post-hoc mutation check
+found that the mixed answer for task 568 repeated one dictionary object rather
+than creating independent dictionaries. Changing one element changed another;
+the large-model direct answer preserved independence. The frozen table remains
+unchanged, but its four scored rescues do not establish four complete repairs.
+Reject this recipe without changing production routing.
+
+Protocol SHA-256:
+`ff317a7e84b501fa8af12eca97b92ffacb88052f01c88e9576762e79019fe4a4`.
+Complete journal SHA-256:
+`cff70a2ff1bc295c995b72c74af7d50a4f743195a4ba83915514b06c96cbad70`.
+
+The [November 2026 planning/coding separation study](https://arxiv.org/html/2611.04320v1)
+uses three independently sampled plans per task, up to 2,048 plan tokens and
+8,192 code tokens, and tests multiple model pairings. This short-plan screen
+does not reproduce that protocol. Its negative result does not reject planning
+in general. [Planning-Driven Programming](https://aclanthology.org/2025.acl-long.621/)
+also checks plans against visible tests before implementation and refinement;
+plan validation remains a separate hypothesis to test with matched controls.
+
+## Tiny-first execution: compute savings are not latency savings
+
+A November 14 local comparison used Qwen2.5-Coder 1.5B Q4_K_M and
+Qwen3-Coder 30B on 32 MBPP tasks not previously used in the recorded campaign.
+The benchmark is public and may overlap model training. Before inference,
+reference implementations and input contracts were reviewed; ambiguous tasks
+were excluded. Each task had its original public examples, eight additional
+public inputs and up to 64 disjoint hidden inputs. Expected results came from
+the frozen references. This tests supplied, trusted verification, not automatic
+test generation or arbitrary repository repair.
+
+Both models received the same specification with 512 output tokens and a
+4,096-token context limit. Each could repair one public-test failure. The
+cascade accepted the tiny model's initial public pass, otherwise used the
+strong model's initial answer and conditional repair. Hidden results were
+withheld until all 78 calls completed. No calls or timings were reused.
+
+| Policy | Public and hidden passes | Model compute seconds | Tokens |
+| --- | ---: | ---: | ---: |
+| 1.5B single | 21/32 | 8.917 | 6,801 |
+| 1.5B with conditional repair | 21/32 | 12.238 | 10,260 |
+| 30B single | 29/32 | 37.705 | 7,312 |
+| 30B with conditional repair | 30/32 | 43.149 | 8,345 |
+| Tiny-first cascade | 30/32 | 29.518 | 10,488 |
+
+The cascade preserved every strong-repair success, had nine accepted mixed-model
+cases and no observed false accepts. It passed the frozen gate: at least 27
+passes, two more than tiny repair, preservation of strong-repair successes,
+at least two accepted mixed-model cases, no false accepts and at least 20%
+less model compute than both strong baselines. Compute fell 21.7% against
+strong single and 31.6% against strong repair. Tokens increased 43.4% and
+25.7%, respectively. These are local compute measurements, not API savings.
+
+Thirty-two tasks are too few for a broad reliability claim. A post-hoc paired
+task-bootstrap 95% interval for the compute ratio was [0.506, 1.098] against
+strong single and [0.481, 0.865] against strong repair. The observed gate passed;
+the advantage against strong single remains uncertain beyond this sample.
+
+A separate timing run selected 18 of those exposed tasks deterministically,
+repeated each twice and made fresh calls for all three compared policies.
+All six execution orders were balanced across the 36 cases. Every policy
+passed all 36 cases, with no false accepts; 115 calls completed. Request time
+included model loading and checkpoints. Strong-single time stopped before
+its public grading; the other policies included all public checks and repairs.
+Hidden grading was excluded from request time.
+
+| Policy | Summed request seconds | Included model-loading seconds |
+| --- | ---: | ---: |
+| 30B single response | 64.574 | 27.723 |
+| 30B with public verification and conditional repair | 89.447 | 24.739 |
+| Tiny-first cascade | 84.384 | 40.723 |
+
+The latency gate failed: the cascade was 30.7% slower than strong single and
+only 5.7% faster than verified strong repair, below the required 20% reduction
+against both. Saving model compute did not save enough request time. This
+does not qualify a faster production profile or justify default activation.
+
+A follow-up used a separate local server with both models resident, preserving
+the same runtime, weights, task sequence, seeds, policies and timing gate.
+Each policy made fresh calls. Two zero-token preloads took 2.062 seconds,
+reported separately from steady-state request time. All policies again passed
+36/36; the run completed 115 inference calls without skipped repairs.
+
+| Resident-model policy | Summed request seconds | Public-verified seconds |
+| --- | ---: | ---: |
+| 30B single | 34.385 | 63.040 |
+| 30B with public verification and conditional repair | 67.650 | 67.650 |
+| Tiny-first cascade | 47.282 | 47.282 |
+
+Model loading within the cascade fell to 0.048 seconds. The cascade was 30.1%
+faster than verified strong repair and 25.0% faster than strong single with its
+public checks included. These descriptive comparisons suggest a narrower use
+case: requests that already require executable verification. The separate
+confirmation below rejects that hypothesis for the remaining tasks. Against
+strong single returning
+before verification, the cascade was 37.5% slower, so the original latency gate
+still failed. Neither failed gate is replaced by the secondary comparison.
+
+The resident run reused exposed tasks and repeated each twice. Its paired
+task-bootstrap 95% latency-ratio interval was [0.549, 0.874] against verified
+strong repair and [1.026, 1.820] against unverified strong single. This is local
+timing evidence, not new-task quality evidence or a production latency promise.
+
+The next run used all 14 tasks omitted from the first timing subset, repeated
+twice, with a new fixed seed and independent calls for each policy. The new
+gate required at least 24/28 passes, preservation of every strong-repair success,
+two accepted mixed-model cases, no false accepts and at least 20% less time
+than **both verified** strong baselines. Raw strong-single time remained a
+reported control. Prior verdicts were unchanged.
+
+| Remaining-task policy | Passes | Request seconds | Public-verified seconds |
+| --- | ---: | ---: | ---: |
+| 30B single | 22/28 | 31.428 | 50.686 |
+| 30B with conditional repair | 24/28 | 68.071 | 68.071 |
+| Tiny-first cascade | 24/28 | 68.622 | 68.622 |
+
+All 111 calls settled; there were no false accepts, skipped repairs or lost
+strong-repair successes. Both models stayed resident. The cascade was 0.8%
+slower than strong repair and 35.4% slower than verified strong single. It
+failed the newly declared latency gate. Cold preloads took 3.568 seconds,
+excluded from request time for every arm. These tasks had prior quality
+observations but no prior timings in this study. The failed confirmation
+rules out presenting the first subset's verified-workflow speedup as a
+general result. Do not repeat this unchanged cascade on the same tasks to
+search for a passing seed.
+
+The compute protocol SHA-256 is
+`a1cc2482b403ca47e19fcfd6de4d4117db420aa311c5d71c9ebc38df9b839bd6`;
+its result SHA-256 is
+`3bf08dca3c6523f19ed3ce9925ea1d9802ece469f0b092f33be7b84f071dca01`.
+The timing protocol SHA-256 is
+`003b8bdd9b4084e1426bc78ae03a6a917a7c91edcb679963b4b0751ec3d4630b`;
+its result SHA-256 is
+`48f344ce4fdbd9726f4f314d0dc1418e1aa7aeff5cd5178e1724d8ca0d107925`.
+These identify local development receipts, not a bundled reproduction suite.
+Independent audits checked source and model pins, prompts, seeds, execution
+order, conditional calls, usage, selections and reported totals. All inference
+was local, with zero paid API calls.
+
+The resident timing protocol SHA-256 is
+`0e9821f95b281f2cd58f0b650657d9bc604aa873ae4bfe2add8fdc455e4ab81b`;
+its result SHA-256 is
+`4d0e0d573d9216299d47a174b8fd1e4afd5b4e11fcb79514c76aa1144efc5503`.
+The remaining-task confirmation protocol SHA-256 is
+`eb82ef0696f1a9420d63a676a4c1902fe3df88c3646ea60105dc5b60517cbeb1`;
+its result SHA-256 is
+`281394cb740f189eeb3eb090f50ba50a4a91b3746dd479625482388e680ab8b1`.
+
+## Native contrastive decoding: positive point estimates, failed admission
+
+A local token-level experiment combined a Qwen3 4B Instruct expert with a
+Qwen3 0.6B amateur. It improved observed accuracy in three arithmetic cohorts,
+but none passed its frozen admission gate. The final cohort lost two answers
+the expert answered correctly. This does not qualify a production profile.
+
+The decoder used the fixed rule from
+[Contrastive Decoding Improves Reasoning in Large Language Models](https://arxiv.org/html/2309.09117v2):
+discard tokens whose expert probability is below 0.1 times its maximum, then
+greedily maximize `1.5 * expert_logit - 0.5 * amateur_logit`. Both models receive
+the selected token at each step. Vocabulary entries, token attributes and
+prompt tokenization were checked for agreement. This needs full local logits;
+it is not available through ordinary Chat Completions responses.
+
+The implementation used an isolated native ARM64 Metal build of llama.cpp at
+`9ff0d7e90f0faaa7c16017e6dcf9cf91c50a100e`. It did not change the shared model
+server. The GGUF SHA-256 pins were:
+
+- Qwen3 4B Instruct: `85e4a5b7b8ef0e48af0e8658f5aaab9c2324c76c1641493f4d1e25fce54b18b9`.
+- Qwen3 0.6B: `7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa`.
+
+Questions came from the official
+[GSM8K test data](https://github.com/openai/grade-school-math/blob/b0bb162abedc65e1fdd8e93ed090fd7598ee68bc/grade_school_math/data/test.jsonl),
+whose raw SHA-256 was
+`3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14`.
+Each cohort used a fixed hash order of questions no longer than 500 characters.
+Later cohorts excluded earlier questions and the earlier prefix-hint study.
+These are disjoint local evaluation samples, not model-training holdouts.
+
+Every arm received the same zero-shot request for concise working and a final
+numeric answer, with a 256-token output cap. An answer counted only if generation
+ended and its final `####` number matched the reference. Capped outputs failed.
+Arm order alternated by question. All 352 calls completed across the three
+cohorts, without retries or paid API calls. The decoding rule and output budget
+were unchanged. This differs from the paper's eight-shot prompting setup.
+
+| Cohort | Expert correct | Fusion correct | Gains / losses | Expert / fusion output tokens | Expert / fusion wall seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Development, 16 questions | 13 | 14 | 1 / 0 | 2,045 / 2,036 | 22.600 / 22.328 |
+| Disjoint confirmation, 32 questions | 25 | 26 | 1 / 0 | 4,164 / 4,030 | 66.633 / 78.424 |
+| Final confirmation, 128 questions | 101 | 107 | 8 / 2 | 17,598 / 17,175 | 267.426 / 313.938 |
+
+Wall time includes model loading, generation and teardown for each subprocess.
+The first development control incurred cold initialization, so its apparent
+1.2% timing advantage is not evidence of faster fusion. Final fusion took 17.4%
+longer while generating 2.4% fewer output tokens. These measurements do not
+establish resident-service latency or throughput.
+
+The first two frozen gates required at least two gains, zero losses, and no more
+than 25% extra wall time or output tokens. Both failed the gain requirement.
+The final test was declared before its calls, with a stricter requirement of
+at least six gains, zero losses and the same cost ceilings. It failed preservation.
+Do not pool the earlier exploratory gains to turn any failed gate into a pass.
+
+In the final cohort, four gains corrected completed wrong answers and four
+avoided baseline truncation. One loss was a new arithmetic error; the other
+misinterpreted a problem and truncated. The exact two-sided paired sign-test
+p-value was 0.109375. A post-hoc paired task bootstrap gave a 95% accuracy-difference
+interval of [0, 9.375] percentage points. The positive point estimate is not
+conclusive evidence of a general improvement. No further sample extension or
+parameter search is admitted for this candidate.
+
+Independent recomputation checked all question identities, reference answers,
+call ordering, grades, gains, losses, totals and receipt hashes. Final protocol
+SHA-256:
+`89fe4f6fba0145f6a107be91ecd9bac5b7f92bf42a2fcac06026a790ee62e43d`.
+Final calls SHA-256:
+`882fb43e8a7bc4ce0b3b908c647ce0eac6f88fe35543c7594489e011cb5c28c0`.
+Final result SHA-256:
+`757125cbf3105f9a60b5b5ad0b9b14fb3b514ba96bbddf944ced25717070536d`.
+These identify local research receipts, not a bundled reproduction suite.
+The experiment adds no Worker route, deployment or default activation.
+
+
+## Asymmetric reader/reasoner screening
+
+The local [PAIR-style](https://arxiv.org/html/2610.16003v1) screens did not
+qualify a deployment profile. The Reader receives the full document context;
+the Reasoner receives only the question and shared generated prefix. Each
+step selects one token from `0.7 * reader_logits + 0.3 * reasoner_logits`.
+This requires compatible local vocabularies and logits, not ordinary
+OpenAI-compatible API responses. No adapters were trained, so these screens
+are not a replication of the paper's adapted models.
+
+Each screen used 16 HotpotQA validation questions, retaining the original ten
+paragraphs and adding thirty fixed distractors from the same pinned source
+page. Question and paragraph order came from fixed hashes. All four arms used
+balanced execution order. Scoring required a completed response ending in a
+separate `####` answer line, with normalized exact match (EM); token F1 was a
+secondary metric. Each complete screen made 64 logical requests across 80 model
+branches. All inference was local, with zero paid API calls.
+
+| Screen | Full-context Reasoner EM | Reader EM | Question-only Reasoner EM | Fusion EM |
+| --- | ---: | ---: | ---: | ---: |
+| 0.6B Reader / 4B Reasoner, 128-token cap | 7/16 | 0/16 | 1/16 | 2/16 |
+| 4B Reader / 30B Reasoner, 128-token cap | 0/16 | 7/16 | 1/16 | 9/16 |
+| 4B Reader / 30B Reasoner, calibrated prompt and 512-token cap | 9/16 | 9/16 | 1/16 | 9/16 |
+
+The first screen lost five full-context Reasoner successes. The second used
+disjoint question IDs, but its apparent gain was invalid: eleven full-context
+Reasoner responses hit the output cap, and the other five omitted the required
+answer marker. Even a numerical gate pass cannot establish improvement over
+that broken control.
+
+The calibration kept the second screen's questions and models. It repeated
+the answer-format instruction after the question and raised the cap to 512
+for every arm. This is exposed-cohort development, not independent confirmation.
+Before inference, baseline qualification required at least 15 valid completed
+answers and eight exact answers. All 16 full-context Reasoner responses then
+completed with the required marker; none hit the cap.
+
+| Calibrated arm | EM | Mean token F1 | Output tokens | Subprocess seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Full-context Qwen3-Coder 30B | 9/16 | 0.6982 | 1,007 | 133.372 |
+| Full-context Qwen3 4B Instruct | 9/16 | 0.7190 | 1,155 | 79.983 |
+| Question-only Qwen3-Coder 30B | 1/16 | 0.1739 | 1,538 | 31.765 |
+| Fused 4B Reader / 30B Reasoner | 9/16 | 0.7692 | 1,157 | 104.718 |
+
+The frozen gate required no lost full-context Reasoner successes, at least as
+many exact answers as that Reasoner, two more exact answers than both the
+Reader and question-only controls, at most 80% of full-context Reasoner wall
+time, and at most 125% of its output tokens. Fusion took 78.52% of that wall
+time and 114.90% of its tokens, but lost one officially scored success and
+added no net exact answers. It failed the quality gate. It was also 30.9% slower
+than the Reader alone. Timing includes model loading, prefill, decoding and
+teardown on one shared host; it is not a production latency claim.
+
+The two EM disagreements also limit the semantic interpretation. Fusion's
+only official gain shortened a correct song name with an alias to the exact
+reference name. Its official loss rejected a false premise: the question
+places the English Electric Canberra in World War II, while the supplied
+paragraph dates its service entry to May 1951. The supporting squadron paragraph
+assigns Canberra service to later conflicts. The [RAF Museum's historical
+account](https://www.rafmuseum.org.uk/documents/Research/RAF-Historical-Society-Journals/Journal_43a_Seminar_The_Canberra_in_the_RAF.pdf)
+independently dates the first RAF delivery to 25 May 1951. The full-context
+Reasoner repeated the incorrect premise and matched the reference. Keep the
+official scores unchanged; neither disagreement proves a capability gain or
+regression. Future quality studies need fresh, semantically qualified tasks.
+
+Smaller parameter count also did not mean smaller KV memory. The cached Reader
+has 36 layers and eight KV heads; the sparse Reasoner has 48 layers and four KV
+heads. Both use 128-wide keys and values. At F16, their KV storage is 144 KiB and
+96 KiB per context token, respectively. The full-context Reader therefore needs
+1.5 times the Reasoner's KV storage, before adding the short-context Reasoner
+state. This pair cannot support a KV-memory-saving claim.
+
+The calibrated protocol SHA-256 is
+`0fd21cc78581e398e4d4fa651a407096de09c2bdef166897ff40a9044c50b96e`;
+its result SHA-256 is
+`1a945f31890c2ff3236d8f9911f11c5285b67da81bb9def1677d9bdf31a42074`.
+Audits reconstructed source questions, answers, document text, execution order,
+prompt-length equality, scores and timing totals. The full-context Reader and
+Reasoner used identical prompts; the pair reused the matching full-context
+Reader and question-only Reasoner prompts. These hashes identify private local
+receipts, not a bundled reproduction suite. No runtime, deployment or default
+policy changed.

@@ -41,6 +41,24 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: litellm
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-litellm.test.mjs
+          - consumer: abliteration
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-abliteration.test.mjs
+          - consumer: byteplus-payg
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-byteplus-payg.test.mjs
+          - consumer: featherless-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-featherless-catalog.test.mjs
+          - consumer: public-catalogs
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-public-catalogs.test.mjs
+          - consumer: bedrock-memory
+            ref: 0eed32b19ce3eb54b38c7dde1b88d0cf2f9613cd
+            test: test/openclaw-bedrock-memory.test.mjs
           - consumer: volcengine-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-volcengine-payg.test.mjs
@@ -152,6 +170,9 @@ jobs:
           - consumer: lyria
             ref: 3645a2c86518e9e98e4df2a81d00355bc6b082c0
             test: test/openclaw-lyria.test.mjs
+          - consumer: requesty-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-requesty-catalog.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -8,9 +8,12 @@ const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery.ts");
 const { REQUESTY_MODELS_FORMAT, requestyCatalogRequest, readRequestyModels } = await import("../requesty-model-catalog.ts");
 const source = parse(readFileSync(new URL("../../providers/requesty.provider.yaml", import.meta.url), "utf8"));
+const inference = structuredClone(source);
+delete inference.endpoints.models_managed;
+inference.capabilities = inference.capabilities.filter(value => !(value.id === "models.list" && value.endpoint === "models_managed"));
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
-  const manifest = structuredClone(source);
+  const manifest = structuredClone(inference);
   manifest.capabilities.push({ id: "models.list", endpoint: "models_managed", methods: ["GET"] });
   manifest.endpoints.models_managed = { method: "GET", path: "/models/managed",
     requestFormat: REQUESTY_MODELS_FORMAT, responseFormat: REQUESTY_MODELS_FORMAT,
@@ -26,7 +29,7 @@ function selected() {
 test("Requesty managed catalog preserves inference facts and compiles the exact native/manifest metadata selector", () => {
   const manifest = fixture(), before = structuredClone(manifest), snapshot = compile(manifest), provider = snapshot.providers[0];
   assert.deepEqual(manifest, before);
-  const baseline = compile(source), original = baseline.providers[0], route = provider.endpoints.find(value => value.id === "models_managed");
+  const baseline = compile(inference), original = baseline.providers[0], route = provider.endpoints.find(value => value.id === "models_managed");
   assert.equal(REQUESTY_MODELS_FORMAT, "requesty.models_managed");
   assert.equal(route.method, "GET"); assert.deepEqual(route.methods, ["GET"]); assert.equal(route.path, "/models/managed");
   assert.equal(route.request_format, REQUESTY_MODELS_FORMAT); assert.equal(route.response_format, REQUESTY_MODELS_FORMAT);

@@ -76,7 +76,10 @@ test("Chutes declaration preserves the existing seed and five frozen cards with 
     assert.equal(m.requestParameters.chat_completions.toolCalling, "supported");
     assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => [e.id, e.method, e.methods, e.path, e.request_format, e.response_format]), [
+    ["chat_completions", "POST", ["POST"], "/chat/completions", "openai.chat_completions", "openai.chat_completions"],
+    ["models_list", "GET", ["GET"], "/models", "chutes.models", "chutes.models"],
+  ]);
   const opaque = providerModel(provider, "chutes/synthetic-tenant-model", provider.endpoints[0]);
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { CHUTES_OAUTH_TOKEN: "synthetic-unselected-oauth", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");

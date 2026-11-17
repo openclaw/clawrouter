@@ -85,6 +85,36 @@ calls these checks in the same order after validating the manifest schema.
 This is upstream model discovery validation; it does not import the shared
 model catalogue or authorize a new endpoint, protocol, or provider.
 
+### Managed lifecycle declaration ownership
+
+`scripts/provider-lifecycles.mjs` owns the existing managed protocol registry
+and create/control/file endpoint qualification. Its schema-validated inputs
+retain provider, origin, credential, method, codec, and path constraints. The
+provider compiler calls it in the same validation order. This module does not
+create jobs, poll, cancel, download files, or settle usage; runtime job ownership
+and execution stay with their existing owners.
+
+### Endpoint declaration ownership
+
+`scripts/provider-endpoints.mjs` compiles endpoint metadata and checks endpoint
+transport, pricing, model passthrough, and path constraints. The provider
+compiler validates the manifest schema first and supplies its canonical literal
+upstream-path pattern; the endpoint module does not maintain a second pattern.
+Normalization and semantic validation retain their existing order and defaults.
+This build-time boundary does not change runtime routing or authorize additional
+provider protocols, credentials, or endpoints.
+
+### Provider qualification ownership
+
+`scripts/provider-validation/` holds host-owned semantic qualification rules.
+Provider modules contain the existing Google, Bedrock, Baseten, Levanto,
+DeepSeek, xAI, Gradium, and PixVerse checks. Shared transcription checks retain
+their finite Groq, Mistral, xAI, OpenRouter, and Deepgram contracts in one module.
+The compiler calls each check after schema validation, in its existing order,
+including on other providers so reserved formats cannot bypass qualification. Provider packages supply data;
+they cannot load validation code or register a protocol as qualified. Runtime
+adapters and lifecycle validation retain their existing owners.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
