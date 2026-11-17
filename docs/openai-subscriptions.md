@@ -25,9 +25,10 @@ invoice-exact quote: generic cache-write usage cannot distinguish 30-minute from
 12-hour retention, so the latter rate is the ceiling. Ultrafast uses the announced
 6x ceiling rather than the temporary 3x promotion through February 28, 2027.
 Fast/priority uses 2x; requests above 272,000 input tokens double input/cache
-rates and use 1.5x output rates for the whole request. Missing write counters
-retain the conservative reservation; unknown served tiers remain unpriced rather
-than inventing exact settlement.
+rates and use 1.5x output rates for the whole request. Missing write counters or
+unknown served tiers produce no measured price. Existing accounting then retains
+the reservation estimate on hard-budget paths or marks soft-budget usage unpriced;
+it does not invent exact settlement.
 See the dated [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra)
 and [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) source cards.
 Catalog declarations and isolated fake-upstream tests are not live inference or
