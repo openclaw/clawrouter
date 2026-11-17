@@ -6,6 +6,33 @@ deployment, including custom-domain Cloudflare Workers, the hosted service, and
 Docker self-hosting. A ChatGPT/Codex subscription is not an OpenAI Platform API
 key or a promise of general-purpose gateway access.
 
+## GPT-6.2 Astra and Sol
+
+The bundled catalog declares **openai/gpt-6.2-astra** and
+**openai/gpt-6.2-sol** for API-key Responses and text Chat Completions, and
+for Responses on the existing stored-subscription transport. This does not add
+subscription onboarding, grant entitlement, or permit copying local Codex tokens
+into the hosted pool. Keep the original API-key/subscription credential source.
+
+Use Responses for tool calling. Both models require a reasoning effort other
+than **none**; start with **medium**. Their catalog advertises text/image input,
+1,050,000 context, 922,000 maximum input and 128,000 maximum output tokens.
+The [migration guide](https://developers.openai.com/api/docs/guides/latest-model)
+explains unsupported sampling parameters and ordered encrypted-reasoning replay.
+
+Budget accounting uses explicitly marked **published upper bounds**, not an
+invoice-exact quote: generic cache-write usage cannot distinguish 30-minute from
+12-hour retention, so the latter rate is the ceiling. Ultrafast uses the announced
+6x ceiling rather than the temporary 3x promotion through February 28, 2027.
+Fast/priority uses 2x; requests above 272,000 input tokens double input/cache
+rates and use 1.5x output rates for the whole request. Missing write counters
+retain the conservative reservation; unknown served tiers remain unpriced rather
+than inventing exact settlement.
+See the dated [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra)
+and [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) source cards.
+Catalog declarations and isolated fake-upstream tests are not live inference or
+proof that an operator's existing subscription grant is entitled to these models.
+
 ## Supported setup
 
 Create a key in [OpenAI Platform](https://platform.openai.com/api-keys), with
