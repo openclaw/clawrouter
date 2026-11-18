@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Observe whether a synchronous provider replay resolver replaces the selected Qwen API registration. Retain only closed identity relations at existing calls; missing or ambiguous observations remain unknown, and native ownership assertions are unchanged.
+
 - Distinguish Qwen normalized-record identity from actual handler provenance by observing original wrapper entry, its retained builtin lazy stream and the selected adapter entry. Keep missing generations unknown and preserve registration, calls and native ownership assertions.
 
 - Observe the selected Qwen SDK runtime, constructor-bound registry and normalized provider record at pinned original boundaries. Bind comparisons to the owned invocation and module generation; missing provenance remains unknown. Preserve original calls, errors, ownership and retirement assertions; this is a diagnostic probe, not a provider repair.

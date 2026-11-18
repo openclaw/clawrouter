@@ -23,6 +23,8 @@ export const qwenValueSources = Object.freeze([
     sha256: "2ec994b4b3d2d21438fc131d457e79d3a068c5ff2e39e6db8476aa1233143958" }),
   Object.freeze({ path: "packages/ai/src/providers/openai-completions.ts",
     sha256: "6139005cf0564180b07a5450304883c1e7066bda4e9f5991ac86511e241e3e20" }),
+  Object.freeze({ path: "src/plugins/provider-replay-runtime.ts",
+    sha256: "5f5d2320c98943c894b0a69b3b4fb1a3b345204164e5e110806c8c49b60fcca8" }),
 ]);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -60,7 +62,7 @@ export function createQwenValueSink(contract) {
   const activations = [0, 0], claims = new Set(), tokens = new Map();
   const runtimeRegistries = new WeakMap(), registrations = new WeakMap(), defaults = new WeakMap();
   const lazySelectors = new WeakMap(), builtins = new WeakSet();
-  let active, poisoned = false, ordinal = 0;
+  let active, replayScope, poisoned = false, ordinal = 0;
   const stray = [];
   const overflow = new Error("Qwen value recording capacity exceeded");
   function fault(owner, error) {
@@ -109,7 +111,34 @@ export function createQwenValueSink(contract) {
   function registered(map, key, normalized, stream, simple) {
     safe(active, () => {
       // Only the exact normalized record from a completed original insertion.
-      if (key === "openai-completions") registrations.set(map, { record: reference(normalized), stream: reference(stream), simple: reference(simple) });
+      if (key === "openai-completions") {
+        const previous = registrations.get(map);
+        if (replayScope && replayScope.owner === active) {
+          if (replayScope.records.has(map)) { active.unknown = true; }
+          else {
+            const previousStream = previous?.stream?.deref();
+            replayScope.records.set(map, { record: reference(normalized),
+              previousBuiltin: previousStream && builtins.has(previousStream) ? 1 : 0,
+              change: compare(normalized, previous?.record) });
+          }
+        }
+        registrations.set(map, { record: reference(normalized), stream: reference(stream), simple: reference(simple) });
+      }
+    });
+  }
+  function replayBegin() {
+    return safe(active, () => {
+      if (!active || active.closed) return null;
+      if (replayScope || active.replay) { active.unknown = true; return null; }
+      const token = { owner: active, records: new WeakMap(), closed: false };
+      active.replay = token; replayScope = token; return token;
+    }) ?? null;
+  }
+  function replayEnd(token) {
+    if (!token) return;
+    safe(token.owner, () => {
+      if (replayScope !== token || token.owner !== active) { token.owner.unknown = true; return; }
+      token.closed = true; replayScope = undefined;
     });
   }
   function lookup(value, map, api) {
@@ -121,6 +150,10 @@ export function createQwenValueSink(contract) {
       const registered = registrations.get(map);
       s.seen |= 4; s.lookup = reference(value); s.record = compare(value, registered?.record);
       s.registeredStream = registered?.stream; s.simpleStream = registered?.simple;
+      const replay = active.replay, change = replay?.records.get(map);
+      if (replay && !replay.closed) { active.unknown = true; return; }
+      s.replay = !replay ? [0,0,0,0] : !change ? [1,0,0,0]
+        : compare(value, change.record) === 1 ? [1,1,change.previousBuiltin,change.change] : [0,0,0,0];
     });
     return value;
   }
@@ -264,7 +297,7 @@ export function createQwenValueSink(contract) {
           if (owner.closed || active !== owner || owner.rows.has(invocation) || owner.rows.size >= 2) { invalidate(owner); return; }
           owner.rows.set(invocation, { id: ++ordinal, sites: [null, null],
             selection: { seen: 0, runtime: 0, registry: 0, provider: 0, record: 0,
-              wrapped: 0, builtin: 0, adapter: 0, ambiguous: false } });
+              wrapped: 0, builtin: 0, adapter: 0, replay: [0,0,0,0], ambiguous: false } });
         });
       },
       snapshot(invocation, diagnostic = false) {
@@ -285,7 +318,7 @@ export function createQwenValueSink(contract) {
             const s = row.selection;
             if (!s.ambiguous)
               valueSelection = freeze([contract, s.seen, s.runtime, s.registry, s.provider,
-                s.wrapped, s.builtin, s.adapter]);
+                s.wrapped, s.builtin, s.adapter, ...s.replay]);
           }
           if (reason) return null;
           const [client, guard] = row.sites;
@@ -307,6 +340,7 @@ export function createQwenValueSink(contract) {
       close() {
         safe(owner, () => {
           if (owner.closed || active !== owner || owner.stack.length) invalidate(owner);
+          if (replayScope?.owner === owner) { invalidate(owner); replayScope = undefined; }
           for (const token of owner.stack) tokens.delete(token);
           owner.stack.length = 0; owner.closed = true;
           if (active === owner) active = undefined;
@@ -318,7 +352,7 @@ export function createQwenValueSink(contract) {
     });
   }
   return freeze({ activate, claim, begin, finish, defaultRegistry, defaultRuntime, createdRuntime,
-    runtime, registered, lookup, provider, lazyStream, builtin, wrapper, lazy, adapter,
+    runtime, registered, lookup, provider, lazyStream, builtin, wrapper, lazy, adapter, replayBegin, replayEnd,
     host: (t, v) => tap(t, 1, v), build: (t, v) => tap(t, 2, v),
     fallback: (t, v) => tap(t, 4, v), selected: (t, v) => tap(t, 8, v),
     argument: (t, v) => tap(t, 16, v), result: (t, v) => tap(t, 32, v) });
@@ -366,6 +400,10 @@ export function overlayQwenValueSource(site, source, contract) {
   if (site === 7) {
     replace('> = (model, context, options) => streamOpenAICompletionsRequest(model, context, options, "direct");',
       '> = (model, context, options) => {\n  __qwenValues.adapter(streamOpenAICompletions);\n  return streamOpenAICompletionsRequest(model, context, options, "direct");\n};');
+  }
+  if (site === 8) {
+    replace("  const plugin = resolveProviderRuntimePlugin(params);\n  if (plugin?.sanitizeReplayHistoryAsync)",
+      "  const plugin = (() => {\n    const token = __qwenValues.replayBegin();\n    try { return resolveProviderRuntimePlugin(params); }\n    finally { __qwenValues.replayEnd(token); }\n  })();\n  if (plugin?.sanitizeReplayHistoryAsync)");
   }
   return `import { sink as __qwenValues } from "${qwenValueModule}";\n`
     + text + (site <= 2 ? `\n__qwenValues.activate(${site}, "${contract}");\n` : "");

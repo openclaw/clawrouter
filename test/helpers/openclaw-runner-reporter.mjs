@@ -45,6 +45,7 @@ export function validateBinding(binding) {
       { path: "packages/ai/src/api-registry.ts", sha256: "5455ee2b67c34bd1d8e85811ee55fe3596bf1291a0165765afdf6b82af7fc18a" },
       { path: "packages/ai/src/providers/register-builtins.ts", sha256: "2ec994b4b3d2d21438fc131d457e79d3a068c5ff2e39e6db8476aa1233143958" },
       { path: "packages/ai/src/providers/openai-completions.ts", sha256: "6139005cf0564180b07a5450304883c1e7066bda4e9f5991ac86511e241e3e20" },
+      { path: "src/plugins/provider-replay-runtime.ts", sha256: "5f5d2320c98943c894b0a69b3b4fb1a3b345204164e5e110806c8c49b60fcca8" },
     ];
     assert.ok(Array.isArray(c.sources) && c.sources.length === originals.length);
     c.sources.forEach((row, index) => {

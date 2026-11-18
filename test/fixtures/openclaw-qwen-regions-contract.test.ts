@@ -201,7 +201,7 @@ function createQwenLedger() {
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
     const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
     return valueSnapshot === undefined ? checked
-      : qwenObserverRecord({ ...checked, v: 8, ...valueSnapshot() });
+      : qwenObserverRecord({ ...checked, v: 9, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -482,6 +482,22 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 9) {
+    if (Object.keys(value).at(-1) !== "valueSelection") invalid();
+    const selection = value.valueSelection;
+    if (selection === null) return { ...qwenObserverRecord({ ...value, v: 8 }), v: 9 };
+    if (utilTypes.isProxy(selection) || !Array.isArray(selection)) invalid();
+    const fields = Object.getOwnPropertyDescriptors(selection);
+    if (Reflect.ownKeys(fields).join() !== "0,1,2,3,4,5,6,7,8,9,10,11,length"
+      || fields.length.value !== 12 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const s = Array.from({ length: 12 }, (_, i) => fields[String(i)].value);
+    const checked = qwenObserverRecord({ ...value, v: 8, valueSelection: s.slice(0, 8) });
+    if (!s.slice(8).every(Number.isSafeInteger) || !s.slice(8, 11).every(n => n === 0 || n === 1)
+      || ![0, 1, 2].includes(s[11]) || s[8] === 0 && s.slice(9).some(Boolean)
+      || s[9] === 0 && s.slice(10).some(Boolean) || s[8] === 1 && !(s[1] & 4)
+      || s[10] === 1 && s[11] === 0) invalid();
+    return { ...checked, v: 9, valueSelection: s };
   }
   if (value.v === 8) {
     if (Object.keys(value).at(-1) !== "valueSelection") invalid();

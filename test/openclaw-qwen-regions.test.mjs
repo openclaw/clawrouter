@@ -47,9 +47,9 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "be2cbe4da37f454bc6a89e452c2a80ebb5e981e40e58b6ba445315ad16633937";
-const qwenRunnerReporterSha256 = "0575ec36d0b186dfe0e04adeabf1e5336a34a6e8f7dd6d0c2b4f214b17dd3a89";
-const qwenValueObserverSha256 = "8c3114f23121e25657474de12c7d1451123cb3cb5c1d5c0592d46adc34ec0478";
+const qwenRunnerFixtureSha256 = "42d3b5dc485e9bd5002cecd07f03b2e1e0944efd409a4d873e39d25047a65dbf";
+const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
+const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -195,7 +195,7 @@ function createQwenFailureRelay() {
     stage = "record_schema";
     assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
     const checked = qwenObserverRecord(value);
-    assert.ok(![5, 6, 7, 8].includes(checked.v) || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
+    assert.ok(![5, 6, 7, 8, 9].includes(checked.v) || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
     stage = "entry_required"; assert.ok(entered.has(checked.case), "observer lacks case entry");
     stage = "terminal_census";
     const original = sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined;
@@ -318,15 +318,15 @@ function createQwenFailureRelay() {
     // completion and helper/runner summaries. Absence conveys no local proof.
     if (firstFailed && observerFailures.has(firstFailed.case)) {
       const observer = JSON.parse(observerFailures.get(firstFailed.case));
-      if ([4, 5, 6, 7, 8].includes(observer.v) && observer.values !== null) {
+      if ([4, 5, 6, 7, 8, 9].includes(observer.v) && observer.values !== null) {
         const binding = runner?.find(record => record.kind === "runner_binding");
         // Missing/foreign actual reporter binding never admits a worker claim.
         if (!binding?.observed || binding.valueContract !== observer.values[1]) {
           observer.values = null;
-          if ([5, 6, 7, 8].includes(observer.v)) observer.valueState[2] = binding?.observed ? 11 : 10;
+          if ([5, 6, 7, 8, 9].includes(observer.v)) observer.valueState[2] = binding?.observed ? 11 : 10;
         }
       }
-      if ([7, 8].includes(observer.v) && observer.valueSelection !== null) {
+      if ([7, 8, 9].includes(observer.v) && observer.valueSelection !== null) {
         const binding = runner?.find(record => record.kind === "runner_binding");
         const key = observer.valueSelection[0] ?? observer.values?.[1];
         if (!binding?.observed || binding.valueContract !== key) {
@@ -2140,6 +2140,7 @@ const qwenValueOriginals = [
   "import type {\n  Api,\n  Model,\n  SimpleStreamOptions,\n  StreamFunction,\n  StreamOptions,\n} from \"@openclaw/llm-core\";\n\n/** Runtime stream adapter signature stored in the API provider registry. */\nexport type ApiStreamFunction = StreamFunction;\n\n/** Runtime simple-stream adapter signature stored in the API provider registry. */\nexport type ApiStreamSimpleFunction = StreamFunction<Api, SimpleStreamOptions>;\n\n/** Provider implementation registered by core or plugins for a specific model API. */\nexport interface ApiProvider<\n  TApi extends Api = Api,\n  TOptions extends StreamOptions = StreamOptions,\n> {\n  /** Model API id this provider handles. */\n  api: TApi;\n  /** Full streaming adapter for callers that already own structured options. */\n  stream: StreamFunction<TApi, TOptions>;\n  /** Simple streaming adapter used by agent and plugin runtime defaults. */\n  streamSimple: StreamFunction<TApi, SimpleStreamOptions>;\n}\n\n/** Type-erased provider returned by a registry after API guards are installed. */\nexport interface RegisteredApiProvider {\n  api: Api;\n  stream: ApiStreamFunction;\n  streamSimple: ApiStreamSimpleFunction;\n}\n\nfunction wrapStream<TApi extends Api, TOptions extends StreamOptions>(\n  api: TApi,\n  stream: StreamFunction<TApi, TOptions>,\n): ApiStreamFunction {\n  return (model, context, options) => {\n    if (model.api !== api) {\n      throw new Error(`Mismatched api: ${model.api} expected ${api}`);\n    }\n    return stream(model as Model<TApi>, context, options as TOptions);\n  };\n}\n\n/** Creates an isolated provider registry for one runtime or tenant. */\nexport function createApiRegistry() {\n  const providers = new Map<string, { provider: RegisteredApiProvider; sourceId?: string }>();\n\n  function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(\n    provider: ApiProvider<TApi, TOptions>,\n    /** Optional source id used to unregister all providers owned by one plugin/runtime. */\n    sourceId?: string,\n  ): void {\n    providers.set(provider.api, {\n      provider: {\n        api: provider.api,\n        stream: wrapStream(provider.api, provider.stream),\n        streamSimple: wrapStream(provider.api, provider.streamSimple),\n      },\n      sourceId,\n    });\n  }\n\n  function getApiProvider(api: Api): RegisteredApiProvider | undefined {\n    return providers.get(api)?.provider;\n  }\n\n  function getApiProviders(): RegisteredApiProvider[] {\n    return Array.from(providers.values(), (entry) => entry.provider);\n  }\n\n  function unregisterApiProviders(sourceId: string): void {\n    for (const [api, entry] of providers.entries()) {\n      if (entry.sourceId === sourceId) {\n        providers.delete(api);\n      }\n    }\n  }\n\n  return {\n    registerApiProvider,\n    getApiProvider,\n    getApiProviders,\n    unregisterApiProviders,\n    clearApiProviders: () => providers.clear(),\n  };\n}\n\nexport type ApiRegistry = ReturnType<typeof createApiRegistry>;\n",
   "// Built-in provider registration installs lazy protocol adapters.\nimport type { ApiProvider, ApiRegistry } from \"../api-registry.js\";\nimport type {\n  Api,\n  AssistantMessage,\n  SimpleStreamOptions,\n  StreamFunction,\n  StreamOptions,\n} from \"../types.js\";\nimport { AssistantMessageEventStream } from \"../utils/event-stream.js\";\nimport { projectProviderError, type ProviderErrorProjection } from \"../utils/provider-error.js\";\nimport { createZeroUsage } from \"../utils/usage.js\";\n\ntype ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = Omit<\n  ApiProvider<TApi, TOptions>,\n  \"api\"\n>;\n\ntype RegisterBuiltIn = (registry: ApiRegistry) => void;\n\n/** Source id used for built-in API provider registrations. */\nexport const BUILT_IN_API_PROVIDER_SOURCE_ID = \"core:built-in\";\n\n// Provider modules load on first use, while callers still receive a stream synchronously.\nfunction createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStreams>(\n  load: () => Promise<TStreams>,\n  select: (streams: TStreams) => StreamFunction<TApi, TOptions>,\n): StreamFunction<TApi, TOptions> {\n  return (model, context, options) => {\n    const outer = new AssistantMessageEventStream();\n    load()\n      .then(async (streams) => {\n        for await (const event of select(streams)(model, context, options)) {\n          outer.push(event);\n        }\n        outer.end();\n      })\n      .catch((error: unknown) => {\n        const lazyLoadSignal = options?.signal;\n        const message: AssistantMessage & ProviderErrorProjection = {\n          role: \"assistant\",\n          content: [],\n          api: model.api,\n          provider: model.provider,\n          model: model.id,\n          usage: createZeroUsage(),\n          ...projectProviderError(error, lazyLoadSignal),\n          timestamp: Date.now(),\n        };\n        outer.push({ type: \"error\", reason: message.stopReason, error: message });\n        outer.end(message);\n      });\n    return outer;\n  };\n}\n\nfunction createLazyRegistration<TApi extends Api, TOptions extends StreamOptions, TModule>(\n  api: TApi,\n  importModule: () => Promise<TModule>,\n  select: (module: TModule) => ProviderStreams<TApi, TOptions>,\n): RegisterBuiltIn {\n  let streamsPromise: Promise<ProviderStreams<TApi, TOptions>> | undefined;\n  const load = () => (streamsPromise ??= importModule().then(select));\n  const stream = createLazyStream(load, (streams) => streams.stream);\n  const streamSimple = createLazyStream<TApi, SimpleStreamOptions, ProviderStreams<TApi, TOptions>>(\n    load,\n    (streams) => streams.streamSimple,\n  );\n  return (registry) => {\n    registry.registerApiProvider({ api, stream, streamSimple }, BUILT_IN_API_PROVIDER_SOURCE_ID);\n  };\n}\n\nconst registerBuiltIns: RegisterBuiltIn[] = [\n  // Registration is transport-free; each lazy adapter owns its fetch or construction unwrap.\n  createLazyRegistration(\n    \"anthropic-messages\",\n    () => import(\"./anthropic.js\"),\n    (module) => ({ stream: module.streamAnthropic, streamSimple: module.streamSimpleAnthropic }),\n  ),\n  createLazyRegistration(\n    \"openai-completions\",\n    () => import(\"./openai-completions.js\"),\n    (module) => ({\n      stream: module.streamOpenAICompletions,\n      streamSimple: module.streamSimpleOpenAICompletions,\n    }),\n  ),\n  createLazyRegistration(\n    \"mistral-conversations\",\n    () => import(\"./mistral.js\"),\n    (module) => ({ stream: module.streamMistral, streamSimple: module.streamSimpleMistral }),\n  ),\n  createLazyRegistration(\n    \"openai-responses\",\n    () => import(\"./openai-responses.js\"),\n    (module) => ({\n      stream: module.streamOpenAIResponses,\n      streamSimple: module.streamSimpleOpenAIResponses,\n    }),\n  ),\n  createLazyRegistration(\n    \"azure-openai-responses\",\n    () => import(\"./azure-openai-responses.js\"),\n    (module) => ({\n      stream: module.streamAzureOpenAIResponses,\n      streamSimple: module.streamSimpleAzureOpenAIResponses,\n    }),\n  ),\n  createLazyRegistration(\n    \"openai-chatgpt-responses\",\n    () => import(\"./openai-chatgpt-responses.js\"),\n    (module) => ({\n      stream: module.streamOpenAICodexResponses,\n      streamSimple: module.streamSimpleOpenAICodexResponses,\n    }),\n  ),\n  createLazyRegistration(\n    \"google-generative-ai\",\n    () => import(\"./google.js\"),\n    (module) => ({ stream: module.streamGoogle, streamSimple: module.streamSimpleGoogle }),\n  ),\n  createLazyRegistration(\n    \"google-interactions\",\n    () => import(\"./google-interactions.js\"),\n    (module) => ({\n      stream: module.streamGoogleInteractions,\n      streamSimple: module.streamSimpleGoogleInteractions,\n    }),\n  ),\n  createLazyRegistration(\n    \"google-vertex\",\n    () => import(\"./google-vertex.js\"),\n    (module) => ({\n      stream: module.streamGoogleVertex,\n      streamSimple: module.streamSimpleGoogleVertex,\n    }),\n  ),\n];\n\n/** Registers every built-in API provider in one runtime registry. */\nexport function registerBuiltInApiProviders(registry: ApiRegistry): void {\n  for (const register of registerBuiltIns) {\n    register(registry);\n  }\n}\n\n/** Restores the built-in provider registry state for tests. */\nexport function resetApiProviders(registry: ApiRegistry): void {\n  registry.unregisterApiProviders(BUILT_IN_API_PROVIDER_SOURCE_ID);\n  registerBuiltInApiProviders(registry);\n}\n",
   "import { clampThinkingLevel } from \"../model-utils.js\";\nimport type { OpenAICompletionsOptions } from \"../provider-options.js\";\nimport { streamOpenAICompletionsRequest } from \"../transports/openai-completions-transport.js\";\nimport type { SimpleStreamOptions, StreamFunction } from \"../types.js\";\nimport { requireApiKey } from \"../utils/required-api-key.js\";\nimport { buildBaseOptions } from \"./simple-options.js\";\n\nexport type { OpenAICompletionsOptions } from \"../provider-options.js\";\nexport { convertMessages } from \"../openai-completions-messages.js\";\n\ntype OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {\n  openclawThinkingExplicit?: boolean;\n};\n\nexport const streamOpenAICompletions: StreamFunction<\n  \"openai-completions\",\n  OpenAICompletionsOptions\n> = (model, context, options) => streamOpenAICompletionsRequest(model, context, options, \"direct\");\n\nexport const streamSimpleOpenAICompletions: StreamFunction<\n  \"openai-completions\",\n  SimpleStreamOptions\n> = (model, context, options) => {\n  const apiKey = requireApiKey(model.provider, options?.apiKey);\n\n  const base = buildBaseOptions(model, options, apiKey);\n  const clampedReasoning = options?.reasoning\n    ? clampThinkingLevel(model, options.reasoning)\n    : undefined;\n  // Host session streams attach selection intent without changing the public provider options.\n  const completionsOptions = options as OpenAIThinkingProvenanceOptions | undefined;\n\n  const providerOptions = {\n    ...base,\n    reasoningEffort: clampedReasoning,\n    toolChoice: completionsOptions?.toolChoice,\n    streaming: completionsOptions?.streaming,\n    openclawThinkingExplicit:\n      completionsOptions?.openclawThinkingExplicit ?? options?.reasoning !== undefined,\n  } satisfies OpenAIThinkingProvenanceOptions;\n  return streamOpenAICompletions(model, context, providerOptions);\n};\n",
+  "import type { AgentMessage } from \"../../packages/agent-core/src/types.js\";\nimport { warnSessionPersistenceDeprecation } from \"../agents/sessions/session-persistence-deprecation.js\";\nimport {\n  ensureProviderRuntimePluginHandle,\n  resolveProviderRuntimePlugin,\n  type ProviderRuntimePluginHandle,\n} from \"./provider-hook-runtime.js\";\nimport type {\n  ProviderReasoningOutputMode,\n  ProviderReasoningOutputModeContext,\n  ProviderSanitizeReplayHistoryContextV2,\n  ProviderValidateReplayTurnsContext,\n} from \"./provider-replay.types.js\";\n\ntype ProviderReplayRuntimeLookup = Pick<\n  Parameters<typeof resolveProviderRuntimePlugin>[0],\n  \"provider\" | \"config\" | \"workspaceDir\" | \"env\"\n>;\n\n/** Prefer worker-backed hooks; retain the legacy hook solely for third-party providers. */\nexport async function sanitizeProviderReplayHistoryWithPluginAsync(\n  params: ProviderReplayRuntimeLookup & { context: ProviderSanitizeReplayHistoryContextV2 },\n) {\n  const plugin = resolveProviderRuntimePlugin(params);\n  if (plugin?.sanitizeReplayHistoryAsync) {\n    return await plugin.sanitizeReplayHistoryAsync(params.context);\n  }\n  if (plugin?.sanitizeReplayHistory) {\n    warnSessionPersistenceDeprecation(\n      \"ProviderPlugin.sanitizeReplayHistory\",\n      \"sanitizeReplayHistoryAsync\",\n      plugin.pluginId ? { pluginId: plugin.pluginId } : undefined,\n    );\n    return await plugin.sanitizeReplayHistory(params.context);\n  }\n  return undefined;\n}\n\nexport async function validateProviderReplayTurnsWithPlugin(\n  params: ProviderReplayRuntimeLookup & { context: ProviderValidateReplayTurnsContext },\n): Promise<AgentMessage[] | null | undefined> {\n  const plugin = resolveProviderRuntimePlugin(params);\n  return await plugin?.validateReplayTurns?.(params.context);\n}\n\nexport function resolveProviderReasoningOutputModeWithPlugin(\n  params: ProviderReplayRuntimeLookup & {\n    runtimeHandle?: ProviderRuntimePluginHandle;\n    context: ProviderReasoningOutputModeContext;\n  },\n): ProviderReasoningOutputMode | undefined {\n  const mode = ensureProviderRuntimePluginHandle({\n    ...params,\n    modelId: params.context.modelId,\n  }).plugin?.resolveReasoningOutputMode?.(params.context);\n  return mode === \"native\" || mode === \"tagged\" ? mode : undefined;\n}\n",
 ].map(text => Buffer.from(text));
 const qwenValueHash = bytes => createHash("sha256").update(bytes).digest("hex");
 
@@ -2268,7 +2269,7 @@ test("Qwen private input custody and falsey read/close faults are independent", 
 test("Qwen value claims travel only with the original first failed observer and matching runner", async () => {
   const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
     fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
-  for (const version of [4, 5, 6, 7, 8]) for (const match of [true, false, null]) {
+  for (const version of [4, 5, 6, 7, 8, 9]) for (const match of [true, false, null]) {
     const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
     if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
       records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
@@ -2282,7 +2283,7 @@ test("Qwen value claims travel only with the original first failed observer and 
       values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0],
       ...(version >= 5 ? { valueState: [1, 1, 0] } : {}),
       ...(version >= 6 ? { valueSites: [1, 11, 1, 1, 3, 1] } : {}),
-      ...(version >= 7 ? { valueSelection: version === 7 ? [null,7,1,1,1] : [null,63,1,1,1,1,1,1] } : {}) };
+      ...(version >= 7 ? { valueSelection: version === 7 ? [null,7,1,1,1] : [null,63,1,1,1,1,1,1,...(version === 9 ? [0,0,0,0] : [])] } : {}) };
     h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
     for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
     const packet = h.relay.output("failed"), projected = packet.find(row => row.kind === "observer_failure");
@@ -2312,7 +2313,7 @@ test("Qwen value disposition reads retained state once without current-context c
     const before = reads, result = claim.snapshot(invocation, true);
     assert.deepEqual(result, { values: null, valueState: expected,
       valueSites: expected[2] === 8 ? [0,0,0,0,0,0] : null,
-      valueSelection: expected[2] === 8 ? [contract,0,0,0,0,0,0,0] : null });
+      valueSelection: expected[2] === 8 ? [contract,0,0,0,0,0,0,0,0,0,0,0] : null });
     assert.equal(reads, before); assert.deepEqual(claim.close(), []);
     assert.deepEqual(claim.snapshot(invocation, true), result);
   }
@@ -2363,7 +2364,7 @@ test("Qwen v5 value disposition is closed, opaque and within existing annotation
 });
 
 test("Qwen retained site state distinguishes absent, partial, open and complete evaluations", () => {
-  const base = { v: 8, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+  const base = { v: 9, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
     site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
     failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1] };
   for (const site of [1, 2]) for (const bits of site === 1 ? [0,1,3,7,11,15] : [0,1,3]) {
@@ -2522,7 +2523,7 @@ test("Qwen actual runtime return associates only its existing registry without p
   const resolve = text.match(/function resolveApiProvider\(api\s*\) \{([\s\S]*?)\n  \}/)?.[0];
   assert.ok(resolve);
   assert.equal(new Function("__qwenValues", "registry", resolve + '; return resolveApiProvider("openai-completions");')(h.sink, registry), normalized);
-  assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, [h.contract,3,1,1,0,0,0,0]);
+  assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, [h.contract,3,1,1,0,0,0,0,0,0,0,0]);
   assert.equal(propertyReads, 0); assert.deepEqual(h.claim.close(), []);
 });
 
@@ -2550,7 +2551,7 @@ test("Qwen selection identities require owned context, generation and normalized
     const expected = ["foreign", "absent"].includes(mode) ? [0,0,0,0]
       : mode === "different" ? [7,2,2,1] : mode === "unconstructed" ? [7,1,0,0]
       : [7,1,1,mode === "preregistered" ? 0 : mode === "old-record" ? 2 : 1];
-    assert.deepEqual(row, [h.contract,...expected,0,0,0]); assert.equal(reads, 3);
+    assert.deepEqual(row, [h.contract,...expected,0,0,0,0,0,0,0]); assert.equal(reads, 3);
     assert.deepEqual(h.claim.close(), []); assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, row);
   }
 });
@@ -2602,7 +2603,7 @@ test("Qwen v7 selection tuples are closed, nonreflective and retain legacy quota
 test("Qwen selection-only projection requires the actual matching invocation contract", () => {
   const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
     fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
-  for (const version of [7, 8]) for (const match of [true, false, null]) {
+  for (const version of [7, 8, 9]) for (const match of [true, false, null]) {
     const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
     if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
       records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
@@ -2614,7 +2615,7 @@ test("Qwen selection-only projection requires the actual matching invocation con
       site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
       failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
       values: null, valueState: [1,1,8], valueSites: [0,0,0,0,0,0],
-      valueSelection: [match ? bundle.plan.contract : "b".repeat(64),7,1,1,1,...(version === 8 ? [0,0,0] : [])] };
+      valueSelection: [match ? bundle.plan.contract : "b".repeat(64),7,1,1,1,...(version >= 8 ? [0,0,0] : []),...(version === 9 ? [0,0,0,0] : [])] };
     h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
     for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
     const packet = h.relay.output("failed"), actual = packet.find(row => row.kind === "observer_failure");
@@ -2677,7 +2678,7 @@ test("Qwen actual builtin lazy path proves wrapper input and selected adapter en
     const expected = mode === "unobserved-builtin" ? [15,1,1,1,1,0,0]
       : mode === "mutated-wrapper" ? [15,1,1,1,2,0,0]
       : ["mutated-direct", "simple"].includes(mode) ? [7,1,1,1,0,0,0] : [63,1,1,1,1,1,1];
-    assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, [h.contract,...expected]);
+    assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, [h.contract,...expected,0,0,0,0]);
     if (["matched", "foreign-lazy", "unobserved-builtin"].includes(mode)) {
       assert.equal(imports, 1); assert.equal(selections, 1);
     }
@@ -2721,4 +2722,135 @@ test("Qwen v8 handler provenance tuples reject false origin and preserve fixed p
     case:rows.reduce((a,b)=>a.id.length>b.id.length?a:b).id,parent:65534,observer:65535,route:[1,65535,65535,65535,0,0,3,3,2]};
   assert.deepEqual(qwenObserverRecord(complete),complete);
   assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(complete))<=768);
+});
+
+function qwenReplayResolver(source, sink, resolve, warn = () => {}) {
+  const text = stripTypeScriptTypes(source);
+  const start = text.indexOf("export async function sanitizeProviderReplayHistoryWithPluginAsync"),
+    end = text.indexOf("export async function validateProviderReplayTurnsWithPlugin", start);
+  assert.ok(start >= 0 && end > start);
+  return new Function("__qwenValues", "resolveProviderRuntimePlugin", "warnSessionPersistenceDeprecation",
+    text.slice(start, end).replace("export ", "") + "; return sanitizeProviderReplayHistoryWithPluginAsync;")(sink, resolve, warn);
+}
+
+test("Qwen replay bracket binds only synchronous replacement of the later selected registration", async () => {
+  const outputs = qwenSelectionSources();
+  for (const mode of ["replace", "none", "before", "after", "foreign-map", "late", "duplicate", "nested", "unknown-prior"]) {
+    const h = qwenValueHarness(), generation = {}, runtime = {};
+    const registry = qwenRegistryFactory(outputs[4], h.sink)();
+    const other = qwenRegistryFactory(outputs[4], h.sink)();
+    const original = () => {}, next = () => {}, simple = () => {};
+    h.sink.createdRuntime(runtime, registry); h.sink.defaultRegistry(registry, generation); h.sink.defaultRuntime(runtime, generation);
+    if (mode !== "unknown-prior") h.sink.builtin(original, "openai-completions");
+    registry.registerApiProvider({ api: "openai-completions", stream: original, streamSimple: simple });
+    const register = (target = registry) => target.registerApiProvider({ api: "openai-completions", stream: next, streamSimple: simple });
+    if (mode === "before") register();
+    const context = {}, result = {}, params = { context }; let calls = 0, hookCalls = 0;
+    const replay = qwenReplayResolver(outputs[7], h.sink, actual => {
+      assert.equal(actual, params); calls++;
+      if (["replace", "duplicate", "unknown-prior"].includes(mode)) register();
+      if (mode === "foreign-map") register(other);
+      if (mode === "duplicate") register();
+      if (mode === "nested") h.sink.replayEnd(h.sink.replayBegin());
+      return { sanitizeReplayHistoryAsync(value) {
+        assert.equal(value, context); hookCalls++;
+        if (mode === "late") register();
+        return Promise.resolve(result);
+      } };
+    });
+    assert.equal(await replay(params), result); assert.equal(calls, 1); assert.equal(hookCalls, 1);
+    if (mode === "after") register();
+    h.sink.runtime(runtime, generation);
+    h.sink.provider(registry.getApiProvider("openai-completions"), registry);
+    const snapshot = h.claim.snapshot(h.invocation, true);
+    if (["duplicate", "nested"].includes(mode)) assert.equal(snapshot.valueSelection, null);
+    else assert.deepEqual(snapshot.valueSelection.slice(8), mode === "replace" ? [1,1,1,2]
+      : mode === "unknown-prior" ? [1,1,0,2] : [1,0,0,0]);
+    assert.deepEqual(h.claim.close(), []);
+  }
+});
+
+test("Qwen actual replay resolver retains original hook ordering and falsey failures", async () => {
+  const observed = qwenSelectionSources()[7], original = qwenValueOriginals[7].toString();
+  for (const kind of ["none", "async", "legacy", "resolver-throw", "hook-throw", "hook-reject"])
+    for (const reason of [undefined, null, false, new Error("synthetic")]) {
+      const run = async source => {
+        const h = qwenValueHarness(), trace = [], context = {}, result = {}, params = { context };
+        const resolve = value => {
+          trace.push(["resolve", value]); if (kind === "resolver-throw") throw reason;
+          if (kind === "none") return undefined;
+          return {
+            get sanitizeReplayHistoryAsync() {
+              trace.push("async-get");
+              if (kind === "legacy") return undefined;
+              return function (value) { trace.push(["async-call", this, value]);
+                if (kind === "hook-throw") throw reason;
+                return kind === "hook-reject" ? Promise.reject(reason) : Promise.resolve(result); };
+            },
+            get sanitizeReplayHistory() { trace.push("legacy-get"); return function (value) { trace.push(["legacy-call", this, value]); return result; }; },
+          };
+        };
+        let failed = false, value;
+        try { value = await qwenReplayResolver(source, h.sink, resolve, () => trace.push("warn"))(params); }
+        catch (error) { failed = true; value = error; }
+        assert.equal(failed, ["resolver-throw", "hook-throw", "hook-reject"].includes(kind));
+        assert.equal(value, failed ? reason : kind === "none" ? undefined : result);
+        for (const entry of trace.filter(Array.isArray)) {
+          if (entry[0] === "resolve") assert.equal(entry[1], params);
+          else { assert.equal(entry[2], context); assert.equal(typeof entry[1], "object"); }
+        }
+        assert.deepEqual(h.claim.close(), []);
+        return trace.map(entry => Array.isArray(entry) ? entry[0] : entry);
+      };
+      assert.deepEqual(await run(observed), await run(original));
+    }
+});
+
+test("Qwen v9 replay relations are closed, nonreflective and keep existing annotation limits", () => {
+  const base = { v: 9, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+    values: null, valueState: [1,1,8], valueSites: [0,0,0,0,0,0], valueSelection: ["a".repeat(64),15,1,1,1,1,0,0,1,1,1,2] };
+  for (const replay of [[0,0,0,0], [1,0,0,0], [1,1,0,0], [1,1,0,1], [1,1,1,2]]) {
+    const row = { ...base, valueSelection: [...base.valueSelection.slice(0,8),...replay] };
+    assert.deepEqual(qwenObserverRecord(row), row); assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(row)) <= 768);
+  }
+  for (const replay of [[0,1,0,0], [1,0,1,2], [1,1,1,0], [1,2,0,0], [1,1,0,3], [true,0,0,0]])
+    assert.throws(() => qwenObserverRecord({ ...base, valueSelection: [...base.valueSelection.slice(0,8),...replay] }));
+  for (const valueSelection of [base.valueSelection.slice(0,11), Object.assign(new Array(13),base.valueSelection),
+    [...base.valueSelection.slice(0,8),1,1,1,2,0]]) assert.throws(() => qwenObserverRecord({ ...base, valueSelection }));
+  let reads = 0; const accessor = [...base.valueSelection]; Object.defineProperty(accessor,"8",{ get() { reads++; throw undefined; } });
+  const proxy = new Proxy([...base.valueSelection], { ownKeys() { reads++; throw undefined; } });
+  for (const valueSelection of [accessor,proxy]) assert.throws(() => qwenObserverRecord({ ...base,valueSelection }));
+  assert.equal(reads,0);
+  const wide = { ...base, case:rows.reduce((a,b)=>a.id.length>b.id.length?a:b).id,parent:65534,observer:65535,
+    route:[1,65535,65535,65535,0,0,3,3,2], values:[1,"a".repeat(64),206,7,15,2,9,8,3,3,0],
+    valueState:[1,1,0],valueSites:[1,15,1,1,3,1],valueSelection:[null,63,1,1,1,1,1,1,1,1,1,2] };
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(qwenObserverRecord(wide)))<=768);
+});
+
+test("Qwen replay recording faults remain separate from falsey resolver failures", async () => {
+  const outputs = qwenSelectionSources();
+  for (const original of [undefined, null, false, {}]) for (const fault of [undefined, false]) {
+    class FailingWeakMap extends WeakMap {
+      set(key, value) {
+        if (Object.hasOwn(value, "previousBuiltin")) throw fault;
+        return super.set(key, value);
+      }
+    }
+    const create = new Function("WeakMap", `return (${createQwenValueSink.toString()});`)(FailingWeakMap);
+    const contract = "a".repeat(64), invocation = {}, sink = create(contract);
+    sink.activate(1,contract); sink.activate(2,contract);
+    const claim = sink.claim(contract,1,()=>invocation); claim.bind(invocation);
+    const registry = qwenRegistryFactory(outputs[4],sink)();
+    const replay = qwenReplayResolver(outputs[7],sink,()=>{
+      registry.registerApiProvider({api:"openai-completions",stream(){},streamSimple(){}});
+      throw original;
+    });
+    let present = false, reason;
+    try { await replay({context:{}}); } catch(error) { present = true; reason = error; }
+    assert.equal(present,true); assert.equal(reason,original);
+    assert.equal(claim.snapshot(invocation,true).valueSelection,null);
+    const errors = claim.close(); assert.equal(errors.length,1); assert.equal(errors[0],fault);
+  }
 });
