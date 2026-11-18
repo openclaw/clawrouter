@@ -19,6 +19,10 @@ export const qwenValueSources = Object.freeze([
     sha256: "08bc3fa48900ee89d34c33b9eb92508285f7332cb73aa19bd61ec5c09625b7de" }),
   Object.freeze({ path: "packages/ai/src/api-registry.ts",
     sha256: "5455ee2b67c34bd1d8e85811ee55fe3596bf1291a0165765afdf6b82af7fc18a" }),
+  Object.freeze({ path: "packages/ai/src/providers/register-builtins.ts",
+    sha256: "2ec994b4b3d2d21438fc131d457e79d3a068c5ff2e39e6db8476aa1233143958" }),
+  Object.freeze({ path: "packages/ai/src/providers/openai-completions.ts",
+    sha256: "6139005cf0564180b07a5450304883c1e7066bda4e9f5991ac86511e241e3e20" }),
 ]);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -55,6 +59,7 @@ export function createQwenValueSink(contract) {
   const is = Object.is, freeze = Object.freeze;
   const activations = [0, 0], claims = new Set(), tokens = new Map();
   const runtimeRegistries = new WeakMap(), registrations = new WeakMap(), defaults = new WeakMap();
+  const lazySelectors = new WeakMap(), builtins = new WeakSet();
   let active, poisoned = false, ordinal = 0;
   const stray = [];
   const overflow = new Error("Qwen value recording capacity exceeded");
@@ -101,10 +106,10 @@ export function createQwenValueSink(contract) {
     });
     return value;
   }
-  function registered(map, key, normalized) {
+  function registered(map, key, normalized, stream, simple) {
     safe(active, () => {
       // Only the exact normalized record from a completed original insertion.
-      if (key === "openai-completions") registrations.set(map, reference(normalized));
+      if (key === "openai-completions") registrations.set(map, { record: reference(normalized), stream: reference(stream), simple: reference(simple) });
     });
   }
   function lookup(value, map, api) {
@@ -113,9 +118,51 @@ export function createQwenValueSink(contract) {
       const s = row.selection;
       if (!(s.seen & 1)) return;
       if (s.seen & 6) { s.ambiguous = true; return; }
-      s.seen |= 4; s.lookup = reference(value); s.record = compare(value, registrations.get(map));
+      const registered = registrations.get(map);
+      s.seen |= 4; s.lookup = reference(value); s.record = compare(value, registered?.record);
+      s.registeredStream = registered?.stream; s.simpleStream = registered?.simple;
     });
     return value;
+  }
+  function lazyStream(value, select) {
+    safe(active, () => { lazySelectors.set(value, reference(select)); }); return value;
+  }
+  function builtin(value, api) {
+    safe(active, () => { if (api === "openai-completions") builtins.add(value); }); return value;
+  }
+  function wrapper(stream, api) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row || api !== "openai-completions") return;
+      const s = row.selection;
+      if (!(s.seen & 2)) return;
+      // Simple adapters delegate to direct adapters. This probe does not qualify
+      // that path; an observed simple operand must never look like replacement.
+      if (compare(stream, s.simpleStream) === 1) return;
+      if (s.seen & 8) { s.ambiguous = true; return; }
+      s.seen |= 8;
+      s.wrapped = s.provider === 1 ? compare(stream, s.registeredStream) : 0;
+      s.builtin = s.wrapped === 1 && builtins.has(stream) ? 1 : 0;
+      s.selector = s.builtin === 1 ? lazySelectors.get(stream) : undefined;
+    });
+  }
+  function lazy(value, select) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 8) || compare(select, s.selector) !== 1) return;
+      if (s.seen & 16) { s.ambiguous = true; return; }
+      s.seen |= 16; s.adapterRef = reference(value);
+    });
+    return value;
+  }
+  function adapter(value) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 16)) return;
+      if (s.seen & 32) { s.ambiguous = true; return; }
+      s.seen |= 32; s.adapter = compare(value, s.adapterRef);
+    });
   }
   function provider(value, registry) {
     safe(active, () => {
@@ -216,7 +263,8 @@ export function createQwenValueSink(contract) {
         safe(owner, () => {
           if (owner.closed || active !== owner || owner.rows.has(invocation) || owner.rows.size >= 2) { invalidate(owner); return; }
           owner.rows.set(invocation, { id: ++ordinal, sites: [null, null],
-            selection: { seen: 0, runtime: 0, registry: 0, provider: 0, record: 0, ambiguous: false } });
+            selection: { seen: 0, runtime: 0, registry: 0, provider: 0, record: 0,
+              wrapped: 0, builtin: 0, adapter: 0, ambiguous: false } });
         });
       },
       snapshot(invocation, diagnostic = false) {
@@ -236,7 +284,8 @@ export function createQwenValueSink(contract) {
               guard ? 1 : 0, guard?.bits ?? 0, guard?.closed ? 1 : 0]);
             const s = row.selection;
             if (!s.ambiguous)
-              valueSelection = freeze([contract, s.seen, s.runtime, s.registry, s.provider]);
+              valueSelection = freeze([contract, s.seen, s.runtime, s.registry, s.provider,
+                s.wrapped, s.builtin, s.adapter]);
           }
           if (reason) return null;
           const [client, guard] = row.sites;
@@ -269,7 +318,7 @@ export function createQwenValueSink(contract) {
     });
   }
   return freeze({ activate, claim, begin, finish, defaultRegistry, defaultRuntime, createdRuntime,
-    runtime, registered, lookup, provider,
+    runtime, registered, lookup, provider, lazyStream, builtin, wrapper, lazy, adapter,
     host: (t, v) => tap(t, 1, v), build: (t, v) => tap(t, 2, v),
     fallback: (t, v) => tap(t, 4, v), selected: (t, v) => tap(t, 8, v),
     argument: (t, v) => tap(t, 16, v), result: (t, v) => tap(t, 32, v) });
@@ -300,9 +349,23 @@ export function overlayQwenValueSource(site, source, contract) {
       "return __qwenValues.createdRuntime({\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  }, registry);");
   }
   if (site === 5) {
-    replace("    providers.set(provider.api, {\n      provider: {", "    let __qwenKey: Api;\n    let __qwenNormalized: RegisteredApiProvider;\n    providers.set(__qwenKey = provider.api, {\n      provider: (__qwenNormalized = {");
-    replace("      },\n      sourceId,\n    });", "      }),\n      sourceId,\n    });\n    __qwenValues.registered(providers, __qwenKey, __qwenNormalized);");
+    replace("    providers.set(provider.api, {\n      provider: {", "    let __qwenKey: Api;\n    let __qwenNormalized: RegisteredApiProvider;\n    let __qwenStream: StreamFunction<TApi, TOptions>;\n    let __qwenSimple: StreamFunction<TApi, SimpleStreamOptions>;\n    providers.set(__qwenKey = provider.api, {\n      provider: (__qwenNormalized = {");
+    replace("stream: wrapStream(provider.api, provider.stream),", "stream: wrapStream(provider.api, __qwenStream = provider.stream),");
+    replace("streamSimple: wrapStream(provider.api, provider.streamSimple),", "streamSimple: wrapStream(provider.api, __qwenSimple = provider.streamSimple),");
+    replace("      },\n      sourceId,\n    });", "      }),\n      sourceId,\n    });\n    __qwenValues.registered(providers, __qwenKey, __qwenNormalized, __qwenStream, __qwenSimple);");
     replace("return providers.get(api)?.provider;", "return __qwenValues.lookup(providers.get(api)?.provider, providers, api);");
+    replace("  return (model, context, options) => {", "  return (model, context, options) => {\n    __qwenValues.wrapper(stream, api);");
+  }
+  if (site === 6) {
+    replace("  return (model, context, options) => {", "  return __qwenValues.lazyStream((model, context, options) => {");
+    replace("    return outer;\n  };", "    return outer;\n  }, select);");
+    replace("select(streams)(model, context, options)", "__qwenValues.lazy(select(streams), select)(model, context, options)");
+    replace("const stream = createLazyStream(load, (streams) => streams.stream);",
+      "const stream = __qwenValues.builtin(createLazyStream(load, (streams) => streams.stream), api);");
+  }
+  if (site === 7) {
+    replace('> = (model, context, options) => streamOpenAICompletionsRequest(model, context, options, "direct");',
+      '> = (model, context, options) => {\n  __qwenValues.adapter(streamOpenAICompletions);\n  return streamOpenAICompletionsRequest(model, context, options, "direct");\n};');
   }
   return `import { sink as __qwenValues } from "${qwenValueModule}";\n`
     + text + (site <= 2 ? `\n__qwenValues.activate(${site}, "${contract}");\n` : "");

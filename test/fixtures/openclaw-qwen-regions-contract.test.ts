@@ -201,7 +201,7 @@ function createQwenLedger() {
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
     const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
     return valueSnapshot === undefined ? checked
-      : qwenObserverRecord({ ...checked, v: 7, ...valueSnapshot() });
+      : qwenObserverRecord({ ...checked, v: 8, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -482,6 +482,24 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 8) {
+    if (Object.keys(value).at(-1) !== "valueSelection") invalid();
+    const selection = value.valueSelection;
+    if (selection === null) return { ...qwenObserverRecord({ ...value, v: 7 }), v: 8 };
+    if (utilTypes.isProxy(selection) || !Array.isArray(selection)
+      || Reflect.ownKeys(selection).join() !== "0,1,2,3,4,5,6,7,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(selection);
+    if (fields.length.value !== 8 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const s = Array.from({ length: 8 }, (_, i) => fields[String(i)].value);
+    if (!s.slice(1).every(Number.isSafeInteger) || s[1] < 0 || s[1] > 63
+      || ![0, 1, 2].includes(s[5]) || ![0, 1].includes(s[6]) || ![0, 1, 2].includes(s[7])
+      || s[1] & 8 && !(s[1] & 2) || s[1] & 16 && !(s[1] & 8) || s[1] & 32 && !(s[1] & 16)
+      || s[5] !== 0 && (!(s[1] & 8) || s[4] !== 1)
+      || s[6] !== 0 && s[5] !== 1 || s[7] !== 0 && !(s[1] & 32)
+      || s[1] & 16 && s[6] !== 1) invalid();
+    const checked = qwenObserverRecord({ ...value, v: 7, valueSelection: [s[0], s[1] & 7, ...s.slice(2, 5)] });
+    return { ...checked, v: 8, valueSelection: s };
   }
   if (value.v === 7) {
     if (Object.keys(value).at(-1) !== "valueSelection") invalid();
