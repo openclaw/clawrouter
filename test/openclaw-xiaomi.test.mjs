@@ -211,9 +211,9 @@ async function readDiagnostics(origin, controlFetch = fetch) {
   assert.ok(Array.isArray(rows) && rows.length <= 64);
   return rows.map(value => { const row = diagnostic.validate(value); assert.ok(row); return row; });
 }
-async function assertPlanOracles(origin, calls, physical, report) {
+async function assertPlanOracles(origin, calls, physical, report, rows = planRows) {
   const failures = [];
-  for (const row of planRows) {
+  for (const row of rows) {
     const selected = calls.filter(call => call.planId === row.id), count = row.kind === "rotation" ? 2 : ["success", "http", "embedded", "no_usage", "cancel", "failover"].includes(row.kind) ? 1 : 0;
     let checkpoint = 1; const check = (id, run) => { checkpoint = id; return run(); };
     try {
@@ -241,17 +241,23 @@ async function assertPlanOracles(origin, calls, physical, report) {
       check(20, () => assert.equal(ledger.filter(value => value.path === "/reserve" && value.dispatched && value.charged === 7).length, count));
       check(21, () => assert.equal(ledger.filter(value => value.path === "/settle" && value.settled).length, count));
       checkpoint = 7;
+      const denialStatus = ["foreign_policy", "foreign_model", "capacity"].includes(row.kind) ? "denied"
+        : ["missing", "invalid_grant"].includes(row.kind) ? "provider_error" : null;
+      const eventCount = row.kind === "rotation" ? 4 : denialStatus ? 1 : count;
+      const dispatchedStatus = ["http", "cancel", "failover"].includes(row.kind) ? "client_error" : row.kind === "embedded" ? "provider_error" : "success";
+      const statuses = row.kind === "rotation" ? ["success", "provider_error", "success", "provider_error"] : Array(eventCount).fill(denialStatus ?? dispatchedStatus);
       let usage;
       for (let n = 0; n < 150; n++) {
         const response = await fetch(origin + "/v1/usage", { headers: { authorization: `Bearer clawrouter-live-xiaomi_plan_${row.id}-fixture-secret` } });
-        usage = await response.json(); if (usage.usage.events.length === count) break;
+        usage = await response.json(); if (usage.usage.events.length === eventCount) break;
         await new Promise(resolve => setTimeout(resolve, 20));
       }
-      check(22, () => assert.equal(usage.usage.events.length, count));
+      check(22, () => { assert.equal(usage.usage.events.length, eventCount); assert.deepEqual(usage.usage.events.map(event => event.status).sort(), statuses.sort()); });
       for (const event of usage.usage.events) {
-        const rejected = ["http", "embedded", "failover"].includes(row.kind), unknown = rejected || ["no_usage", "cancel"].includes(row.kind);
+        const denied = denialStatus !== null || row.kind === "rotation" && event.status === "provider_error";
+        const rejected = denied || ["http", "embedded", "failover"].includes(row.kind), unknown = rejected || ["no_usage", "cancel"].includes(row.kind);
         check(23, () => assert.equal(event.provider, row.provider)); check(24, () => assert.equal(event.model, `${row.provider}/${row.model}`)); check(25, () => assert.equal(event.credential_id, `xiaomi_plan_${row.id}`));
-        check(26, () => assert.equal(event.status, row.kind === "http" || row.kind === "cancel" || row.kind === "failover" ? "client_error" : row.kind === "embedded" ? "provider_error" : "success"));
+        check(26, () => { assert.equal(event.status, denied ? denialStatus ?? "provider_error" : dispatchedStatus); if (denied) assert.equal(event.reserved_cost_micros, 0); });
         check(27, () => assert.equal(event.cost_basis, rejected ? "none" : "policy_fixed")); check(28, () => assert.equal(event.actual_cost_micros, rejected ? 0 : 7));
         check(29, () => assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens], unknown ? [null, null, null, null] : [300, 20, 320, 256]));
       }
@@ -1674,6 +1680,80 @@ test("SDK provider-error witness refuses arbitrary errors, foreign signals, chan
     const f = await xiaomiProviderErrorFixture((value, at) => { if (at === phase) mutate(value); });
     assert.equal(xiaomiSdkProviderErrorDisposition(f.selection, f.reader), false, `counterfactual ${index}`);
     await assert.rejects(f.f.proof.join(f.selection), error => error instanceof AggregateError && error.errors.includes(f.reason));
+  }
+});
+test("actual Xiaomi denial and rotation attempts retain zero-cost usage without upstream dispatch", { timeout: 60000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-xiaomi-denial-accounting-")); let mf; const failures = [];
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { requestContext: true });
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    await provisionPlans(await mf.getKVNamespace("POLICY_KV", "router"));
+    const grants = await fetch(origin + "/fixture/grants", { method: "POST" }); await grants.arrayBuffer(); assert.equal(grants.status, 204);
+    const cases = [["invalid_proxy",401,null],["foreign_policy",403,"denied"],["foreign_model",403,"denied"],
+      ["retired_pro",400,null],["retired",400,null],["missing",503,"provider_error"],["invalid_grant",503,"provider_error"],["capacity",402,"denied"]];
+    const observed = [];
+    const send = async row => {
+      const response = await fetch(origin + `/v1/native/${row.provider}/chat/completions`, { method: "POST",
+        headers: { authorization: `Bearer clawrouter-live-xiaomi_plan_${row.id}-${row.kind === "invalid_proxy" ? "invalid" : "fixture-secret"}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: row.model, stream: true, max_tokens: 128, thinking: { type: "enabled" }, reasoning_effort: "high",
+          messages: [{ role: "assistant", reasoning_content: "synthetic-plan-thinking", tool_calls: [{ id: "planlookup", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+            { role: "tool", tool_call_id: "planlookup", content: "synthetic-plan-result" }] }) });
+      await response.arrayBuffer(); return response.status;
+    };
+    const usage = async (row, expected) => {
+      let value;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        const response = await fetch(origin + "/v1/usage", { headers: { authorization: `Bearer clawrouter-live-xiaomi_plan_${row.id}-fixture-secret` } });
+        assert.equal(response.status, 200); value = await response.json(); if (value.usage.events.length === expected) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      return value;
+    };
+    for (const [kind, status, outcome] of cases) {
+      const row = planRows.find(value => value.kind === kind); assert.equal(await send(row), status, kind);
+      const actual = await usage(row, outcome === null ? 0 : 1); assert.equal(actual.usage.events.length, outcome === null ? 0 : 1, kind);
+      assert.equal(actual.budget.spentMicros, 0, kind);
+      for (const event of actual.usage.events) {
+        assert.equal(event.status, outcome, kind); assert.equal(event.actual_cost_micros, 0); assert.equal(event.reserved_cost_micros, 0); assert.equal(event.cost_basis, "none");
+        assert.equal(event.credential_id, `xiaomi_plan_${row.id}`); assert.equal(event.provider, row.provider); assert.equal(event.model, `${row.provider}/${row.model}`);
+        assert.deepEqual([event.input_tokens,event.output_tokens,event.total_tokens,event.cached_input_tokens],[null,null,null,null]);
+      }
+      observed.push({ id: row.id, status, events: actual.usage.events.length, outcome, spent: actual.budget.spentMicros });
+    }
+    const row = planRows.find(value => value.kind === "rotation");
+    for (const [index, [action, status]] of [["valid",200],["invalid",503],["rotated",200],["revoked",503]].entries()) {
+      const control = await fetch(origin + `/fixture/plan/${row.id}/${action}`, { method: "POST" }); await control.arrayBuffer(); assert.equal(control.status,204);
+      assert.equal(await send(row), status, action); const actual = await usage(row, index + 1);
+      assert.equal(actual.usage.events.length,index+1); assert.equal(actual.budget.spentMicros,index < 2 ? 7 : 14);
+      const success = actual.usage.events.filter(event=>event.status === "success"), denied = actual.usage.events.filter(event=>event.status === "provider_error");
+      assert.equal(success.length,index < 2 ? 1 : 2); assert.equal(denied.length,index===0?0:index<3?1:2);
+      for (const event of denied) { assert.equal(event.actual_cost_micros,0); assert.equal(event.reserved_cost_micros,0); assert.equal(event.cost_basis,"none"); }
+      observed.push({ id: row.id, action, status, events: actual.usage.events.length, denied: denied.length, spent: actual.budget.spentMicros });
+    }
+    const upstream = await mf.getWorker("upstream"), state = await upstream.fetch("https://fixture.example/state"), calls = await state.json();
+    assert.equal(state.status,200); assert.equal(calls.length,2); assert.ok(calls.every(call=>call.planId===row.id&&call.sourceJoined));
+    const retired = await fetch(origin+"/fixture/retire?seal=1",{method:"POST"}); const physical = await retired.json(); assert.equal(retired.status,200);
+    await assertPlanOracles(origin, calls, physical, () => {}, [...cases.map(([kind]) => planRows.find(value => value.kind === kind)), row]);
+    t.diagnostic(JSON.stringify(observed));
+  } catch (error) { failures.push(error); }
+  try { await mf?.dispose(); } catch (error) { failures.push(error); }
+  try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  if (failures.length===1) throw failures[0]; if (failures.length) throw new AggregateError(failures,"Xiaomi denial accounting or cleanup failed");
+});
+test("actual Xiaomi usage oracle rejects missing denial events, unexpected status and nonzero billing", async () => {
+  const row = planRows.find(value => value.kind === "missing");
+  const evaluate = new Function("assert", "fetch", "planRows", "return " + assertPlanOracles.toString());
+  for (const mutate of [null, value => { value.usage.events = []; }, value => { value.usage.events.push({ ...value.usage.events[0] }); },
+    value => { value.usage.events[0].status = "success"; }, value => { value.usage.events[0].actual_cost_micros = 7; },
+    value => { value.usage.events[0].reserved_cost_micros = 7; }, value => { value.usage.events[0].cost_basis = "policy_fixed"; },
+    value => { value.usage.events[0].input_tokens = 1; }, value => { value.budget.spentMicros = 1; }]) {
+    const value = { usage: { events: [{ provider: row.provider, model: `${row.provider}/${row.model}`, credential_id: `xiaomi_plan_${row.id}`,
+      status: "provider_error", actual_cost_micros: 0, reserved_cost_micros: 0, cost_basis: "none", input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null }] }, budget: { spentMicros: 0 } };
+    mutate?.(value);
+    const actual = evaluate(assert, async () => ({ json: async () => value }), [row]);
+    const pending = actual("https://fixture.example", [], { budgets: [], materializations: [] }, () => {});
+    if (mutate) await assert.rejects(pending, AggregateError); else await pending;
   }
 });
 test("SDK body reporting retains undefined primary and independent writer errors without a callback-rethrow duplicate", () => {
