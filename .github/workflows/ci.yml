@@ -52,6 +52,8 @@ jobs:
             sha256: "aff46539a83aff86e3c62c592bce2c50d95391f9df289afaf03a50c01d14533d"
           - version: "0.164.0"
             sha256: "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4"
+          - version: "0.169.0"
+            sha256: "9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -83,11 +85,17 @@ jobs:
           fi
           echo "CLAWROUTER_CODEX_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
           echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-$producer_version/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          if [ "$CODEX_VERSION" = 0.169.0 ]; then
+            echo "CLAWROUTER_CODEX_REMOTE_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          fi
           if [ "$CODEX_VERSION" = 0.155.0 ]; then
             echo "CLAWROUTER_DESKTOP_FIXTURE_OUTPUT=$RUNNER_TEMP/codex-desktop-fixture" >> "$GITHUB_ENV"
           fi
+      - name: Fetch released Codex connection writer for upgrade proof
+        if: matrix.version == '0.169.0'
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 608050e4e4dae5ebc93919e0759ffb4bf0664528
       - name: Native client through real router and ledgers
-        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs test/codex-remote-upgrade.test.mjs
       - name: Synthetic native rehearsal saved-client contract
         if: matrix.version == '0.164.0'
         run: node --test test/native-rehearsal.test.mjs
