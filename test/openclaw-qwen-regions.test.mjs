@@ -47,9 +47,9 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "cc24b35b678e752ab8097cf2694fc46c943cd40ecb5b97ca1a41d0ca49ac1808";
+const qwenRunnerFixtureSha256 = "d5ad167a1efaf63c253052df1add5a52583ca1b3b0c258c7c1c2d4c4ee341679";
 const qwenRunnerReporterSha256 = "351d2c199b6aa09124073b8c8b9e58d195abe1f462ac40e8a7b72c544476b40a";
-const qwenValueObserverSha256 = "5ef84f755d8e3082e46c9886b3a8c2cbf69fd745c4ef5f995cdca203b014d738";
+const qwenValueObserverSha256 = "22336f3a29f7cf956965056726b062edbd6443d2a59e1d394f244bb8c7d87241";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -195,6 +195,7 @@ function createQwenFailureRelay() {
     stage = "record_schema";
     assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
     const checked = qwenObserverRecord(value);
+    assert.ok(checked.v !== 5 || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
     stage = "entry_required"; assert.ok(entered.has(checked.case), "observer lacks case entry");
     stage = "terminal_census";
     const original = sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined;
@@ -317,10 +318,13 @@ function createQwenFailureRelay() {
     // completion and helper/runner summaries. Absence conveys no local proof.
     if (firstFailed && observerFailures.has(firstFailed.case)) {
       const observer = JSON.parse(observerFailures.get(firstFailed.case));
-      if (observer.v === 4 && observer.values !== null) {
+      if ((observer.v === 4 || observer.v === 5) && observer.values !== null) {
         const binding = runner?.find(record => record.kind === "runner_binding");
         // Missing/foreign actual reporter binding never admits a worker claim.
-        if (!binding?.observed || binding.valueContract !== observer.values[1]) observer.values = null;
+        if (!binding?.observed || binding.valueContract !== observer.values[1]) {
+          observer.values = null;
+          if (observer.v === 5) observer.valueState[2] = binding?.observed ? 11 : 10;
+        }
       }
       essential.push(observer);
     }
@@ -2225,22 +2229,24 @@ test("Qwen private input custody and falsey read/close faults are independent", 
 test("Qwen value claims travel only with the original first failed observer and matching runner", async () => {
   const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
     fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
-  for (const match of [true, false]) {
+  for (const version of [4, 5]) for (const match of [true, false, null]) {
     const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
-    h.relay.runnerReport(qwenRunnerPacket("complete", records => {
+    if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
       records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
     }));
     const witness = h.witness.enter(rows[0].id), counts = { operations: 2, rejected: 1, pending: 0 };
     witness.at("owned_drain"); witness.failed(undefined);
     h.relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "fetch_observer", "failed", counts)) + "\n");
-    const record = { v: 4, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    const record = { v: version, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
       site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
       failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
-      values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0] };
+      values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0],
+      ...(version === 5 ? { valueState: [1, 1, 0] } : {}) };
     h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
     for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
     const packet = h.relay.output("failed"), projected = packet.find(row => row.kind === "observer_failure");
     assert.deepEqual(projected.values, match ? record.values : null);
+    if (version === 5) assert.deepEqual(projected.valueState, [1, 1, match ? 0 : match === null ? 10 : 11]);
     assert.equal(packet.length, 10); assert.equal(h.relay.complete(), false);
     const commands = packet.map(qwenBoundaryAnnotation);
     assert.ok(commands.every(line => Buffer.byteLength(line) <= 768));
@@ -2252,3 +2258,62 @@ test("Qwen value claims travel only with the original first failed observer and 
   witness.complete(counts);
   assert.equal(successful.relay.output("failed").some(row => row.kind === "observer_failure"), false);
 });
+
+// BEGIN Qwen value disposition controls.
+test("Qwen value disposition reads retained state once without current-context calls", () => {
+  const contract = "a".repeat(64);
+  for (const [sites, expected] of [[[], [0,0,5]], [[1], [1,0,6]], [[2], [0,1,5]], [[1,2], [1,1,8]], [[1,1,2], [2,1,1]]]) {
+    let reads = 0; const invocation = {}, sink = createQwenValueSink(contract);
+    for (const site of sites) sink.activate(site, contract);
+    const claim = sink.claim(contract, 1, () => { reads++; return invocation; }); claim.bind(invocation);
+    const before = reads, result = claim.snapshot(invocation, true);
+    assert.deepEqual(result, { values: null, valueState: expected });
+    assert.equal(reads, before); assert.deepEqual(claim.close(), []);
+    assert.deepEqual(claim.snapshot(invocation, true), result);
+  }
+  const h = qwenValueHarness();
+  assert.deepEqual(h.claim.snapshot({}, true).valueState, [1,1,4]);
+  const token = h.sink.begin(2);
+  assert.deepEqual(h.claim.snapshot(h.invocation, true).valueState, [1,1,7]);
+  h.sink.argument(token, {}); const original = Promise.resolve();
+  assert.equal(h.sink.result(token, original), original); h.sink.finish(token);
+  const beforeClose = h.claim.snapshot(h.invocation, true);
+  assert.equal(beforeClose.values[8], 3); assert.deepEqual(beforeClose.valueState, [1,1,0]);
+  assert.deepEqual(h.claim.close(), []); assert.deepEqual(h.claim.snapshot(h.invocation, true), beforeClose);
+  const fault = qwenValueHarness(() => { throw undefined; });
+  assert.equal(fault.sink.begin(2), null);
+  assert.deepEqual(fault.claim.snapshot(fault.invocation, true).valueState, [1,1,2]);
+  assert.deepEqual(fault.claim.close(), [undefined]);
+  assert.deepEqual(fault.claim.snapshot(fault.invocation, true).valueState, [1,1,2]);
+});
+
+test("Qwen v5 value disposition is closed, opaque and within existing annotation quotas", () => {
+  const base = { v: 5, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+    values: null, valueState: [0,0,5] };
+  for (const state of [[0,0,1],[1,1,2],[1,1,3],[1,1,4],[0,0,5],[1,0,6],[1,1,7],[1,1,8],[1,1,9],[1,1,10],[1,1,11],
+    [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, 1]]) {
+    const row = { ...base, valueState: state };
+    assert.deepEqual(qwenObserverRecord(row), row);
+    assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(row)) <= 768);
+  }
+  const value = { ...base, values: [1,"a".repeat(64),206,7,15,2,9,8,3,3,0], valueState: [1,1,0] };
+  assert.deepEqual(qwenObserverRecord(value), value);
+  const wide = { ...value, case: rows.reduce((a,b) => a.id.length > b.id.length ? a : b).id,
+    parent: 65534, observer: 65535, route: [1,65535,65535,65535,0,0,3,3,2] };
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(wide)) <= 768);
+  for (const state of [[0,0,0], [1,1,5], [0,1,6], [0,0,8], [-1,0,5], [0,0,12], [true,0,5],
+    [0,0,5,0], Object.assign(new Array(4), {0:0,1:0,2:5})]) {
+    assert.throws(() => qwenObserverRecord({ ...base, valueState: state }));
+  }
+  assert.throws(() => qwenObserverRecord({ ...value, valueState: [1,1,8] }));
+  let reads = 0;
+  const accessor = [0,0,5]; Object.defineProperty(accessor, "0", { get() { reads++; throw undefined; } });
+  const proxy = new Proxy([0,0,5], { ownKeys() { reads++; throw undefined; } });
+  for (const state of [accessor, proxy]) assert.throws(() => qwenObserverRecord({ ...base, valueState: state }));
+  assert.equal(reads, 0);
+  const { valueState, ...old } = value;
+  old.v = 4; assert.deepEqual(qwenObserverRecord(old), old);
+});
+// END Qwen value disposition controls.

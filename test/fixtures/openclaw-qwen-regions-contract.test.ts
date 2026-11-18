@@ -201,7 +201,7 @@ function createQwenLedger() {
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
     const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
     return valueSnapshot === undefined ? checked
-      : qwenObserverRecord({ ...checked, v: 4, values: valueSnapshot() });
+      : qwenObserverRecord({ ...checked, v: 5, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -335,7 +335,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   // ownership or infer native interception from a zero entry count.
   const contexts = new Map<object, Invocation>(), routes = new Map<Invocation, any>();
   let callable: ReturnType<typeof createQwenCallableWitness> | undefined;
-  let values: { bind: (invocation: Invocation) => void; snapshot: (invocation: Invocation | undefined) => unknown; close: () => unknown[] } | undefined;
+  let values: { bind: (invocation: Invocation) => void; snapshot: (invocation: Invocation | undefined, diagnostic?: boolean) => unknown; close: () => unknown[] } | undefined;
   let unknownEntry = false;
   function passive(record: () => void) {
     try { record(); } catch (error) { ledger.recordingFailure(error); }
@@ -433,7 +433,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
           try { ledger.captureObserverFailure(pending, { site, seen, truthy, receipt: !!receipt,
             acquisition: acquisitionObserved ? !!acquisition : null, route,
             ...(callable ? { callable: callable.snapshot(callableInvocation) } : {}),
-            ...(values ? { valueSnapshot: () => values!.snapshot(valueInvocation) } : {}) }, error); }
+            ...(values ? { valueSnapshot: () => values!.snapshot(valueInvocation, true) } : {}) }, error); }
           catch (reportError) { ledger.recordingFailure(reportError); }
           throw error;
         }
@@ -482,6 +482,20 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 5) {
+    if (Object.keys(value).at(-1) !== "valueState") invalid();
+    const { valueState, ...prior } = value, checked = qwenObserverRecord({ ...prior, v: 4 });
+    if (utilTypes.isProxy(valueState) || !Array.isArray(valueState)
+      || Reflect.ownKeys(valueState).join() !== "0,1,2,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(valueState);
+    if (fields.length.value !== 3 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const s = [fields[0].value, fields[1].value, fields[2].value];
+    if (!s.every(Number.isSafeInteger) || s[0] < 0 || s[1] < 0 || s[2] < 0 || s[2] > 11
+      || (s[2] === 0) !== (checked.values !== null)
+      || [0, 7, 8, 10, 11].includes(s[2]) && (s[0] !== 1 || s[1] !== 1)
+      || s[2] === 5 && s[0] === 1 || s[2] === 6 && (s[0] !== 1 || s[1] === 1)) invalid();
+    return { ...checked, v: 5, valueState: s };
   }
   if (value.v === 4) {
     if (Object.keys(value).at(-1) !== "values") invalid();

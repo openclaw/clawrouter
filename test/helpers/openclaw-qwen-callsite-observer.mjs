@@ -148,21 +148,29 @@ export function createQwenValueSink(contract) {
           owner.rows.set(invocation, { id: ++ordinal, sites: [null, null] });
         });
       },
-      snapshot(invocation) {
-        return safe(owner, () => {
+      snapshot(invocation, diagnostic = false) {
+        // First failed gate only: no new context lookup or operand evaluation.
+        // 0=value, 1=poisoned, 2=owner unknown, 3=recording fault, 4=unbound,
+        // 5/6=client/guard activation, 7=open evaluation, 8=no complete group,
+        // 9=snapshot threw. Relay-only 10/11 mean missing/mismatched binding.
+        let reason = 9;
+        const values = safe(owner, () => {
           const row = owner.rows.get(invocation);
-          if (poisoned || owner.unknown || owner.errors.length || !row ||
-              activations[0] !== 1 || activations[1] !== 1 || owner.stack.length) return null;
+          reason = poisoned ? 1 : owner.unknown ? 2 : owner.errors.length ? 3 : !row ? 4
+            : activations[0] !== 1 ? 5 : activations[1] !== 1 ? 6 : owner.stack.length ? 7 : 0;
+          if (reason) return null;
           const [client, guard] = row.sites;
           // Missing or partial groups are UNKNOWN (zero), never "call absent".
           const c = client?.closed && (client.bits === 11 || client.bits === 15) ? client : null;
           const g = guard?.closed && guard.bits === 3 ? guard : null;
-          if (!c && !g) return null;
+          if (!c && !g) { reason = 8; return null; }
           // v,key,invocation,clientEval,clientPhases,branch,selectedType,
           // guardEval,guardPhases,activatedSites,calleeIdentities(UNKNOWN).
           return freeze([1, contract, row.id, c?.id ?? 0, c?.bits ?? 0,
             c?.branch ?? 0, c?.kind ?? 0, g?.id ?? 0, g?.bits ?? 0, 3, 0]);
         }) ?? null;
+        return diagnostic ? freeze({ values,
+          valueState: freeze([activations[0], activations[1], values === null && reason === 0 ? 9 : reason]) }) : values;
       },
       close() {
         safe(owner, () => {
