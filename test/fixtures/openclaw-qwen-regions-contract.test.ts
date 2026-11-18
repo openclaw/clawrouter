@@ -1,5 +1,5 @@
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createEmptyPluginRegistry, registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import * as transport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import * as guard from "../../src/infra/net/fetch-guard.js";
@@ -15,6 +15,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
 import { buildQwenProvider } from "./api.js";
 import plugin from "./index.js";
 
@@ -815,8 +816,10 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
       witness.at("history_policy");
       const policy = resolveTranscriptPolicy({ provider: model.provider, modelId: row.model, modelApi: model.api, model, runtimeHandle: { provider: model.provider, plugin: provider } });
       witness.at("history_sanitize");
-      return witness.observe("history_sanitize", sanitizeSessionHistory({ provider: model.provider, modelId: row.model, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
-        sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId: row.model })]), messages: history }));
+      const replayRegistry = createEmptyPluginRegistry();
+      replayRegistry.providers.push({ pluginId: "qwen", provider, source: "test" });
+      return witness.observe("history_sanitize", withPluginRuntimeGenerationRegistryScope(replayRegistry, () => sanitizeSessionHistory({ provider: model.provider, modelId: row.model, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
+        sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId: row.model })]), messages: history })));
       } catch (error) { witness.failed(error); throw error; }
     }));
     witness.at("convert");

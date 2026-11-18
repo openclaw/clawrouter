@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Keep Qwen replay sanitization in its case-owned provider generation. Use the captured provider with the existing generation scope so replay lookup does not acquire a second plugin graph; retain the actual sanitizer, original stream entrypoints and all ownership, cancellation and accounting assertions.
+
 - Observe whether a synchronous provider replay resolver replaces the selected Qwen API registration. Retain only closed identity relations at existing calls; missing or ambiguous observations remain unknown, and native ownership assertions are unchanged.
 
 - Distinguish Qwen normalized-record identity from actual handler provenance by observing original wrapper entry, its retained builtin lazy stream and the selected adapter entry. Keep missing generations unknown and preserve registration, calls and native ownership assertions.

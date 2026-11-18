@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "42d3b5dc485e9bd5002cecd07f03b2e1e0944efd409a4d873e39d25047a65dbf";
+const qwenRunnerFixtureSha256 = "3348d360cea1c51223cbb4d0266a7e7d013cec0ef3d1b8720c0271fa056781e1";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -2853,4 +2853,69 @@ test("Qwen replay recording faults remain separate from falsey resolver failures
     assert.equal(claim.snapshot(invocation,true).valueSelection,null);
     const errors = claim.close(); assert.equal(errors.length,1); assert.equal(errors[0],fault);
   }
+});
+
+// Exact D8 generation scope, exercised with an inert frame and the native ALS.
+const qwenGenerationScopeSource = "// Keep retained registry reads independent of metadata discovery and plugin loading.\nimport {\n  getPluginExecutionFrame,\n  runWithPluginExecutionFrame,\n} from \"../plugin-instance-invocation.js\";\nimport type { PluginRegistry } from \"../registry-types.js\";\nimport { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from \"./execution-frame.js\";\n\nexport function withPluginRuntimeGenerationRegistryScope<T>(\n  registry: PluginRegistry,\n  run: () => T,\n): T {\n  const current = getPluginExecutionFrame();\n  return runWithPluginExecutionFrame(\n    new PluginRuntimeExecutionFrame(\n      current ?? {},\n      getPluginRuntimeExecutionFrame(current)?.gatewayScope,\n      registry,\n    ),\n    run,\n  );\n}\n\n/** Exact registry owned by the prepared generation, including empty selections. */\nexport function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {\n  return getPluginRuntimeExecutionFrame()?.generationRegistry;\n}\n\nexport function runOutsidePluginRuntimeGenerationRegistryScope<T>(run: () => T): T {\n  const current = getPluginExecutionFrame();\n  return runWithPluginExecutionFrame(\n    new PluginRuntimeExecutionFrame(\n      current ?? {},\n      getPluginRuntimeExecutionFrame(current)?.gatewayScope,\n      undefined,\n    ),\n    run,\n  );\n}\n";
+
+test("Qwen actual sanitization callback retains the captured provider in a case-owned generation", async () => {
+  assert.equal(qwenValueHash(qwenGenerationScopeSource), "dd545702892c9c350b6717ebcf3e6df3596b96ff37e0014f01838ecd4442a2a4");
+  const storage = new AsyncLocalStorage();
+  class Frame {
+    constructor(scopes, gatewayScope, generationRegistry) { Object.assign(this, scopes); this.gatewayScope = gatewayScope; this.generationRegistry = generationRegistry; }
+  }
+  const code = stripTypeScriptTypes(qwenGenerationScopeSource);
+  const start = code.indexOf("export function withPluginRuntimeGenerationRegistryScope");
+  assert.ok(start >= 0);
+  const scope = new Function("getPluginExecutionFrame", "runWithPluginExecutionFrame", "getPluginRuntimeExecutionFrame", "PluginRuntimeExecutionFrame",
+    code.slice(start).replaceAll("export ", "") + "; return { withPluginRuntimeGenerationRegistryScope, getPluginRuntimeGenerationRegistry };")(
+      () => storage.getStore(), (frame, run) => storage.run(frame, run), (frame = storage.getStore()) => frame instanceof Frame ? frame : undefined, Frame);
+  const anchor = 'withOpenClawTestState({ label: "qwen-regions" }, async state => {';
+  const begin = transformed.indexOf(anchor), end = transformed.indexOf('    }));\n    witness.at("convert");', begin);
+  assert.ok(begin >= 0 && end > begin);
+  const callback = transformed.slice(begin + anchor.length, end);
+  const factory = new Function("witness", "resolveTranscriptPolicy", "createEmptyPluginRegistry", "withPluginRuntimeGenerationRegistryScope",
+    "sanitizeSessionHistory", "makeInMemorySessionManager", "makeModelSnapshotEntry", "model", "row", "provider", "history",
+    "return async state => {" + callback + "};");
+  const owned = [];
+  const rootFrame = new Frame({}, { pluginId: "caller" }, { outer: true });
+  for (const failed of [false, true]) for (const reason of [undefined, false, new Error("synthetic")]) {
+    await storage.run(rootFrame, async () => {
+      const run = async id => {
+        const provider = { id: "qwen", sanitizeReplayHistoryAsync() {} }, model = { provider: "qwen", api: "openai-completions", id };
+        const row = { id, model: id }, history = [], state = { workspaceDir: "/fixture/workspace" }, policy = {}, result = [];
+        const trace = [], originalErrors = []; let pending, ownRegistry, observations = 0;
+        const invoke = factory({
+          at(stage) { trace.push(stage); },
+          failed(error) { originalErrors.push(error); },
+          observe(stage, value) { observations++; assert.equal(stage, "history_sanitize"); assert.equal(value, pending); return value; },
+        }, params => { assert.equal(params.runtimeHandle.plugin, provider); return policy; },
+        () => { ownRegistry = { providers: [] }; owned.push(ownRegistry); return ownRegistry; },
+        scope.withPluginRuntimeGenerationRegistryScope,
+        params => {
+          assert.equal(scope.getPluginRuntimeGenerationRegistry(), ownRegistry);
+          assert.deepEqual(ownRegistry.providers, [{ pluginId: "qwen", provider, source: "test" }]);
+          assert.equal(params.messages, history); assert.equal(params.model, model); assert.equal(params.policy, policy);
+          assert.equal(params.sessionId, id); assert.equal(params.workspaceDir, state.workspaceDir);
+          pending = Promise.resolve().then(() => {
+            assert.equal(scope.getPluginRuntimeGenerationRegistry(), ownRegistry, "generation follows the original asynchronous sanitizer");
+            if (failed) throw reason;
+            return result;
+          });
+          return pending;
+        }, entries => ({ entries }), value => value, model, row, provider, history);
+        let caught = false, value;
+        try { value = await invoke(state); } catch (error) { caught = true; value = error; }
+        assert.equal(caught, failed); assert.equal(value, failed ? reason : result);
+        assert.equal(observations, 1); assert.deepEqual(trace, ["history_policy", "history_sanitize"]);
+        assert.equal(storage.getStore(), rootFrame, "caller scope restored");
+        // Existing callback returns the original promise; rejection is not rewritten by this correction.
+        assert.deepEqual(originalErrors, []);
+      };
+      await Promise.all([run("case-one"), run("case-two")]);
+      assert.equal(storage.getStore(), rootFrame);
+    });
+  }
+  assert.equal(new Set(owned).size, owned.length, "concurrent cases never share registries");
+  assert.equal(storage.getStore(), undefined);
 });
