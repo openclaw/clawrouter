@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Retain the first failed Qwen retirement join’s closed fault counts and already-evaluated reader operands. Keep skipped operands unknown and preserve original errors, reader getters, joins and native acceptance.
+
 - Keep Qwen replay sanitization in its case-owned provider generation. Use the captured provider with the existing generation scope so replay lookup does not acquire a second plugin graph; retain the actual sanitizer, original stream entrypoints and all ownership, cancellation and accounting assertions.
 
 - Observe whether a synchronous provider replay resolver replaces the selected Qwen API registration. Retain only closed identity relations at existing calls; missing or ambiguous observations remain unknown, and native ownership assertions are unchanged.

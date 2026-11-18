@@ -26,7 +26,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "3348d360cea1c51223cbb4d0266a7e7d013cec0ef3d1b8720c0271fa056781e1";
+const qwenRunnerFixtureSha256 = "bd2c21fb9b1b09e47602c4631c9346fd33bb2df3a0ee4060500a74c1e00c17e5";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -176,10 +176,13 @@ function createQwenFailureRelay() {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     assert.ok(Reflect.ownKeys(descriptors).every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "closed data fields required");
     value = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
-    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending"].sort());
-    assert.equal(value.v, 1);
+    assert.ok(value.v === 1 || value.v === 2);
+    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v === 2 ? ["join"] : [])].sort());
     if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
     const checked = qwenClosedRecord(value.case, value.phase, value.op, value.state, { operations: value.operations, rejected: value.rejected, pending: value.pending });
+    if (value.v === 2) {
+      assert.equal(checked.state, "failed"); checked.v = 2; checked.join = qwenJoinRecord(value.join);
+    }
     const key = value.case + ":" + value.phase + ":" + value.op;
     const encoded = JSON.stringify(checked);
     if (records.has(key)) assert.equal(records.get(key), encoded, "conflicting closed diagnostic");
@@ -2918,4 +2921,108 @@ test("Qwen actual sanitization callback retains the captured provider in a case-
   }
   assert.equal(new Set(owned).size, owned.length, "concurrent cases never share registries");
   assert.equal(storage.getStore(), undefined);
+});
+
+// Closed first-join evidence never grants retirement or changes original errors.
+for (const reason of [undefined, false, {}]) test("Qwen first join preserves fault order and survives repeated drains", async () => {
+  const ledger = createQwenLedger(), rejection = {};
+  let caught = false;
+  try { ledger.invoke("read", () => { throw reason; }, undefined, []); }
+  catch (error) { caught = true; assert.equal(error, reason); }
+  assert.equal(caught, true); ledger.fail(reason); ledger.recordingFailure(reason);
+  ledger.observe("read", Promise.reject(rejection));
+  const first = ledger.drain(); assert.equal(ledger.drain(), first);
+  await assert.rejects(first, error => {
+    assert.deepEqual(error.errors, [reason, reason, reason, rejection]); return true;
+  });
+  const tuple = ledger.joinRecord();
+  assert.deepEqual(qwenJoinRecord(tuple), [1,0,0,1,0,0,1,1,0,0,-1,-1,-1,-1,-1]);
+  ledger.fail({}); await assert.rejects(ledger.drain()); assert.equal(ledger.joinRecord(), tuple);
+  ledger.restore(); await assert.rejects(ledger.drain()); ledger.seal(); assert.equal(ledger.joinRecord(), tuple);
+});
+for (const mode of ["no_unlock", "throw_unlock", "locked", "released", "getter_throw"]) test(`Qwen first join reader operands preserve ${mode} short circuits`, async () => {
+  const ledger = createQwenLedger(), source = qwenInertReader(), reason = {};
+  if (mode === "throw_unlock") source.reader.releaseLock = () => { throw reason; };
+  ledger.body(source.body); const reader = source.body.getReader();
+  if (mode !== "no_unlock") {
+    try { reader.releaseLock(); } catch (error) { assert.equal(mode, "throw_unlock"); assert.equal(error, reason); }
+  }
+  let reads = 0;
+  Object.defineProperty(source.body, "locked", { configurable: true, get() {
+    reads++; if (mode === "getter_throw") throw reason; return mode === "locked";
+  } });
+  if (mode === "released") { await ledger.drain(); assert.equal(ledger.joinRecord(), null); }
+  else if (mode === "getter_throw") { await assert.rejects(ledger.drain(), error => error === reason); assert.deepEqual(qwenJoinRecord(ledger.joinRecord()).slice(10), [0,1,1,3,2]); }
+  else {
+    await assert.rejects(ledger.drain());
+    const tuple = qwenJoinRecord(ledger.joinRecord());
+    assert.equal(tuple[9], 1); assert.deepEqual(tuple.slice(10), mode === "no_unlock" ? [0,0,-1,-1,2] : mode === "throw_unlock" ? [0,1,0,-1,2] : [0,1,1,1,2]);
+    assert.equal(tuple[0], mode === "throw_unlock" ? 1 : 0);
+  }
+  assert.equal(reads, ["no_unlock", "throw_unlock"].includes(mode) ? 0 : 1); ledger.restore();
+});
+test("Qwen first join preserves independent snapshot failure after original falsey reason", async () => {
+  const primary = undefined, reporting = {}, nativeFreeze = Object.freeze;
+  let armed = false;
+  const faults = Object.create(Object); faults.freeze = value => { if (armed) throw reporting; return nativeFreeze(value); };
+  const factory = new Function("utilTypes", "Object", `${functions}; return createQwenLedger;`)(utilTypes, faults);
+  const ledger = factory(); ledger.fail(primary); armed = true;
+  await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors[0] === primary && error.errors[1] === reporting);
+  assert.equal(ledger.joinRecord(), null); assert.equal(ledger.failures().recording[0], reporting);
+  assert.equal(Object.freeze, nativeFreeze);
+});
+test("Qwen join codec and actual relay reject malformed tuples without growing output", async () => {
+  const ledger = createQwenLedger(); ledger.fail(undefined); await assert.rejects(ledger.drain());
+  const tuple = qwenJoinRecord(ledger.joinRecord());
+  const malformed = [[], [...tuple, 0], Array(15), tuple.map(() => 0), [...tuple.slice(0,10),0,1,1,0,2]];
+  for (const [index, value] of [[0,-1],[1,true],[2,65536],[3,1.1],[10,0]]) {
+    const changed = [...tuple]; changed[index] = value; malformed.push(changed);
+  }
+  const hole = [...tuple]; hole.length = 16; malformed.push(hole);
+  let reads = 0; const getter = [...tuple]; Object.defineProperty(getter, 0, { get() { reads++; return 0; } }); malformed.push(getter);
+  malformed.push(new Proxy(tuple, { ownKeys() { reads++; return []; } }));
+  for (const value of malformed) assert.throws(() => qwenJoinRecord(value)); assert.equal(reads, 0);
+  const relay = createQwenFailureRelay(), witness = createQwenEntryWitness(value => relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)));
+  witness.moduleEvaluated(); rows.forEach(row => witness.registered(row.id)); witness.registrationComplete();
+  const current = witness.enter(rows[0].id), counts = { operations: 0, rejected: 0, pending: 0 };
+  current.at("owned_drain"); current.failed(undefined);
+  const record = { ...qwenClosedRecord(rows[0].id, "join", "case", "failed", counts), v: 2, join: tuple };
+  relay.text("QWEN_SDK_V1 " + JSON.stringify(record)); current.complete(counts);
+  const packet = relay.output("failed"); assert.deepEqual(packet.find(row => row.join), record);
+  assert.ok(packet.map(qwenBoundaryAnnotation).every(line => Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(packet.map(qwenBoundaryAnnotation).join("\n")) <= 8192);
+  const max = [65535,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535,65535,-1,-1,2];
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation({ ...record, join: qwenJoinRecord(max) })) <= 768);
+  for (const value of malformed.slice(0,10)) assert.throws(() => createQwenFailureRelay().record({ ...record, join: value }));
+  assert.throws(() => createQwenFailureRelay().record({ ...record, state: "passed" }));
+  assert.equal(relay.complete(), false);
+});
+
+test("Qwen first join keeps held observer and reader closed identities distinct", async () => {
+  const ledger = createQwenLedger(), source = qwenInertReader(), closedReason = {}, tail = qwenDeferred();
+  source.reader.closed = Promise.reject(closedReason); ledger.body(source.body); source.body.getReader();
+  let subscriptions = 0;
+  ledger.observe("held", { then(yes) { yes(); return ++subscriptions === 1 ? tail.promise : Promise.resolve(); } });
+  let finished = false; const joined = ledger.drain().catch(error => { finished = true; return error; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(finished, false); assert.equal(ledger.joinRecord(), null);
+  tail.resolve(); const error = await joined; assert.equal(error.errors[0], closedReason);
+  const tuple = qwenJoinRecord(ledger.joinRecord()); assert.equal(tuple[7], 1); assert.equal(tuple[9], 1);
+  assert.deepEqual(tuple.slice(10), [0,0,-1,-1,3]); ledger.restore();
+});
+test("Qwen locked-operand undefined throw preserves original identity and independent reporting error", async () => {
+  const reporting = {}, nativeFreeze = Object.freeze; let armed = false;
+  const faults = Object.create(Object); faults.freeze = value => { if (armed) throw reporting; return nativeFreeze(value); };
+  const factory = new Function("utilTypes", "Object", `${functions}; return createQwenLedger;`)(utilTypes, faults);
+  for (const reportFails of [false, true]) {
+    armed = false; const ledger = factory(), source = qwenInertReader(); ledger.body(source.body);
+    const reader = source.body.getReader(); reader.releaseLock(); let reads = 0;
+    Object.defineProperty(source.body, "locked", { get() { reads++; throw undefined; } }); armed = reportFails;
+    let caught = false; try { await ledger.drain(); } catch (error) {
+      caught = true; if (reportFails) assert.deepEqual(error.errors, [undefined, reporting]); else assert.equal(error, undefined);
+    }
+    assert.equal(caught, true); assert.equal(reads, 1);
+    if (reportFails) assert.equal(ledger.joinRecord(), null);
+    else assert.deepEqual(qwenJoinRecord(ledger.joinRecord()).slice(10), [0,1,1,2,2]);
+    armed = false; ledger.restore();
+  }
 });

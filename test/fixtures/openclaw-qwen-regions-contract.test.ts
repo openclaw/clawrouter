@@ -56,7 +56,7 @@ function createQwenLedger() {
   const operations: Operation[] = [], observers: Array<{ pending: Promise<unknown>; terminal?: Promise<unknown>; state: string; reason?: unknown }> = [];
   const synchronous: unknown[] = [], registration: unknown[] = [], observerFailures: unknown[] = [], ownershipFailures: unknown[] = [], restorationFailures: unknown[] = [], lateFailures: unknown[] = [];
   const recordingFailures: unknown[] = [];
-  let firstObserverFailure: any;
+  let firstObserverFailure: any, firstJoinFailure: readonly number[] | undefined;
   const restorers: Array<() => void> = [];
   const readers: Array<{ body: ReadableStream<Uint8Array>; reader: ReadableStreamDefaultReader<Uint8Array>; response?: Response; owner?: object; generation: object; closed: Promise<unknown>; unlocks: number; returns: number }> = [];
   const bodies = new WeakSet<object>(), responses = new WeakMap<object, object | undefined>(), originals = new WeakSet<object>();
@@ -153,11 +153,43 @@ function createQwenLedger() {
       originalCursor = originalsAt; observerCursor = observersAt;
       await Promise.allSettled([...batch.map(row => row.pending), ...tails.map(row => row.terminal ?? row.pending)]);
     } while (originalCursor < operations.length || observerCursor < observers.length);
+    const counts = [synchronous.length, registration.length, observerFailures.length, ownershipFailures.length,
+      restorationFailures.length, lateFailures.length, recordingFailures.length, 0, 0, 0];
     const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures, ...recordingFailures,
-      ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
-    for (const row of observers) if (row.state === "pending") failures.push(new Error("original observer remains pending"));
-    for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
-    if (failures.length) throw new AggregateError(failures, "original Qwen operations failed");
+      ...operations.filter(operation => operation.state !== "fulfilled").map(operation => { counts[7]++; return operation.reason; })];
+    for (const row of observers) if (row.state === "pending") { counts[8]++; failures.push(new Error("original observer remains pending")); }
+    let firstReader = [-1, -1, -1, -1, -1], readerIndex = 0;
+    const retain = () => {
+      try { firstJoinFailure ??= Object.freeze([...counts, ...firstReader]); return []; }
+      catch (error) { recordingFailures.push(error); return [error]; }
+    };
+    for (const row of readers) {
+      const operands = [-1, -1, -1];
+      const tap = <T>(slot: number, value: T): T => { operands[slot] = slot === 2 ? (value ? 1 : 0) : value as number; return value; };
+      const readerFailure = () => {
+        if (counts[9]++ === 0) {
+          const closed = operations.find(operation => operation.kind === "closed" && operation.pending === row.closed && operation.binding === row);
+          firstReader = [readerIndex, ...operands, !closed ? 0 : closed.state === "pending" ? 1 : closed.state === "fulfilled" ? 2 : 3];
+        }
+      };
+      let failed;
+      try { failed = tap(0, row.unlocks) !== 1 || tap(1, row.returns) !== 1 || tap(2, row.body.locked); }
+      catch (error) {
+        // The original lock getter was reached but threw; retain only presence.
+        operands[2] = error === undefined ? 2 : 3; readerFailure();
+        const reporting = retain();
+        if (reporting.length) throw new AggregateError([error, ...reporting], "Qwen join and diagnostic failed");
+        throw error;
+      }
+      if (failed) { readerFailure(); failures.push(new Error("original reader remains owned")); }
+      readerIndex++;
+    }
+    if (failures.length) {
+      // First failed join only; skipped operands stay -1. No extra body getter,
+      // original subscription, reason inspection or retirement assertion.
+      failures.push(...retain());
+      throw new AggregateError(failures, "original Qwen operations failed");
+    }
   }
   function drain() {
     open(); if (inFlight) return inFlight;
@@ -205,7 +237,7 @@ function createQwenLedger() {
       : qwenObserverRecord({ ...checked, v: 9, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
-    captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
+    captureObserverFailure, observerRecord, joinRecord: () => firstJoinFailure ?? null, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
     deferRestore(restore: () => void) { open(); if (restored) throw new Error("Qwen observer installation after restoration"); restorers.push(restore); },
     failures: () => ({ synchronous: [...synchronous], registration: [...registration], observer: [...observerFailures], ownership: [...ownershipFailures], restoration: [...restorationFailures], late: [...lateFailures], recording: [...recordingFailures] }),
     fail: (reason: unknown) => { open(); ownershipFailures.push(reason); } };
@@ -472,6 +504,26 @@ function qwenClosedRecord(id: string, phase: string, op: string, state: string, 
     || !["passed", "failed", "incomplete", "unrun"].includes(state)) throw new Error("invalid closed Qwen boundary");
   for (const value of Object.values(counts)) if (!Number.isSafeInteger(value) || value < 0 || value > 65535) throw new Error("Qwen diagnostic count exceeded");
   return { v: 1, case: id, phase, op, state, operations: counts.operations, rejected: counts.rejected, pending: counts.pending };
+}
+
+
+function qwenJoinRecord(input: unknown): readonly number[] {
+  const invalid = (): never => { throw new Error("invalid closed Qwen join witness"); };
+  if (utilTypes.isProxy(input) || !Array.isArray(input)) invalid();
+  const fields = Object.getOwnPropertyDescriptors(input);
+  if (Reflect.ownKeys(fields).join() !== Array.from({ length: 15 }, (_, i) => String(i)).concat("length").join()
+    || fields.length.value !== 15 || Object.values(fields).some(field => !Object.hasOwn(field, "value"))) invalid();
+  const value = Array.from({ length: 15 }, (_, i) => fields[String(i)].value);
+  if (!value.every(Number.isSafeInteger) || value.slice(0, 10).some(n => n < 0 || n > 65535)
+    || !value.slice(0, 10).some(Boolean)) invalid();
+  if (value[9] === 0) {
+    if (value.slice(10).some(n => n !== -1)) invalid();
+  } else {
+    if (value[10] < 0 || value[10] > 65535 || value[11] < 0 || value[11] > 65535 || value[14] < 0 || value[14] > 3) invalid();
+    if (value[11] !== 1) { if (value[12] !== -1 || value[13] !== -1) invalid(); }
+    else if (value[12] < 0 || value[12] > 65535 || (value[12] !== 1 ? value[13] !== -1 : ![1, 2, 3].includes(value[13]))) invalid();
+  }
+  return value;
 }
 
 // A case-scoped ordinal names the privately retained original P and its derived
@@ -875,7 +927,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
   for (const error of entryWitness.takeErrors()) { witness.failed(error); failures.push(error); }
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");
   try {
-    console.log("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length })));
+    console.log("QWEN_SDK_V1 " + JSON.stringify({ ...qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }), ...(ledger.joinRecord() === null ? {} : { v: 2, join: qwenJoinRecord(ledger.joinRecord()) }) }));
   } catch (error) { witness.failed(error); failures.push(error); }
   try {
     const observer = ledger.observerRecord(row.id);
