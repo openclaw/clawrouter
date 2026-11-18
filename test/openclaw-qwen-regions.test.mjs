@@ -48,7 +48,7 @@ async function finish(body, cleanups) {
 const retainedNativeFailures = new WeakMap();
 
 const qwenRunnerFixtureSha256 = "1fdbdb298e31847302782b7a008c621f7bcd3b1c12c553a5495a666a325c7645";
-const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
+const qwenRunnerReporterSha256 = "9c39bb702834528918c1e2f69509cea9de1e557d20ecf8205a9c36cb53f2a478";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.

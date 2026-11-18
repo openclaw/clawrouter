@@ -1,5 +1,7 @@
 # Changelog
 
+- Join Xiaomi fixture source pull and cancellation callbacks in their original Worker request before reporting retirement. Retain independent source failures and require settled work, successful cancellation return, and the existing expiry guard; verify early and pending-read cancellation with the real local Workerd topology.
+- Keep the Xiaomi cancellation producer responsive with bounded SSE heartbeats while joining its original deadline and source callbacks. Qualify only the owned Worker read outcome after source retirement and caller-cancellation accounting; bind SDK provider-error cleanup to the controlled SSE error, original output, acquisition signal and reader. Preserve rejected states and all independent failures; hosted qualification remains required.
 - Export the compiled provider snapshot contract from the standalone provider plugin package, preserving existing shared imports and the registry wire shape.
 
 - Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
@@ -20,6 +22,10 @@
 - Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
 
 ## Unreleased
+
+- Keep Xiaomi replay sanitization in each case's captured provider generation, including regional token-plan routing. Compose the current runner diagnostics and credential checks without borrowing Qwen native qualification or relaxing retirement and accounting assertions.
+
+- Show bounded immediate-prototype and public-code facts for the first original Xiaomi reader rejection and one shallow cause in its existing failure display. Preserve original errors and strict retirement/accounting; unmatched facts and origin remain unknown.
 
 - Qualify a Qwen fixture's single owned read rejection only after caller-cancellation accounting, fulfilled original cancel and closed promises, joined release, and complete source retirement. Preserve the rejected reason and count, the existing strict three-rejection disposition, and every independent control, observer, source and accounting failure. This outcome check makes no claim about the native read error's cause.
 
@@ -69,6 +75,14 @@
 
 - Export published model and request tariff types from the provider plugin contract while preserving existing shared imports.
 
+- Retain the first Xiaomi control reader-join predicates and private original-outcome identities in the existing bounded diagnostic record. Keep raw failures, physical retirement and accounting strict; skipped operands remain unobserved, and pre-relay diagnostics do not establish final cleanup or native cause.
+
+- Connect Xiaomi native disconnect controls directly to the fixture Worker and retain bounded first-postlude failure sites with independent reason-definedness summaries in the existing control records. Preserve original failures, strict retirement and accounting gates, and annotation quotas; native cancellation still requires hosted qualification.
+
+- Join the existing LiteLLM fixture producer proof before sampling final active, cancellation and expiry counters. Preserve strict retirement and accounting assertions, original request counts and independent cleanup failures; this corrects test ordering without attributing a historical native failure.
+
+- Retain bounded Xiaomi control-witness and original ownership summaries before rejecting failed control responses, without changing retirement, producer or accounting acceptance. Preserve independent diagnostic failures and the existing relay request count.
+
 - Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
 
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
@@ -91,6 +105,12 @@
 
 - Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts; require matching native terminal IDs and retain the target failure when diagnostic buffers fill.
 - Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
+
+- Match native runner project admission to the pinned target: Xiaomi uses the media project and Qwen uses the providers project. Validate the private binding before choosing the single expected project, and create no report until every startup guard passes. Preserve original failures, cleanup and native qualification requirements.
+
+- Bind Xiaomi startup and collection reporting to the pinned native runner and exact fixture/reporter bytes. Preserve existing SDK failure records and qualification rules; publish a bounded runner supplement only when SDK records are absent and the existing annotation budget permits it. Missing or incomplete reports remain failures, with no partial lifecycle or retirement credit.
+
+- Join Xiaomi reader originals and their existing observers to a stable boundary, invalidate late failures, and seal only during final cleanup without weakening retirement or accounting checks.
 
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
@@ -922,6 +942,7 @@
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
 - Qualify the three frozen direct Arcee Trinity Chat cards with native tool/reasoning replay, original-grant transport tests and unknown pricing.
 - Include the three direct Arcee Chat cards in the generated catalog and verify catalog-selected native/manifest transport, fragmented streams and conservative accounting across the bundled Chat matrix.
+- Activate separate Singapore, China and Europe Xiaomi Token Plan Chat declarations with dedicated credentials, frozen 2.6 models and pre-egress rejection of expired 2.5 identities; validate the selected plan credential before dispatch or budget reservation without borrowing PAYG or other scoped credentials.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Bind GMI's optional organization header to the original credential owner for Chat and keyed discovery, reject caller/static overrides, and recheck account identity and current policy after admission waits.
 - Preserve GMI unified Chat and model-prefix aliases by validating internal model selectors against the selected upstream model, while keeping caller path parameters and organization overrides closed.

@@ -11,6 +11,11 @@ export const runnerContract = Object.freeze({
   target: "extensions/qwen/worker-regions-contract.test.ts",
   expectedInvocations: 1,
 });
+export function runnerPlan(pin, target) {
+  assert.equal(pin, runnerContract.pin, "unsupported native diagnostic pin");
+  assert.ok([runnerContract.target, "extensions/xiaomi/worker-contract.test.ts"].includes(target), "unsupported native diagnostic target");
+  return { ...runnerContract, target };
+}
 export const reportByteLimit = 64 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
 const phases = ["run_start", "module_queued", "module_collected", "module_start", "module_end"];
@@ -28,9 +33,10 @@ function count(value) {
 export function validateBinding(binding) {
   keys(binding, [...Object.keys(runnerContract), "fixtureSha256", "reporterSha256", "nonce",
     ...(Object.hasOwn(binding, "callsite") ? ["callsite"] : [])]);
-  for (const [key, value] of Object.entries(runnerContract)) assert.equal(binding[key], value, "unsupported native runner plan");
+  for (const [key, value] of Object.entries(runnerPlan(binding.pin, binding.target))) assert.equal(binding[key], value, "unsupported native runner plan");
   for (const key of ["fixtureSha256", "reporterSha256", "nonce"]) assert.match(binding[key], hashPattern);
   if (Object.hasOwn(binding, "callsite")) {
+    assert.equal(binding.target, runnerContract.target, "callsite overlay requires its Qwen target");
     const c = binding.callsite;
     keys(c, ["schema", "nonce", "pin", "target", "helperSHA", "fixtureSHA", "contract", "virtualSHA", "sources", "configSHA"]);
     assert.equal(c.schema, "qwen-value-overlay.v1");
@@ -179,11 +185,13 @@ export default class NativeRunnerReporter {
   onInit(ctx) {
     assert.equal(this.#file, undefined, "runner reporter initialized twice");
     assert.equal(ctx.version, "5.0.5", "unqualified native reporter API");
-    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === "extension-providers", "unqualified native project plan");
     assert.equal(typeof ctx.config.outputFile, "string", "explicit runner output required");
     this.#file = resolve(ctx.config.outputFile); this.#root = resolve(ctx.config.root);
     const plan = readPrivateFile(join(dirname(this.#file), "plan.json"), 4096);
     this.#binding = validateBinding(JSON.parse(plan.toString("utf8")));
+    // D8 extension-test-plan routes these exact, validated targets to distinct shards.
+    const project = this.#binding.target === "extensions/xiaomi/worker-contract.test.ts" ? "extension-media" : "extension-providers";
+    assert.ok(ctx.projects.length === 1 && ctx.projects[0].name === project, "unqualified native project plan");
     assert.equal(sha256(readFileSync(fileURLToPath(import.meta.url))), this.#binding.reporterSha256);
     assert.equal(sha256(readFileSync(join(this.#root, this.#binding.target))), this.#binding.fixtureSha256);
     if (this.#binding.callsite) {

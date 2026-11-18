@@ -1336,6 +1336,132 @@ test("owned HTTP/1 reset pure: producer proof joins original and attached observ
   assert.deepEqual(litellmProducerOwners(r), [{ call: 0, held: true, chat: false, finished: true, eof: false, cancels: 1, fulfilledCancels: 1, operations: 2, observers: 4 }]);
   r.operations[1].producer = { ...producer }; assert.throws(() => litellmProducerOwners(r));
 });
+
+// BEGIN producer final snapshot ordering pure tests.
+async function producerSnapshotCase({ previousOrder = false, alreadySettled = false, cancel = true, expiry = false, rejectWait = false, observerFault = false, reason } = {}) {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("export function litellmObserveProducer("), source.indexOf("export function litellmOwnedH1Reset("));
+  const upstreamText = new Function(code.replace(/^export (?=(?:async )?function )/gm, "") + ";return upstreamFixture();")();
+  let stream, now = 0, resolveWait, rejectWaiting, reachedProof;
+  const held = new Promise((resolve, reject) => { resolveWait = resolve; rejectWaiting = reject; });
+  const proofEntered = new Promise(resolve => { reachedProof = resolve; });
+  const events = [], diagnostics = [];
+  let row;
+  let waitingCalls = 0, finishes = 0;
+  class FakeResponse {
+    constructor(body, { status = 200 } = {}) { this.body = body; this.status = status; this.bodyUsed = false; }
+    static json(value) { const response = new FakeResponse(null); response.value = JSON.stringify(value); return response; }
+    async json() { this.bodyUsed = true; return JSON.parse(this.value); }
+  }
+  class FakeStream { constructor(original) { this.source = original; stream = this; } }
+  class Rows extends Map { set(id, value) { row = value; return super.set(id, value); } }
+  const upstream = new Function("Response", "ReadableStream", "TextEncoder", "scheduler", "Date", "Map", upstreamText.replace("export default", "return"))(
+      FakeResponse, FakeStream, class { encode(text) { return { byteLength: text.length }; } },
+      { wait(ms) { assert.equal(ms, 20); waitingCalls++; return held; } }, { now: () => now }, Rows);
+  const request = { url: "https://gateway.example/team/v1/models", method: "GET", body: null,
+    headers: { get: () => "Bearer fixture-upstream-native_abort" },
+    signal: { addEventListener() {}, removeEventListener() { finishes++; } } };
+  await upstream.fetch({ url: "https://fixture.test/setup", json: async () => [{ id: "native_abort", mode: "held" }] });
+  await upstream.fetch(request);
+  const controller = { enqueue() {}, close() { assert.fail("held producer must not close"); }, error() {} };
+  await stream.source.pull(controller);
+  const pull = stream.source.pull(controller);
+  assert.equal(pull, row.operations[1].promise);
+  if (observerFault) {
+    const op = row.operations[1]; let state = op.state;
+    Object.defineProperty(op, "state", { get: () => state, set(value) { state = value; throw reason; } });
+  }
+  const facts = resetRemoteFacts();
+  const fetchControl = async action => {
+    events.push(action);
+    if (action === "proof") reachedProof();
+    const response = await upstream.fetch({ url: "https://fixture.test/" + action + "/native_abort" });
+    return response.json();
+  };
+  const f = { origin: "https://fixture.test", async started() { events.push("started"); },
+    proof: () => fetchControl("proof"), state: () => fetchControl("state"),
+    async control(action) { events.push(action); return action === "started" ? { started: true } : action === "retire" ? facts.proof : action === "observation" ? facts.observed : facts.usage; } };
+  let cancellation;
+  const owner = () => ({ start() { events.push("caller_start"); }, async ready() { events.push("caller_ready"); },
+    reset() { events.push("reset"); if (cancel && !expiry) { cancellation = stream.source.cancel(); assert.equal(cancellation, row.operations.at(-1).promise); } },
+    async join() { events.push("caller_join"); }, async close() { events.push("caller_close"); return []; } });
+  let callback, body = abortDiagnosticSource().body;
+  if (previousOrder) {
+    const line = '      const source = await f.proof("native_abort");\n';
+    assert.equal(body.split(line).length, 2);
+    body = body.replace(line, "").replace('      const usage = await f.control("usage", "native_abort");\n', value => line + value);
+  }
+  new Function("test", "withGateway", "workerAbortEvidence", "litellmOwnedH1Reset", "httpRequest", "Socket", "key", "assertLiteLLMResetRetirement", "litellmFailurePostlude", "assert", body)(
+    (name, options, fn) => { callback = fn; }, async (rows, run) => run(f), workerAbortEvidence, owner, {}, class {}, () => "inert",
+    resetSourceFunctions().assertLiteLLMResetRetirement, () => assert.fail("retire did not fail"), assert);
+  if (alreadySettled) { resolveWait(); await pull; }
+  let completed = false;
+  const result = callback({ diagnostic(value) { diagnostics.push(value); } }).then(
+    () => { completed = true; return { failed: false }; }, error => { completed = true; return { failed: true, error }; });
+  return { events, operations: row.operations, observerFailures: row.observerFailures, diagnostics, result, proofEntered,
+    completed: () => completed, counts: () => ({ waitingCalls, finishes }),
+    async finish() {
+      if (expiry) now = 10001;
+      if (rejectWait) rejectWaiting(reason); else resolveWait();
+      await Promise.allSettled([pull]);
+      if (cancel && expiry) cancellation = stream.source.cancel();
+      await Promise.allSettled([cancellation]);
+      return result;
+    } };
+}
+test("producer final snapshot pure: existing join precedes final state and preserves request counts", async () => {
+  const old = await producerSnapshotCase({ previousOrder: true });
+  const oldResult = await old.result;
+  assert.equal(oldResult.failed, true); assert.equal(oldResult.error.actual, 1); assert.equal(oldResult.error.expected, 0);
+  assert.ok(!old.events.includes("proof")); await old.finish();
+  const current = await producerSnapshotCase(); await current.proofEntered;
+  assert.equal(current.completed(), false); assert.ok(!current.events.includes("state"));
+  assert.deepEqual(current.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.deepEqual(current.operations.map(op => op.kind), ["pull", "pull", "cancel"]);
+  assert.equal((await current.finish()).failed, false);
+  assert.deepEqual(current.events, ["caller_start", "caller_ready", "started", "started", "reset", "caller_join", "retire", "observation", "proof", "state", "usage", "caller_close"]);
+  assert.deepEqual(current.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.ok(current.operations.every(op => op.state === "fulfilled"));
+  const settledOld = await producerSnapshotCase({ previousOrder: true, alreadySettled: true });
+  assert.equal((await settledOld.finish()).failed, false);
+  const restoredOrder = current.events.filter(name => name !== "proof");
+  restoredOrder.splice(restoredOrder.indexOf("usage"), 0, "proof");
+  assert.deepEqual(settledOld.events, restoredOrder);
+  const original = abortDiagnosticSource().body;
+  for (const call of ['f.proof("native_abort")', 'f.state("native_abort")', 'f.control("observation", "native_abort")', 'f.control("usage", "native_abort")']) assert.equal(original.split(call).length, 2);
+});
+test("producer final snapshot pure: join cannot manufacture cancellation or erase expiry", async () => {
+  const missing = await producerSnapshotCase({ cancel: false }); await missing.proofEntered;
+  assert.deepEqual(missing.counts(), { waitingCalls: 1, finishes: 0 });
+  assert.deepEqual(missing.operations.map(op => op.kind), ["pull", "pull"]);
+  const absent = await missing.finish(); assert.equal(absent.failed, true); assert.equal(absent.error.actual, 0); assert.equal(absent.error.expected, 1);
+  assert.deepEqual(missing.counts(), { waitingCalls: 1, finishes: 0 });
+  const expired = await producerSnapshotCase({ expiry: true }); await expired.proofEntered;
+  const failure = await expired.finish(); assert.equal(failure.failed, true); assert.equal(failure.error.actual, 1); assert.equal(failure.error.expected, 0);
+  assert.deepEqual(expired.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.ok(!expired.events.includes("usage"));
+});
+test("producer final snapshot pure: original and observer rejections stay fatal including undefined", async () => {
+  for (const reason of [undefined, {}]) for (const observerFault of [false, true]) {
+    const c = await producerSnapshotCase({ reason, observerFault, rejectWait: !observerFault }); await c.proofEntered;
+    const result = await c.finish(); assert.equal(result.failed, true); assert.equal(result.error.code, "ERR_ASSERTION");
+    if (observerFault) assert.ok(c.observerFailures.some(value => value === reason));
+    else for (const op of c.operations.slice(1)) { assert.equal(op.state, "rejected"); assert.equal(Object.hasOwn(op, "error"), true); assert.equal(op.error, reason); }
+    assert.ok(c.events.includes("caller_close"));
+  }
+});
+test("producer final snapshot pure: proof shares stage17 and preserves independent cleanup failures", async () => {
+  for (const undefinedFault of [false, true]) {
+    const result = await abortDiagnosticCase({ fault: "proof", undefinedFault, secondary: ["caller_cleanup", "dispose", "remove"] });
+    assert.equal(result.failed, true); assert.deepEqual(result.record.first, [17, 0, !undefinedFault]);
+    const leaves = value => value instanceof AggregateError ? value.errors.flatMap(leaves) : [value];
+    assert.deepEqual(leaves(result.error), Array(4).fill(undefinedFault ? undefined : result.failure));
+    assert.equal(result.calls.filter(value => value === "proof").length, 1);
+    for (const name of ["caller_cleanup", "dispose", "remove"]) assert.ok(result.calls.includes(name));
+    assert.ok(!result.calls.includes("final_state") && !result.calls.includes("usage"));
+  }
+});
+// END producer final snapshot ordering pure tests.
 test("owned HTTP/1 reset pure: restoration late failures and primary undefined stay independent", async () => {
   const c = inertResetCaller({ holdClose: true, removeFault: true }); c.caller.start(); await c.caller.ready(); c.caller.reset();
   const original = {}; c.socket.emit("error", original); c.close();

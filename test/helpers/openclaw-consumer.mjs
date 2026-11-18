@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { makeQwenValuePlan, qwenValueArgv, qwenValueSources, readQwenValueInput } from "./openclaw-qwen-callsite-observer.mjs";
-import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
+import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, runnerPlan, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
 
 export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport }) {
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
@@ -45,10 +45,10 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
 }
 
 export function validateRunnerRequest({ sourceHead, testPath, env, runnerReport }) {
-  assert.equal(sourceHead, runnerContract.pin, "unsupported native diagnostic pin");
-  assert.equal(testPath, runnerContract.target, "unsupported native diagnostic target");
+  runnerPlan(sourceHead, testPath);
   const keys = ["expectedInvocations", "fixtureSha256", "onReport", "reporterSha256"];
   if (Object.hasOwn(runnerReport, "valueObserverSha256")) {
+    assert.equal(testPath, runnerContract.target, "value observer requires its Qwen target");
     keys.push("valueObserverSha256");
     assert.match(runnerReport.valueObserverSha256, /^[a-f0-9]{64}$/);
   }
@@ -84,7 +84,7 @@ export async function withNativeRunnerReport(options, run) {
   const reporterBytes = await readFile(reporterSource);
   assert.equal(sha256(reporterBytes), runnerReport.reporterSha256, "reporter bytes changed");
   assert.equal(sha256(await readFile(fixture)), runnerReport.fixtureSha256, "fixture bytes changed");
-  const binding = { ...runnerContract, fixtureSha256: runnerReport.fixtureSha256,
+  const binding = { ...runnerPlan(options.sourceHead, options.testPath), fixtureSha256: runnerReport.fixtureSha256,
     reporterSha256: runnerReport.reporterSha256, nonce: randomBytes(32).toString("hex") };
   let valueBundle, valueHelper;
   if (runnerReport.valueObserverSha256 !== undefined) {
