@@ -6,24 +6,50 @@ import {largeCreatePath} from './large-http/headers.ts';
 import {authorizeAdmin} from './access.ts';
 import {readJson,sha256Hex} from './utils.ts';
 import {rehearsalConfig,journal,journalCall,type RehearsalEnv} from './native-rehearsal/contract.ts';
+import {startupStep,readinessValid} from './native-rehearsal/startup.ts';
 export {PolicyBindingIndexObject,BudgetLedgerObject,GrantCredentialObject,UsageLedgerObject,ContentArchiveCleanupObject} from './index.ts';
 export {LargeHttpPool} from './large-http/lifecycle.ts';
 export {NativeRehearsalState} from './native-rehearsal/state.ts';
 export class LargeHttpSlot extends ProductionSlot {
+ private lastReadiness='';
  protected override async startContainer(options:ContainerStartupOptions){
   const c=rehearsalConfig(this.env),slot=Number(options.env!.LARGE_HTTP_SLOT),generation=Number(options.env!.LARGE_HTTP_GENERATION),runtimeSha=options.env!.LARGE_HTTP_RUNTIME_SHA;
   // Durable budget intent precedes every native start, including a failed one.
   await journalCall(this.env,'start',{slot,generation,runtimeSha});
-  const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:{slot:number;generation:number;runtimeSha:string}})=>Fetcher;NativeRehearsalDeny:Fetcher};
-  const container=this.ctx.container!,outbound=exports.NativeRehearsalEgress({props:{slot,generation,runtimeSha}});
-  await container.interceptOutboundHttps('api.openai.com',outbound);
-  await container.interceptOutboundHttps(new URL(c.origin).hostname,outbound);
-  await container.interceptAllOutboundHttp(exports.NativeRehearsalDeny);
+  const identity={slot,generation,runtimeSha},env=this.env as RehearsalEnv;
+  const {outbound,deny}=await startupStep(env,identity,'export_resolution',()=>{
+   const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:typeof identity})=>Fetcher;NativeRehearsalDeny:Fetcher};
+   return {outbound:exports.NativeRehearsalEgress({props:identity}),deny:exports.NativeRehearsalDeny};
+  });
+  const container=this.ctx.container!;
+  await startupStep(env,identity,'https_provider',()=>container.interceptOutboundHttps('api.openai.com',outbound));
+  await startupStep(env,identity,'https_callback',()=>container.interceptOutboundHttps(new URL(c.origin).hostname,outbound));
+  await startupStep(env,identity,'http_deny',()=>container.interceptAllOutboundHttp(deny));
   // No public fallback, other ports or DNS egress. Runtime-provided ephemeral CA
   // is trusted by Node; verification is never disabled. Native bytes unchanged.
   rehearsalConfig(this.env);
-  container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
-   entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+options.entrypoint![3]]});
+  await startupStep(env,identity,'container_start',()=>{
+   rehearsalConfig(this.env);
+   container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
+    entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+options.entrypoint![3]]});
+  });
+ }
+ override async fetch(r:Request):Promise<Response>{
+  const response=await super.fetch(r);
+  const path=new URL(r.url).pathname;
+  if(r.method==='POST'&&['/control/state','/control/status','/control/prepare','/control/retire'].includes(path)&&response.ok){
+   const s=await response.clone().json<any>();
+   const reason=s.reason===undefined?'unreported':s.reason;
+   if(s.generation>0&&readinessValid({phase:s.phase,reason})){
+    // Keep the observed response's generation/reason, even if state has moved
+    // on. Only the slot index comes from state; the fixture owns the immutable
+    // slot/generation -> native-digest mapping from the prior start intent.
+    const state=path==='/control/state'?s:await(await super.fetch(new Request('https://slot/control/state',{method:'POST',headers:r.headers,body:'{}'}))).json<any>();
+    const observation={slot:state.control.slot,generation:s.generation,phase:s.phase,reason},signature=JSON.stringify(observation);
+    if(signature!==this.lastReadiness){const receipt=await journalCall(this.env,'readiness',observation);if(receipt.recorded===true)this.lastReadiness=signature;}
+   }
+  }
+  return response;
  }
 }
 export class NativeRehearsalDeny extends WorkerEntrypoint {fetch(){return new Response(null,{status:403});}}

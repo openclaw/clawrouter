@@ -7,6 +7,7 @@ import {openSavedCodex,finishTurn} from '../scripts/native-rehearsal-client.mjs'
 import {readCodexCatalog} from '../scripts/codex-catalog.mjs';
 import {join} from 'node:path';
 import {hostedBoundaryFixture} from './helpers/native-rehearsal.mjs';
+import {exerciseStartupEntrypoint} from './helpers/native-startup.mjs';
 import {inspectSyntheticInput} from '../worker/native-rehearsal/input.ts';
 import {rehearsalConfig,upstreamKey} from '../worker/native-rehearsal/contract.ts';
 const worker='clawrouter-native-qualification-abcdef012345',origin='https://'+worker+'.fixture.workers.dev';
@@ -29,13 +30,36 @@ test('synthetic scanner reads prior request context across arbitrary chunks, not
 test('fixture startup awaits intercepts, trusts runtime CA, retains native identity and fails without fallback',async()=>{
  const hooks=registerHooks({resolve(s,c,next){if(s.startsWith('.')&&c.parentURL?.endsWith('.ts')&&!/\.[a-z]+$/i.test(s))return next(s+'.ts',c);if(s==='cloudflare:workers')return {shortCircuit:true,url:'data:text/javascript,'+encodeURIComponent('export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env;}};export class WorkerEntrypoint extends DurableObject {}')};return next(s,c);}});
  let Slot;try{({LargeHttpSlot:Slot}=await import('../worker/native-rehearsal-entry.ts'));}finally{hooks.deregister();}
- const effects=[],allow={},deny={},e=env();e.NATIVE_REHEARSAL_STATE={getByName:()=>({fetch:async()=>{effects.push('reserve');return Response.json({accepted:true});}})};
- const slot=Object.create(Slot.prototype);slot.env=e;let started;
- slot.ctx={exports:{NativeRehearsalEgress:()=>allow,NativeRehearsalDeny:deny},container:{interceptOutboundHttps:async(host,binding)=>{assert.equal(binding,allow);effects.push(host);},interceptAllOutboundHttp:async binding=>{assert.equal(binding,deny);effects.push('http-deny');},start:options=>{started=options;effects.push('start');}}};
- const options={image:'cloudflare/debian-trixie',enableInternet:true,instance:'standard-1',labels:{slot:'0',generation:'1',build:sha},env:{LARGE_HTTP_SLOT:'0',LARGE_HTTP_GENERATION:'1',LARGE_HTTP_RUNTIME_SHA:sha,LARGE_HTTP_RUNTIME_TOKEN:'d'.repeat(64)},entrypoint:['node','--input-type=module','-e','/* unchanged production bootstrap */']};
- await slot.startContainer(options);assert.deepEqual(effects,['reserve','api.openai.com',new URL(origin).hostname,'http-deny','start']);
- assert.equal(started.enableInternet,false);assert.equal(started.env.NODE_EXTRA_CA_CERTS,'/etc/cloudflare/certs/cloudflare-containers-ca.crt');assert.equal(started.env.NODE_TLS_REJECT_UNAUTHORIZED,undefined);assert.deepEqual(started.labels,options.labels);assert.equal(started.env.LARGE_HTTP_RUNTIME_SHA,sha);assert.ok(started.entrypoint[3].endsWith(options.entrypoint[3]));
- effects.length=0;slot.ctx.container.interceptOutboundHttps=async()=>{throw Error('intercept unavailable');};await assert.rejects(slot.startContainer(options));assert.deepEqual(effects,['reserve']);
+ await exerciseStartupEntrypoint(Slot);
+});
+
+test('real fixture persists bounded startup stages and preserves the first observed readiness failure',async t=>{
+ const f=await hostedBoundaryFixture(t);assert.equal((await f.call('setup',{seedHash:hash(seed),credentialHash:hash('synthetic-client')})).status,200);
+ const ns=await f.mf.getDurableObjectNamespace('NATIVE_REHEARSAL_STATE','fixture'),stub=ns.get(ns.idFromName('native-rehearsal'));
+ const internal=(op,v)=>stub.fetch('https://rehearsal/'+op,{method:'POST',body:JSON.stringify(v)}),identity={slot:0,generation:1,runtimeSha:sha};
+ assert.equal((await f.call('startup',identity)).status,404,'diagnostics are not exposed as a public mutation route');
+ assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started'})).status,409,'receipt requires a matching startup intent');
+ assert.equal((await internal('start',identity)).status,200);
+ assert.equal((await internal('startup',{...identity,stage:'https_provider',outcome:'started'})).status,409,'no skipped stage');
+ assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started',token:'not-for-the-journal'})).status,200);
+ assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started'})).status,409,'no duplicate stage');
+ assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'failed',error:'arbitrary-sensitive-text'})).status,400);
+ assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'failed',error:'type',message:'not-for-the-journal'})).status,200);
+ assert.equal((await internal('startup',{...identity,stage:'https_provider',outcome:'started'})).status,409,'no native effects after a failed stage');
+ assert.equal((await internal('readiness',{...identity,phase:'failed',reason:'arbitrary-sensitive-text'})).status,400);
+ const {runtimeSha:_,...observedIdentity}=identity;
+ const pending=await internal('readiness',{...observedIdentity,generation:2,phase:'starting',reason:'none'});assert.equal(pending.status,200);assert.deepEqual(await pending.json(),{recorded:false,pendingStart:true},'early polling does not create a start or fail control');
+ assert.equal((await internal('readiness',{...identity,runtimeSha:'b'.repeat(64),phase:'failed',reason:'start_or_keepalive'})).status,409,'a supplied native digest must match');
+ for(const [phase,reason] of [['starting','none'],['failed','start_or_keepalive'],['stopped','none'],['ready','none'],['failed','native_exit_engine']])assert.equal((await internal('readiness',{...observedIdentity,phase,reason,token:'not-for-the-journal'})).status,200);
+ const s=await(await f.call('snapshot')).json(),d=s.starts[0].diagnostics;
+ assert.equal(d.stages.length,2);assert.deepEqual(d.stages.map(x=>[x.stage,x.outcome,x.error]),[['export_resolution','started',undefined],['export_resolution','failed','type']]);
+ assert.equal(d.firstFailure.reason,'start_or_keepalive');assert.equal(d.readiness.reason,'native_exit_engine');assert.ok(d.readyAt>0);
+ const blockedIdentity={...identity,slot:1};assert.equal((await internal('start',blockedIdentity)).status,200);
+ assert.equal((await internal('readiness',{...blockedIdentity,phase:'blocked',reason:'unreported'})).status,200);
+ assert.equal((await internal('readiness',{...blockedIdentity,phase:'destroyed',reason:'none'})).status,200);
+ const blocked=(await(await f.call('snapshot')).json()).starts[1].diagnostics;
+ assert.equal(blocked.firstFailure.phase,'blocked');assert.equal(blocked.firstFailure.reason,'unreported');assert.equal(blocked.readiness.phase,'destroyed');
+ assert.ok(!JSON.stringify(s).includes('not-for-the-journal'));assert.deepEqual(f.outbound,[]);
 });
 
 
