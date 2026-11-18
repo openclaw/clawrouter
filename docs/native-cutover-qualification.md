@@ -86,6 +86,30 @@ Environment `native-qualification` supplies only these distinct secrets:
 - Optional paired `NATIVE_QUALIFICATION_ACCESS_CLIENT_ID` and
   `NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET`
 
+Before activating a prepared rehearsal, run **Read-only isolated native
+authentication** (`preflight-native-auth.yml`) on exact reviewed main, supplying
+`expected_sha`, `worker` and `origin`. This separate five-minute workflow uses
+the actual `native-qualification` environment credentials. It reads the selected
+version, verifies isolated persistent owners and its configured admin hash, sends
+an anonymous HEAD expecting 401 followed by an authenticated HEAD expecting 404,
+then confirms deployment stability. Both responses must identify the selected
+version. The existing admin router authenticates before rejecting HEAD; HEAD
+never calls the pool. This deliberate authentication probe has no GET fallback,
+and a changed route/status contract blocks it. Owner checks admit disabled
+bootstrap versions without requiring native payload lineage; cutover readiness
+checks remain unchanged. Management requests are GETs; there is no activation, admission mutation,
+fixture initialization, inference, retry or recovery job. A previously closed
+isolated Worker can be used without reusing its terminal fixture. Only the safe
+`native-auth-<run>-<attempt>/native-auth.json` receipt is retained.
+
+`NATIVE_QUALIFICATION_ADMIN_TOKEN` contains the **raw bearer** (locally injected as
+`NATIVE_REHEARSAL_ADMIN_TOKEN`), while the isolated Worker's
+`CLAWROUTER_ADMIN_TOKEN_SHA256` plain-text configuration contains its SHA-256 hash.
+This check supplements the metadata-only rehearsal preflight, which does not
+authenticate to the Worker. Authentication does not establish native readiness,
+session continuity or cutover qualification. Stop on failure; do not activate or
+retry the campaign. Recheck if credentials or the target configuration change.
+
 The coordinator supplies six non-secret dispatch inputs:
 
 | Input | Value |
