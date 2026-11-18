@@ -6,6 +6,8 @@ import {writeFile,mkdir} from 'node:fs/promises';
 import {openSavedCodex,finishTurn} from '../scripts/native-rehearsal-client.mjs';
 import {readCodexCatalog} from '../scripts/codex-catalog.mjs';
 import {join} from 'node:path';
+import {smokeNativeCutover} from '../scripts/smoke-native-cutover.mjs';
+import {isolatedNativeTarget} from '../scripts/deploy-native-target.mjs';
 import {hostedBoundaryFixture} from './helpers/native-rehearsal.mjs';
 import {exerciseStartupEntrypoint} from './helpers/native-startup.mjs';
 import {inspectSyntheticInput} from '../worker/native-rehearsal/input.ts';
@@ -121,4 +123,14 @@ test('official Codex persists and resumes the same thread; distinct follow-ups r
   }finally{await opened.client.close();}
  }
  const snapshot=await(await f.call('snapshot')).json();assert.equal(snapshot.cases.length,3);assert.equal(snapshot.replays,0);assert.deepEqual(snapshot.cases.map(x=>x.direction),['baseline','forward','recovery']);assert.deepEqual(f.outbound,[]);
+});
+
+// Exercise router routing and version metadata in workerd; mock-only smoke
+// coverage previously blessed /health although the router serves /v1/health.
+test('non-inference cutover smoke uses the actual router health endpoint',async t=>{
+ const versionId='22222222-2222-2222-2222-222222222222',f=await hostedBoundaryFixture(t,{versionId});
+ const target=isolatedNativeTarget({worker,origin:f.origin,account:'a'.repeat(32)});
+ const legacy=await f.mf.dispatchFetch(f.origin+'/health');assert.equal(legacy.status,404);await legacy.body?.cancel();
+ await smokeNativeCutover({target,env:{CLOUDFLARE_ACCOUNT_ID:target.account},version:versionId,fetchImpl:(url,init)=>f.mf.dispatchFetch(url,init)});
+ assert.deepEqual(f.outbound,[],'smoke must not call an upstream provider');
 });
