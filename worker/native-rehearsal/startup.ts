@@ -1,5 +1,6 @@
 // Rehearsal-only receipts. Never serialize native options or exception text.
 import {journalCall,type RehearsalEnv} from './contract.ts';
+import type {BootstrapReceipt} from './bootstrap.ts';
 export const startupStages=['export_resolution','https_provider','https_callback','http_deny','container_start'] as const;
 export type StartupStage=typeof startupStages[number];
 export const startupErrors=['type','unsupported','permission','capacity','timeout','unknown'] as const;
@@ -9,7 +10,7 @@ export interface ReadinessEvent {phase:string;reason:string;at:number}
 export const monitorCategories=['success','process_exit','no_container','internal','image','permission','network','other'] as const;
 export const monitorNames=['Error','TypeError','RangeError','AbortError','TimeoutError','other'] as const;
 export interface MonitorEvent {outcome:'exited'|'rejected';category:typeof monitorCategories[number];name:typeof monitorNames[number];exitCode:number|null;at:number}
-export interface StartupDiagnostics {stages:StartupEvent[];readiness?:ReadinessEvent;firstFailure?:ReadinessEvent;readyAt?:number;monitor?:MonitorEvent}
+export interface StartupDiagnostics {stages:StartupEvent[];readiness?:ReadinessEvent;firstFailure?:ReadinessEvent;readyAt?:number;monitor?:MonitorEvent;bootstrap?:BootstrapReceipt[]}
 export function monitorFailure(error:unknown):Omit<MonitorEvent,'at'|'outcome'>{
  const e=error as {message?:unknown;name?:unknown;exitCode?:unknown}|null;
  const message=typeof e?.message==='string'?e.message.toLowerCase():'';

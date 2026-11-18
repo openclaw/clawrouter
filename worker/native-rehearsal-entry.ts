@@ -7,6 +7,7 @@ import {authorizeAdmin} from './access.ts';
 import {readJson,sha256Hex} from './utils.ts';
 import {rehearsalConfig,journal,journalCall,type RehearsalEnv} from './native-rehearsal/contract.ts';
 import {startupStep,readinessValid,monitorFailure} from './native-rehearsal/startup.ts';
+import {bootstrapProbePrefix,bootstrapReceiptUrl,bootstrapReceiptValid} from './native-rehearsal/bootstrap.ts';
 export {PolicyBindingIndexObject,BudgetLedgerObject,GrantCredentialObject,UsageLedgerObject,ContentArchiveCleanupObject} from './index.ts';
 export {LargeHttpPool} from './large-http/lifecycle.ts';
 export {NativeRehearsalState} from './native-rehearsal/state.ts';
@@ -18,8 +19,8 @@ export class LargeHttpSlot extends ProductionSlot {
   await journalCall(this.env,'start',{slot,generation,runtimeSha});
   const identity={slot,generation,runtimeSha},env=this.env as RehearsalEnv;
   const {outbound,deny}=await startupStep(env,identity,'export_resolution',()=>{
-   const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:typeof identity})=>Fetcher;NativeRehearsalDeny:Fetcher};
-   return {outbound:exports.NativeRehearsalEgress({props:identity}),deny:exports.NativeRehearsalDeny};
+   const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:typeof identity})=>Fetcher;NativeRehearsalDeny:(options:{props:typeof identity})=>Fetcher};
+   return {outbound:exports.NativeRehearsalEgress({props:identity}),deny:exports.NativeRehearsalDeny({props:identity})};
   });
   const container=this.ctx.container!;
   await startupStep(env,identity,'https_provider',()=>container.interceptOutboundHttps('api.openai.com',outbound));
@@ -31,7 +32,7 @@ export class LargeHttpSlot extends ProductionSlot {
   await startupStep(env,identity,'container_start',()=>{
    rehearsalConfig(this.env);
    container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
-    entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+options.entrypoint![3]]});
+    entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+bootstrapProbePrefix()+options.entrypoint![3]]});
   });
   // Observe the same native lifecycle without replacing the product monitor.
   // Never persist native exception text, options, or credentials.
@@ -58,7 +59,16 @@ export class LargeHttpSlot extends ProductionSlot {
   return response;
  }
 }
-export class NativeRehearsalDeny extends WorkerEntrypoint {fetch(){return new Response(null,{status:403});}}
+export class NativeRehearsalDeny extends WorkerEntrypoint<RehearsalEnv,{slot:number;generation:number;runtimeSha:string}> {
+ async fetch(r:Request){
+  rehearsalConfig(this.env,Date.now(),true);
+  if(r.method!=='POST'||r.url!==bootstrapReceiptUrl)return new Response(null,{status:403});
+  let v;try{v=await readJson<any>(r,undefined,1024);}catch{return new Response(null,{status:400});}
+  if(!bootstrapReceiptValid(v))return new Response(null,{status:400});
+  const result=await journalCall(this.env,'bootstrap',{...this.ctx.props,...v});
+  return Response.json(result);
+ }
+}
 export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:number;generation:number;runtimeSha:string}> {
  async fetch(r:Request):Promise<Response>{
   const c=rehearsalConfig(this.env,Date.now(),true),u=new URL(r.url),props=this.ctx.props;

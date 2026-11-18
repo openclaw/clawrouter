@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 const stages=['export_resolution','https_provider','https_callback','http_deny','container_start'];
 // Controlled Container API failures against an imported source OR exact packaged
 // entrypoint. Does not assert Cloudflare supports these operations remotely.
@@ -11,7 +12,7 @@ export async function exerciseStartupEntrypoint(Slot){
  let started,fail,monitorError,monitorThrows=false;const pending=[];
  const effect=stage=>{effects.push(stage);if(fail===stage)throw Error('unsupported operation '+secret);};
  const slot=Object.create(Slot.prototype);slot.env=env;
- slot.ctx={waitUntil:p=>pending.push(p),exports:{NativeRehearsalEgress:()=>{effect('export_resolution');return allow;},NativeRehearsalDeny:deny},container:{
+ slot.ctx={waitUntil:p=>pending.push(p),exports:{NativeRehearsalEgress:()=>{effect('export_resolution');return allow;},NativeRehearsalDeny:()=>deny},container:{
   interceptOutboundHttps:async(host,binding)=>{assert.equal(binding,allow);effect(host==='api.openai.com'?'https_provider':'https_callback');},
   interceptAllOutboundHttp:async binding=>{assert.equal(binding,deny);effect('http_deny');},
   start:value=>{effect('container_start');started=value;},
@@ -21,6 +22,10 @@ export async function exerciseStartupEntrypoint(Slot){
  await Promise.all(pending.splice(0));
  assert.deepEqual(effects,stages);assert.equal(started.enableInternet,false);assert.equal(started.env.NODE_EXTRA_CA_CERTS,'/etc/cloudflare/certs/cloudflare-containers-ca.crt');assert.equal(started.env.NODE_TLS_REJECT_UNAUTHORIZED,undefined);
  assert.deepEqual(started.labels,options.labels);assert.equal(started.env.LARGE_HTTP_RUNTIME_SHA,sha);assert.ok(started.entrypoint[3].endsWith(options.entrypoint[3]));
+ // Execute the exact generated prefix, including after esbuild packaging. This
+ // catches serialization/import defects before any fleet or hosted activation.
+ const smoke=spawnSync(process.execPath,[...started.entrypoint.slice(1,3),'globalThis.fetch=async()=>new Response("{}");'+started.entrypoint[3]+';process.exit(0);'],{encoding:'utf8',timeout:5000,env:{PATH:process.env.PATH}});
+ assert.equal(smoke.status,0,smoke.stderr);assert.equal(smoke.stdout,'');
  assert.deepEqual(receipts.filter(x=>x.op==='/startup').map(({stage,outcome})=>[stage,outcome]),stages.flatMap(stage=>[[stage,'started'],[stage,'completed']]));
  assert.equal(receipts.at(-1).outcome,'exited');assert.equal(receipts.at(-1).exitCode,0);
  // Capture structured native failures without error text, stack or native env.
