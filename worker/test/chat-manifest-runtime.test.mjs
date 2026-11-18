@@ -24,6 +24,8 @@ const tools = [{ type: "function", function: { name: "lookup", parameters: { typ
 const tokens = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
 const configuredModel = "fixture/served-model";
 const configuredDeployment = "deployment";
+const upstreamKey = provider => ["qwen-coding-global", "qwen-coding-cn"].includes(provider.id)
+  ? "sk-sp-synthetic-upstream-key" : "synthetic-upstream-key";
 const delta = { id: "chat_fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "synthetic-output", reasoning_content: "synthetic-reasoning", tool_calls: messages[0].tool_calls }, finish_reason: null }] };
 const sse = value => `data: ${JSON.stringify(value)}\n\n`;
 
@@ -46,7 +48,7 @@ async function fixture(t, provider, dispatch = "manifest-session", outcome = "em
   const env = Object.fromEntries(provider.config_keys.map(key => [key,
     /(?:URL|ENDPOINT)$/.test(key) ? "https://fixture-upstream.example"
       : /_MODEL$/.test(key) ? configuredModel
-      : /_DEPLOYMENT$/.test(key) ? configuredDeployment : "synthetic-upstream-key"]));
+      : /_DEPLOYMENT$/.test(key) ? configuredDeployment : upstreamKey(provider)]));
   Object.assign(env, {
     AZURE_OPENAI_API_VERSION: "2024-10-21", AZURE_OPENAI_DEPLOYMENT: configuredDeployment,
     POLICY_KV: {
@@ -172,8 +174,8 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
           assert.equal(url.pathname, expected.pathname);
           assert.ok(!headers.get("authorization")?.includes("clawrouter-live-"));
           for (const auth of provider.auth.schemes) {
-            if (auth.type === "bearer") assert.equal(headers.get(auth.header), "Bearer synthetic-upstream-key");
-            else if (auth.type === "api_key") assert.equal(headers.get(auth.header), "synthetic-upstream-key");
+            if (auth.type === "bearer") assert.equal(headers.get(auth.header), `Bearer ${upstreamKey(provider)}`);
+            else if (auth.type === "api_key") assert.equal(headers.get(auth.header), upstreamKey(provider));
             else assert.fail(`Chat fixture needs explicit ${auth.type} authentication coverage`);
           }
           assert.deepEqual(body.messages, messages);
