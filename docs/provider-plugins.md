@@ -117,7 +117,7 @@ admission rules before rendering or serving resources.
 ## Compiled provider contract
 
 [`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot and model declarations, and re-exports portable endpoint, auth,
+v1 snapshot declarations, and re-exports portable model, endpoint, auth,
 and quota declarations. Build tools and future package compilers can import these
 types without importing Worker bindings, credential records, or adapter
 implementations. Existing imports from
@@ -155,6 +155,20 @@ Quota probe and response-header declarations belong to the package through
 also belong to the package; `shared/provider-observations.ts` preserves existing
 imports. These are provider-reported observations and extraction recipes.
 Polling, freshness, credentials, budgets, and admission remain host-owned.
+
+### Portable model declarations
+
+The package exports `ProviderModelDefinition`, `ModelAvailability`, request-parameter
+support types, and native endpoint capability types, including the OpenAI, Baseten,
+and Sage decision protocols. Existing imports from `shared/provider-model.ts`,
+`shared/model-availability.ts`, `shared/model-request-parameters.ts`, and
+`shared/native-capabilities.ts` remain supported.
+
+The closed `isPublishedMusicInputSupport` validator moves with its support type
+and remains available through the shared import. Its matching rules are unchanged.
+Request assessment, publication permissions, and runtime admission remain in the
+host. These declarations describe compiled provider facts; they do not replace
+the shared model catalogue or add catalogue imports.
 
 ### Portable tariff declarations
 
