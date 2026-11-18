@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Keep the Qwen partial-stream fixture's bounded producer alive independently of pull completion. Join its original settlement on cancellation or expiry, including cancellation before the first pull. Assess only the exact owned Worker reader rejection group after strict joins, source cancellation and caller-cancellation accounting; retain original rejected states and all independent retirement, control and accounting failures. Hosted cancellation behavior requires fresh qualification.
+
 - Reconcile Qwen SDK completion against its validated partial/provider-error dispositions without erasing original rejection counts. Retain separate Worker-local first-join ownership, cancellation and signal relations plus producer settlement facts; keep Worker retirement, usage and budget acceptance strict.
 
 - Recognize only the Qwen fixture’s fully owned, settled SDK-abort reader group after the exact controlled provider error and returned result. Keep the API error distinct from the request-abort reason, retain original rejected states and counts, and preserve all independent release, observer and restoration failures.
