@@ -494,8 +494,8 @@ function qwenWorkerCancellation(state, source, usage, sealed) {
   if (!argument || !Object.hasOwn(argument, "value") || !Object.is(argument.value, signal.reason)) return [];
   return rejected;
 }
-function qwenWorkerCancellationFailure(error, originals) {
-  if (originals.length !== 3 || !(error instanceof AggregateError)) return false;
+function qwenWorkerCancellationFailure(error, originals, drainFailures) {
+  if (!drainFailures?.has(error) || originals.length !== 3 || !(error instanceof AggregateError)) return false;
   const errors = Object.getOwnPropertyDescriptor(error, "errors")?.value;
   return Array.isArray(errors) && errors.length === 3 && originals.every((operation, index) => Object.is(errors[index], operation.reason));
 }
@@ -623,16 +623,16 @@ export default {async fetch(request,env,context){
  if(path.startsWith('/fixture/join/')){
   const s=states.get(path.slice('/fixture/join/'.length));if(!s)throw Error('unknown Qwen fixture');
   if(!s.retirement)s.retirement=(async()=>{
-   const failures=[];let firstWorker=null;try{await s.ledger.drain();}catch(error){failures.push(error);try{firstWorker=captureQwenWorkerFailure(s);}catch(reportError){failures.push(reportError);}}
+   const failures=[],drainFailures=new Set();let firstWorker=null;try{await s.ledger.drain();}catch(error){failures.push(error);drainFailures.add(error);try{firstWorker=captureQwenWorkerFailure(s);}catch(reportError){failures.push(reportError);}}
    let source,usage,budget;try{source=await control(s,'proof');}catch(error){failures.push(error);}
    try{usage=await s.ledger.invoke('usage',usageSnapshot,undefined,[env,'fixture',s.row.id,{kind:'admin'}]);}catch(error){failures.push(error);}
    try{budget=await s.ledger.invoke('budget',budgetStatus,undefined,[env,s.row.id,{tenantId:'fixture',monthlyBudgetMicros:100}]);}catch(error){failures.push(error);}
-   try{await s.ledger.drain();}catch(error){failures.push(error);}
+   try{await s.ledger.drain();}catch(error){failures.push(error);drainFailures.add(error);}
    try{s.ledger.restore();}catch(error){failures.push(error);}
-   try{await s.ledger.drain();}catch(error){failures.push(error);}
+   try{await s.ledger.drain();}catch(error){failures.push(error);drainFailures.add(error);}
    let sealed;try{sealed=s.ledger.seal();}catch(error){failures.push(error);}
    let cancellation=[];try{cancellation=qwenWorkerCancellation(s,source,usage,sealed);}catch(error){failures.push(error);}
-   const unqualified=failures.filter(error=>!qwenWorkerCancellationFailure(error,cancellation));
+   const unqualified=failures.filter(error=>!qwenWorkerCancellationFailure(error,cancellation,drainFailures));
    requestOwnership.retire(s);
    return {retired:unqualified.length===0,join:s.ledger.joinRecord(),worker:firstWorker,workerCancelled:cancellation.map(o=>s.ledger.operations.indexOf(o)),calls:s.calls,source,usage,budget,status:s.status,requests:s.requests,charged:bodyBudgetCharged(),operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),readers:s.ledger.readers.map(r=>({unlocks:r.unlocks,returns:r.returns,locked:r.body.locked}))};
   })();const proof=await s.retirement;return Response.json(proof,{status:proof.retired?200:500});
@@ -3763,15 +3763,21 @@ async function qwenWorkerAssessmentFixture(mode = "owned") {
 test("Qwen Worker cancellation assessment preserves strict joins and original rejected states", async () => {
   const f = await qwenWorkerAssessmentFixture(), before = f.ledger.operations.map(row => ({...row}));
   const classified = f.assess(); assert.equal(classified.length, 3);
-  assert.equal(qwenWorkerCancellationFailure(f.error, classified), true);
-  assert.equal(qwenWorkerCancellationFailure(f.finalError, classified), true);
+  const origins = new Set([f.error, f.finalError]);
+  assert.equal(qwenWorkerCancellationFailure(f.error, classified, origins), true);
+  assert.equal(qwenWorkerCancellationFailure(f.finalError, classified, origins), true);
+  const foreign = new AggregateError(f.error.errors);
+  assert.deepEqual(foreign.errors, f.error.errors); assert.notEqual(foreign, f.error);
+  assert.equal(qwenWorkerCancellationFailure(foreign, classified, origins), false);
+  assert.equal(qwenWorkerCancellationFailure(f.error, classified, new Set()), false);
   assert.deepEqual(f.ledger.operations, before);
   assert.deepEqual(classified.map(row => row.kind).sort(), ["cancel", "closed", "read"]);
   assert.ok(classified.every(row => row.state === "rejected" && row.reason === f.reason));
   assert.equal(f.ledger.joinRecord()[7], 3); assert.equal(f.record.originals.length, 3);
   for (const independent of [undefined, false, f.reason, f.unrelated]) {
-    assert.equal(qwenWorkerCancellationFailure(independent, classified), false);
-    assert.equal(qwenWorkerCancellationFailure(new AggregateError([...f.error.errors, independent]), classified), false);
+    assert.equal(qwenWorkerCancellationFailure(independent, classified, origins), false);
+    const extra = new AggregateError([...f.error.errors, independent]); origins.add(extra);
+    assert.equal(qwenWorkerCancellationFailure(extra, classified, origins), false);
   }
   f.close(true);
 });
@@ -3829,7 +3835,7 @@ test("Qwen Worker later independent faults cannot be hidden by the first cancell
     const usage={events:[{status:"client_error",credential_id:f.state.row.id,provider:f.state.row.provider,
       model:f.state.row.provider+"/"+f.state.row.model}]};
     const group=qwenWorkerCancellation(f.state,source,usage,sealed);
-    assert.equal(group.length,3);assert.equal(qwenWorkerCancellationFailure(final,group),false);
+    assert.equal(group.length,3);assert.equal(qwenWorkerCancellationFailure(final,group,new Set([final])),false);
     assert.equal(final.errors.length,4);assert.equal(final.errors[0],fault);
     assert.deepEqual(f.ledger.joinRecord(),first);f.close(true);
   }
