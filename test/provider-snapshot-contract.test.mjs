@@ -25,17 +25,22 @@ test("compiled provider declarations build and typecheck without client or Worke
   const options = { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"],
     types: [], strict: true, allowImportingTsExtensions: true };
   compile(root, "build", { ...options, declaration: true, emitDeclarationOnly: true, rootDir: repo, outDir: output },
-    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts"), join(repo, "shared/model-availability.ts"), join(repo, "shared/model-request-parameters.ts"), join(repo, "shared/native-capabilities.ts")]);
+    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/provider-model.ts"), join(repo, "shared/provider-products.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts"), join(repo, "shared/model-availability.ts"), join(repo, "shared/model-request-parameters.ts"), join(repo, "shared/native-capabilities.ts")]);
   const files = readdirSync(output, { recursive: true }).map(file => file.replaceAll("\\", "/"));
   assert.ok(files.includes("shared/provider-snapshot.d.ts"));
   assert.ok(files.includes("shared/provider-model.d.ts"));
+  assert.ok(files.includes("packages/provider-plugin-contract/src/snapshot.d.ts"));
   assert.ok(!files.includes("shared/contracts.d.ts"), "the client API must not own compiled-provider declarations");
   assert.ok(!files.some(file => /^(worker|admin)\//.test(file)), "the declaration graph must not depend on a runtime host");
 
   // This consumer imports emitted declarations without repository ambient types.
   const consumer = join(root, "consumer.ts");
   writeFileSync(consumer, `
-import type { AuthScheme as LegacyAuth, AuthorizationConfig as LegacyAuthorization, RefreshConfig as LegacyRefresh, GrantTransportAuth as LegacyTransportAuth, CompiledGrantTransport as LegacyTransport, GrantKind, ProviderSnapshot, CompiledProvider, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
+import type { AuthScheme as LegacyAuth, AuthorizationConfig as LegacyAuthorization, RefreshConfig as LegacyRefresh, GrantTransportAuth as LegacyTransportAuth, CompiledGrantTransport as LegacyTransport, GrantKind, ProviderSnapshot, CompiledProvider, CompiledModel, CompiledQuotaProbe } from "./declarations/shared/provider-snapshot.js";
+import type { ProviderSnapshot as PortableSnapshot, CompiledProvider as PortableProvider, CompiledModel as PortableModel } from "./declarations/packages/provider-plugin-contract/src/snapshot.js";
+declare const portableSnapshot: [PortableSnapshot, PortableProvider, PortableModel];
+const legacySnapshot: [ProviderSnapshot, CompiledProvider, CompiledModel] = portableSnapshot;
+const roundTripSnapshot: typeof portableSnapshot = legacySnapshot;
 import type { GrantAccount, GrantExtraUsage } from "./declarations/shared/provider-observations.js";
 import type { ProviderProduct as LegacyProduct } from "./declarations/shared/provider-products.js";
 import type { ProviderGrantKind, ProviderProduct } from "./declarations/packages/provider-plugin-contract/src/products.js";
@@ -82,7 +87,7 @@ const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { roundTripModels, roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
+export { roundTripSnapshot, roundTripModels, roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });

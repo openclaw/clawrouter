@@ -41,6 +41,9 @@ import {
   type CompiledQuotaConfig,
   type ProviderModelDefinition,
   type NativeDecisionCapabilities,
+  type ProviderSnapshot,
+  type CompiledProvider,
+  type CompiledModel,
 } from "@clawrouter/provider-plugin-contract";
 ```
 
@@ -78,3 +81,7 @@ native endpoint capabilities, including decision protocols. These are compiled
 provider facts, not a generic model catalogue or account entitlement.
 `isPublishedMusicInputSupport` checks the existing closed support record; it does
 not grant permission to publish input. Request assessment remains host-owned.
+
+`ProviderSnapshot`, `CompiledProvider`, and `CompiledModel` describe the existing
+compiled registry, including its provider and model indexes. They do not parse
+or validate snapshots, load packages, or admit providers to the running host.
