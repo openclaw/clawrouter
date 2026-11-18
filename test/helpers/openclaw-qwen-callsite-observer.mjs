@@ -13,6 +13,12 @@ export const qwenValueSources = Object.freeze([
     sha256: "0c049068171de83e25e8c12cbbe9c24ad984280776ed47f3554e7beb50997e41" }),
   Object.freeze({ path: "src/agents/provider-transport-dispatcher-pool.ts",
     sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" }),
+  Object.freeze({ path: "src/llm/stream.ts",
+    sha256: "eb3d07cf0742255ec2279194df55fc88507ee3ec60cf7c93e38fa150979beb28" }),
+  Object.freeze({ path: "packages/ai/src/stream.ts",
+    sha256: "08bc3fa48900ee89d34c33b9eb92508285f7332cb73aa19bd61ec5c09625b7de" }),
+  Object.freeze({ path: "packages/ai/src/api-registry.ts",
+    sha256: "5455ee2b67c34bd1d8e85811ee55fe3596bf1291a0165765afdf6b82af7fc18a" }),
 ]);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -48,6 +54,7 @@ export const guardValueExpression = `(() => {
 export function createQwenValueSink(contract) {
   const is = Object.is, freeze = Object.freeze;
   const activations = [0, 0], claims = new Set(), tokens = new Map();
+  const runtimeRegistries = new WeakMap(), registrations = new WeakMap(), defaults = new WeakMap();
   let active, poisoned = false, ordinal = 0;
   const stray = [];
   const overflow = new Error("Qwen value recording capacity exceeded");
@@ -60,6 +67,69 @@ export function createQwenValueSink(contract) {
   }
   function invalidate(owner) { if (owner) owner.unknown = true; }
   function safe(owner, fn) { try { return fn(); } catch (error) { fault(owner, error); } }
+  const reference = value => value !== null && (typeof value === "object" || typeof value === "function")
+    ? new WeakRef(value) : undefined;
+  const compare = (value, expected) => {
+    const held = expected?.deref();
+    return held === undefined || value === null || !["object", "function"].includes(typeof value)
+      ? 0 : is(value, held) ? 1 : 2;
+  };
+  function selectionRow() {
+    // One diagnostic read of the owned ALS per selection hook. A foreign or
+    // absent context cannot borrow an active case's sole bound invocation.
+    return active && !active.closed ? active.rows.get(active.current()) : undefined;
+  }
+  function defaultRegistry(value, generation) {
+    safe(active, () => { defaults.set(generation, { registry: reference(value) }); }); return value;
+  }
+  function defaultRuntime(value, generation) {
+    safe(active, () => { const row = defaults.get(generation); if (row) row.runtime = reference(value); }); return value;
+  }
+  function createdRuntime(value, registry) {
+    safe(active, () => { if (reference(value)) runtimeRegistries.set(value, reference(registry)); });
+    return value;
+  }
+  function runtime(value, generation) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (s.seen !== 0) { s.ambiguous = true; return; }
+      const baseline = defaults.get(generation);
+      s.seen = 1; s.runtime = compare(value, baseline?.runtime);
+      s.registryRef = reference(value) ? runtimeRegistries.get(value) : undefined;
+      s.registry = compare(s.registryRef?.deref(), baseline?.registry);
+    });
+    return value;
+  }
+  function registered(map, key, normalized) {
+    safe(active, () => {
+      // Only the exact normalized record from a completed original insertion.
+      if (key === "openai-completions") registrations.set(map, reference(normalized));
+    });
+  }
+  function lookup(value, map, api) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row || api !== "openai-completions") return;
+      const s = row.selection;
+      if (!(s.seen & 1)) return;
+      if (s.seen & 6) { s.ambiguous = true; return; }
+      s.seen |= 4; s.lookup = reference(value); s.record = compare(value, registrations.get(map));
+    });
+    return value;
+  }
+  function provider(value, registry) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 1)) return;
+      if (s.seen & 2) { s.ambiguous = true; return; }
+      s.seen |= 2;
+      // A preexisting runtime without an observed constructor association is
+      // UNKNOWN; never inspect runtime.registry to manufacture that association.
+      s.provider = compare(registry, s.registryRef) === 1 && compare(value, s.lookup) === 1 ? s.record : 0;
+    });
+    return value;
+  }
   function activate(site, key) {
     safe(active, () => {
       if (key !== contract || (site !== 1 && site !== 2) || ++activations[site - 1] !== 1) poisoned = true;
@@ -145,7 +215,8 @@ export function createQwenValueSink(contract) {
       bind(invocation) {
         safe(owner, () => {
           if (owner.closed || active !== owner || owner.rows.has(invocation) || owner.rows.size >= 2) { invalidate(owner); return; }
-          owner.rows.set(invocation, { id: ++ordinal, sites: [null, null] });
+          owner.rows.set(invocation, { id: ++ordinal, sites: [null, null],
+            selection: { seen: 0, runtime: 0, registry: 0, provider: 0, record: 0, ambiguous: false } });
         });
       },
       snapshot(invocation, diagnostic = false) {
@@ -153,7 +224,7 @@ export function createQwenValueSink(contract) {
         // 0=value, 1=poisoned, 2=owner unknown, 3=recording fault, 4=unbound,
         // 5/6=client/guard activation, 7=open evaluation, 8=no complete group,
         // 9=snapshot threw. Relay-only 10/11 mean missing/mismatched binding.
-        let reason = 9, valueSites = null;
+        let reason = 9, valueSites = null, valueSelection = null;
         const values = safe(owner, () => {
           const row = owner.rows.get(invocation);
           reason = poisoned ? 1 : owner.unknown ? 2 : owner.errors.length ? 3 : !row ? 4
@@ -163,6 +234,9 @@ export function createQwenValueSink(contract) {
             // Private retained state only: present, phase mask, closed per site.
             valueSites = freeze([client ? 1 : 0, client?.bits ?? 0, client?.closed ? 1 : 0,
               guard ? 1 : 0, guard?.bits ?? 0, guard?.closed ? 1 : 0]);
+            const s = row.selection;
+            if (!s.ambiguous)
+              valueSelection = freeze([contract, s.seen, s.runtime, s.registry, s.provider]);
           }
           if (reason) return null;
           const [client, guard] = row.sites;
@@ -177,7 +251,9 @@ export function createQwenValueSink(contract) {
         }) ?? null;
         return diagnostic ? freeze({ values,
           valueState: freeze([activations[0], activations[1], values === null && reason === 0 ? 9 : reason]),
-          valueSites: values === null && reason === 0 ? null : valueSites }) : values;
+          valueSites: values === null && reason === 0 ? null : valueSites,
+          valueSelection: values === null && reason === 0 ? null : valueSelection === null ? null
+            : freeze([values === null ? contract : null, ...valueSelection.slice(1)]) }) : values;
       },
       close() {
         safe(owner, () => {
@@ -192,22 +268,44 @@ export function createQwenValueSink(contract) {
       },
     });
   }
-  return freeze({ activate, claim, begin, finish,
+  return freeze({ activate, claim, begin, finish, defaultRegistry, defaultRuntime, createdRuntime,
+    runtime, registered, lookup, provider,
     host: (t, v) => tap(t, 1, v), build: (t, v) => tap(t, 2, v),
     fallback: (t, v) => tap(t, 4, v), selected: (t, v) => tap(t, 8, v),
     argument: (t, v) => tap(t, 16, v), result: (t, v) => tap(t, 32, v) });
 }
 
 export function overlayQwenValueSource(site, source, contract) {
-  assert.ok(site === 1 || site === 2);
+  assert.ok(Number.isInteger(site) && site >= 1 && site <= qwenValueSources.length);
   assert.ok(validHash(contract));
   assert.equal(hash(source), qwenValueSources[site - 1].sha256, "D8 callsite source changed");
-  const text = source.toString("utf8"), anchor = site === 1 ? clientValueAnchor : guardValueAnchor;
-  assert.ok(Buffer.from(text).equals(source) && text.split(anchor).length === 2, "exact single callsite anchor");
+  let text = source.toString("utf8");
+  assert.ok(Buffer.from(text).equals(source), "exact source encoding");
   assert.equal(text.includes("__qwenValues"), false, "overlay name collision");
+  assert.equal(text.includes("__qwen"), false, "selection overlay name collision");
+  const replace = (anchor, output) => {
+    assert.equal(text.split(anchor).length, 2, "exact single callsite anchor");
+    text = text.replace(anchor, output);
+  };
+  if (site <= 2) replace(site === 1 ? clientValueAnchor : guardValueAnchor,
+    site === 1 ? clientValueExpression : guardValueExpression);
+  if (site === 3) {
+    replace("registerBuiltInApiProviders(defaultApiRegistry);", "const __qwenGeneration = {};\nregisterBuiltInApiProviders(__qwenValues.defaultRegistry(defaultApiRegistry, __qwenGeneration));");
+    replace("return getModelLlmRuntime(model) ?? defaultLlmRuntime;",
+      "return __qwenValues.runtime(getModelLlmRuntime(model) ?? __qwenValues.defaultRuntime(defaultLlmRuntime, __qwenGeneration), __qwenGeneration);");
+  }
+  if (site === 4) {
+    replace("const provider = registry.getApiProvider(api);", "const provider = __qwenValues.provider(registry.getApiProvider(api), registry);");
+    replace("return {\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  };",
+      "return __qwenValues.createdRuntime({\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  }, registry);");
+  }
+  if (site === 5) {
+    replace("    providers.set(provider.api, {\n      provider: {", "    let __qwenKey: Api;\n    let __qwenNormalized: RegisteredApiProvider;\n    providers.set(__qwenKey = provider.api, {\n      provider: (__qwenNormalized = {");
+    replace("      },\n      sourceId,\n    });", "      }),\n      sourceId,\n    });\n    __qwenValues.registered(providers, __qwenKey, __qwenNormalized);");
+    replace("return providers.get(api)?.provider;", "return __qwenValues.lookup(providers.get(api)?.provider, providers, api);");
+  }
   return `import { sink as __qwenValues } from "${qwenValueModule}";\n`
-    + text.replace(anchor, site === 1 ? clientValueExpression : guardValueExpression)
-    + `\n__qwenValues.activate(${site}, "${contract}");\n`;
+    + text + (site <= 2 ? `\n__qwenValues.activate(${site}, "${contract}");\n` : "");
 }
 
 export function qwenValueConfigText(plan) {
@@ -220,7 +318,7 @@ export default { ...base, plugins: [...(base.plugins ?? []), plugin] };
 
 export function makeQwenValuePlan({ nonce, helperSHA, fixtureSHA, originals }) {
   assert.ok([nonce, helperSHA, fixtureSHA].every(validHash));
-  assert.equal(originals.length, 2);
+  assert.equal(originals.length, qwenValueSources.length);
   const contract = hash(JSON.stringify({ schema: "qwen-value-overlay.v1", nonce, pin: qwenValuePin,
     helperSHA, fixtureSHA, originals: qwenValueSources }));
   const virtualSource = `const create = ${createQwenValueSink.toString()};\nexport const contract = "${contract}";\nexport const sink = create(contract);\n`;

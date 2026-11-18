@@ -40,8 +40,11 @@ export function validateBinding(binding) {
     const originals = [
       { path: "packages/ai/src/providers/openai-provider-client.ts", sha256: "0c049068171de83e25e8c12cbbe9c24ad984280776ed47f3554e7beb50997e41" },
       { path: "src/agents/provider-transport-dispatcher-pool.ts", sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" },
+      { path: "src/llm/stream.ts", sha256: "eb3d07cf0742255ec2279194df55fc88507ee3ec60cf7c93e38fa150979beb28" },
+      { path: "packages/ai/src/stream.ts", sha256: "08bc3fa48900ee89d34c33b9eb92508285f7332cb73aa19bd61ec5c09625b7de" },
+      { path: "packages/ai/src/api-registry.ts", sha256: "5455ee2b67c34bd1d8e85811ee55fe3596bf1291a0165765afdf6b82af7fc18a" },
     ];
-    assert.ok(Array.isArray(c.sources) && c.sources.length === 2);
+    assert.ok(Array.isArray(c.sources) && c.sources.length === originals.length);
     c.sources.forEach((row, index) => {
       keys(row, ["path", "sha256", "outputSHA"]);
       assert.equal(row.path, originals[index].path); assert.equal(row.sha256, originals[index].sha256);

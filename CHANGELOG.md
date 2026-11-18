@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Observe the selected Qwen SDK runtime, constructor-bound registry and normalized provider record at pinned original boundaries. Bind comparisons to the owned invocation and module generation; missing provenance remains unknown. Preserve original calls, errors, ownership and retirement assertions; this is a diagnostic probe, not a provider repair.
+
 - Retain per-site entry, phase-mask and closed state in the existing bounded first-failure Qwen observation. Revert the isolated-runner trial after it reproduced the same missing-receipt failure; retain Qwen-first consumer scheduling. Preserve the SDK pin, original calls, ownership and retirement assertions; these observations do not establish a provider fix.
 
 - Export compiled model, availability, request-parameter, and native capability contracts from the provider plugin package while preserving shared imports and support validation. Include pinned contract sources when reproducing native recovery artifacts.

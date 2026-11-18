@@ -47,9 +47,9 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "ac809a3ccdc492d8a89c183d8e9ce092b43cb567015440b987409400d6a39b7e";
-const qwenRunnerReporterSha256 = "351d2c199b6aa09124073b8c8b9e58d195abe1f462ac40e8a7b72c544476b40a";
-const qwenValueObserverSha256 = "ca93740ba5ffe0e079bea80d3b13c0a448ce681c845540ab944f52df1a22e7d4";
+const qwenRunnerFixtureSha256 = "3b8675cc9d9d60b520b8944cc9cf88bc593aa121ed9b7f2ede01344bd2f4f20c";
+const qwenRunnerReporterSha256 = "8d6ad1f26cd29cf744dd81c7179ee842488ebe25cd0bc925285a68a712c48866";
+const qwenValueObserverSha256 = "f7a8d89571d08c51c9bef57dfdb406c68770bd04f72052d6ffa7663d82aa430e";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -195,7 +195,7 @@ function createQwenFailureRelay() {
     stage = "record_schema";
     assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
     const checked = qwenObserverRecord(value);
-    assert.ok(![5, 6].includes(checked.v) || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
+    assert.ok(![5, 6, 7].includes(checked.v) || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
     stage = "entry_required"; assert.ok(entered.has(checked.case), "observer lacks case entry");
     stage = "terminal_census";
     const original = sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined;
@@ -318,12 +318,20 @@ function createQwenFailureRelay() {
     // completion and helper/runner summaries. Absence conveys no local proof.
     if (firstFailed && observerFailures.has(firstFailed.case)) {
       const observer = JSON.parse(observerFailures.get(firstFailed.case));
-      if ([4, 5, 6].includes(observer.v) && observer.values !== null) {
+      if ([4, 5, 6, 7].includes(observer.v) && observer.values !== null) {
         const binding = runner?.find(record => record.kind === "runner_binding");
         // Missing/foreign actual reporter binding never admits a worker claim.
         if (!binding?.observed || binding.valueContract !== observer.values[1]) {
           observer.values = null;
-          if ([5, 6].includes(observer.v)) observer.valueState[2] = binding?.observed ? 11 : 10;
+          if ([5, 6, 7].includes(observer.v)) observer.valueState[2] = binding?.observed ? 11 : 10;
+        }
+      }
+      if (observer.v === 7 && observer.valueSelection !== null) {
+        const binding = runner?.find(record => record.kind === "runner_binding");
+        const key = observer.valueSelection[0] ?? observer.values?.[1];
+        if (!binding?.observed || binding.valueContract !== key) {
+          observer.valueSelection = null;
+          observer.valueState[2] = binding?.observed ? 11 : 10;
         }
       }
       essential.push(observer);
@@ -2126,7 +2134,10 @@ test("Qwen v4 value grammar stays bounded and rejects forged associations", () =
 
 const qwenValueOriginals = [
   "import OpenAI from \"openai\";\nimport { getAiTransportHost } from \"../host.js\";\nimport {\n  resolveOpenAIClientBaseUrl,\n  withOpenAIErrorResponseHook,\n} from \"../transports/openai-transport-shared.js\";\nimport type { Model, ModelRequestHeaders, StreamOptions } from \"../types.js\";\nimport { isCloudflareProvider, resolveCloudflareBaseUrl } from \"./cloudflare.js\";\n\nexport function createOpenAIProviderClient(\n  model: Model<\"openai-completions\" | \"openai-responses\">,\n  apiKey: string,\n  headers: ModelRequestHeaders,\n  optionsHeaders?: ModelRequestHeaders,\n  onResponse?: StreamOptions[\"onResponse\"],\n): OpenAI {\n  // Merge options headers last so they can override defaults\n  if (optionsHeaders) {\n    Object.assign(headers, optionsHeaders);\n  }\n\n  const defaultHeaders =\n    model.provider === \"cloudflare-ai-gateway\"\n      ? {\n          ...headers,\n          Authorization: headers.Authorization ?? null,\n          \"cf-aig-authorization\": `Bearer ${apiKey}`,\n        }\n      : headers;\n\n  const baseUrl = isCloudflareProvider(model.provider)\n    ? resolveCloudflareBaseUrl(model)\n    : model.baseUrl;\n  return new OpenAI({\n    apiKey,\n    baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),\n    dangerouslyAllowBrowser: true,\n    defaultHeaders,\n    maxRetries: 0,\n    // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.\n    fetch: withOpenAIErrorResponseHook(\n      getAiTransportHost().buildModelFetch(model) ?? globalThis.fetch,\n      onResponse,\n      model,\n    ),\n  });\n}\n",
-  "import {\n  fetchWithSsrFGuard,\n  type GuardedFetchOptions,\n  type GuardedFetchResult,\n} from \"../infra/net/fetch-guard.js\";\nimport { PinnedDispatcherPool } from \"../infra/net/pinned-dispatcher-pool.js\";\nimport { setProviderTransportDispatcherPoolActive } from \"./provider-runtime-lifecycle.js\";\n\nlet activePool: PinnedDispatcherPool | undefined;\n\n/** Reuse provider connections without exposing their lifecycle-owned pool to callers. */\nexport function fetchWithProviderHttpGuard(\n  options: Omit<GuardedFetchOptions, \"dispatcherPool\">,\n): Promise<GuardedFetchResult> {\n  return fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  });\n}\n\n/** Returns the current process-lifecycle provider dispatcher pool generation. */\nfunction getProviderTransportDispatcherPool(): PinnedDispatcherPool {\n  if (!activePool) {\n    activePool = new PinnedDispatcherPool();\n    setProviderTransportDispatcherPoolActive(true);\n  }\n  return activePool;\n}\n\n/** Closes the current generation while allowing an in-process Gateway restart to create another. */\nexport async function closeProviderTransportDispatcherPool(): Promise<void> {\n  const pool = activePool;\n  if (pool) {\n    await pool.closeAll();\n    if (activePool === pool) {\n      activePool = undefined;\n      setProviderTransportDispatcherPoolActive(false);\n    }\n  }\n}\n"
+  "import {\n  fetchWithSsrFGuard,\n  type GuardedFetchOptions,\n  type GuardedFetchResult,\n} from \"../infra/net/fetch-guard.js\";\nimport { PinnedDispatcherPool } from \"../infra/net/pinned-dispatcher-pool.js\";\nimport { setProviderTransportDispatcherPoolActive } from \"./provider-runtime-lifecycle.js\";\n\nlet activePool: PinnedDispatcherPool | undefined;\n\n/** Reuse provider connections without exposing their lifecycle-owned pool to callers. */\nexport function fetchWithProviderHttpGuard(\n  options: Omit<GuardedFetchOptions, \"dispatcherPool\">,\n): Promise<GuardedFetchResult> {\n  return fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  });\n}\n\n/** Returns the current process-lifecycle provider dispatcher pool generation. */\nfunction getProviderTransportDispatcherPool(): PinnedDispatcherPool {\n  if (!activePool) {\n    activePool = new PinnedDispatcherPool();\n    setProviderTransportDispatcherPoolActive(true);\n  }\n  return activePool;\n}\n\n/** Closes the current generation while allowing an in-process Gateway restart to create another. */\nexport async function closeProviderTransportDispatcherPool(): Promise<void> {\n  const pool = activePool;\n  if (pool) {\n    await pool.closeAll();\n    if (activePool === pool) {\n      activePool = undefined;\n      setProviderTransportDispatcherPoolActive(false);\n    }\n  }\n}\n",
+  "// This facade owns the process-default AI runtime wiring: it installs the\n// OpenClaw host policy ports and registers built-in providers exactly once,\n// before any caller imports the stream API.\nimport { defaultApiRegistry, defaultLlmRuntime } from \"@openclaw/ai/internal/runtime\";\nimport { registerBuiltInApiProviders } from \"@openclaw/ai/providers\";\nimport { makeZeroUsageSnapshot } from \"../agents/usage.js\";\nimport { POSTGRES_QUERY_CANCELED_ERROR_NAME } from \"../infra/postgres-sync/protocol.js\";\nimport { classifyGatewayStorageFailure } from \"../infra/sqlite-error-diagnostics.js\";\nimport { hasSqliteWorkerOutcomeUnknown } from \"../infra/sqlite-worker-error.js\";\nimport { assertProviderAuthAuthority } from \"../plugins/provider-auth-authority.js\";\nimport { runInDetachedAsyncContext } from \"../shared/detached-async-context.js\";\nimport { createLazyPromise } from \"../shared/lazy-promise.js\";\nimport { getModelLlmRuntime } from \"./model-runtime-binding.js\";\nimport { getModelTransportContext } from \"./model-transport-context.js\";\nimport { createProviderRateLimitRequest } from \"./provider-rate-limit.js\";\nimport \"./ai-transport-host.js\";\nimport type {\n  Api,\n  AssistantMessage,\n  AssistantMessageEventStreamContract,\n  Context,\n  Model,\n  ProviderStreamOptions,\n  SimpleStreamOptions,\n} from \"./types.js\";\nimport { createAssistantMessageEventStream } from \"./utils/event-stream.js\";\n\nregisterBuiltInApiProviders(defaultApiRegistry);\n\n// The process host outlives requests; only provider invocation carries caller authority.\nconst ensureTransportRuntimeHost = createLazyPromise(\n  () => runInDetachedAsyncContext(() => import(\"../agents/ai-transport-runtime-host.js\")),\n  { cacheRejections: true },\n);\n\nfunction createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {\n  // A message cannot retain the error graph, so preserve its strongest continuation fence.\n  const storageFailure = hasSqliteWorkerOutcomeUnknown(error)\n    ? \"session_actor_reconciliation\"\n    : classifyGatewayStorageFailure(error);\n  return {\n    role: \"assistant\",\n    content: [],\n    api: model.api,\n    provider: model.provider,\n    model: model.id,\n    usage: makeZeroUsageSnapshot(),\n    stopReason: \"error\",\n    errorMessage: error instanceof Error ? error.message : String(error),\n    errorCode: storageFailure,\n    errorType:\n      storageFailure === \"57014\"\n        ? POSTGRES_QUERY_CANCELED_ERROR_NAME\n        : storageFailure === \"unavailable\"\n          ? \"SqliteWorkerError\"\n          : undefined,\n    timestamp: Date.now(),\n  };\n}\n\nfunction deferUntilTransportRuntimeHost<T extends SimpleStreamOptions>(\n  model: Model,\n  start: (options: T) => AssistantMessageEventStreamContract,\n  options: T,\n): AssistantMessageEventStreamContract {\n  const output = createAssistantMessageEventStream();\n  const admission = createProviderRateLimitRequest(model, options);\n  const transportContext = getModelTransportContext();\n  void (async () => {\n    try {\n      await ensureTransportRuntimeHost();\n      await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);\n      assertProviderAuthAuthority(model);\n      options?.signal?.throwIfAborted();\n      for await (const event of start(admission.options)) {\n        if (event.type === \"error\") {\n          admission.observe?.(event.error);\n        }\n        output.push(event);\n      }\n    } catch (error) {\n      const message = createRuntimeHostErrorMessage(model, error);\n      output.push({ type: \"error\", reason: \"error\", error: message });\n    } finally {\n      output.end();\n    }\n  })();\n  return output;\n}\n\nfunction resolveRuntime(model: Model) {\n  return getModelLlmRuntime(model) ?? defaultLlmRuntime;\n}\n\nexport function stream<TApi extends Api>(\n  model: Model<TApi>,\n  context: Context,\n  options?: ProviderStreamOptions,\n): AssistantMessageEventStreamContract {\n  return deferUntilTransportRuntimeHost(\n    model,\n    (admittedOptions) => resolveRuntime(model).stream(model, context, admittedOptions),\n    options ?? {},\n  );\n}\n\nexport async function complete<TApi extends Api>(\n  model: Model<TApi>,\n  context: Context,\n  options?: ProviderStreamOptions,\n  assertCurrent?: () => void,\n): Promise<AssistantMessage> {\n  await ensureTransportRuntimeHost();\n  const admission = createProviderRateLimitRequest(model, options ?? {});\n  const transportContext = getModelTransportContext();\n  await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);\n  assertCurrent?.();\n  assertProviderAuthAuthority(model);\n  options?.signal?.throwIfAborted();\n  const result = await resolveRuntime(model).complete(model, context, admission.options);\n  admission.observe?.(result);\n  return result;\n}\n\nexport function streamSimple<TApi extends Api>(\n  model: Model<TApi>,\n  context: Context,\n  options?: SimpleStreamOptions,\n): AssistantMessageEventStreamContract {\n  return deferUntilTransportRuntimeHost(\n    model,\n    (admittedOptions) => resolveRuntime(model).streamSimple(model, context, admittedOptions),\n    options ?? {},\n  );\n}\n\nexport async function completeSimple<TApi extends Api>(\n  model: Model<TApi>,\n  context: Context,\n  options?: SimpleStreamOptions,\n  assertCurrent?: () => void,\n): Promise<AssistantMessage> {\n  await ensureTransportRuntimeHost();\n  const admission = createProviderRateLimitRequest(model, options ?? {});\n  const transportContext = getModelTransportContext();\n  await admission.wait(transportContext?.onRateLimitWait, transportContext?.priority);\n  // Runtime setup can outlive its caller. Admit only a current request to the provider.\n  assertCurrent?.();\n  assertProviderAuthAuthority(model);\n  options?.signal?.throwIfAborted();\n  const result = await resolveRuntime(model).completeSimple(model, context, admission.options);\n  admission.observe?.(result);\n  return result;\n}\n",
+  "import type {\n  Api,\n  AssistantMessage,\n  AssistantMessageEvent,\n  AssistantMessageEventStreamContract,\n  Context,\n  Model,\n  ProviderStreamOptions,\n  SimpleStreamOptions,\n  StreamOptions,\n} from \"@openclaw/llm-core\";\nimport {\n  bindAssistantMessageEventStream,\n  getEventStreamCompletion,\n} from \"@openclaw/llm-core/event-stream\";\nimport { createApiRegistry, type ApiRegistry } from \"./api-registry.js\";\nimport {\n  createAiTransportHost,\n  getDefaultAiTransportHost,\n  runWithAiTransportHost,\n  supportsScopedAiTransportHosts,\n  type AiTransportHost,\n} from \"./host.js\";\nimport { cleanupSessionResources as cleanupRegisteredSessionResources } from \"./session-resources.js\";\n\nfunction retainUnscopedStreamLifetime(\n  stream: AssistantMessageEventStreamContract,\n  runWithHost: <T>(operation: () => T) => T,\n): AssistantMessageEventStreamContract {\n  let releaseLifetime!: () => void;\n  const lifetime = new Promise<void>((resolve) => {\n    releaseLifetime = resolve;\n  });\n  void runWithHost(() => lifetime);\n  let resultSettled = false;\n  let bufferSettled = false;\n  const releaseIfSettled = () => {\n    if (resultSettled && bufferSettled) {\n      releaseLifetime();\n    }\n  };\n  const push = stream.push.bind(stream);\n  const end = stream.end.bind(stream);\n  const result = stream.result.bind(stream);\n  const iterate = stream[Symbol.asyncIterator].bind(stream);\n  const bufferedEvents: AssistantMessageEvent[] = [];\n  const bufferWaiters = new Set<() => void>();\n  let bufferError: Error | undefined;\n  let resultPromise: ReturnType<typeof result> | undefined;\n  const notifyBufferWaiters = () => {\n    for (const resolve of bufferWaiters) {\n      resolve();\n    }\n    bufferWaiters.clear();\n  };\n  const observeResult = () => {\n    if (!resultPromise) {\n      let providerResult: ReturnType<typeof result>;\n      try {\n        providerResult = runWithHost(result);\n      } catch (error) {\n        providerResult = Promise.reject(new Error(\"Stream result failed\", { cause: error }));\n      }\n      const settleResult = () => {\n        resultSettled = true;\n        releaseIfSettled();\n      };\n      void providerResult.then(settleResult, settleResult);\n      resultPromise = providerResult;\n    }\n    return resultPromise;\n  };\n  void (async () => {\n    try {\n      const iterator = runWithHost(iterate);\n      while (true) {\n        const next = await runWithHost(() => iterator.next());\n        if (next.done) {\n          return;\n        }\n        bufferedEvents.push(next.value);\n        notifyBufferWaiters();\n      }\n    } catch (error) {\n      bufferError = new Error(\"Stream iteration failed\", { cause: error });\n    } finally {\n      bufferSettled = true;\n      notifyBufferWaiters();\n      void observeResult().catch(() => {});\n      releaseIfSettled();\n    }\n  })();\n  return {\n    push: (event) => runWithHost(() => push(event)),\n    end: (message) => runWithHost(() => end(message)),\n    result: observeResult,\n    [Symbol.asyncIterator]() {\n      let index = 0;\n      let done = false;\n      const next = async (): Promise<IteratorResult<AssistantMessageEvent>> => {\n        if (done) {\n          return { done: true, value: undefined };\n        }\n        if (index < bufferedEvents.length) {\n          const value = bufferedEvents[index];\n          if (value === undefined) {\n            throw new Error(\"Buffered stream event is missing\");\n          }\n          index += 1;\n          return { done: false, value };\n        }\n        if (bufferSettled) {\n          if (bufferError) {\n            throw bufferError;\n          }\n          done = true;\n          return { done: true, value: undefined };\n        }\n        await new Promise<void>((resolve) => {\n          bufferWaiters.add(resolve);\n        });\n        return next();\n      };\n      return {\n        [Symbol.asyncIterator]() {\n          return this;\n        },\n        next,\n        async return(value?: unknown) {\n          done = true;\n          notifyBufferWaiters();\n          return { done: true as const, value };\n        },\n      };\n    },\n  };\n}\n\nfunction createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTransportHost>) {\n  const explicitHost =\n    transportHost === undefined ? undefined : createAiTransportHost(transportHost);\n  const resolveRuntimeHost = () => explicitHost ?? getDefaultAiTransportHost();\n  const startStream = (start: () => AssistantMessageEventStreamContract) => {\n    const host = resolveRuntimeHost();\n    const runWithStreamHost = <T>(operation: () => T): T => runWithAiTransportHost(host, operation);\n    const started = runWithStreamHost(start);\n    const completion = getEventStreamCompletion(started);\n    const bound = bindAssistantMessageEventStream(started, runWithStreamHost);\n    if (completion) {\n      if (!supportsScopedAiTransportHosts()) {\n        let producerSettled = false;\n        const observedCompletion = completion.finally(() => {\n          producerSettled = true;\n        });\n        void runWithStreamHost(() => observedCompletion);\n        const result = runWithStreamHost(() => started.result());\n        return bindAssistantMessageEventStream(\n          started,\n          (operation) => (producerSettled ? operation() : runWithStreamHost(operation)),\n          {\n            result: () => result,\n          },\n        );\n      }\n      void runWithStreamHost(() => completion);\n    }\n    return !completion && !supportsScopedAiTransportHosts()\n      ? retainUnscopedStreamLifetime(started, runWithStreamHost)\n      : bound;\n  };\n  function resolveApiProvider(api: Api) {\n    const provider = registry.getApiProvider(api);\n    if (!provider) {\n      throw new Error(`No API provider registered for api: ${api}`);\n    }\n    return provider;\n  }\n\n  function stream<TApi extends Api>(\n    model: Model<TApi>,\n    context: Context,\n    options?: ProviderStreamOptions,\n  ): AssistantMessageEventStreamContract {\n    return startStream(() =>\n      resolveApiProvider(model.api).stream(model, context, options as StreamOptions),\n    );\n  }\n\n  async function complete<TApi extends Api>(\n    model: Model<TApi>,\n    context: Context,\n    options?: ProviderStreamOptions,\n  ): Promise<AssistantMessage> {\n    return stream(model, context, options).result();\n  }\n\n  function streamSimple<TApi extends Api>(\n    model: Model<TApi>,\n    context: Context,\n    options?: SimpleStreamOptions,\n  ): AssistantMessageEventStreamContract {\n    return startStream(() => resolveApiProvider(model.api).streamSimple(model, context, options));\n  }\n\n  async function completeSimple<TApi extends Api>(\n    model: Model<TApi>,\n    context: Context,\n    options?: SimpleStreamOptions,\n  ): Promise<AssistantMessage> {\n    return streamSimple(model, context, options).result();\n  }\n\n  function cleanupSessionResources(sessionId?: string): void {\n    if (!supportsScopedAiTransportHosts()) {\n      cleanupRegisteredSessionResources(sessionId);\n      return;\n    }\n    const host = resolveRuntimeHost();\n    try {\n      runWithAiTransportHost(host, () => cleanupRegisteredSessionResources(sessionId, host));\n    } catch (error) {\n      throw new AggregateError([error], \"Failed to cleanup runtime session resources\", {\n        cause: error,\n      });\n    }\n  }\n\n  return {\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  };\n}\n\n/** Creates an isolated LLM runtime backed by the supplied provider registry. */\nexport function createLlmRuntime(registry: ApiRegistry = createApiRegistry()) {\n  return createRuntime(registry);\n}\n\n/** Creates a Node runtime whose provider work retains an explicit transport host. */\nexport function createNodeLlmRuntime(\n  registry: ApiRegistry = createApiRegistry(),\n  transportHost: Partial<AiTransportHost> = {},\n) {\n  if (!supportsScopedAiTransportHosts()) {\n    throw new Error(\"Explicit AI transport hosts require Node.js async context support\");\n  }\n  return createRuntime(registry, transportHost);\n}\n\nexport type LlmRuntime = ReturnType<typeof createLlmRuntime>;\n",
+  "import type {\n  Api,\n  Model,\n  SimpleStreamOptions,\n  StreamFunction,\n  StreamOptions,\n} from \"@openclaw/llm-core\";\n\n/** Runtime stream adapter signature stored in the API provider registry. */\nexport type ApiStreamFunction = StreamFunction;\n\n/** Runtime simple-stream adapter signature stored in the API provider registry. */\nexport type ApiStreamSimpleFunction = StreamFunction<Api, SimpleStreamOptions>;\n\n/** Provider implementation registered by core or plugins for a specific model API. */\nexport interface ApiProvider<\n  TApi extends Api = Api,\n  TOptions extends StreamOptions = StreamOptions,\n> {\n  /** Model API id this provider handles. */\n  api: TApi;\n  /** Full streaming adapter for callers that already own structured options. */\n  stream: StreamFunction<TApi, TOptions>;\n  /** Simple streaming adapter used by agent and plugin runtime defaults. */\n  streamSimple: StreamFunction<TApi, SimpleStreamOptions>;\n}\n\n/** Type-erased provider returned by a registry after API guards are installed. */\nexport interface RegisteredApiProvider {\n  api: Api;\n  stream: ApiStreamFunction;\n  streamSimple: ApiStreamSimpleFunction;\n}\n\nfunction wrapStream<TApi extends Api, TOptions extends StreamOptions>(\n  api: TApi,\n  stream: StreamFunction<TApi, TOptions>,\n): ApiStreamFunction {\n  return (model, context, options) => {\n    if (model.api !== api) {\n      throw new Error(`Mismatched api: ${model.api} expected ${api}`);\n    }\n    return stream(model as Model<TApi>, context, options as TOptions);\n  };\n}\n\n/** Creates an isolated provider registry for one runtime or tenant. */\nexport function createApiRegistry() {\n  const providers = new Map<string, { provider: RegisteredApiProvider; sourceId?: string }>();\n\n  function registerApiProvider<TApi extends Api, TOptions extends StreamOptions>(\n    provider: ApiProvider<TApi, TOptions>,\n    /** Optional source id used to unregister all providers owned by one plugin/runtime. */\n    sourceId?: string,\n  ): void {\n    providers.set(provider.api, {\n      provider: {\n        api: provider.api,\n        stream: wrapStream(provider.api, provider.stream),\n        streamSimple: wrapStream(provider.api, provider.streamSimple),\n      },\n      sourceId,\n    });\n  }\n\n  function getApiProvider(api: Api): RegisteredApiProvider | undefined {\n    return providers.get(api)?.provider;\n  }\n\n  function getApiProviders(): RegisteredApiProvider[] {\n    return Array.from(providers.values(), (entry) => entry.provider);\n  }\n\n  function unregisterApiProviders(sourceId: string): void {\n    for (const [api, entry] of providers.entries()) {\n      if (entry.sourceId === sourceId) {\n        providers.delete(api);\n      }\n    }\n  }\n\n  return {\n    registerApiProvider,\n    getApiProvider,\n    getApiProviders,\n    unregisterApiProviders,\n    clearApiProviders: () => providers.clear(),\n  };\n}\n\nexport type ApiRegistry = ReturnType<typeof createApiRegistry>;\n",
 ].map(text => Buffer.from(text));
 const qwenValueHash = bytes => createHash("sha256").update(bytes).digest("hex");
 
@@ -2255,7 +2266,7 @@ test("Qwen private input custody and falsey read/close faults are independent", 
 test("Qwen value claims travel only with the original first failed observer and matching runner", async () => {
   const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
     fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
-  for (const version of [4, 5, 6]) for (const match of [true, false, null]) {
+  for (const version of [4, 5, 6, 7]) for (const match of [true, false, null]) {
     const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
     if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
       records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
@@ -2268,13 +2279,15 @@ test("Qwen value claims travel only with the original first failed observer and 
       failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
       values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0],
       ...(version >= 5 ? { valueState: [1, 1, 0] } : {}),
-      ...(version === 6 ? { valueSites: [1, 11, 1, 1, 3, 1] } : {}) };
+      ...(version >= 6 ? { valueSites: [1, 11, 1, 1, 3, 1] } : {}),
+      ...(version === 7 ? { valueSelection: [null, 7, 1, 1, 1] } : {}) };
     h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
     for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
     const packet = h.relay.output("failed"), projected = packet.find(row => row.kind === "observer_failure");
     assert.deepEqual(projected.values, match ? record.values : null);
     if (version >= 5) assert.deepEqual(projected.valueState, [1, 1, match ? 0 : match === null ? 10 : 11]);
-    if (version === 6) assert.deepEqual(projected.valueSites, record.valueSites);
+    if (version >= 6) assert.deepEqual(projected.valueSites, record.valueSites);
+    if (version === 7) assert.deepEqual(projected.valueSelection, match ? record.valueSelection : null);
     assert.equal(packet.length, 10); assert.equal(h.relay.complete(), false);
     const commands = packet.map(qwenBoundaryAnnotation);
     assert.ok(commands.every(line => Buffer.byteLength(line) <= 768));
@@ -2296,7 +2309,8 @@ test("Qwen value disposition reads retained state once without current-context c
     const claim = sink.claim(contract, 1, () => { reads++; return invocation; }); claim.bind(invocation);
     const before = reads, result = claim.snapshot(invocation, true);
     assert.deepEqual(result, { values: null, valueState: expected,
-      valueSites: expected[2] === 8 ? [0,0,0,0,0,0] : null });
+      valueSites: expected[2] === 8 ? [0,0,0,0,0,0] : null,
+      valueSelection: expected[2] === 8 ? [contract,0,0,0,0] : null });
     assert.equal(reads, before); assert.deepEqual(claim.close(), []);
     assert.deepEqual(claim.snapshot(invocation, true), result);
   }
@@ -2347,7 +2361,7 @@ test("Qwen v5 value disposition is closed, opaque and within existing annotation
 });
 
 test("Qwen retained site state distinguishes absent, partial, open and complete evaluations", () => {
-  const base = { v: 6, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+  const base = { v: 7, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
     site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
     failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1] };
   for (const site of [1, 2]) for (const bits of site === 1 ? [0,1,3,7,11,15] : [0,1,3]) {
@@ -2413,3 +2427,199 @@ test("Qwen v6 site tuples reject malformed, contradictory and reflective inputs 
   assert.deepEqual(qwenObserverRecord(legacy), legacy);
 });
 // END Qwen value disposition controls.
+
+
+// The new source literals are inert hash-bound D8 inputs, never an SDK fallback.
+function qwenSelectionSources() {
+  return qwenValueOriginals.map((bytes, i) => overlayQwenValueSource(i + 1, bytes, "a".repeat(64)));
+}
+function qwenRegistryFactory(text, sink, MapClass = Map) {
+  const code = stripTypeScriptTypes(text).replace(/^import .*;\n/gm, "").replaceAll("export ", "");
+  return new Function("__qwenValues", "Map", code + "; return createApiRegistry;")(sink, MapClass);
+}
+
+test("Qwen selection overlays preserve actual facade nullish evaluation and falsey throws", () => {
+  const outputs = qwenSelectionSources();
+  for (let i = 2; i < outputs.length; i++) {
+    assert.equal(qwenValueHash(qwenValueOriginals[i]), qwenValueSources[i].sha256);
+    assert.throws(() => overlayQwenValueSource(i + 1, Buffer.concat([qwenValueOriginals[i], Buffer.from(" ")]), "a".repeat(64)));
+    assert.doesNotThrow(() => stripTypeScriptTypes(outputs[i]));
+  }
+  const expression = text => text.match(/function resolveRuntime\(model: Model\) \{\n  (return .*;)\n\}/)?.[1];
+  const original = expression(qwenValueOriginals[2].toString()), observed = expression(outputs[2]);
+  assert.ok(original && observed);
+  for (const selected of [null, undefined, {}, false, 0]) for (const throws of [false, true]) {
+    const error = undefined, fallback = {};
+    const run = body => {
+      const h = qwenValueHarness(), generation = {}, trace = [];
+      h.sink.defaultRegistry({}, generation);
+      const env = { getModelLlmRuntime(model) { trace.push(model); if (throws) throw error; return selected; },
+        get defaultLlmRuntime() { trace.push("default"); return fallback; } };
+      const value = qwenCaught(() => new Function("__qwenValues", "__qwenGeneration", "model", "env",
+        `with (env) { ${body} }`)(h.sink, generation, "model", env));
+      assert.deepEqual(h.claim.close(), []);
+      return { value, trace };
+    };
+    const a = run(original), b = run(observed);
+    assert.deepEqual(b.trace, a.trace); assert.deepEqual(b.value, a.value);
+    assert.equal(b.trace.filter(v => v === "model").length, 1);
+  }
+});
+
+test("Qwen normalized registration observes only completed insertion and preserves getter order", () => {
+  const outputs = qwenSelectionSources();
+  for (const fail of [null, "key", "api", "stream", "simple", "set"]) for (const reason of [undefined, {}]) {
+    const run = observed => {
+      const trace = [], inserted = [], streamResult = {}, h = qwenValueHarness(); let apiReads = 0;
+      class TracedMap extends Map {
+        get set() { trace.push("set_get"); return function (key, entry) {
+          trace.push("set_call"); if (fail === "set") throw reason;
+          inserted.push(entry.provider); return Map.prototype.set.call(this, key, entry);
+        }; }
+      }
+      const sink = { ...h.sink, registered(...args) { trace.push("record"); h.sink.registered(...args); } };
+      const factory = qwenRegistryFactory(observed ? outputs[4] : qwenValueOriginals[4].toString(), sink, TracedMap);
+      const registry = factory();
+      const source = { get api() {
+        trace.push("api"); apiReads++;
+        if (fail === "key" && apiReads === 1 || fail === "api" && apiReads === 2) throw reason;
+        return "openai-completions";
+      }, get stream() { trace.push("stream"); if (fail === "stream") throw reason;
+        return function (...args) { trace.push(["call", this, ...args]); return streamResult; };
+      }, get streamSimple() { trace.push("simple"); if (fail === "simple") throw reason; return () => streamResult; } };
+      const result = qwenCaught(() => registry.registerApiProvider(source));
+      if (!result.failed) {
+        assert.equal(result.value, undefined);
+        const normalized = registry.getApiProvider("openai-completions");
+        assert.equal(normalized, inserted[0]); assert.notEqual(normalized, source);
+        assert.equal(normalized.stream({ api: "openai-completions" }, "context", "options"), streamResult);
+      } else assert.equal(result.reason, reason);
+      assert.deepEqual(h.claim.close(), []);
+      return { trace, failed: result.failed };
+    };
+    const a = run(false), b = run(true);
+    assert.deepEqual(b.trace.filter(v => v !== "record"), a.trace);
+    assert.equal(b.trace.filter(v => v === "record").length, a.failed ? 0 : 1);
+    if (!a.failed) assert.ok(b.trace.indexOf("record") > b.trace.indexOf("set_call"));
+  }
+});
+
+test("Qwen actual runtime return associates only its existing registry without property reads", () => {
+  const text = stripTypeScriptTypes(qwenSelectionSources()[3]);
+  const start = text.indexOf("function createRuntime("), end = text.indexOf("/** Creates an isolated LLM runtime", start);
+  assert.ok(start >= 0 && end > start);
+  let propertyReads = 0, produced;
+  const h = qwenValueHarness(), generation = {}, normalized = {}, result = {};
+  const registry = { getApiProvider() { return normalized; } };
+  const sink = { ...h.sink, createdRuntime(value, held) { produced = value; assert.equal(held, registry); return h.sink.createdRuntime(value, held); } };
+  const create = new Function("__qwenValues", text.slice(start, end) + "; return createRuntime;")(sink);
+  const runtime = create(registry);
+  assert.equal(runtime, produced); assert.equal(runtime.registry, registry);
+  Object.defineProperty(runtime, "registry", { get() { propertyReads++; throw undefined; } });
+  h.sink.defaultRegistry(registry, generation); h.sink.defaultRuntime(runtime, generation); h.sink.runtime(runtime, generation);
+  const resolve = text.match(/function resolveApiProvider\(api\s*\) \{([\s\S]*?)\n  \}/)?.[0];
+  assert.ok(resolve);
+  assert.equal(new Function("__qwenValues", "registry", resolve + '; return resolveApiProvider("openai-completions");')(h.sink, registry), normalized);
+  assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, [h.contract,3,1,1,0]);
+  assert.equal(propertyReads, 0); assert.deepEqual(h.claim.close(), []);
+});
+
+test("Qwen selection identities require owned context, generation and normalized-record provenance", () => {
+  for (const mode of ["matched", "preregistered", "unconstructed", "different", "replaced", "old-record", "foreign", "absent", "other-generation"]) {
+    let current, reads = 0;
+    const h = qwenValueHarness(() => { reads++; return current; }); current = h.invocation;
+    const generation = {}, registry = {}, defaultRegistry = mode === "different" ? {} : registry;
+    const runtime = {}, defaultRuntime = mode === "different" ? {} : runtime, map = {}, old = {}, latest = {};
+    h.sink.defaultRegistry(defaultRegistry, generation); h.sink.defaultRuntime(defaultRuntime, generation);
+    if (mode !== "unconstructed") h.sink.createdRuntime(runtime, registry);
+    if (mode !== "preregistered") h.sink.registered(map, "openai-completions", old);
+    if (["replaced", "old-record"].includes(mode)) h.sink.registered(map, "openai-completions", latest);
+    if (mode === "other-generation") {
+      const other = {}; h.sink.defaultRegistry({}, other); h.sink.defaultRuntime({}, other);
+    }
+    if (mode === "foreign") current = {};
+    if (mode === "absent") current = undefined;
+    const selected = mode === "replaced" ? latest : old;
+    assert.equal(h.sink.runtime(runtime, generation), runtime);
+    assert.equal(h.sink.lookup(selected, map, "openai-completions"), selected);
+    assert.equal(h.sink.provider(selected, registry), selected);
+    assert.equal(reads, 3, "one explicit owned-context read per hook");
+    const row = h.claim.snapshot(h.invocation, true).valueSelection;
+    const expected = ["foreign", "absent"].includes(mode) ? [0,0,0,0]
+      : mode === "different" ? [7,2,2,1] : mode === "unconstructed" ? [7,1,0,0]
+      : [7,1,1,mode === "preregistered" ? 0 : mode === "old-record" ? 2 : 1];
+    assert.deepEqual(row, [h.contract,...expected]); assert.equal(reads, 3);
+    assert.deepEqual(h.claim.close(), []); assert.deepEqual(h.claim.snapshot(h.invocation, true).valueSelection, row);
+  }
+});
+
+test("Qwen selection observer faults preserve falsey reasons and original return identities", () => {
+  for (const reason of [undefined, null, false, {}]) {
+    const h = qwenValueHarness(() => { throw reason; }), value = {}, generation = {};
+    assert.equal(h.sink.runtime(value, generation), value);
+    assert.equal(h.sink.lookup(value, {}, "openai-completions"), value);
+    assert.equal(h.sink.provider(value, {}), value);
+    assert.equal(h.claim.snapshot(h.invocation, true).valueSelection, null);
+    const faults = h.claim.close(); assert.equal(faults.length, 3); assert.ok(faults.every(x => Object.is(x, reason)));
+  }
+  const h = qwenValueHarness(), generation = {}, runtime = {};
+  h.sink.runtime(runtime, generation); h.sink.runtime(runtime, generation);
+  assert.equal(h.claim.snapshot(h.invocation, true).valueSelection, null);
+  assert.deepEqual(h.claim.close(), []);
+});
+
+test("Qwen v7 selection tuples are closed, nonreflective and retain legacy quotas", () => {
+  const base = { v: 7, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+    values: null, valueState: [1,1,8], valueSites: [0,0,0,0,0,0], valueSelection: ["a".repeat(64),7,1,1,1] };
+  for (const valueSelection of [null, ["a".repeat(64),0,0,0,0], ["a".repeat(64),1,2,0,0], base.valueSelection]) {
+    const row = { ...base, valueSelection }; assert.deepEqual(qwenObserverRecord(row), row);
+    assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(row)) <= 768);
+  }
+  for (const valueSelection of [[], ["a".repeat(64),7,1,1], Object.assign(new Array(6), base.valueSelection),
+    [null,7,1,1,1], ["x",7,1,1,1], ["a".repeat(64),2,0,0,0], ["a".repeat(64),0,1,0,0],
+    ["a".repeat(64),1,1,1,1], ["a".repeat(64),7,3,1,1]]) assert.throws(() => qwenObserverRecord({ ...base, valueSelection }));
+  let reads = 0;
+  for (const key of ["valueState", "valueSites", "valueSelection"]) {
+    const accessor = [...base[key]]; Object.defineProperty(accessor, "0", { get() { reads++; throw undefined; } });
+    const proxy = new Proxy([...base[key]], { ownKeys() { reads++; throw undefined; } });
+    for (const value of [accessor, proxy]) assert.throws(() => qwenObserverRecord({ ...base, [key]: value }));
+  }
+  assert.equal(reads, 0);
+  const complete = { ...base, values: [1,"a".repeat(64),206,7,15,2,9,8,3,3,0], valueState: [1,1,0],
+    valueSites: [1,15,1,1,3,1], valueSelection: [null,7,1,1,1] };
+  const wide = { ...complete, case: rows.reduce((a,b) => a.id.length > b.id.length ? a : b).id,
+    parent: 65534, observer: 65535, route: [1,65535,65535,65535,0,0,3,3,2] };
+  assert.deepEqual(qwenObserverRecord(wide), wide);
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(wide)) <= 768);
+  const { valueSelection, ...old } = complete; old.v = 6; assert.deepEqual(qwenObserverRecord(old), old);
+});
+
+
+test("Qwen selection-only projection requires the actual matching invocation contract", () => {
+  const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
+    fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
+  for (const match of [true, false, null]) {
+    const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
+    if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
+      records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
+    }));
+    const witness = h.witness.enter(rows[0].id), counts = { operations: 2, rejected: 1, pending: 0 };
+    witness.at("owned_drain"); witness.failed(undefined);
+    h.relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "fetch_observer", "failed", counts)) + "\n");
+    const record = { v: 7, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+      site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+      failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+      values: null, valueState: [1,1,8], valueSites: [0,0,0,0,0,0],
+      valueSelection: [match ? bundle.plan.contract : "b".repeat(64),7,1,1,1] };
+    h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
+    for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
+    const packet = h.relay.output("failed"), actual = packet.find(row => row.kind === "observer_failure");
+    assert.deepEqual(actual.valueSelection, match ? record.valueSelection : null);
+    assert.equal(actual.valueState[2], match ? 8 : match === null ? 10 : 11);
+    assert.deepEqual(qwenObserverRecord(actual), actual);
+    assert.ok(packet.every(row => Buffer.byteLength(qwenBoundaryAnnotation(row)) <= 768));
+    assert.ok(Buffer.byteLength(packet.map(qwenBoundaryAnnotation).join("\n")) <= 8192);
+  }
+});

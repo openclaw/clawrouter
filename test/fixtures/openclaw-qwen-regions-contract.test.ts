@@ -201,7 +201,7 @@ function createQwenLedger() {
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
     const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
     return valueSnapshot === undefined ? checked
-      : qwenObserverRecord({ ...checked, v: 6, ...valueSnapshot() });
+      : qwenObserverRecord({ ...checked, v: 7, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -482,6 +482,41 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 7) {
+    if (Object.keys(value).at(-1) !== "valueSelection") invalid();
+    const { valueSelection, ...prior } = value;
+    const tuple = (input: unknown, size: number): any[] => {
+      if (utilTypes.isProxy(input) || !Array.isArray(input)) return invalid();
+      const fields = Object.getOwnPropertyDescriptors(input);
+      if (Reflect.ownKeys(fields).join() !== [...Array.from({ length: size }, (_, i) => String(i)), "length"].join()
+        || fields.length.value !== size || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) return invalid();
+      return Array.from({ length: size }, (_, i) => fields[String(i)].value);
+    };
+    prior.valueState = tuple(prior.valueState, 3);
+    if (prior.valueSites !== null) prior.valueSites = tuple(prior.valueSites, 6);
+    // v7 relay rejection also covers selection-only records with no site entry.
+    const rejected = [10, 11].includes(prior.valueState[2]);
+    let validation = prior;
+    if (rejected && prior.values === null && Array.isArray(prior.valueSites)) {
+      const s = prior.valueSites;
+      const complete = s[0] === 1 && s[2] === 1 && [11, 15].includes(s[1]) || s[3] === 1 && s[4] === 3 && s[5] === 1;
+      const open = s[0] === 1 && s[2] === 0 || s[3] === 1 && s[5] === 0;
+      if (!complete) validation = { ...prior, valueState: [prior.valueState[0], prior.valueState[1], open ? 7 : 8] };
+    }
+    const checked = qwenObserverRecord({ ...validation, v: 6 });
+    if (rejected) checked.valueState[2] = prior.valueState[2];
+    if (valueSelection === null) return { ...checked, v: 7, valueSelection: null };
+    if (rejected || ![0, 7, 8].includes(checked.valueState[2]) || utilTypes.isProxy(valueSelection)
+      || !Array.isArray(valueSelection) || Reflect.ownKeys(valueSelection).join() !== "0,1,2,3,4,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(valueSelection);
+    if (fields.length.value !== 5 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const s = Array.from({ length: 5 }, (_, i) => fields[String(i)].value);
+    if (checked.values === null ? typeof s[0] !== "string" || !/^[a-f0-9]{64}$/.test(s[0]) : s[0] !== null) invalid();
+    if (!s.slice(1).every(Number.isSafeInteger) || ![0, 1, 3, 5, 7].includes(s[1])
+      || s.slice(2).some(n => n < 0 || n > 2) || s[1] === 0 && s.slice(2).some(Boolean)
+      || s[4] !== 0 && s[1] !== 7) invalid();
+    return { ...checked, v: 7, valueSelection: s };
   }
   if (value.v === 6) {
     if (Object.keys(value).at(-1) !== "valueSites") invalid();
