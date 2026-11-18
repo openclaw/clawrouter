@@ -5,7 +5,7 @@ import {putGrantCredentials} from '../grant-credentials.ts';
 import {lifecycleCall} from '../large-http/lifecycle-client.ts';
 import {rehearsalConfig,caseId,upstreamKey,type RehearsalEnv} from './contract.ts';
 import {inspectSyntheticInput} from './input.ts';
-import {startupStages,startupErrors,readinessValid,type StartupDiagnostics,type StartupStage,type StartupError} from './startup.ts';
+import {startupStages,startupErrors,readinessValid,monitorValid,type StartupDiagnostics,type StartupStage,type StartupError} from './startup.ts';
 interface Case {id:string;mode:string;direction:string;slot:number;generation:number;runtimeSha:string;startedAt:number;finishedAt?:number;releasedAt?:number;contextSha256:string;answerSha256:string;bytes:number;outcome:string}
 interface State {schema:1;phase:'initializing'|'ready'|'closed';seedHash:string;starts:{slot:number;generation:number;runtimeSha:string;at:number;diagnostics?:StartupDiagnostics}[];requests:number;cases:Case[];callbacks:unknown[];replays:number;createdAt:number;expiresAt:number}
 const digest=/^[a-f0-9]{64}$/;
@@ -20,7 +20,7 @@ export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
  }
  async alarm(){await this.close();}
  async fetch(r:Request):Promise<Response>{
-  const p=new URL(r.url).pathname,c=rehearsalConfig(this.env,Date.now(),['/snapshot','/close','/callback','/release','/startup','/readiness'].includes(p));
+  const p=new URL(r.url).pathname,c=rehearsalConfig(this.env,Date.now(),['/snapshot','/close','/callback','/release','/startup','/readiness','/monitor'].includes(p));
   if(r.method!=='POST')return new Response(null,{status:405});
   if(p==='/upstream')return this.upstream(r);
   const v=await readJson<any>(r,undefined,8192);
@@ -46,10 +46,11 @@ export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
    return Response.json({...visible,accounting:{policySpentMicros:policy.spentMicros,providerSpentMicros:provider.spentMicros,events},qualified:false});
   }
   if(p==='/close'){await this.close();return Response.json({closed:true,qualified:false});}
-  if(p==='/startup'||p==='/readiness'){
+  if(p==='/startup'||p==='/readiness'||p==='/monitor'){
    if(!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||(p==='/startup'||v.runtimeSha!==undefined)&&!digest.test(v.runtimeSha))return new Response(null,{status:400});
    if(p==='/startup'&&(!startupStages.includes(v.stage)||!['started','completed','failed'].includes(v.outcome)||(v.outcome==='failed'?!startupErrors.includes(v.error):v.error!==undefined)))return new Response(null,{status:400});
    if(p==='/readiness'&&!readinessValid(v))return new Response(null,{status:400});
+   if(p==='/monitor'&&(!digest.test(v.runtimeSha)||!monitorValid(v)))return new Response(null,{status:400});
    const accepted=await this.update(s=>{
     const start=s.starts.find(x=>x.slot===v.slot&&x.generation===v.generation);
     // prepare acknowledges persisted intent before its async start override
@@ -58,7 +59,10 @@ export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
     if(!start)return p==='/readiness'?'pending-start':false;
     if(v.runtimeSha!==undefined&&start.runtimeSha!==v.runtimeSha)return false;
     const d=start.diagnostics??={stages:[]},at=Date.now();
-    if(p==='/startup'){
+    if(p==='/monitor'){
+     if(d.monitor)return false;
+     d.monitor={outcome:v.outcome,category:v.category,name:v.name,exitCode:v.exitCode,at};
+    }else if(p==='/startup'){
      const n=d.stages.length;
      if(n>=startupStages.length*2||d.stages.at(-1)?.outcome==='failed'||v.stage!==startupStages[Math.floor(n/2)]||(n%2===0?v.outcome!=='started':v.outcome==='started'))return false;
      d.stages.push({stage:v.stage as StartupStage,outcome:v.outcome,at,...(v.outcome==='failed'?{error:v.error as StartupError}:{})});

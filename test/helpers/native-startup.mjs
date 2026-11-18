@@ -8,18 +8,29 @@ export async function exerciseStartupEntrypoint(Slot){
  env.NATIVE_REHEARSAL=JSON.stringify({schema:1,worker,origin,createdAt:Date.now()-1000,expiresAt:Date.now()+600000,maxStarts:40,maxRequests:64});
  env.NATIVE_REHEARSAL_STATE={getByName:()=>({fetch:async(url,r)=>{receipts.push({op:new URL(url).pathname,...JSON.parse(r.body)});return Response.json({accepted:true});}})};
  const options={image:'cloudflare/debian-trixie',enableInternet:true,instance:'standard-1',labels:{slot:'0',generation:'1',build:sha},env:{LARGE_HTTP_SLOT:'0',LARGE_HTTP_GENERATION:'1',LARGE_HTTP_RUNTIME_SHA:sha,LARGE_HTTP_RUNTIME_TOKEN:secret},entrypoint:['node','--input-type=module','-e','/* unchanged production bootstrap */']};
- let started,fail;
+ let started,fail,monitorError,monitorThrows=false;const pending=[];
  const effect=stage=>{effects.push(stage);if(fail===stage)throw Error('unsupported operation '+secret);};
  const slot=Object.create(Slot.prototype);slot.env=env;
- slot.ctx={exports:{NativeRehearsalEgress:()=>{effect('export_resolution');return allow;},NativeRehearsalDeny:deny},container:{
+ slot.ctx={waitUntil:p=>pending.push(p),exports:{NativeRehearsalEgress:()=>{effect('export_resolution');return allow;},NativeRehearsalDeny:deny},container:{
   interceptOutboundHttps:async(host,binding)=>{assert.equal(binding,allow);effect(host==='api.openai.com'?'https_provider':'https_callback');},
   interceptAllOutboundHttp:async binding=>{assert.equal(binding,deny);effect('http_deny');},
-  start:value=>{effect('container_start');started=value;}
+  start:value=>{effect('container_start');started=value;},
+  monitor:()=>{if(monitorThrows)throw monitorError;return monitorError?Promise.reject(monitorError):Promise.resolve();}
  }};
  await slot.startContainer(options);
+ await Promise.all(pending.splice(0));
  assert.deepEqual(effects,stages);assert.equal(started.enableInternet,false);assert.equal(started.env.NODE_EXTRA_CA_CERTS,'/etc/cloudflare/certs/cloudflare-containers-ca.crt');assert.equal(started.env.NODE_TLS_REJECT_UNAUTHORIZED,undefined);
  assert.deepEqual(started.labels,options.labels);assert.equal(started.env.LARGE_HTTP_RUNTIME_SHA,sha);assert.ok(started.entrypoint[3].endsWith(options.entrypoint[3]));
  assert.deepEqual(receipts.filter(x=>x.op==='/startup').map(({stage,outcome})=>[stage,outcome]),stages.flatMap(stage=>[[stage,'started'],[stage,'completed']]));
+ assert.equal(receipts.at(-1).outcome,'exited');assert.equal(receipts.at(-1).exitCode,0);
+ // Capture structured native failures without error text, stack or native env.
+ for(const [error,category,exitCode,sync] of [[Object.assign(Error('process failed '+secret),{exitCode:1}),'process_exit',1,false],[Error('internal error '+secret),'internal',null,false],[Error('monitor() cannot be called on a container that is not running.'),'no_container',null,true]]){
+  monitorError=error;monitorThrows=sync;receipts.length=0;effects.length=0;
+  await slot.startContainer(options);await Promise.all(pending.splice(0));
+  assert.deepEqual(receipts.at(-1),{op:'/monitor',slot:0,generation:1,runtimeSha:sha,outcome:'rejected',category,name:'Error',exitCode});
+  assert.ok(!JSON.stringify(receipts).includes(secret));
+ }
+ monitorError=undefined;monitorThrows=false;
  for(const stage of stages){
   fail=stage;receipts.length=0;effects.length=0;started=undefined;
   await assert.rejects(slot.startContainer(options));

@@ -10,6 +10,7 @@ import {hostedBoundaryFixture} from './helpers/native-rehearsal.mjs';
 import {exerciseStartupEntrypoint} from './helpers/native-startup.mjs';
 import {inspectSyntheticInput} from '../worker/native-rehearsal/input.ts';
 import {rehearsalConfig,upstreamKey} from '../worker/native-rehearsal/contract.ts';
+import {monitorFailure,monitorValid} from '../worker/native-rehearsal/startup.ts';
 const worker='clawrouter-native-qualification-abcdef012345',origin='https://'+worker+'.fixture.workers.dev';
 const sha='c'.repeat(64),seed='a'.repeat(64),hash=x=>createHash('sha256').update(x).digest('hex');
 const config=()=>({schema:1,worker,origin,createdAt:Date.now()-1000,expiresAt:Date.now()+600000,maxStarts:24,maxRequests:8});
@@ -33,6 +34,15 @@ test('fixture startup awaits intercepts, trusts runtime CA, retains native ident
  await exerciseStartupEntrypoint(Slot);
 });
 
+test('monitor projection retains only bounded structured values and fixed categories',()=>{
+ for(const error of [undefined,null,'sensitive error',Object.assign(Error('sensitive'),{exitCode:'1'}),Object.assign(Error('sensitive'),{exitCode:Infinity}),{name:'sensitive',exitCode:2**32}]){
+  const v={outcome:'rejected',...monitorFailure(error)};assert(monitorValid(v));assert.equal(v.exitCode,null);assert(!JSON.stringify(v).includes('sensitive'));
+ }
+ for(const exitCode of [1,127,137,-1])assert.deepEqual(monitorFailure(Object.assign(Error('sensitive'),{exitCode})),{category:'process_exit',name:'Error',exitCode});
+ assert(!monitorValid({outcome:'rejected',category:'process_exit',name:'Error',exitCode:null}));
+ assert(!monitorValid({outcome:'exited',category:'success',name:'other',exitCode:1}));
+});
+
 test('real fixture persists bounded startup stages and preserves the first observed readiness failure',async t=>{
  const f=await hostedBoundaryFixture(t);assert.equal((await f.call('setup',{seedHash:hash(seed),credentialHash:hash('synthetic-client')})).status,200);
  const ns=await f.mf.getDurableObjectNamespace('NATIVE_REHEARSAL_STATE','fixture'),stub=ns.get(ns.idFromName('native-rehearsal'));
@@ -40,6 +50,12 @@ test('real fixture persists bounded startup stages and preserves the first obser
  assert.equal((await f.call('startup',identity)).status,404,'diagnostics are not exposed as a public mutation route');
  assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started'})).status,409,'receipt requires a matching startup intent');
  assert.equal((await internal('start',identity)).status,200);
+ assert.equal((await f.call('monitor',identity)).status,404,'monitor diagnostics remain internal');
+ const monitor={...identity,outcome:'rejected',category:'process_exit',name:'Error',exitCode:127};
+ assert.equal((await internal('monitor',{...monitor,runtimeSha:'b'.repeat(64)})).status,409);
+ assert.equal((await internal('monitor',{...monitor,category:'sensitive-message'})).status,400);
+ assert.equal((await internal('monitor',{...monitor,message:'not-for-the-journal',stack:'not-for-the-journal'})).status,200);
+ assert.equal((await internal('monitor',monitor)).status,409,'only one monitor terminal receipt per matching start');
  assert.equal((await internal('startup',{...identity,stage:'https_provider',outcome:'started'})).status,409,'no skipped stage');
  assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started',token:'not-for-the-journal'})).status,200);
  assert.equal((await internal('startup',{...identity,stage:'export_resolution',outcome:'started'})).status,409,'no duplicate stage');
@@ -54,6 +70,7 @@ test('real fixture persists bounded startup stages and preserves the first obser
  const s=await(await f.call('snapshot')).json(),d=s.starts[0].diagnostics;
  assert.equal(d.stages.length,2);assert.deepEqual(d.stages.map(x=>[x.stage,x.outcome,x.error]),[['export_resolution','started',undefined],['export_resolution','failed','type']]);
  assert.equal(d.firstFailure.reason,'start_or_keepalive');assert.equal(d.readiness.reason,'native_exit_engine');assert.ok(d.readyAt>0);
+ assert.equal(d.monitor.exitCode,127);assert.equal(d.monitor.category,'process_exit');assert.equal(d.monitor.outcome,'rejected');
  const blockedIdentity={...identity,slot:1};assert.equal((await internal('start',blockedIdentity)).status,200);
  assert.equal((await internal('readiness',{...blockedIdentity,phase:'blocked',reason:'unreported'})).status,200);
  assert.equal((await internal('readiness',{...blockedIdentity,phase:'destroyed',reason:'none'})).status,200);

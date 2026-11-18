@@ -6,7 +6,7 @@ import {largeCreatePath} from './large-http/headers.ts';
 import {authorizeAdmin} from './access.ts';
 import {readJson,sha256Hex} from './utils.ts';
 import {rehearsalConfig,journal,journalCall,type RehearsalEnv} from './native-rehearsal/contract.ts';
-import {startupStep,readinessValid} from './native-rehearsal/startup.ts';
+import {startupStep,readinessValid,monitorFailure} from './native-rehearsal/startup.ts';
 export {PolicyBindingIndexObject,BudgetLedgerObject,GrantCredentialObject,UsageLedgerObject,ContentArchiveCleanupObject} from './index.ts';
 export {LargeHttpPool} from './large-http/lifecycle.ts';
 export {NativeRehearsalState} from './native-rehearsal/state.ts';
@@ -33,6 +33,12 @@ export class LargeHttpSlot extends ProductionSlot {
    container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
     entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+options.entrypoint![3]]});
   });
+  // Observe the same native lifecycle without replacing the product monitor.
+  // Never persist native exception text, options, or credentials.
+  this.ctx.waitUntil(Promise.resolve().then(()=>container.monitor()).then(
+   ()=>journalCall(env,'monitor',{...identity,outcome:'exited',category:'success',name:'other',exitCode:0}),
+   error=>journalCall(env,'monitor',{...identity,outcome:'rejected',...monitorFailure(error)}),
+  ).then(()=>{},()=>{}));
  }
  override async fetch(r:Request):Promise<Response>{
   const response=await super.fetch(r);
