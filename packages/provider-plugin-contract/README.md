@@ -1,8 +1,8 @@
 # Provider plugin contract
 
 Data-only descriptors, conformance fixtures, package indexes, product/offer
-declarations, authentication configuration, and published tariffs for ClawRouter
-provider packages. No Worker, filesystem, network, or runtime
+declarations, model capabilities, authentication configuration, endpoints, quotas,
+and published tariffs for ClawRouter provider packages. No Worker, filesystem, network, or runtime
 dependencies. Validation does not authorize a provider or qualify its execution.
 
 ## Build and pack locally
@@ -37,6 +37,10 @@ import {
   type CompiledGrantTransport,
   type ModelPricing,
   type RequestPricing,
+  type CompiledEndpoint,
+  type CompiledQuotaConfig,
+  type ProviderModelDefinition,
+  type NativeDecisionCapabilities,
 } from "@clawrouter/provider-plugin-contract";
 ```
 
@@ -58,3 +62,19 @@ credentials, perform OAuth exchanges, refresh tokens, or certify setup support.
 tariffs. They preserve units, nullable rates, provenance, and provider-specific
 qualifications. They do not supply policy overrides, compute charges, or certify
 that a price is current or applicable to an account.
+
+`CompiledEndpoint`, `ManagedProtocol`, `ManagedFileLinks`, `OutputTokenLimit`, and
+`ToolPricing` describe compiled endpoint configuration. They preserve lifecycle
+links, formats, limits, and pricing references. They do not validate manifests,
+load adapters, or authorize requests.
+
+`CompiledQuotaConfig` and its probe/window types declare where to read quota
+observations. `GrantAccount` and `GrantExtraUsage` describe provider-reported
+metadata. These types do not poll providers, store credentials, or establish
+entitlement, remaining budget, or an admission decision.
+
+`ProviderModelDefinition` includes availability, request-parameter support, and
+native endpoint capabilities, including decision protocols. These are compiled
+provider facts, not a generic model catalogue or account entitlement.
+`isPublishedMusicInputSupport` checks the existing closed support record; it does
+not grant permission to publish input. Request assessment remains host-owned.

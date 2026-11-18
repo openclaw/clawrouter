@@ -1,5 +1,5 @@
 import type { AccessPolicy, UpstreamGrant } from "./contracts.ts";
-import { grantCoolingDown, grantQuotaExhausted, grantRuntimeFresh, windowApplies } from "./grant-quota";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaExclusionReason, grantRuntimeFresh, windowApplies } from "./grant-quota";
 type PoolGrantInput = Pick<UpstreamGrant, "quotaObservedAt" | "cooldownUntil" | "quotaWindows" | "kind" | "enabled" | "usable" | "credentialStatus">;
 type PoolPolicyInput = Pick<AccessPolicy, "enabled" | "grantRouting">;
 export type PoolEligibility = "eligible" | "exhausted" | "cooldown" | "stale" | "reauth_required";
@@ -19,8 +19,10 @@ export function planLabel(tier?: string): string {
 }
 
 export function quotaFree(window: UpstreamGrant["quotaWindows"][number], now = Date.now()): number | null {
-  if (window.resetAt && Date.parse(window.resetAt) <= now) return null;
-  return window.limit && window.remaining !== null ? Math.max(0, Math.min(100, window.remaining / window.limit * 100)) : null;
+  if (window.resetAt && (!Number.isFinite(Date.parse(window.resetAt)) || Date.parse(window.resetAt) <= now)) return null;
+  return typeof window.limit === "number" && Number.isFinite(window.limit) && window.limit > 0
+    && typeof window.remaining === "number" && Number.isFinite(window.remaining) && window.remaining >= 0
+    ? Math.min(100, window.remaining / window.limit * 100) : null;
 }
 
 export function modelHeadroom(grant: PoolGrantInput, family: string, policy: PoolPolicyInput, now = Date.now()) {
@@ -30,7 +32,21 @@ export function modelHeadroom(grant: PoolGrantInput, family: string, policy: Poo
   const free = ratios.length ? Math.min(...ratios) : null;
   const stale = !grantRuntimeFresh(state, policy.grantRouting.staleAfterSeconds * 1000, now, family);
   const status = modelEligibility(grant, family, policy, now);
-  return { free, eligible: status === "eligible", stale };
+  return { free, eligible: status === "eligible", stale, reason: modelExclusionReason(grant, family, policy, now) };
+}
+
+// Additive detail: retain the v1 eligibility enum for existing pool consumers.
+export function modelExclusionReason(grant: PoolGrantInput, model: string, policy: PoolPolicyInput, now = Date.now()) {
+  if (policy.enabled === false) return "policy_disabled";
+  if (!grant.enabled) return "grant_disabled";
+  if (grant.credentialStatus === "reauth_required") return "reauth_required";
+  if (!grant.usable) return "credential_unavailable";
+  const state = { observedAt: grant.quotaObservedAt ?? "", cooldownUntil: grant.cooldownUntil, windows: grant.quotaWindows };
+  if (grantCoolingDown(state, now)) return "cooldown";
+  const quota = grantQuotaExclusionReason(state, model, grant.kind === "subscription" ? policy.grantRouting.includedQuotaReservePercent ?? 0 : 0, grant.kind === "subscription", now);
+  if (quota) return quota;
+  if (modelEligibility(grant, model, policy, now) === "stale") return grant.quotaWindows.some(window => windowApplies(window, model) && quotaFree(window, now) !== null) ? "stale_quota" : "quota_unknown";
+  return null;
 }
 
 export function modelEligibility(grant: PoolGrantInput, model: string, policy: PoolPolicyInput, now = Date.now()): PoolEligibility {

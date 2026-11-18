@@ -24,8 +24,8 @@ function xiaomiRunnerReport() {
   let reported = false, summary;
   const options = {
     expectedInvocations: 1,
-    fixtureSha256: "e1df3ce4729e9eac41c3cecf5da7883bb12ef015e5b3f7925ab10f0c1290acda",
-    reporterSha256: "88a9021f87d47b62c0e120cc6c02bf9c96248ac20bd549595b981d6ef20f0b67",
+    fixtureSha256: "98411a139877ac0fe92e221d8f68b400f2b1740373914aa282c57fbc8fa1bebc",
+    reporterSha256: "9c39bb702834528918c1e2f69509cea9de1e557d20ecf8205a9c36cb53f2a478",
     onReport(packet) {
       summary = undefined;
       assert.equal(reported, false, "duplicate Xiaomi runner report"); reported = true;
@@ -1764,4 +1764,85 @@ test("lineage observes separate caller, guard-input and fetch-input controllers 
   assert.notEqual(row.transport.signalTrace.reason, row.guard.reason); assert.notEqual(row.guard.reason, invocation.caller.reason);
   assert.equal(owner.bound(row), true); assert.deepEqual(await owner.join(), []);
   invocation.caller.detach(); row.guard.detach(); owner.restore();
+});
+
+
+// Exact pinned generation scope; the frame seam is inert and the ALS is native.
+const xiaomiGenerationScopeSource = "// Keep retained registry reads independent of metadata discovery and plugin loading.\nimport {\n  getPluginExecutionFrame,\n  runWithPluginExecutionFrame,\n} from \"../plugin-instance-invocation.js\";\nimport type { PluginRegistry } from \"../registry-types.js\";\nimport { getPluginRuntimeExecutionFrame, PluginRuntimeExecutionFrame } from \"./execution-frame.js\";\n\nexport function withPluginRuntimeGenerationRegistryScope<T>(\n  registry: PluginRegistry,\n  run: () => T,\n): T {\n  const current = getPluginExecutionFrame();\n  return runWithPluginExecutionFrame(\n    new PluginRuntimeExecutionFrame(\n      current ?? {},\n      getPluginRuntimeExecutionFrame(current)?.gatewayScope,\n      registry,\n    ),\n    run,\n  );\n}\n\n/** Exact registry owned by the prepared generation, including empty selections. */\nexport function getPluginRuntimeGenerationRegistry(): PluginRegistry | undefined {\n  return getPluginRuntimeExecutionFrame()?.generationRegistry;\n}\n\nexport function runOutsidePluginRuntimeGenerationRegistryScope<T>(run: () => T): T {\n  const current = getPluginExecutionFrame();\n  return runWithPluginExecutionFrame(\n    new PluginRuntimeExecutionFrame(\n      current ?? {},\n      getPluginRuntimeExecutionFrame(current)?.gatewayScope,\n      undefined,\n    ),\n    run,\n  );\n}\n";
+test("Xiaomi actual replay callbacks retain PAYG and token-plan providers across regional routing", async () => {
+  assert.equal(createHash("sha256").update(xiaomiGenerationScopeSource).digest("hex"), "dd545702892c9c350b6717ebcf3e6df3596b96ff37e0014f01838ecd4442a2a4");
+  const storage = new AsyncLocalStorage();
+  class Frame {
+    constructor(scopes, gatewayScope, generationRegistry) { Object.assign(this, scopes); this.gatewayScope = gatewayScope; this.generationRegistry = generationRegistry; }
+  }
+  const code = stripTypeScriptTypes(xiaomiGenerationScopeSource);
+  const scope = new Function("getPluginExecutionFrame", "runWithPluginExecutionFrame", "getPluginRuntimeExecutionFrame", "PluginRuntimeExecutionFrame",
+    code.slice(code.indexOf("export function withPluginRuntimeGenerationRegistryScope")).replaceAll("export ", "") +
+    "; return { withPluginRuntimeGenerationRegistryScope, getPluginRuntimeGenerationRegistry };")(
+    () => storage.getStore(), (frame, run) => storage.run(frame, run),
+    (frame = storage.getStore()) => frame instanceof Frame ? frame : undefined, Frame);
+  const transformed = stripTypeScriptTypes(sdkSource);
+  const callbacks = new Map();
+  for (const label of ["xiaomi-worker", "xiaomi-plan-worker"]) {
+    const anchor = `withOpenClawTestState({ label: "${label}" }, async state => {`;
+    const start = transformed.indexOf(anchor), end = transformed.indexOf("\n  });", start);
+    assert.ok(start >= 0 && end > start);
+    const body = transformed.slice(start + anchor.length, end);
+    callbacks.set(label, new Function("resolveTranscriptPolicy", "expect", "createEmptyPluginRegistry", "withPluginRuntimeGenerationRegistryScope",
+      "sanitizeSessionHistory", "makeInMemorySessionManager", "makeModelSnapshotEntry", "selected", "modelId", "row", "id", "provider", "history",
+      "return async state => {" + body + "};"));
+  }
+  assert.match(sdkSource, /const provider = requireRegisteredProvider\(providers, "xiaomi"\)/);
+  assert.match(sdkSource, /const provider = requireRegisteredProvider\(registered.providers, "xiaomi-token-plan"\)/);
+  const owned = [];
+  const globalProvider = { id: "xiaomi-token-plan", foreign: true };
+  const root = new Frame({}, { pluginId: "caller" }, { providers: [{ pluginId: "xiaomi", provider: globalProvider, source: "test" }] });
+  for (const failure of [false, true]) for (const reason of [undefined, false, new Error("synthetic")]) {
+    await storage.run(root, async () => {
+      await Promise.all(["xiaomi", "xiaomi-token-plan", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams"].map(async (route, ordinal) => {
+        const provider = { id: route === "xiaomi" ? "xiaomi" : "xiaomi-token-plan" };
+        const selected = { provider: provider.id, api: "openai-completions" };
+        const row = { id: "case-" + ordinal, provider: route, model: "synthetic-model" };
+        const history = [], policy = { dropReasoningFromHistory: false }, result = [];
+        let registry, sanitizerCalls = 0;
+        const factory = callbacks.get(route === "xiaomi" ? "xiaomi-worker" : "xiaomi-plan-worker");
+        const invoke = factory(params => {
+          assert.equal(params.runtimeHandle.plugin, provider); assert.equal(params.provider, provider.id); return policy;
+        }, value => ({ toBe: expected => assert.equal(value, expected) }),
+        () => { registry = { providers: [] }; owned.push(registry); return registry; },
+        scope.withPluginRuntimeGenerationRegistryScope, params => {
+          sanitizerCalls++;
+          assert.equal(scope.getPluginRuntimeGenerationRegistry(), registry);
+          assert.deepEqual(registry.providers, [{ pluginId: "xiaomi", provider, source: "test" }]);
+          assert.notEqual(registry.providers[0].provider, globalProvider);
+          assert.equal(params.provider, provider.id); assert.equal(params.policy, policy); assert.equal(params.messages, history);
+          assert.equal(params.model, selected); assert.equal(params.workspaceDir, "/fixture/workspace");
+          return Promise.resolve().then(async () => {
+            assert.equal(scope.getPluginRuntimeGenerationRegistry(), registry);
+            const nested = { providers: [] };
+            await scope.withPluginRuntimeGenerationRegistryScope(nested, async () => {
+              await Promise.resolve(); assert.equal(scope.getPluginRuntimeGenerationRegistry(), nested);
+              assert.deepEqual(scope.getPluginRuntimeGenerationRegistry().providers, [], "empty owned generation cannot borrow the caller's provider");
+            });
+            assert.equal(scope.getPluginRuntimeGenerationRegistry(), registry);
+            if (failure) throw reason;
+            return result;
+          });
+        }, entries => ({ entries }), value => value, selected, row.model, row, row.id, provider, history);
+        let caught = false, actual;
+        try { actual = await invoke({ workspaceDir: "/fixture/workspace" }); } catch (error) { caught = true; actual = error; }
+        assert.equal(caught, failure); assert.equal(actual, failure ? reason : result); assert.equal(sanitizerCalls, 1);
+        assert.equal(storage.getStore(), root);
+      }));
+      for (const providers of [[], [{ pluginId: "foreign", provider: { id: "foreign" }, source: "test" }]]) {
+        await scope.withPluginRuntimeGenerationRegistryScope({ providers }, async () => {
+          await Promise.resolve();
+          assert.equal(scope.getPluginRuntimeGenerationRegistry().providers, providers);
+          assert.equal(providers.find(row => row.provider.id === globalProvider.id), undefined);
+        });
+        assert.equal(storage.getStore(), root);
+      }
+    });
+  }
+  assert.equal(new Set(owned).size, owned.length); assert.equal(storage.getStore(), undefined);
 });

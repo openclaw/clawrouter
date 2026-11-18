@@ -19,7 +19,49 @@
 
 ## Unreleased
 
+- Keep Xiaomi replay sanitization in each case's captured provider generation, including regional token-plan routing. Compose the current runner diagnostics and credential checks without borrowing Qwen native qualification or relaxing retirement and accounting assertions.
+
 - Show bounded immediate-prototype and public-code facts for the first original Xiaomi reader rejection and one shallow cause in its existing failure display. Preserve original errors and strict retirement/accounting; unmatched facts and origin remain unknown.
+
+- Qualify a Qwen fixture's single owned read rejection only after caller-cancellation accounting, fulfilled original cancel and closed promises, joined release, and complete source retirement. Preserve the rejected reason and count, the existing strict three-rejection disposition, and every independent control, observer, source and accounting failure. This outcome check makes no claim about the native read error's cause.
+
+- Keep the Qwen synthetic upstream producer in its originating request context and use bounded native waits between SSE heartbeats so the cross-Worker pump can observe cancellation. Join the pending producer wait before recording cancel return; require no active work, exactly one returned cancellation and no expiry. Local source-retirement proof does not admit unrelated reader rejections or replace the full hosted SDK/Worker qualification.
+
+- Keep the Qwen partial-stream fixture's bounded producer alive independently of pull completion. Join its original settlement on cancellation or expiry, including cancellation before the first pull. Assess only the exact owned Worker reader rejection group and errors retained from its ledger drains after strict joins, source cancellation and caller-cancellation accounting; retain original rejected states and all independent retirement, control and accounting failures. Hosted cancellation behavior requires fresh qualification.
+
+- Reconcile Qwen SDK completion against its validated partial/provider-error dispositions without erasing original rejection counts. Retain separate Worker-local first-join ownership, cancellation and signal relations plus producer settlement facts; keep Worker retirement, usage and budget acceptance strict.
+
+- Recognize only the Qwen fixture’s fully owned, settled SDK-abort reader group after the exact controlled provider error and returned result. Keep the API error distinct from the request-abort reason, retain original rejected states and counts, and preserve all independent release, observer and restoration failures.
+
+- Relate Qwen first-join rejections to the retained SDK request signal and the actual controlled APIError at the existing transport-failure boundary. Sample only captured native signal accessors and own data fields, keep unknown provenance explicit, and retain strict provider-error and independent retirement failures.
+
+- Recognize the Qwen fixture’s exact owned partial-abort reader disposition only after the asserted aborted outcome and successful resource retirement. Preserve the fresh caller-reason identity, original promises and errors, foreign-owner negatives, and independent cancellation, release and cleanup failures; provider-error handling remains separate.
+
+- Retain bounded original-rejection relations at the first failed Qwen join: private resource binding, reason equality and observed callback order around the original caller cancellation. Preserve all rejection and retirement gates; equality and callback order alone do not prove cancellation causality.
+
+- Observe Qwen guarded-fetch release as the receiver-free callback declared and used by the pinned SDK. Bind it to its captured acquisition and result while preserving the actual receiver, arguments, promise and errors; retain foreign-resource, release-count and retirement assertions.
+
+- Retain the first failed Qwen retirement join’s closed fault counts and already-evaluated reader operands. Keep skipped operands unknown and preserve original errors, reader getters, joins and native acceptance.
+
+- Keep Qwen replay sanitization in its case-owned provider generation. Use the captured provider with the existing generation scope so replay lookup does not acquire a second plugin graph; retain the actual sanitizer, original stream entrypoints and all ownership, cancellation and accounting assertions.
+
+- Observe whether a synchronous provider replay resolver replaces the selected Qwen API registration. Retain only closed identity relations at existing calls; missing or ambiguous observations remain unknown, and native ownership assertions are unchanged.
+
+- Distinguish Qwen normalized-record identity from actual handler provenance by observing original wrapper entry, its retained builtin lazy stream and the selected adapter entry. Keep missing generations unknown and preserve registration, calls and native ownership assertions.
+
+- Observe the selected Qwen SDK runtime, constructor-bound registry and normalized provider record at pinned original boundaries. Bind comparisons to the owned invocation and module generation; missing provenance remains unknown. Preserve original calls, errors, ownership and retirement assertions; this is a diagnostic probe, not a provider repair.
+
+- Retain per-site entry, phase-mask and closed state in the existing bounded first-failure Qwen observation. Revert the isolated-runner trial after it reproduced the same missing-receipt failure; retain Qwen-first consumer scheduling. Preserve the SDK pin, original calls, ownership and retirement assertions; these observations do not establish a provider fix.
+
+- Export compiled model, availability, request-parameter, and native capability contracts from the provider plugin package while preserving shared imports and support validation. Include pinned contract sources when reproducing native recovery artifacts.
+
+- Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
+
+- Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.
+
+- Retain two-site activation counts and a closed first-failure value disposition for Qwen diagnostics, distinguishing producer unknowns from relay binding rejection without relaxing ownership or retirement checks.
+
+- Add invocation-bound Qwen native value observations at two hash-pinned SDK callsites, using in-memory overlays and a bounded first-failure record. Preserve the SDK pin, original ownership and retirement assertions; missing or ambiguous observations remain unknown and do not establish a native fix or qualification.
 
 - Establish downstream gzip explicitly for the direct-ingress HTTP delayed-output cancellation fixture, preserving its original stream, cancellation and accounting assertions.
 
@@ -41,6 +83,23 @@
 
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
+- Route Qwen regional cancellation fixtures through the direct Worker ingress, preserving existing SDK, retirement and accounting assertions.
+
+- Preserve an invocation-bound Qwen diagnostic for defining transport lookup, returned-host build and selected-fetch hook outcomes. Keep unsupported interception and ambiguous custody unknown, without changing original calls, errors, ownership or financial verdicts.
+
+- Preserve a bounded Qwen fetch-invocation witness for observed provider/SSRF spy entries, acquisition setup failures and exact context relations. Missing interception remains unknown; original failures and strict retirement checks are unchanged.
+
+- Retain an invocation-bound Qwen fetch-observer failure witness with the original parent promise state, exact callback boundary and observed ownership predicates. Preserve original failures, strict verdicts and bounded reporting without attributing native transport causes.
+
+- Bind Qwen's native runner report to the current SDK fixture bytes, retaining strict pre-execution digest checks and a fake-I/O regression that rejects stale bindings before any child or report-directory acquisition.
+
+- Qwen regional proof: join original operations and their attached observers to a stable fixed point, bind Worker fetches to the original ingress request, and seal ownership only after independent producer/accounting checks and restoration. All original rejection and retirement assertions remain strict. Reentrant drains share the published join before original promise assimilation.
+
+- Preserve bounded script and Worker failure reports when composing Qwen region coverage with the landed native retirement diagnostics.
+
+- Report native-bound realtime authority failure stages and independent cleanup outcomes for twelve distinct variants, retaining original failures within bounded diagnostics and keeping build failures attributed to the build after anchor callbacks finish.
+
+- Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts; require matching native terminal IDs and retain the target failure when diagnostic buffers fill.
 - Export full product, binding, and offer declaration types from the standalone provider plugin contract, preserving existing shared type imports.
 
 - Match native runner project admission to the pinned target: Xiaomi uses the media project and Qwen uses the providers project. Validate the private binding before choosing the single expected project, and create no report until every startup guard passes. Preserve original failures, cleanup and native qualification requirements.
@@ -465,6 +524,7 @@
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
+- Include Qwen China standard and global/China Coding Plan declarations in the shipping snapshot for native and manifest Chat, preserving unrelated providers, scoped credentials, frozen model inventory and retired-ID rejection. Validate selected Coding Plan key shape and raw controls before formatting; add a pinned registered Qwen fixture with 103 authored cases, including 44 positive cases through both stream APIs. Opt in to bounded native runner diagnostics that distinguish collection observations from fixture case receipts; actual SDK outcomes remain unqualified. Render opt-in native child diagnostics without color and report closed witness-admission status without recovering or weakening rejected output. Native model discovery and its caller-signal forwarding remain gaps. Worker fixtures do not establish vendor entitlement or deployment.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
 - Add the frozen MiniMax M3 Chat identity with primary-sourced context and input facts, retaining unknown output/pricing bounds and existing M2.7 behavior.
@@ -585,6 +645,7 @@
 - Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
+- Declare native Levanto Sage, Liquid AI and TypeSafe decision provider routes with isolated credentials and typed codec fixtures, including explicit text/JSON Sage batch support metadata without inferred batch limits or prices; actual provider, catalog and DecisionV2 qualification remain separate.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
 - Declare scoped Vydra Jobs submission/retrieval/cancellation and validate returned workflow identity, preserving cancellation/refund uncertainty and unqualified upstream-dollar costs.

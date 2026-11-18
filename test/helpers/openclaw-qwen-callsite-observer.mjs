@@ -1,0 +1,514 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { constants, openSync, closeSync, fstatSync, readSync, realpathSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// D8 source overlays are diagnostics, not SDK changes or ownership evidence.
+export const qwenValuePin = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
+export const qwenValueTarget = "extensions/qwen/worker-regions-contract.test.ts";
+export const qwenValueModule = "virtual:clawrouter-qwen-values";
+export const qwenValueSources = Object.freeze([
+  Object.freeze({ path: "packages/ai/src/providers/openai-provider-client.ts",
+    sha256: "0c049068171de83e25e8c12cbbe9c24ad984280776ed47f3554e7beb50997e41" }),
+  Object.freeze({ path: "src/agents/provider-transport-dispatcher-pool.ts",
+    sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" }),
+  Object.freeze({ path: "src/llm/stream.ts",
+    sha256: "eb3d07cf0742255ec2279194df55fc88507ee3ec60cf7c93e38fa150979beb28" }),
+  Object.freeze({ path: "packages/ai/src/stream.ts",
+    sha256: "08bc3fa48900ee89d34c33b9eb92508285f7332cb73aa19bd61ec5c09625b7de" }),
+  Object.freeze({ path: "packages/ai/src/api-registry.ts",
+    sha256: "5455ee2b67c34bd1d8e85811ee55fe3596bf1291a0165765afdf6b82af7fc18a" }),
+  Object.freeze({ path: "packages/ai/src/providers/register-builtins.ts",
+    sha256: "2ec994b4b3d2d21438fc131d457e79d3a068c5ff2e39e6db8476aa1233143958" }),
+  Object.freeze({ path: "packages/ai/src/providers/openai-completions.ts",
+    sha256: "6139005cf0564180b07a5450304883c1e7066bda4e9f5991ac86511e241e3e20" }),
+  Object.freeze({ path: "src/plugins/provider-replay-runtime.ts",
+    sha256: "5f5d2320c98943c894b0a69b3b4fb1a3b345204164e5e110806c8c49b60fcca8" }),
+]);
+const hash = bytes => createHash("sha256").update(bytes).digest("hex");
+const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+export const clientValueAnchor = "getAiTransportHost().buildModelFetch(model) ?? globalThis.fetch";
+export const guardValueAnchor = "fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  })";
+
+// Lexical arrows preserve this/arguments and leave every original call Reference
+// intact. The hook callee and preceding constructor/options work remain outside.
+// Engine-generated error text/stacks may reflect the overlay; no byte-equivalence
+// or native qualification is claimed.
+export const clientValueExpression = `(() => {
+        const token = __qwenValues.begin(1);
+        try {
+          return __qwenValues.selected(token,
+            __qwenValues.build(token,
+              __qwenValues.host(token, getAiTransportHost()).buildModelFetch(model)
+            ) ?? __qwenValues.fallback(token, globalThis.fetch));
+        } finally { __qwenValues.finish(token); }
+      })()`;
+export const guardValueExpression = `(() => {
+    const token = __qwenValues.begin(2);
+    try {
+      return __qwenValues.result(token,
+        fetchWithSsrFGuard(__qwenValues.argument(token, {
+          ...options,
+          dispatcherPool: getProviderTransportDispatcherPool(),
+        })));
+    } finally { __qwenValues.finish(token); }
+  })()`;
+
+// Serialized into one nonce-specific WORKER module, never a config-side sink.
+// No observed value is reflected on, invoked, assimilated or serialized.
+export function createQwenValueSink(contract) {
+  const is = Object.is, freeze = Object.freeze;
+  const activations = [0, 0], claims = new Set(), tokens = new Map();
+  const runtimeRegistries = new WeakMap(), registrations = new WeakMap(), defaults = new WeakMap();
+  const lazySelectors = new WeakMap(), builtins = new WeakSet();
+  let active, replayScope, poisoned = false, ordinal = 0;
+  const stray = [];
+  const overflow = new Error("Qwen value recording capacity exceeded");
+  function fault(owner, error) {
+    const list = owner ? owner.errors : stray;
+    if (list.length < 31) list.push(error);
+    else if (list.length === 31) list.push(overflow);
+    if (owner) owner.unknown = true;
+    else poisoned = true;
+  }
+  function invalidate(owner) { if (owner) owner.unknown = true; }
+  function safe(owner, fn) { try { return fn(); } catch (error) { fault(owner, error); } }
+  const reference = value => value !== null && (typeof value === "object" || typeof value === "function")
+    ? new WeakRef(value) : undefined;
+  const compare = (value, expected) => {
+    const held = expected?.deref();
+    return held === undefined || value === null || !["object", "function"].includes(typeof value)
+      ? 0 : is(value, held) ? 1 : 2;
+  };
+  function selectionRow() {
+    // One diagnostic read of the owned ALS per selection hook. A foreign or
+    // absent context cannot borrow an active case's sole bound invocation.
+    return active && !active.closed ? active.rows.get(active.current()) : undefined;
+  }
+  function defaultRegistry(value, generation) {
+    safe(active, () => { defaults.set(generation, { registry: reference(value) }); }); return value;
+  }
+  function defaultRuntime(value, generation) {
+    safe(active, () => { const row = defaults.get(generation); if (row) row.runtime = reference(value); }); return value;
+  }
+  function createdRuntime(value, registry) {
+    safe(active, () => { if (reference(value)) runtimeRegistries.set(value, reference(registry)); });
+    return value;
+  }
+  function runtime(value, generation) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (s.seen !== 0) { s.ambiguous = true; return; }
+      const baseline = defaults.get(generation);
+      s.seen = 1; s.runtime = compare(value, baseline?.runtime);
+      s.registryRef = reference(value) ? runtimeRegistries.get(value) : undefined;
+      s.registry = compare(s.registryRef?.deref(), baseline?.registry);
+    });
+    return value;
+  }
+  function registered(map, key, normalized, stream, simple) {
+    safe(active, () => {
+      // Only the exact normalized record from a completed original insertion.
+      if (key === "openai-completions") {
+        const previous = registrations.get(map);
+        if (replayScope && replayScope.owner === active) {
+          if (replayScope.records.has(map)) { active.unknown = true; }
+          else {
+            const previousStream = previous?.stream?.deref();
+            replayScope.records.set(map, { record: reference(normalized),
+              previousBuiltin: previousStream && builtins.has(previousStream) ? 1 : 0,
+              change: compare(normalized, previous?.record) });
+          }
+        }
+        registrations.set(map, { record: reference(normalized), stream: reference(stream), simple: reference(simple) });
+      }
+    });
+  }
+  function replayBegin() {
+    return safe(active, () => {
+      if (!active || active.closed) return null;
+      if (replayScope || active.replay) { active.unknown = true; return null; }
+      const token = { owner: active, records: new WeakMap(), closed: false };
+      active.replay = token; replayScope = token; return token;
+    }) ?? null;
+  }
+  function replayEnd(token) {
+    if (!token) return;
+    safe(token.owner, () => {
+      if (replayScope !== token || token.owner !== active) { token.owner.unknown = true; return; }
+      token.closed = true; replayScope = undefined;
+    });
+  }
+  function lookup(value, map, api) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row || api !== "openai-completions") return;
+      const s = row.selection;
+      if (!(s.seen & 1)) return;
+      if (s.seen & 6) { s.ambiguous = true; return; }
+      const registered = registrations.get(map);
+      s.seen |= 4; s.lookup = reference(value); s.record = compare(value, registered?.record);
+      s.registeredStream = registered?.stream; s.simpleStream = registered?.simple;
+      const replay = active.replay, change = replay?.records.get(map);
+      if (replay && !replay.closed) { active.unknown = true; return; }
+      s.replay = !replay ? [0,0,0,0] : !change ? [1,0,0,0]
+        : compare(value, change.record) === 1 ? [1,1,change.previousBuiltin,change.change] : [0,0,0,0];
+    });
+    return value;
+  }
+  function lazyStream(value, select) {
+    safe(active, () => { lazySelectors.set(value, reference(select)); }); return value;
+  }
+  function builtin(value, api) {
+    safe(active, () => { if (api === "openai-completions") builtins.add(value); }); return value;
+  }
+  function wrapper(stream, api) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row || api !== "openai-completions") return;
+      const s = row.selection;
+      if (!(s.seen & 2)) return;
+      // Simple adapters delegate to direct adapters. This probe does not qualify
+      // that path; an observed simple operand must never look like replacement.
+      if (compare(stream, s.simpleStream) === 1) return;
+      if (s.seen & 8) { s.ambiguous = true; return; }
+      s.seen |= 8;
+      s.wrapped = s.provider === 1 ? compare(stream, s.registeredStream) : 0;
+      s.builtin = s.wrapped === 1 && builtins.has(stream) ? 1 : 0;
+      s.selector = s.builtin === 1 ? lazySelectors.get(stream) : undefined;
+    });
+  }
+  function lazy(value, select) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 8) || compare(select, s.selector) !== 1) return;
+      if (s.seen & 16) { s.ambiguous = true; return; }
+      s.seen |= 16; s.adapterRef = reference(value);
+    });
+    return value;
+  }
+  function adapter(value) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 16)) return;
+      if (s.seen & 32) { s.ambiguous = true; return; }
+      s.seen |= 32; s.adapter = compare(value, s.adapterRef);
+    });
+  }
+  function provider(value, registry) {
+    safe(active, () => {
+      const row = selectionRow(); if (!row) return;
+      const s = row.selection;
+      if (!(s.seen & 1)) return;
+      if (s.seen & 2) { s.ambiguous = true; return; }
+      s.seen |= 2;
+      // A preexisting runtime without an observed constructor association is
+      // UNKNOWN; never inspect runtime.registry to manufacture that association.
+      s.provider = compare(registry, s.registryRef) === 1 && compare(value, s.lookup) === 1 ? s.record : 0;
+    });
+    return value;
+  }
+  function activate(site, key) {
+    safe(active, () => {
+      if (key !== contract || (site !== 1 && site !== 2) || ++activations[site - 1] !== 1) poisoned = true;
+    });
+  }
+  function begin(site) {
+    const owner = active;
+    return safe(owner, () => {
+      if (!owner || owner.closed || (site !== 1 && site !== 2)) { poisoned = true; return null; }
+      if (owner.entering) { invalidate(owner); return null; }
+      owner.entering = true;
+      try {
+        const invocation = owner.current(), row = owner.rows.get(invocation);
+        if (!row) { invalidate(owner); return null; }
+        // Bound before operand evaluation: even a nested lookup/spread that throws
+        // before its first value tap invalidates BOTH evaluations.
+        if (owner.stack.length || row.sites[site - 1]) invalidate(owner);
+        if (++owner.evaluations > 8) { invalidate(owner); return null; }
+        const token = freeze({});
+        const state = { owner, invocation, row, site, bits: 0, closed: false,
+          id: owner.evaluations, build: undefined, fallback: undefined, branch: 0, kind: 0 };
+        row.sites[site - 1] = state; tokens.set(token, state); owner.stack.push(token);
+        return token;
+      } finally { owner.entering = false; }
+    }) ?? null;
+  }
+  const kind = value => value === undefined ? 1 : value === null ? 2
+    : typeof value === "boolean" ? 3 : typeof value === "number" ? 4
+    : typeof value === "bigint" ? 5 : typeof value === "string" ? 6
+    : typeof value === "symbol" ? 7 : typeof value === "function" ? 9 : 8;
+  function tap(token, phase, value) {
+    const state = tokens.get(token), owner = state?.owner ?? active;
+    safe(owner, () => {
+      if (!state || state.closed || active !== owner || owner.closed ||
+          owner.stack.at(-1) !== token || owner.current() !== state.invocation) {
+        if (owner) invalidate(owner); else poisoned = true;
+        return;
+      }
+      const before = state.bits;
+      if (phase === 1 && state.site === 1 && before === 0) state.bits = 1;
+      else if (phase === 2 && state.site === 1 && before === 1) {
+        state.build = value; state.bits = 3;
+      } else if (phase === 4 && state.site === 1 && before === 3 &&
+          (state.build === null || state.build === undefined)) {
+        state.fallback = value; state.bits = 7;
+      } else if (phase === 8 && state.site === 1 && (before === 3 || before === 7)) {
+        const nullish = state.build === null || state.build === undefined;
+        if ((before === 7) !== nullish || !is(value, nullish ? state.fallback : state.build)) invalidate(owner);
+        state.bits |= 8; state.branch = nullish ? 2 : 1; state.kind = kind(value);
+      } else if (phase === 16 && state.site === 2 && before === 0) state.bits = 1;
+      else if (phase === 32 && state.site === 2 && before === 1) state.bits = 3;
+      else invalidate(owner);
+    });
+    return value;
+  }
+  function finish(token) {
+    const state = tokens.get(token), owner = state?.owner ?? active;
+    safe(owner, () => {
+      if (!state || state.closed || active !== owner || owner.closed) { invalidate(owner); return; }
+      try {
+        if (owner.stack.at(-1) !== token || owner.current() !== state.invocation) invalidate(owner);
+      } finally {
+        // Retire even when recording throws undefined. Never replace the operand's
+        // original throw or return; recording faults are collected independently.
+        state.closed = true; tokens.delete(token);
+        const index = owner.stack.indexOf(token);
+        if (index >= 0) owner.stack.splice(index, 1);
+      }
+    });
+  }
+  function claim(key, id, current) {
+    const owner = { current, rows: new Map(), stack: [], errors: [], evaluations: 0,
+      unknown: false, closed: false };
+    safe(owner, () => {
+      if (key !== contract || !Number.isSafeInteger(id) || id < 1 || id > 103 ||
+          typeof current !== "function" || claims.has(id) || active) {
+        invalidate(active); owner.unknown = true; poisoned = true;
+      }
+      claims.add(id); active = owner;
+      for (const error of stray.splice(0)) fault(owner, error);
+    });
+    return freeze({
+      bind(invocation) {
+        safe(owner, () => {
+          if (owner.closed || active !== owner || owner.rows.has(invocation) || owner.rows.size >= 2) { invalidate(owner); return; }
+          owner.rows.set(invocation, { id: ++ordinal, sites: [null, null],
+            selection: { seen: 0, runtime: 0, registry: 0, provider: 0, record: 0,
+              wrapped: 0, builtin: 0, adapter: 0, replay: [0,0,0,0], ambiguous: false } });
+        });
+      },
+      snapshot(invocation, diagnostic = false) {
+        // First failed gate only: no new context lookup or operand evaluation.
+        // 0=value, 1=poisoned, 2=owner unknown, 3=recording fault, 4=unbound,
+        // 5/6=client/guard activation, 7=open evaluation, 8=no complete group,
+        // 9=snapshot threw. Relay-only 10/11 mean missing/mismatched binding.
+        let reason = 9, valueSites = null, valueSelection = null;
+        const values = safe(owner, () => {
+          const row = owner.rows.get(invocation);
+          reason = poisoned ? 1 : owner.unknown ? 2 : owner.errors.length ? 3 : !row ? 4
+            : activations[0] !== 1 ? 5 : activations[1] !== 1 ? 6 : owner.stack.length ? 7 : 0;
+          if (diagnostic && (reason === 0 || reason === 7)) {
+            const [client, guard] = row.sites;
+            // Private retained state only: present, phase mask, closed per site.
+            valueSites = freeze([client ? 1 : 0, client?.bits ?? 0, client?.closed ? 1 : 0,
+              guard ? 1 : 0, guard?.bits ?? 0, guard?.closed ? 1 : 0]);
+            const s = row.selection;
+            if (!s.ambiguous)
+              valueSelection = freeze([contract, s.seen, s.runtime, s.registry, s.provider,
+                s.wrapped, s.builtin, s.adapter, ...s.replay]);
+          }
+          if (reason) return null;
+          const [client, guard] = row.sites;
+          // Missing or partial groups are UNKNOWN (zero), never "call absent".
+          const c = client?.closed && (client.bits === 11 || client.bits === 15) ? client : null;
+          const g = guard?.closed && guard.bits === 3 ? guard : null;
+          if (!c && !g) { reason = 8; return null; }
+          // v,key,invocation,clientEval,clientPhases,branch,selectedType,
+          // guardEval,guardPhases,activatedSites,calleeIdentities(UNKNOWN).
+          return freeze([1, contract, row.id, c?.id ?? 0, c?.bits ?? 0,
+            c?.branch ?? 0, c?.kind ?? 0, g?.id ?? 0, g?.bits ?? 0, 3, 0]);
+        }) ?? null;
+        return diagnostic ? freeze({ values,
+          valueState: freeze([activations[0], activations[1], values === null && reason === 0 ? 9 : reason]),
+          valueSites: values === null && reason === 0 ? null : valueSites,
+          valueSelection: values === null && reason === 0 ? null : valueSelection === null ? null
+            : freeze([values === null ? contract : null, ...valueSelection.slice(1)]) }) : values;
+      },
+      close() {
+        safe(owner, () => {
+          if (owner.closed || active !== owner || owner.stack.length) invalidate(owner);
+          if (replayScope?.owner === owner) { invalidate(owner); replayScope = undefined; }
+          for (const token of owner.stack) tokens.delete(token);
+          owner.stack.length = 0; owner.closed = true;
+          if (active === owner) active = undefined;
+        });
+        // Original operations have already drained; caller appends these faults
+        // after original failures, including falsey reasons, without flattening.
+        return owner.errors.splice(0);
+      },
+    });
+  }
+  return freeze({ activate, claim, begin, finish, defaultRegistry, defaultRuntime, createdRuntime,
+    runtime, registered, lookup, provider, lazyStream, builtin, wrapper, lazy, adapter, replayBegin, replayEnd,
+    host: (t, v) => tap(t, 1, v), build: (t, v) => tap(t, 2, v),
+    fallback: (t, v) => tap(t, 4, v), selected: (t, v) => tap(t, 8, v),
+    argument: (t, v) => tap(t, 16, v), result: (t, v) => tap(t, 32, v) });
+}
+
+export function overlayQwenValueSource(site, source, contract) {
+  assert.ok(Number.isInteger(site) && site >= 1 && site <= qwenValueSources.length);
+  assert.ok(validHash(contract));
+  assert.equal(hash(source), qwenValueSources[site - 1].sha256, "D8 callsite source changed");
+  let text = source.toString("utf8");
+  assert.ok(Buffer.from(text).equals(source), "exact source encoding");
+  assert.equal(text.includes("__qwenValues"), false, "overlay name collision");
+  assert.equal(text.includes("__qwen"), false, "selection overlay name collision");
+  const replace = (anchor, output) => {
+    assert.equal(text.split(anchor).length, 2, "exact single callsite anchor");
+    text = text.replace(anchor, output);
+  };
+  if (site <= 2) replace(site === 1 ? clientValueAnchor : guardValueAnchor,
+    site === 1 ? clientValueExpression : guardValueExpression);
+  if (site === 3) {
+    replace("registerBuiltInApiProviders(defaultApiRegistry);", "const __qwenGeneration = {};\nregisterBuiltInApiProviders(__qwenValues.defaultRegistry(defaultApiRegistry, __qwenGeneration));");
+    replace("return getModelLlmRuntime(model) ?? defaultLlmRuntime;",
+      "return __qwenValues.runtime(getModelLlmRuntime(model) ?? __qwenValues.defaultRuntime(defaultLlmRuntime, __qwenGeneration), __qwenGeneration);");
+  }
+  if (site === 4) {
+    replace("const provider = registry.getApiProvider(api);", "const provider = __qwenValues.provider(registry.getApiProvider(api), registry);");
+    replace("return {\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  };",
+      "return __qwenValues.createdRuntime({\n    registry,\n    stream,\n    complete,\n    streamSimple,\n    completeSimple,\n    cleanupSessionResources,\n  }, registry);");
+  }
+  if (site === 5) {
+    replace("    providers.set(provider.api, {\n      provider: {", "    let __qwenKey: Api;\n    let __qwenNormalized: RegisteredApiProvider;\n    let __qwenStream: StreamFunction<TApi, TOptions>;\n    let __qwenSimple: StreamFunction<TApi, SimpleStreamOptions>;\n    providers.set(__qwenKey = provider.api, {\n      provider: (__qwenNormalized = {");
+    replace("stream: wrapStream(provider.api, provider.stream),", "stream: wrapStream(provider.api, __qwenStream = provider.stream),");
+    replace("streamSimple: wrapStream(provider.api, provider.streamSimple),", "streamSimple: wrapStream(provider.api, __qwenSimple = provider.streamSimple),");
+    replace("      },\n      sourceId,\n    });", "      }),\n      sourceId,\n    });\n    __qwenValues.registered(providers, __qwenKey, __qwenNormalized, __qwenStream, __qwenSimple);");
+    replace("return providers.get(api)?.provider;", "return __qwenValues.lookup(providers.get(api)?.provider, providers, api);");
+    replace("  return (model, context, options) => {", "  return (model, context, options) => {\n    __qwenValues.wrapper(stream, api);");
+  }
+  if (site === 6) {
+    replace("  return (model, context, options) => {", "  return __qwenValues.lazyStream((model, context, options) => {");
+    replace("    return outer;\n  };", "    return outer;\n  }, select);");
+    replace("select(streams)(model, context, options)", "__qwenValues.lazy(select(streams), select)(model, context, options)");
+    replace("const stream = createLazyStream(load, (streams) => streams.stream);",
+      "const stream = __qwenValues.builtin(createLazyStream(load, (streams) => streams.stream), api);");
+  }
+  if (site === 7) {
+    replace('> = (model, context, options) => streamOpenAICompletionsRequest(model, context, options, "direct");',
+      '> = (model, context, options) => {\n  __qwenValues.adapter(streamOpenAICompletions);\n  return streamOpenAICompletionsRequest(model, context, options, "direct");\n};');
+  }
+  if (site === 8) {
+    replace("  const plugin = resolveProviderRuntimePlugin(params);\n  if (plugin?.sanitizeReplayHistoryAsync)",
+      "  const plugin = (() => {\n    const token = __qwenValues.replayBegin();\n    try { return resolveProviderRuntimePlugin(params); }\n    finally { __qwenValues.replayEnd(token); }\n  })();\n  if (plugin?.sanitizeReplayHistoryAsync)");
+  }
+  return `import { sink as __qwenValues } from "${qwenValueModule}";\n`
+    + text + (site <= 2 ? `\n__qwenValues.activate(${site}, "${contract}");\n` : "");
+}
+
+export function qwenValueConfigText(plan) {
+  return `import base from "../test/vitest/vitest.extension-providers.config.ts";
+import { createQwenValuePlugin } from "./callsite-observer.mjs";
+const plugin = createQwenValuePlugin(new URL("../", import.meta.url), new URL("./", import.meta.url), ${JSON.stringify(plan)});
+export default { ...base, plugins: [...(base.plugins ?? []), plugin] };
+`;
+}
+
+export function makeQwenValuePlan({ nonce, helperSHA, fixtureSHA, originals }) {
+  assert.ok([nonce, helperSHA, fixtureSHA].every(validHash));
+  assert.equal(originals.length, qwenValueSources.length);
+  const contract = hash(JSON.stringify({ schema: "qwen-value-overlay.v1", nonce, pin: qwenValuePin,
+    helperSHA, fixtureSHA, originals: qwenValueSources }));
+  const virtualSource = `const create = ${createQwenValueSink.toString()};\nexport const contract = "${contract}";\nexport const sink = create(contract);\n`;
+  const outputs = originals.map((bytes, i) => overlayQwenValueSource(i + 1, bytes, contract));
+  const plan = { schema: "qwen-value-overlay.v1", nonce, pin: qwenValuePin, target: qwenValueTarget,
+    helperSHA, fixtureSHA, contract, virtualSHA: hash(virtualSource),
+    sources: qwenValueSources.map((row, i) => ({ ...row, outputSHA: hash(outputs[i]) })) };
+  const config = qwenValueConfigText(plan);
+  return { plan, config, virtualSource, outputs, configSHA: hash(config) };
+}
+
+export function readQwenValueInput(file, expected, privateMode) {
+  const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const errors = []; let bytes;
+  try {
+    const before = fstatSync(fd);
+    if (privateMode !== undefined) assert.ok((before.mode & 0o777) === privateMode && before.uid === process.getuid() && before.nlink === 1, "owned overlay input");
+    assert.ok(before.isFile() && before.size > 0 && before.size <= 65536, "bounded regular D8 input");
+    const buffer = Buffer.alloc(65537); let size = 0;
+    while (size < buffer.length) { const n = readSync(fd, buffer, size, buffer.length - size, size); if (!n) break; size += n; }
+    const after = fstatSync(fd);
+    assert.ok(size === before.size && size <= 65536 &&
+      ["dev", "ino", "size", "mtimeMs", "ctimeMs"].every(key => before[key] === after[key]), "D8 source changed while reading");
+    bytes = buffer.subarray(0, size); assert.equal(hash(bytes), expected);
+  } catch (error) { errors.push(error); }
+  try { closeSync(fd); } catch (error) { errors.push(error); }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "callsite read and close failed");
+  return bytes;
+}
+
+export function createQwenValuePlugin(rootURL, directoryURL, expected) {
+  const root = fileURLToPath(rootURL), directory = fileURLToPath(directoryURL);
+  assert.equal(realpathSync(root), resolve(root), "canonical SDK root");
+  assert.equal(dirname(resolve(directory)), resolve(root), "owned overlay directory");
+  assert.match(resolve(directory).split(/[\\/]/).at(-1), /^\.clawrouter-runner-report-[A-Za-z0-9_-]+$/);
+  readQwenValueInput(join(directory, "callsite-observer.mjs"), expected.helperSHA, 0o400);
+  const ids = qwenValueSources.map(row => resolve(root, row.path));
+  assert.ok(ids.every(id => realpathSync(id) === id), "canonical callsite IDs");
+  const originals = ids.map((id, i) => readQwenValueInput(id, qwenValueSources[i].sha256));
+  const contract = hash(JSON.stringify({ schema: "qwen-value-overlay.v1", nonce: expected.nonce,
+    pin: qwenValuePin, helperSHA: expected.helperSHA, fixtureSHA: expected.fixtureSHA,
+    originals: qwenValueSources }));
+  assert.ok([expected.nonce, expected.helperSHA, expected.fixtureSHA, expected.virtualSHA].every(validHash));
+  assert.equal(expected.contract, contract);
+  const outputs = originals.map((bytes, i) => overlayQwenValueSource(i + 1, bytes, contract));
+  const plan = { schema: "qwen-value-overlay.v1", nonce: expected.nonce, pin: qwenValuePin, target: qwenValueTarget,
+    helperSHA: expected.helperSHA, fixtureSHA: expected.fixtureSHA, contract, virtualSHA: expected.virtualSHA,
+    sources: qwenValueSources.map((row, i) => ({ ...row, outputSHA: hash(outputs[i]) })) };
+  assert.deepEqual(plan, expected, "closed overlay plan");
+  // Prepared from the hash-bound helper in the parent, not Function#toString
+  // after config bundling. The worker receives these exact verified input bytes.
+  const virtualSource = readQwenValueInput(join(directory, "worker-values.mjs"), expected.virtualSHA, 0o600).toString("utf8");
+  const config = qwenValueConfigText(plan), configSHA = hash(config);
+  assert.equal(hash(readQwenValueInput(join(directory, "qwen-callsite.config.ts"), configSHA, 0o600)), configSHA);
+  const bundle = { outputs, virtualSource, configSHA };
+  const virtualId = "\0clawrouter:qwen-values:" + expected.nonce;
+  const virtualImporters = new Set([...ids, resolve(root, qwenValueTarget)]);
+  const key = hash(JSON.stringify(expected) + "\0" + bundle.configSHA);
+  return {
+    name: "clawrouter:qwen-value-observation", enforce: "pre",
+    configureVitest({ defineCacheKeyGenerator }) {
+      // Every cached worker import is invocation-specific, including dependents.
+      defineCacheKeyGenerator(() => key);
+    },
+    resolveId(id, importer) {
+      if (id !== qwenValueModule) return null;
+      assert.ok(virtualImporters.has(importer), "foreign worker sink importer");
+      return virtualId;
+    },
+    load(id) {
+      if (id === virtualId) return { code: bundle.virtualSource, moduleType: "js" };
+      const index = ids.indexOf(id);
+      if (index >= 0) {
+        assert.equal(hash(readQwenValueInput(id, qwenValueSources[index].sha256)), qwenValueSources[index].sha256);
+        return { code: bundle.outputs[index], map: null };
+      }
+      const canonical = id.split(/[?#]/, 1)[0];
+      assert.ok(!ids.includes(canonical) && !id.startsWith("\0clawrouter:qwen-values:"), "foreign callsite/cache ID");
+      return null;
+    },
+  };
+}
+
+// Explicit config retains extension-providers aliases, pool, setup and plugins.
+// D8 run-vitest run + explicit config keeps native full-runtime/Kysely preparation.
+export function qwenValueArgv(directory, target, reporterArgs) {
+  assert.equal(target, qwenValueTarget);
+  assert.ok(/^\.clawrouter-runner-report-[A-Za-z0-9_-]+$/.test(directory.split(/[\\/]/).at(-1)));
+  return ["scripts/run-vitest.mjs", "run", "--config", join(directory, "qwen-callsite.config.ts"),
+    target, "--maxWorkers=1", ...reporterArgs];
+}

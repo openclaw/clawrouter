@@ -29,12 +29,14 @@ const configuredDeployment = "deployment";
 const delta = { id: "chat_fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "synthetic-output", reasoning_content: "synthetic-reasoning", tool_calls: messages[0].tool_calls }, finish_reason: null }] };
 const sse = value => `data: ${JSON.stringify(value)}\n\n`;
 const tokenPlanIds = new Set(["xiaomi-token-plan", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams"]);
-const syntheticCredential = providerId => tokenPlanIds.has(providerId) ? "tp-synthetic-upstream-key" : "synthetic-upstream-key";
+const codingPlanIds = new Set(["qwen-coding-global", "qwen-coding-cn"]);
+const syntheticCredential = providerId => tokenPlanIds.has(providerId) ? "tp-synthetic-upstream-key"
+  : codingPlanIds.has(providerId) ? "sk-sp-synthetic-upstream-key" : "synthetic-upstream-key";
 
 test("Xiaomi Chat fixture credentials match selected provider contracts", () => {
   for (const provider of snapshot.providers) {
     const credential = syntheticCredential(provider.id);
-    if (!tokenPlanIds.has(provider.id)) { assert.equal(credential, "synthetic-upstream-key"); continue; }
+    if (!tokenPlanIds.has(provider.id)) { assert.equal(credential, codingPlanIds.has(provider.id) ? "sk-sp-synthetic-upstream-key" : "synthetic-upstream-key"); continue; }
     assert.throws(() => assertXiaomiTokenPlanCredential(provider.id, "synthetic-upstream-key"), { status: 503, code: "provider_credentials_invalid" });
     assert.equal(assertXiaomiTokenPlanCredential(provider.id, credential), undefined);
     const env = Object.fromEntries(provider.config_keys.map(key => [key, credential]));

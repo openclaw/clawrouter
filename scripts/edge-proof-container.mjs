@@ -69,9 +69,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "8400014aab9814521c4b3bd8eee381acfa974bbc",
-    "sha256": "b440e83e10c6172f1c8876da1fa1c633516523fefd5d0eeb94417f2a6b67c70a",
-    "bytes": 2496
+    "blob": "c1d5793820500663a805cecc6daad37864e4f6d1",
+    "sha256": "f059ca92a016946e043d5ff6192f2b2a218c7698d1636984b4021f417c93834d",
+    "bytes": 3617
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
@@ -92,10 +92,46 @@ export const currentInputInventory = Object.freeze(
     "bytes": 7719
   },
   {
+    "path": "packages/provider-plugin-contract/src/endpoints.ts",
+    "blob": "2102a8a85714c7bcbfc8005dfb9be09dd29ed193",
+    "sha256": "d95280cd067bdc30bd5bedb738c50ec87bd83639361c7ea035a30e7a500c3825",
+    "bytes": 1761
+  },
+  {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "1a70d91c550b7519c54c5701be681fa236731e58",
-    "sha256": "7bce6abcb1dc113b7312a8114674ec20f531a20041fdab595d60f63f60742786",
-    "bytes": 6065
+    "blob": "2a9d3949994c58cf4768b25326c603959c01acaf",
+    "sha256": "a50f75af0f187afd9769233ece6a92760d313b6c6d37155e01fd14d0069464c5",
+    "bytes": 7016
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-availability.ts",
+    "blob": "5525659c1be1c6506bcdc84db80b801ff2f9e0a0",
+    "sha256": "5525e683152c9c40859055ec1b424f31e88987084b9ca600888b3302b93be9cf",
+    "bytes": 309
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-request-parameters.ts",
+    "blob": "352762ccb542da4493336d6a937105eb04305acc",
+    "sha256": "44ce4b2380156ced3ef3ff5d50e469b12c7454c2e64269067e4dec8cae76103a",
+    "bytes": 457
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/models.ts",
+    "blob": "b97d9b44d929281b4fed23290de1460cb5a46efa",
+    "sha256": "03df7f231c46345e2121d66e71dafdc38d92d8156911232f6854b5bc42ee0c63",
+    "bytes": 850
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/native-capabilities.ts",
+    "blob": "ea796c0011ad29f5b86f687727b8351829094ab2",
+    "sha256": "537886d04e5a1cc79bd733fbc13fb1017fe9158430ad2a61e0c93c211e6b6027",
+    "bytes": 5169
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/observations.ts",
+    "blob": "4b58eaab06b268954182fda822e6db94f1a1862b",
+    "sha256": "138f7801c7205c35fb4bc4132eb630c2d16de27da5eab2372a6fad26de1721e5",
+    "bytes": 416
   },
   {
     "path": "packages/provider-plugin-contract/src/package-index.ts",
@@ -120,6 +156,12 @@ export const currentInputInventory = Object.freeze(
     "blob": "82e30671358be91baa5720d624170821aca1dfd3",
     "sha256": "23533b59fb4c71a13649f707ec564a2d6ffb6d7fe7366b07a8aec6dd342b0ada",
     "bytes": 1374
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/quota.ts",
+    "blob": "ecdc2303d869657da4973c1a944dc37a7ed60d57",
+    "sha256": "f45d6251dc221c4f9806fee7a846306612db4a42e2b98a55a3382f58324f769c",
+    "bytes": 1526
   },
   {
     "path": "packages/provider-plugin-contract/tsconfig.json",

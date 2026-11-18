@@ -6,6 +6,14 @@ export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderPro
 export type { ProviderGrantKind, ProviderProductBinding, ProviderProductOffer, ProviderOfferDefinition, ProviderOfferReference, ProviderProduct } from "./products.ts";
 export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./auth.ts";
 export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "./pricing.ts";
+export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./endpoints.ts";
+export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "./quota.ts";
+export type { GrantAccount, GrantExtraUsage } from "./observations.ts";
+export type { ProviderModelDefinition } from "./models.ts";
+export type { ModelAvailability } from "./model-availability.ts";
+export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./model-request-parameters.ts";
+export { isPublishedMusicInputSupport } from "./native-capabilities.ts";
+export type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "./native-capabilities.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 

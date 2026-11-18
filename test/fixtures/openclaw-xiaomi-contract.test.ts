@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createEmptyPluginRegistry, registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { types as nodeTypes } from "node:util";
 import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
@@ -11,6 +11,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 
@@ -35,8 +36,10 @@ async function run(id: string, modelId = models[0], simple = true, reasoning: "o
   const messages = await withOpenClawTestState({ label: "xiaomi-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: selected.provider, modelId, modelApi: selected.api, model: selected, runtimeHandle: { provider: selected.provider, plugin: provider } });
     expect(policy.dropReasoningFromHistory).toBe(false);
-    return sanitizeSessionHistory({ provider: selected.provider, modelId, modelApi: selected.api, model: selected, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: `xiaomi-${id}`,
-      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: selected.provider, modelApi: selected.api, modelId })]), messages: history });
+    const replayRegistry = createEmptyPluginRegistry();
+    replayRegistry.providers.push({ pluginId: "xiaomi", provider, source: "test" });
+    return withPluginRuntimeGenerationRegistryScope(replayRegistry, () => sanitizeSessionHistory({ provider: selected.provider, modelId, modelApi: selected.api, model: selected, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: `xiaomi-${id}`,
+      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: selected.provider, modelApi: selected.api, modelId })]), messages: history }));
   });
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages), tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   const wrapped = provider.wrapStreamFn?.({ provider: selected.provider, modelId, model: selected, streamFn: simple ? streamSimple : stream, thinkingLevel: reasoning });
@@ -1016,8 +1019,10 @@ async function runPlan(row: (typeof planRows)[number], signal?: AbortSignal, onP
   const messages = await withOpenClawTestState({ label: "xiaomi-plan-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: selected.provider, modelId: row.model, modelApi: selected.api, model: selected, runtimeHandle: { provider: selected.provider, plugin: provider } });
     expect(policy.dropReasoningFromHistory).toBe(false);
-    return sanitizeSessionHistory({ provider: selected.provider, modelId: row.model, modelApi: selected.api, model: selected, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
-      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: selected.provider, modelApi: selected.api, modelId: row.model })]), messages: history });
+    const replayRegistry = createEmptyPluginRegistry();
+    replayRegistry.providers.push({ pluginId: "xiaomi", provider, source: "test" });
+    return withPluginRuntimeGenerationRegistryScope(replayRegistry, () => sanitizeSessionHistory({ provider: selected.provider, modelId: row.model, modelApi: selected.api, model: selected, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: row.id,
+      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: selected.provider, modelApi: selected.api, modelId: row.model })]), messages: history }));
   });
   const context: Context = { messages: convertToLlm(messages), tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   planMark("wrapper");
