@@ -1,5 +1,7 @@
 # Changelog
 
+- Join Xiaomi fixture source pull and cancellation callbacks in their original Worker request before reporting retirement. Retain independent source failures and require settled work, successful cancellation return, and the existing expiry guard; verify early and pending-read cancellation with the real local Workerd topology.
+
 - Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
 
 - Retain the independently decoded reaper outcome and exact private receipt-write result in the existing attach diagnostic. Record the coordinator’s first escaping post-permit boundary and independent FINISH outcome without interpreting process causes or granting receipt or retirement credit. Preserve original failures, complete-capture custody and historical diagnostics.

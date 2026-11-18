@@ -169,9 +169,9 @@ export default { ...handler, async fetch(request, env, context) {
 function upstreamFixture() {
   return `${planUpstream.toString()}
 const plan = planUpstream((delay, options) => scheduler.wait(delay, options));
-const calls = []; export default { async fetch(request) {
-    if (request.url === "https://fixture.example/state") return Response.json([...calls, ...plan.calls]);
-    if (request.headers.has("api-key")) return plan.fetch(request);
+const calls = []; export default { async fetch(request, env, context) {
+    if (request.url === "https://fixture.example/state") { const failures = await plan.join(); return Response.json([...calls, ...plan.calls], { status: failures.length ? 500 : 200 }); }
+    if (request.headers.has("api-key")) return plan.fetch(request, context);
     const body = await request.json(); calls.push({ url: request.url, authorization: request.headers.get("authorization"), apiKey: request.headers.get("api-key"), xApiKey: request.headers.get("x-api-key"), body });
     const id = request.headers.get("authorization").replace("Bearer fixture-upstream-", "");
     if (id === "http_error") return Response.json({ error: { message: "synthetic provider rejection" } }, { status: 401 });
@@ -347,7 +347,8 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
           // Control I/O is deliberately outside the observed inference fetch. It
           // consumes its actual response before returning only fixed safe facts.
           let calls = [];
-          try { const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"]); calls = (await response.json()).filter(value => value.planId === id); }
+          try { const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"]); calls = (await response.json()).filter(value => value.planId === id);
+            if (!response.ok) throw new Error("owned upstream source join failed"); }
           catch (error) { failures.push(error); }
           const witness = { caseId: id, joined: failures.length === 0, requests: matchingRequests.length, inputs: matchingInputs.length, calls: calls.length,
             reserves: budgets.filter(value => value.id === id && value.path === "/reserve" && value.allowed).length,
@@ -406,8 +407,11 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
   };
 }
 function planUpstream(wait) {
-  const calls = [];
-  return { calls, async fetch(request) {
+  const calls = [], sources = [];
+  return { calls, async join() {
+    const results = await Promise.all(sources.map(source => source.joined));
+    return results.flat();
+  }, async fetch(request, context) {
     const apiKey = request.headers.get("api-key"), planId = apiKey?.replace(/^(?:tp|ttp)-fixture-upstream-/, "");
     const body = await request.json(), turn = calls.filter(call => call.planId === planId).length + 1;
     const call = { planId, turn, url: request.url, method: request.method, authorization: request.headers.get("authorization"), apiKey, xApiKey: request.headers.get("x-api-key"), body, canceled: false, expired: false, sourceJoined: true, completed: false }; calls.push(call);
@@ -417,6 +421,35 @@ function planUpstream(wait) {
     const wire = ["n_embedded", "c_provider_error"].includes(planId) ? frame({ error: { code: "synthetic", message: "Synthetic rejection" } }) : first + frame({ id: "chat_plan", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], ...(planId === "n_no_usage" || ["n_cancel", "c_cancel"].includes(planId) ? {} : { usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320, prompt_tokens_details: { cached_tokens: 256 } } }) }) + "data: [DONE]\n\n";
     const bytes = new TextEncoder().encode(["n_cancel", "c_cancel"].includes(planId) ? first : wire); let offset = 0;
     let timer, timerObserved, timerController, timerState = "absent", timerReason;
+    let finish;
+    const terminal = new Promise(resolve => { finish = resolve; });
+    const source = { operations: [], joined: undefined }; sources.push(source);
+    Object.assign(call, { active: 0, settled: false, cancelCalls: 0, cancelReturned: 0 });
+    const track = (kind, body) => {
+      call.active++;
+      const operation = { kind, pending: undefined, observed: undefined, state: "pending", reason: undefined };
+      source.operations.push(operation);
+      try { operation.pending = body(); } catch (error) { operation.pending = Promise.reject(error); }
+      operation.observed = operation.pending.then(() => {
+        operation.state = "fulfilled"; call.active--;
+        if (kind === "cancel") { call.cancelReturned++; finish(); }
+      }, error => {
+        operation.state = "rejected"; operation.reason = error; call.active--; finish();
+      });
+      return operation.pending;
+    };
+    source.joined = (async () => {
+      await terminal;
+      let done = 0;
+      while (done < source.operations.length) { const batch = source.operations.slice(done); done += batch.length;
+        await Promise.all(batch.map(operation => operation.observed)); }
+      const failures = source.operations.filter(operation => operation.state === "rejected").map(operation => operation.reason);
+      call.settled = call.active === 0;
+      call.sourceJoined = call.settled && failures.length === 0 && (!call.canceled || call.cancelCalls === 1 && call.cancelReturned === 1);
+      return failures;
+    })();
+    // This request owns the source callbacks, even when a later control joins them.
+    context?.waitUntil(source.joined);
     const joinTimer = async () => {
       if (!timer) return;
       await timerObserved;
@@ -427,22 +460,22 @@ function planUpstream(wait) {
     };
     call.sourceJoined = false;
     return new Response(new ReadableStream({
-      async pull(c) {
+      pull(c) { return track("pull", async () => {
         if (offset < bytes.length) { const end = Math.min(offset + 7, bytes.length); c.enqueue(bytes.slice(offset, end)); offset = end; return; }
-        if (!["n_cancel", "c_cancel"].includes(planId)) { c.close(); call.completed = true; call.sourceJoined = true; return; }
+        if (!["n_cancel", "c_cancel"].includes(planId)) { c.close(); call.completed = true; finish(); return; }
         call.sourceJoined = false;
         if (!timer) {
           timerController = new AbortController(); timerState = "pending";
           timer = wait(10000, { signal: timerController.signal });
           timerObserved = timer.then(() => { timerState = "fulfilled"; }, reason => { timerState = "rejected"; timerReason = reason; });
         }
-        await joinTimer(); call.sourceJoined = true;
-      },
-      async cancel() {
-        call.canceled = true;
+        await joinTimer();
+      }); },
+      cancel() { return track("cancel", async () => {
+        call.canceled = true; call.cancelCalls++;
         if (timerState === "pending") timerController.abort(new Error("owned upstream timer canceled"));
-        await joinTimer(); call.sourceJoined = true;
-      },
+        await joinTimer();
+      }); },
     }), { headers: { "content-type": "text/event-stream" } });
   } };
 }
@@ -1317,10 +1350,99 @@ test("owned held-source timer joins its original timer on cancellation and rejec
   const response = await upstream.fetch(new Request("https://token-plan-sgp.xiaomimimo.com/v1/chat/completions", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: JSON.stringify({ model: "mimo-v2.6-pro" }) }));
   const reader = response.body.getReader(); while (!calls) await reader.read();
   // The pending source pull is owned by the response; cancellation joins it.
-  await reader.cancel(); reader.releaseLock(); assert.equal(signal.aborted, true); assert.equal(upstream.calls[0].sourceJoined, true); assert.equal(upstream.calls[0].expired, false);
+  await reader.cancel(); reader.releaseLock(); assert.deepEqual(await upstream.join(), []);
+  assert.equal(signal.aborted, true); assert.equal(upstream.calls[0].sourceJoined, true); assert.equal(upstream.calls[0].expired, false);
+  assert.deepEqual([upstream.calls[0].cancelCalls, upstream.calls[0].cancelReturned, upstream.calls[0].active, upstream.calls[0].settled], [1, 1, 0, true]);
   const expired = planUpstream(() => Promise.resolve());
   const r = await expired.fetch(new Request("https://fixture.example", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: "{}" }));
   await assert.rejects(r.text()); assert.equal(expired.calls[0].expired, true);
+  assert.equal((await expired.join()).length, 1); assert.equal(expired.calls[0].sourceJoined, false);
+});
+test("source callback retirement preserves held work, foreign controls and falsey original failures", async () => {
+  const request = () => new Request("https://fixture.example", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: "{}" });
+  for (const reason of [undefined, false]) {
+    let reject, started = false; const retained = [];
+    const upstream = planUpstream(() => { started = true; return new Promise((_, fail) => { reject = fail; }); });
+    const response = await upstream.fetch(request(), { waitUntil(pending) { retained.push(pending); } });
+    const reader = response.body.getReader(); while (!started) await reader.read();
+    const read = reader.read(), cancel = reader.cancel();
+    let joined = false; const join = upstream.join().then(result => { joined = true; return result; });
+    await Promise.resolve(); await Promise.resolve();
+    assert.equal(joined, false); assert.equal(upstream.calls[0].sourceJoined, false);
+    assert.equal(upstream.calls[0].cancelReturned, 0); assert.equal(upstream.calls[0].active, 2);
+    assert.deepEqual(await planUpstream(() => Promise.resolve()).join(), []);
+    assert.equal(joined, false, "a foreign control cannot retire this source");
+    reject(reason);
+    const results = await Promise.allSettled([read, cancel]);
+    assert.equal(results[1].status, "rejected"); assert.equal(results[1].reason, reason);
+    const failures = await join; assert.equal(failures.length, 2); assert.ok(failures.every(value => value === reason));
+    await Promise.all(retained); reader.releaseLock();
+    assert.equal(upstream.calls[0].sourceJoined, false); assert.equal(upstream.calls[0].settled, true);
+    assert.equal(upstream.calls[0].active, 0); assert.equal(upstream.calls[0].cancelReturned, 0);
+  }
+  const early = planUpstream(() => { throw new Error("timer must not start before held pull"); });
+  const response = await early.fetch(request()); await response.body.cancel();
+  assert.deepEqual(await early.join(), []);
+  assert.deepEqual([early.calls[0].cancelCalls, early.calls[0].cancelReturned, early.calls[0].active, early.calls[0].settled, early.calls[0].sourceJoined], [1, 1, 0, true, true]);
+  const original = new Error("independent source failure");
+  const failed = planUpstream(() => Promise.reject(original));
+  const failedResponse = await failed.fetch(request());
+  await assert.rejects(failedResponse.text(), error => error === original);
+  assert.deepEqual(await failed.join(), [original]); assert.equal(failed.calls[0].sourceJoined, false);
+  for (const reason of [undefined, false, original]) {
+    let reject, started = false;
+    const actual = new Function("AbortController", "return (" + planUpstream.toString() + ");")(class {
+      signal = { aborted: false };
+      abort() { throw reason; }
+    });
+    const upstream = actual(() => { started = true; return new Promise((_, fail) => { reject = fail; }); });
+    const response = await upstream.fetch(request()); const reader = response.body.getReader();
+    while (!started) await reader.read();
+    const cancel = reader.cancel(); const result = await Promise.allSettled([cancel]);
+    assert.equal(result[0].status, "rejected"); assert.equal(result[0].reason, reason);
+    let joined = false; const pending = upstream.join().then(value => { joined = true; return value; });
+    await Promise.resolve(); assert.equal(joined, false, "failed cancel does not retire the held pull");
+    reject(original); const failures = await pending;
+    assert.equal(failures.length, 2); assert.equal(failures[0], original); assert.equal(failures[1], reason);
+    assert.equal(upstream.calls[0].sourceJoined, false); assert.equal(upstream.calls[0].cancelReturned, 0); reader.releaseLock();
+  }
+});
+test("source callback retirement joins real Workerd cancellation and rejects uncanceled expiry", { timeout: 45000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "xiaomi-source-retirement-")); let mf; const failures = [];
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    const router = `export * from "./worker/index.ts"; export default { fetch(request) {
+      if (new URL(request.url).pathname === "/early-cancel") return fetch("https://fixture.example/early-cancel");
+      if (new URL(request.url).pathname === "/state") return fetch("https://fixture.example/state");
+      return fetch("https://fixture.example", { method: "POST", headers: { "api-key": "tp-fixture-upstream-c_cancel" }, body: "{}" });
+    } };`;
+    const upstream = upstreamFixture()
+      .replace("(delay, options) => scheduler.wait(delay, options)", "(delay, options) => { timerStarts++; return scheduler.wait(delay, options); }")
+      .replace("const calls = []; export default { async fetch(request, env, context) {", `let timerStarts = 0; const calls = []; export default { async fetch(request, env, context) {
+        if (request.url === "https://fixture.example/early-cancel") {
+          const response = await plan.fetch(new Request("https://fixture.example", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: "{}" }), context);
+          await response.body.cancel(); const failures = await plan.join();
+          return Response.json({ failures: failures.length, timerStarts, call: plan.calls[0] });
+        }`);
+    mf = await startWorkerdFixture(temporary, router, upstream, { directRouter: true });
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    const early = await (await fetch(origin + "/early-cancel")).json();
+    assert.equal(early.failures, 0); assert.equal(early.timerStarts, 0);
+    assert.deepEqual([early.call.cancelCalls, early.call.cancelReturned, early.call.active, early.call.settled, early.call.sourceJoined], [1, 1, 0, true, true]);
+    const response = await fetch(origin); const reader = response.body.getReader(); await reader.read();
+    const pending = reader.read(); const canceled = reader.cancel(); await Promise.allSettled([pending, canceled]); reader.releaseLock();
+    const state = await fetch(origin + "/state"); const calls = await state.json();
+    assert.equal(state.status, 200, "source cancellation must retire before control success: " + JSON.stringify(calls.map(({ canceled, expired, active, settled, cancelCalls, cancelReturned }) => ({ canceled, expired, active, settled, cancelCalls, cancelReturned }))));
+    assert.equal(calls.length, 2);
+    assert.deepEqual([calls[1].canceled, calls[1].cancelCalls, calls[1].cancelReturned, calls[1].settled, calls[1].active, calls[1].expired, calls[1].sourceJoined], [true, 1, 1, true, 0, false, true]);
+    const uncanceled = await fetch(origin); await assert.rejects(uncanceled.text());
+    const expired = await fetch(origin + "/state"); const after = await expired.json();
+    assert.equal(expired.status, 500); assert.equal(after.length, 3);
+    assert.equal(after[2].expired, true); assert.equal(after[2].sourceJoined, false);
+  } catch (error) { failures.push(error); }
+  try { await mf?.dispose(); } catch (error) { failures.push(error); }
+  try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0]; if (failures.length) throw new AggregateError(failures, "source retirement or cleanup failed");
 });
 test("actual Worker controls relay safe evidence, activated env/grant rows and real SQLite joins", { timeout: 45000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "xiaomi-plan-worker-")); const failures = []; let mf;
