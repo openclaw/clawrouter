@@ -19,9 +19,11 @@ Native admin requests retain bearer authentication, optional paired Access
 credentials, redirect refusal and selected-version response checks.
 
 During owned deployment convergence, a snapshot GET returning HTTP 500 from
-the exact selected Worker version is recorded as pending within the existing
-phase deadline. Immediate Durable Object code adoption can interrupt a snapshot;
-HTTP 500 alone does not establish that cause. Ownership is checked before every
+the exact selected Worker version or an explicitly allowed previous immutable
+version is recorded as pending within the existing phase deadline. A previous
+version may still answer after the deployment API selects its replacement.
+Immediate Durable Object code adoption can interrupt a snapshot; HTTP 500 alone
+does not establish either cause. Ownership is checked before every
 observation, and only a successful validated snapshot can establish readiness.
 Persistent errors time out; authentication errors, unknown versions and malformed
 successful responses fail immediately. No activation, admission or inference
