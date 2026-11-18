@@ -176,13 +176,14 @@ function createQwenFailureRelay() {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     assert.ok(Reflect.ownKeys(descriptors).every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "closed data fields required");
     value = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
-    assert.ok([1, 2, 3, 4].includes(value.v));
-    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v >= 2 ? ["join"] : []), ...(value.v >= 3 ? ["rejections"] : []), ...(value.v === 4 ? ["sdk"] : [])].sort());
+    assert.ok([1, 2, 3, 4, 5].includes(value.v));
+    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v >= 2 ? ["join"] : []), ...([3,4].includes(value.v) ? ["rejections"] : []), ...(value.v === 4 ? ["sdk"] : []), ...(value.v === 5 ? ["worker"] : [])].sort());
     if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
     const checked = qwenClosedRecord(value.case, value.phase, value.op, value.state, { operations: value.operations, rejected: value.rejected, pending: value.pending });
     if (value.v >= 2) {
       assert.equal(checked.state, "failed"); checked.v = value.v; checked.join = qwenJoinRecord(value.join);
-      if (value.v >= 3) {
+      if (value.v === 5) { assert.equal(sdk, false); assert.equal(value.phase, "worker"); checked.worker = qwenWorkerFailureRecord(value.worker, checked.join); }
+      if ([3,4].includes(value.v)) {
         checked.rejections = qwenRejectionRecord(value.rejections);
         if (checked.rejections.originals !== null) assert.equal(checked.rejections.originals.length, checked.join[7]);
         if (value.v === 4) checked.sdk = qwenSdkSignalRecord(value.sdk, checked.rejections);
@@ -352,10 +353,15 @@ function createQwenFailureRelay() {
     return result;
   }
   const complete = () => moduleEvaluated && registration?.complete === true && entered.size === rows.length && completed.size === rows.length
-    && [...completed.values()].every(value => value.state === "passed" && value.rejected === 0 && value.pending === 0)
-    && sdkCases.size === rows.length && [...sdkCases.values()].every(value => {
-    const row = JSON.parse(value); return row.state === "passed" && row.rejected === 0 && row.pending === 0;
-  });
+    && [...completed.values()].every(value => value.state === "passed" && value.pending === 0)
+    && sdkCases.size === rows.length && [...sdkCases.entries()].every(([id, encoded]) => {
+      const row = JSON.parse(encoded), completion = completed.get(id);
+      // Entry validation already restricts nonzero rejection counts to the
+      // exact partial/provider-error dispositions. Require both original
+      // records to agree; a passed SDK row alone cannot qualify a rejection.
+      return row.state === "passed" && row.pending === 0 && !!completion
+        && ["state", "operations", "rejected", "pending"].every(key => row[key] === completion[key]);
+    });
   return { record, entry, text, error, runnerReport, output, complete };
 }
 
@@ -402,9 +408,90 @@ async function withQwenNativeRelay(body, cleanups, emit) {
   }
 }
 
+// Worker-local evidence only: no SDK disposition or reason crosses HTTP.
+function captureQwenWorkerFailure(state) {
+  const ledger = state.ledger, first = ledger.joinOriginals();
+  if (!first) return null;
+  const signalSamples = new Map();
+  const sample = signal => {
+    if (!signal || typeof signal !== "object") return { state: 0 };
+    if (signalSamples.has(signal)) return signalSamples.get(signal);
+    let result;
+    try {
+      const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+      const reason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get;
+      if (!aborted || !reason) throw new Error("Worker signal accessors unavailable");
+      const value = Reflect.apply(aborted, signal, []);
+      if (value !== true && value !== false) throw new Error("Worker signal state invalid");
+      result = { state: value ? 2 : 1, reason: value ? Reflect.apply(reason, signal, []) : undefined };
+    } catch (error) { ledger.recordingFailure(error); result = { state: error === undefined ? 3 : 4 }; }
+    signalSamples.set(signal, result); return result;
+  };
+  const request = sample(state.requestSignal), kinds = ["handler", "handler_observer", "fetch", "fetch_observer", "closed", "read", "cancel", "body_cancel", "waitUntil", "usage_ingest", "control_fetch", "control_body", "usage", "budget"];
+  const originals = first.originals.length > 4 ? null : first.originals.map(operation => {
+    const binding = operation.binding, reader = operation.kind === "closed" ? binding : binding?.resource;
+    const index = ledger.readers.indexOf(reader), receipt = index >= 0 ? reader.owner : undefined;
+    let mask = 0;
+    if (index >= 0 && reader.generation === ledger.generation) mask |= 1;
+    if (receipt && state.receipts.has(receipt) && reader.response === receipt.response) mask |= 2;
+    if (receipt?.owner?.state === state && receipt.owner.generation === ledger.generation && receipt.owner === state.requestOwner) mask |= 4;
+    if (index >= 0 && (operation.kind === "closed" ? operation.pending === reader.closed : binding.receiver === reader.reader)) mask |= 8;
+    const upstream = mask === 15 ? sample(receipt.signal) : { state: 0 };
+    const cancels = ledger.operations.filter(row => row.kind === "cancel" && row.binding?.resource === reader && row.binding.receiver === reader?.reader);
+    const args = cancels.length === 1 ? cancels[0].binding.args : undefined;
+    const argument = args && Object.getOwnPropertyDescriptor(args, "0");
+    const rejected = operation.state === "rejected";
+    const relation = value => rejected ? Object.is(operation.reason, value) ? 1 : 2 : 0;
+    return [operation.ordinal, kinds.indexOf(operation.kind) + 1, operation.entered, operation.settled,
+      index + 1, mask, rejected ? 2 : 1, rejected ? operation.reason === undefined ? 0 : 1 : -1,
+      argument && Object.hasOwn(argument, "value") ? relation(argument.value) : 0,
+      upstream.state, upstream.state === 2 ? relation(upstream.reason) : 0,
+      request.state === 2 ? relation(request.reason) : 0, index >= 0 ? reader.unlocks : -1, index >= 0 ? reader.returns : -1];
+  });
+  return { requestState: request.state, source: null, originals };
+}
+function qwenWorkerFailureRecord(input, join) {
+  const invalid = () => { throw new Error("invalid closed Qwen Worker witness"); };
+  if (!input || typeof input !== "object" || utilTypes.isProxy(input)) invalid();
+  const fields = Object.getOwnPropertyDescriptors(input);
+  if (Reflect.ownKeys(fields).join() !== "requestState,source,originals"
+    || Object.values(fields).some(field => !Object.hasOwn(field, "value"))) invalid();
+  const state = fields.requestState.value, source = fields.source.value, raw = fields.originals.value;
+  if (!Number.isSafeInteger(state) || state < 0 || state > 4) invalid();
+  const tuple = (raw, length) => {
+    if (utilTypes.isProxy(raw) || !Array.isArray(raw)) invalid();
+    const slots = Object.getOwnPropertyDescriptors(raw);
+    if (slots.length.value !== length || Reflect.ownKeys(slots).join() !== Array.from({length}, (_,i)=>String(i)).concat("length").join()
+      || Object.values(slots).some(field => !Object.hasOwn(field,"value"))) invalid();
+    const values = Array.from({length}, (_,i)=>slots[String(i)].value);
+    if (!values.every(Number.isSafeInteger) || values.some(value=>value < -1 || value > 65535)) invalid();
+    return values;
+  };
+  const producer = source === null ? null : tuple(source,4);
+  if (producer && (![0,1].includes(producer[0]) || producer[1]<0 || producer[2]<0 || ![0,1].includes(producer[3]))) invalid();
+  if (raw === null) return { requestState:state,source:producer,originals:null };
+  if (utilTypes.isProxy(raw) || !Array.isArray(raw)) invalid();
+  const rows = Object.getOwnPropertyDescriptors(raw), length = rows.length.value;
+  if (!Number.isSafeInteger(length) || length<0 || length>4 || length!==join[7]
+    || Reflect.ownKeys(rows).join()!==Array.from({length},(_,i)=>String(i)).concat("length").join()
+    || Object.values(rows).some(field=>!Object.hasOwn(field,"value"))) invalid();
+  let ordinal=0;
+  const originals=Array.from({length},(_,i)=>{
+    const r=tuple(rows[String(i)].value,14);
+    if(r[0]<=ordinal || r[1]<0 || r[1]>14 || r[2]<1 || r[3]<0 || r[3]!==0&&r[3]<=r[2]
+      || r[4]<0 || r[5]<0 || r[5]>15 || ![1,2].includes(r[6]) || r[9]<0 || r[9]>4
+      || ![0,1,2].includes(r[8]) || ![0,1,2].includes(r[10]) || ![0,1,2].includes(r[11])
+      || (r[6]===1 ? r[3]!==0||r[7]!==-1||r[8]!==0||r[10]!==0||r[11]!==0 : r[3]===0||![0,1].includes(r[7]))
+      || r[9]!==2&&r[10]!==0 || state!==2&&r[11]!==0 || r[5]!==15&&r[9]!==0
+      || (r[4]===0 ? r[5]!==0||r[12]!==-1||r[13]!==-1 : r[12]<0||r[13]<0)) invalid();
+    ordinal=r[0];return r;
+  });
+  return { requestState:state,source:producer,originals };
+}
+
 // The credential selects a case; only the original ingress call establishes
 // asynchronous request ancestry. Owned cleanup tails outlive public admission.
-function createQwenRequestOwnership(storage) {
+function createQwenRequestOwnership(storage, signalGetter) {
   const owners = new WeakMap(), retired = new WeakSet();
   function current() {
     const owner = storage.getStore();
@@ -415,6 +502,11 @@ function createQwenRequestOwnership(storage) {
     if (state.retirement || owners.has(state) || retired.has(state) || args[0] !== request) throw new Error("duplicate or retired Qwen request owner");
     const owner = Object.freeze({ state, request, generation: state.ledger.generation, original, receiver, args });
     owners.set(state, owner);
+    // One diagnostic native getter at ingress; failure stays independent.
+    state.requestOwner = owner;
+    try {
+      if (signalGetter) state.requestSignal = Reflect.apply(signalGetter, request, []);
+    } catch (error) { state.ledger.recordingFailure(error); }
     return storage.run(owner, () => state.ledger.invoke("handler", original, receiver, args, owner));
   }
   return { current, invoke, retire(state) { retired.add(state); } };
@@ -432,7 +524,8 @@ import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {sha256Hex} from './worker/utils.ts';
 ${createQwenLedger.toString()}
 ${createQwenRequestOwnership.toString()}
-const requestOwnership=createQwenRequestOwnership(new AsyncLocalStorage());
+${captureQwenWorkerFailure.toString()}
+const requestOwnership=createQwenRequestOwnership(new AsyncLocalStorage(),Object.getOwnPropertyDescriptor(Request.prototype,"signal")?.get);
 const rows=${JSON.stringify(rows)},regions=${JSON.stringify(regions)},states=new Map(),nativeFetch=globalThis.fetch;
 const credential=${credential.toString()};
 globalThis.fetch=function(input,init){
@@ -442,6 +535,7 @@ globalThis.fetch=function(input,init){
  const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
  s.calls.push({url,method:init?.method??(input instanceof Request?input.method:'GET'),original:secret==='Bearer '+credential(s.row),rotated:secret==='Bearer '+credential(s.row,true),noCaller:!headers.has('x-api-key')&&!headers.has('api-key')});
  const receipt={owner,original:nativeFetch,receiver:this,args:[input,init],pending:undefined,response:undefined};
+ try{const signal=Object.getOwnPropertyDescriptor(init??{},'signal');if(signal&&Object.hasOwn(signal,'value'))receipt.signal=signal.value;s.receipts.add(receipt);}catch(error){s.ledger.recordingFailure(error);}
  const original=s.ledger.invoke('fetch',nativeFetch,this,receipt.args,receipt);receipt.pending=original;
  s.ledger.follow('fetch_observer',original,[response=>{receipt.response=response;s.ledger.response(response,receipt);}]);return original;
 };
@@ -454,7 +548,7 @@ export default {async fetch(request,env,context){
   await authorityCall(env,'/policies/initialize-all',[]);await authorityCall(env,'/credentials/initialize-all',[]);
   await authorityCall(env,'/connections/initialize-all',regions.map(providerId=>({providerId,enabled:true,monthlyBudgetMicros:10000})));
   for(const row of rows){
-   const ledger=createQwenLedger(),s={row,ledger,calls:[],requests:0,status:null,retirement:undefined};
+   const ledger=createQwenLedger(),s={row,ledger,calls:[],receipts:new Set(),requests:0,status:null,retirement:undefined};
    s.env={...configured,USAGE_QUEUE:{send:event=>ledger.invoke('usage_ingest',ingestUsage,undefined,[env,event])}};
    // The real credential owner rejects empty stored grants. Exercise an empty
    // selected environment binding explicitly, without poisoning another owner.
@@ -478,7 +572,7 @@ export default {async fetch(request,env,context){
  if(path.startsWith('/fixture/join/')){
   const s=states.get(path.slice('/fixture/join/'.length));if(!s)throw Error('unknown Qwen fixture');
   if(!s.retirement)s.retirement=(async()=>{
-   const failures=[];try{await s.ledger.drain();}catch(error){failures.push(error);}
+   const failures=[];let firstWorker=null;try{await s.ledger.drain();}catch(error){failures.push(error);try{firstWorker=captureQwenWorkerFailure(s);}catch(reportError){failures.push(reportError);}}
    let source,usage,budget;try{source=await control(s,'proof');}catch(error){failures.push(error);}
    try{usage=await s.ledger.invoke('usage',usageSnapshot,undefined,[env,'fixture',s.row.id,{kind:'admin'}]);}catch(error){failures.push(error);}
    try{budget=await s.ledger.invoke('budget',budgetStatus,undefined,[env,s.row.id,{tenantId:'fixture',monthlyBudgetMicros:100}]);}catch(error){failures.push(error);}
@@ -487,7 +581,7 @@ export default {async fetch(request,env,context){
    try{await s.ledger.drain();}catch(error){failures.push(error);}
    try{s.ledger.seal();}catch(error){failures.push(error);}
    requestOwnership.retire(s);
-   return {retired:failures.length===0,calls:s.calls,source,usage,budget,status:s.status,requests:s.requests,charged:bodyBudgetCharged(),operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),readers:s.ledger.readers.map(r=>({unlocks:r.unlocks,returns:r.returns,locked:r.body.locked}))};
+   return {retired:failures.length===0,join:s.ledger.joinRecord(),worker:firstWorker,calls:s.calls,source,usage,budget,status:s.status,requests:s.requests,charged:bodyBudgetCharged(),operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),readers:s.ledger.readers.map(r=>({unlocks:r.unlocks,returns:r.returns,locked:r.body.locked}))};
   })();const proof=await s.retirement;return Response.json(proof,{status:proof.retired?200:500});
  }
  const authorization=request.headers.get('authorization'),s=[...states.values()].find(s=>authorization==='Bearer clawrouter-live-'+s.row.id+'-fixture-secret'||authorization==='Bearer clawrouter-live-'+s.row.id+'-invalid');
@@ -541,9 +635,15 @@ async function readControl(f, path, report) {
   if (report) {
     const id = path.startsWith("/fixture/join/") ? path.slice("/fixture/join/".length) : "none";
     const operations = Array.isArray(proof.operations) ? proof.operations : [];
-    report(qwenClosedRecord(id, id === "none" ? "setup" : "worker", "control", response.status === 200 ? "passed" : "failed", {
+    const record = qwenClosedRecord(id, id === "none" ? "setup" : "worker", "control", response.status === 200 ? "passed" : "failed", {
       operations: operations.length, rejected: operations.filter(op => op.state === "rejected").length, pending: operations.filter(op => op.state === "pending").length,
-    }));
+    });
+    if (response.status !== 200 && proof.worker && proof.join) {
+      const join = qwenJoinRecord(proof.join), source = proof.source;
+      const worker = qwenWorkerFailureRecord({ ...proof.worker,
+        source: source ? [source.held,source.canceled,source.expired,source.settled] : null }, join);
+      report({ ...record, v: 5, join, worker });
+    } else report(record);
   }
   assert.equal(response.status, 200, path === "/fixture/setup" ? "Worker setup failed" : "original Worker retirement failed");
   return proof;
@@ -3446,4 +3546,118 @@ test("Qwen v3 completion retains controlled provider rejections without extendin
   const { providerCancelled, ...old } = valid; old.v = 1;
   assert.throws(() => qwenEntryRecord(old)); assert.doesNotThrow(() => qwenEntryRecord({...old,rejected:0}));
   f.close();
+});
+
+test("Qwen relay completeness reconciles qualified original rejections in either record order", () => {
+  for (const sdkFirst of [false, true]) {
+    const relay = createQwenFailureRelay(), witness = createQwenEntryWitness(value => relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)));
+    witness.moduleEvaluated(); for (const row of rows) witness.registered(row.id); witness.registrationComplete();
+    for (const row of rows) {
+      const entry = witness.enter(row.id), partial = row.mode === "partial", provider = row.mode === "provider_error";
+      const counts = { operations: 10, rejected: partial || provider ? 3 : 0, pending: 0 };
+      const original = qwenClosedRecord(row.id, "join", "closed", "passed", counts);
+      if (sdkFirst) relay.text(closedSDKLine(original));
+      entry.complete(counts, partial ? 3 : 0, provider ? 3 : 0);
+      if (!sdkFirst) relay.text(closedSDKLine(original));
+    }
+    assert.deepEqual(witness.takeErrors(), []); assert.equal(relay.complete(), true);
+  }
+});
+test("Qwen relay cannot qualify mismatched, missing or unclassified rejected originals", () => {
+  for (const sdkFirst of [false, true]) for (const mode of ["counts", "failure", "missing", "unclassified"]) {
+    const relay = createQwenFailureRelay(), emitted = [];
+    const witness = createQwenEntryWitness(value => { emitted.push(value); relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)); });
+    witness.moduleEvaluated(); for (const row of rows) witness.registered(row.id); witness.registrationComplete();
+    const row = rows.find(row => row.mode === "provider_error"), entry = witness.enter(row.id);
+    const counts = { operations: 10, rejected: 3, pending: 0 };
+    const original = qwenClosedRecord(row.id, "join", "closed", mode === "failure" ? "failed" : "passed",
+      {...counts,rejected:mode === "counts" ? 2 : 3});
+    if (sdkFirst && mode !== "missing") relay.text(closedSDKLine(original));
+    entry.complete(counts, 0, mode === "unclassified" ? 0 : 3);
+    if (!sdkFirst && mode !== "missing") {
+      if (["counts", "failure"].includes(mode)) assert.throws(() => relay.text(closedSDKLine(original)));
+      else relay.text(closedSDKLine(original));
+    }
+    if (mode === "unclassified" || sdkFirst && ["counts", "failure"].includes(mode)) assert.ok(witness.takeErrors().length);
+    assert.equal(relay.complete(), false);
+  }
+});
+
+async function qwenWorkerWitnessFixture(mode = "owned") {
+  const ledger=createQwenLedger(), state={ledger,receipts:new Set()}, storage=new AsyncLocalStorage();
+  const incoming=new AbortController(), upstream=new AbortController(), reason={}, unrelated={};
+  const request=new Request("https://worker.fixture/",{signal:incoming.signal});
+  const ownership=createQwenRequestOwnership(storage,Object.getOwnPropertyDescriptor(Request.prototype,"signal").get);
+  const closed=qwenDeferred(), read=qwenDeferred(), cancellation=qwenDeferred(), repeated=qwenDeferred();
+  let calls=0;
+  const reader={closed:closed.promise,read(){return read.promise;},cancel(){return ++calls===1?cancellation.promise:repeated.promise;},releaseLock(){if(mode==="release")throw undefined;body.locked=false;}};
+  const body={locked:false,getReader(){body.locked=true;return reader;},cancel(){return Promise.resolve();}}, response={body};
+  let receipt;
+  await ownership.invoke(state,request,async()=>{
+    const owner=ownership.current();receipt={owner,response,signal:upstream.signal};state.receipts.add(receipt);
+    ledger.response(response,receipt);const actual=body.getReader();actual.read();
+    if(mode==="eof"){closed.resolve();read.resolve();}
+    else {
+      if(mode==="pre_cancel"){read.reject(unrelated);await Promise.resolve();}
+      incoming.abort(reason);upstream.abort(reason);closed.reject(reason);
+      if(mode!=="pre_cancel")read.reject(reason);
+      actual.cancel(reason);cancellation.reject(reason);
+      if(mode==="repeated"){actual.cancel(reason);repeated.reject(reason);}
+    }
+    try{actual.releaseLock();}catch(error){assert.equal(error,undefined);}
+  },undefined,[request]);
+  if(mode==="foreign")receipt.owner={...receipt.owner};
+  if(mode==="unknown_signal")receipt.signal=undefined;
+  if(mode==="accounting")ledger.observe("usage_ingest",Promise.reject(unrelated));
+  let error;try{await ledger.drain();}catch(value){error=value;}
+  const record=captureQwenWorkerFailure(state);
+  return {ledger,state,record,error,reason,unrelated,receipt,close(){ledger.restore();ownership.retire(state);}};
+}
+for(const mode of ["owned","pre_cancel","foreign","unknown_signal","repeated","release","accounting"])
+  test("Qwen Worker-local witness retains "+mode+" without admitting rejections",async()=>{
+    const f=await qwenWorkerWitnessFixture(mode);assert.ok(f.error);
+    const checked=qwenWorkerFailureRecord({...f.record,source:[0,1,0,1]},qwenJoinRecord(f.ledger.joinRecord()));
+    assert.equal(checked.requestState,2);assert.ok(checked.originals.every(row=>row[6]===2));
+    const read=checked.originals.find(row=>row[1]===6);
+    if(mode==="pre_cancel"){assert.equal(read[8],2);assert.equal(read[10],2);assert.equal(read[11],2);}
+    else if(mode==="foreign"||mode==="unknown_signal"){assert.equal(read[9],0);assert.equal(read[10],0);}
+    else {assert.equal(read[9],2);assert.equal(read[10],1);assert.equal(read[11],1);}
+    if(mode==="owned")assert.ok(checked.originals.every(row=>row[5]===15&&row[8]===1&&row[12]===1&&row[13]===1));
+    if(mode==="repeated")assert.ok(checked.originals.every(row=>row[8]===0));
+    if(mode==="release")assert.ok(f.error.errors.includes(undefined));
+    if(mode==="accounting")assert.ok(f.error.errors.includes(f.unrelated));
+    await assert.rejects(f.ledger.drain());f.close();
+  });
+test("Qwen Worker EOF remains distinct and held source work remains joined",async()=>{
+  const f=await qwenWorkerWitnessFixture("eof");assert.equal(f.error,undefined);assert.equal(f.record,null);
+  const held=qwenDeferred();f.ledger.observe("control_body",held.promise);let finished=false;
+  const joining=f.ledger.drain().then(()=>{finished=true;});
+  await Promise.resolve();await Promise.resolve();assert.equal(finished,false);held.resolve();await joining;f.close();
+});
+test("Qwen diagnostic request getter preserves original invocation and falsey faults",async()=>{
+  for(const reason of [undefined,false,{}]){
+    const ledger=createQwenLedger(),storage=new AsyncLocalStorage(),request={},state={ledger},receiver={},original=Promise.resolve({});
+    let getters=0,calls=0;const owner=createQwenRequestOwnership(storage,()=>{getters++;throw reason;});
+    const returned=owner.invoke(state,request,function(...args){calls++;assert.equal(this,receiver);assert.deepEqual(args,[request]);return original;},receiver,[request]);
+    assert.equal(returned,original);await returned;assert.equal(getters,1);assert.equal(calls,1);
+    await assert.rejects(ledger.drain(),error=>error.errors.some(value=>Object.is(value,reason)));
+  }
+});
+test("Qwen Worker tuple rejects malformed data and stays within real annotation bounds",async()=>{
+  const f=await qwenWorkerWitnessFixture(),join=qwenJoinRecord(f.ledger.joinRecord()),worker=qwenWorkerFailureRecord({...f.record,source:[0,1,0,1]},join);
+  const record={...qwenClosedRecord("qr0_partial_stream","worker","control","failed",{operations:f.ledger.operations.length,rejected:3,pending:0}),v:5,join,worker};
+  const relay=createQwenFailureRelay();relay.record(record);assert.equal(relay.complete(),false);
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(record))<=768);
+  assert.throws(()=>relay.text(closedSDKLine(record)));
+  for(const patch of [{requestState:5},{source:[0,1,0]},{source:[0,1,-1,1]},{originals:[]},{extra:true}])assert.throws(()=>qwenWorkerFailureRecord({...worker,...patch},join));
+  for(const [slot,value]of[[0,0],[1,15],[3,0],[5,16],[6,3],[7,2],[9,5],[10,3],[11,3],[12,-2]]){
+    const copy=worker.originals.map(row=>[...row]);copy[0][slot]=value;assert.throws(()=>qwenWorkerFailureRecord({...worker,originals:copy},join));
+  }
+  let getters=0;const accessor=[...worker.originals[0]];Object.defineProperty(accessor,8,{get(){getters++;return 1;}});
+  assert.throws(()=>qwenWorkerFailureRecord({...worker,originals:[accessor,...worker.originals.slice(1)]},join));assert.equal(getters,0);
+  const sparse=[...worker.originals[0]];sparse.length=15;assert.throws(()=>qwenWorkerFailureRecord({...worker,originals:[sparse,...worker.originals.slice(1)]},join));
+  const maximum={requestState:2,source:[1,65535,65535,1],originals:Array.from({length:4},(_,i)=>[65531+i,14,65530,65535,65535,15,2,1,2,2,2,2,65535,65535])};
+  const maxJoin=[0,0,0,0,0,0,0,4,0,0,-1,-1,-1,-1,-1];
+  const maxRecord={...record,join:maxJoin,worker:qwenWorkerFailureRecord(maximum,maxJoin),operations:65535,rejected:65535};
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(maxRecord))<=768);f.close();
 });

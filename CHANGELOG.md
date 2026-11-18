@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Reconcile Qwen SDK completion against its validated partial/provider-error dispositions without erasing original rejection counts. Retain separate Worker-local first-join ownership, cancellation and signal relations plus producer settlement facts; keep Worker retirement, usage and budget acceptance strict.
+
 - Recognize only the Qwen fixture’s fully owned, settled SDK-abort reader group after the exact controlled provider error and returned result. Keep the API error distinct from the request-abort reason, retain original rejected states and counts, and preserve all independent release, observer and restoration failures.
 
 - Relate Qwen first-join rejections to the retained SDK request signal and the actual controlled APIError at the existing transport-failure boundary. Sample only captured native signal accessors and own data fields, keep unknown provenance explicit, and retain strict provider-error and independent retirement failures.
