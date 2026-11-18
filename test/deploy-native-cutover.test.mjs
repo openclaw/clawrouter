@@ -338,3 +338,52 @@ test('owned cutovers converge across previous-version GETs and snapshot resets w
   t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,reads,lagged,mutationReplay:false}));
  });
 });
+
+test('admission observes selected-version lag after convergence and after a single POST',async t=>{
+ for(const scenario of ['pre-lag','pre-reset','post-lag','post-reset','lost-ack-lag','recovery-pre-lag','recovery-post-lag','recovery-lost-ack-lag','foreign-version','owner-drift','persistent-lag'])await t.test(scenario,async t=>{
+  const f=fixture(),wire=f.control,foreign='99999999-9999-9999-9999-999999999999';
+  const target=scenario.startsWith('recovery-')?recovery:green,fault=scenario.replace(/^recovery-/,'');
+  const prior=target===green?blue:green;
+  let revision=0,posts=0,readsOnTarget=0,lagged=0,postFault=false;
+  const server=createServer(async(req,res)=>{
+   const selected=f.latest.versions[0].version_id;
+   if(req.method==='POST'){
+    posts++;let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);
+    assert.equal(body.expectedRevision,revision);await wire.admission(body.accepting);revision++;
+    postFault=selected===target&&body.accepting&&['post-lag','post-reset','lost-ack-lag'].includes(fault);
+    if(postFault&&fault==='lost-ack-lag'){req.socket.destroy();return;}
+    res.setHeader('x-clawrouter-version-id',selected);res.setHeader('content-type','application/json');
+    res.end(JSON.stringify({status:200,accepting:body.accepting,revision}));return;
+   }
+   if(selected===target)readsOnTarget++;
+   // First green GET is valid. A later GET may still hit the preceding Worker.
+   const pre=selected===target&&posts===(target===green?1:3)&&readsOnTarget>=2&&(!lagged||fault==='persistent-lag')&&!['post-lag','post-reset','lost-ack-lag'].includes(fault);
+   let actual=selected,status=200;
+   if(pre||postFault){
+    lagged++;actual=fault==='foreign-version'?foreign:prior;
+    if(['pre-reset','post-reset'].includes(fault)){actual=target;status=500;}
+    if(fault==='owner-drift')f.latest.annotations={'workers/message':'foreign'};
+    postFault=false;
+   }
+   const s=await wire.snapshot(selected);s.control.revision=revision;
+   res.setHeader('x-clawrouter-version-id',actual);res.statusCode=status;res.setHeader('content-type','application/json');
+   res.end(JSON.stringify({status:200,state:s,control:s.control,slots:s.inspection}));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+  const origin='http://127.0.0.1:'+server.address().port;
+  const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},wait:f.wait,fetchImpl:(url,init)=>fetch(origin+new URL(url).pathname,init)});
+  if(['pre-lag','pre-reset','post-lag','post-reset','lost-ack-lag'].includes(fault)){
+   await assert.rejects(runNativeCutover({...f,control,smoke:async()=>{throw Error('planned runner stop');}}),/planned runner stop/);
+   await recoverNativeCutover({...f,control,state:deploymentState(f.latest)});
+   assert.equal(deploymentState(f.latest).status,'rolled-back');assert.equal(posts,4,'one POST per admission transition');
+   assert.equal(lagged,1);
+  }else{
+   const failure=scenario==='persistent-lag'?/deadline/:scenario==='owner-drift'?/not owned/:/selected-version mismatch/;
+   await assert.rejects(runNativeCutover({...f,control,timeoutMs:scenario==='owner-drift'?5000:10}),failure);
+   assert.equal(posts,1,'refused pre-read cannot open candidate admission');
+   assert.equal((await wire.snapshot(green)).accepting,false);
+  }
+  t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,lagged,mutationReplay:false}));
+ });
+});

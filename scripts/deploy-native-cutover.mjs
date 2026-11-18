@@ -109,8 +109,8 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
   }
   return {
     async snapshot(version) { const result = await request('GET',version); if (result.status !== 200) throw new Error('Native control snapshot refused'); return { ...snapshotState(result.state), control: result.control, inspection: result.slots }; },
-    async admission(accepting, version, { allowLegacy = false, runtimeSha } = {}) {
-      const before = await this.snapshot(version);
+    async admission(accepting, version, { allowLegacy = false, runtimeSha, observe = () => this.snapshot(version) } = {}) {
+      const before = await observe();
       const fenced = controlReady(before,runtimeSha ?? before.control?.runtimeSha);
       if (!fenced && (!allowLegacy || accepting)) throw new Error('Native admission control protocol is not available');
       if (!fenced && before.accepting === false) return; // legacy is only ever closed, never reopened
@@ -121,7 +121,7 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
       catch (cause) { error = cause; }
       // Never repeat an uncertain mutation. Reads reconcile a response lost after commit.
       for (let attempt=0; attempt<5; attempt++) {
-        const after = await this.snapshot(version);
+        const after = await observe();
         if (after.accepting === accepting && (!fenced || after.control?.revision === expectedRevision + 1)) return;
         if (attempt<4) await wait(1000);
       }
@@ -145,13 +145,13 @@ async function journal(api,state,version,phase,save,status='rolling',immediate=f
 }
 async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
   const observed = new Set(), runtimeSha = version === state.green ? state.native.runtimeSha : state.cutover.blueRuntimeSha;
-  await observeNativeControl({control,version,previousVersions:[state.blue,state.green,state.cutover.recovery],now,wait,timeoutMs,
+  return observeNativeControl({control,version,previousVersions:[state.blue,state.green,state.cutover.recovery],now,wait,timeoutMs,
     assertOwnership:async()=>{
       const {latest} = await owned(api,state);
       if (stableVersion(latest) !== version || latest.id !== state.deploymentId) throw new Error('Native cutover deployment changed during convergence');
     },
     validate:s=>{ if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect'); },
-    isReady:s=>kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha),
+    isReady:s=>kind === 'snapshot' || (kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha)),
     onPending:observation=>{
       const key = observation.kind === 'version' ? observation.actual : 'http500:' + (observation.actual ?? version);
       if (observed.has(key)) return;
@@ -160,6 +160,18 @@ async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
     },
     deadlineMessage:'Native ' + kind + ' deadline exceeded; preserve the remote recovery journal',
   });
+}
+async function admission({api,state,control,version,accepting,allowLegacy=false,now,wait,timeoutMs}) {
+  // A successful convergence GET does not pin the next edge request. Keep the
+  // admission pre-read and post-write reconciliation under the same owned,
+  // bounded observation policy. The admission POST remains single-shot.
+  const deadline=now()+Math.min(timeoutMs,60_000);
+  const observe=()=>{
+    const remaining=deadline-now();
+    if(remaining<=0)throw new Error('Native admission deadline exceeded; preserve the remote recovery journal');
+    return converge({api,state,control,version,kind:allowLegacy?'snapshot':'control',now,wait,timeoutMs:remaining});
+  };
+  await control.admission(accepting,version,{allowLegacy,runtimeSha:version===state.green?state.native.runtimeSha:state.cutover.blueRuntimeSha,observe});
 }
 export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=Date.now,wait=sleep,timeoutMs=NATIVE_PHASE_TIMEOUT_MS}) {
   await verifyCutoverRecovery(api,state);
@@ -181,7 +193,7 @@ export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=
   // leaves enough remote custody for recovery without its filesystem/artifacts.
   await verifyObservability(api,state,now());
   await journal(api,state,state.blue,'draining',save);
-  await control.admission(false,state.blue,{allowLegacy:true,runtimeSha:state.cutover.blueRuntimeSha});
+  await admission({api,state,control,version:state.blue,accepting:false,allowLegacy:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.blue,kind:'drain',now,wait,timeoutMs});
   await verifyCutoverRecovery(api,state);
   // A full traffic switch alone can leave active DOs on old code for five
@@ -189,7 +201,7 @@ export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=
   await verifyObservability(api,state,now());
   await journal(api,state,state.green,'warming',save,'rolling',true);
   await converge({api,state,control,version:state.green,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-  await control.admission(true,state.green,{runtimeSha:state.native.runtimeSha});
+  await admission({api,state,control,version:state.green,accepting:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.green,kind:'warm',now,wait,timeoutMs});
   await verifyObservability(api,state,now());
   await smoke(state.green);
@@ -209,13 +221,13 @@ export async function recoverNativeCutover({api,state,control,save=()=>{},now=Da
     const phase = active===state.blue?'recover-draining-blue':active===state.green?'recover-draining-green':'recover-draining-recovery';
     if (state.cutover.phase !== phase) await journal(api,state,active,phase,save);
     if (active !== state.blue) await converge({api,state,control,version:active,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-    await control.admission(false,active,{allowLegacy:active===state.blue,runtimeSha:active===state.green?state.native.runtimeSha:state.cutover.blueRuntimeSha});
+    await admission({api,state,control,version:active,accepting:false,allowLegacy:active===state.blue,now,wait,timeoutMs});
     await converge({api,state,control,version:active,kind:'drain',now,wait,timeoutMs});
     await verifyCutoverRecovery(api,state);
     await journal(api,state,state.cutover.recovery,'recover-warming',save,'rolling',true);
   }
   await converge({api,state,control,version:state.cutover.recovery,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-  await control.admission(true,state.cutover.recovery,{runtimeSha:state.cutover.blueRuntimeSha});
+  await admission({api,state,control,version:state.cutover.recovery,accepting:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.cutover.recovery,kind:'warm',now,wait,timeoutMs});
   await journal(api,state,state.cutover.recovery,'recover-warming',save,'rolled-back');
   state.recovery='compatible-native-restored'; save(state);
