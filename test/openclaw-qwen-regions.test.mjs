@@ -459,7 +459,7 @@ function qwenWorkerCancellation(state, source, usage, sealed) {
   const ledger = state.ledger, first = ledger.joinOriginals(), join = ledger.joinRecord();
   if (!sealed || sealed.generation !== ledger.generation || state.row.mode !== "partial"
     || state.requests !== 1 || state.status !== 200 || state.receipts.size !== 1
-    || !source || source.held !== 0 || source.canceled !== 1 || source.expired !== 0 || source.settled !== 1
+    || !source || source.held !== 0 || source.canceled !== 1 || source.cancelReturns !== 1 || source.active !== 0 || source.expired !== 0 || source.settled !== 1
     || source.calls?.length !== 1 || usage?.events?.length !== 1) return [];
   const event = usage.events[0];
   if (event.status !== "client_error" || event.credential_id !== state.row.id || event.provider !== state.row.provider
@@ -645,13 +645,13 @@ export default {async fetch(request,env,context){
 }
 
 function upstreamScript() {
-  return `const rows=${JSON.stringify(rows)},states=new Map(rows.map(row=>[row.id,{row,calls:[],held:0,canceled:0,expired:0,settled:0}]));const credential=${credential.toString()};
-export default {async fetch(request){
+  return `const rows=${JSON.stringify(rows)},states=new Map(rows.map(row=>[row.id,{row,calls:[],held:0,canceled:0,cancelReturns:0,active:0,expired:0,settled:0}]));const credential=${credential.toString()};
+export default {async fetch(request,env,ctx){
  const url=new URL(request.url);
  if(url.origin==='https://control.fixture'){
   const s=states.get(url.pathname.split('/')[2]);if(!s)throw Error('unknown source');
   if(s.producer){await s.producer;s.settled=1;}
-  return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,expired:s.expired,settled:s.settled});
+  return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,cancelReturns:s.cancelReturns,active:s.active,expired:s.expired,settled:s.settled});
  }
  const matches=[...states.values()].filter(s=>request.headers.get('authorization')==='Bearer '+credential(s.row)||request.headers.get('authorization')==='Bearer '+credential(s.row,true));
  if(matches.length!==1)throw Error('unbound upstream secret');const s=matches[0],body=await request.json();
@@ -660,12 +660,13 @@ export default {async fetch(request){
  const chunk=delta=>({id:'chat_fixture',object:'chat.completion.chunk',model:body.model,choices:[{index:0,delta,finish_reason:null}]});
  if(s.row.mode==='provider_error')return new Response(frame({error:{message:'synthetic provider error',code:'synthetic_error'}}),{headers:{'content-type':'text/event-stream'}});
  const first=frame(chunk({role:'assistant',content:'synthetic-answer'}));
- // Keep actual pending I/O alive without making pull wait for its own cancel.
- // The control route still joins the original producer, including expiry.
+ // Bounded native I/O lets the cross-Worker pump observe disconnection. Keep
+ // its original producer in this request's lifetime; control still joins it.
  if(s.row.mode==='partial')return new Response(new ReadableStream({start(c){s.held=1;c.enqueue(new TextEncoder().encode(first));
-  s.producer=new Promise((resolve,reject)=>{s.resolve=resolve;s.timer=setTimeout(()=>{s.expired++;s.held=0;c.error(Error('source expired'));reject(Error('source expired'));},10000);});
-  void s.producer.catch(()=>undefined);
- },cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;s.resolve?.();}}),{headers:{'content-type':'text/event-stream'}});
+  s.producer=new Promise((resolve,reject)=>{s.resolve=resolve;s.reject=reject;s.timer=setTimeout(()=>{s.expired++;s.held=0;c.error(Error('source expired'));reject(Error('source expired'));},10000);});
+  ctx.waitUntil(s.producer);
+ },pull(c){const pending=(async()=>{s.active++;try{await scheduler.wait(20);if(s.held)c.enqueue(new TextEncoder().encode(': fixture heartbeat\\n\\n'));}catch(error){clearTimeout(s.timer);s.held=0;s.reject(error);throw error;}finally{s.active--;}})();s.waiting=pending;return pending.finally(()=>{if(s.waiting===pending)s.waiting=undefined;});
+ },async cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;try{if(s.waiting)await s.waiting;s.cancelReturns++;s.resolve?.();}catch(error){s.reject(error);throw error;}}}),{headers:{'content-type':'text/event-stream'}});
  const usage=s.row.mode==='no_usage'?{}:{usage:{prompt_tokens:300,completion_tokens:20,total_tokens:320,prompt_tokens_details:{cached_tokens:256}}};
  const wire=first+frame({id:'chat_fixture',model:body.model,choices:[{index:0,delta:{},finish_reason:'stop'}],...usage})+'data: [DONE]\\n\\n';
  const bytes=new TextEncoder().encode(wire);let at=0;
@@ -673,44 +674,50 @@ export default {async fetch(request){
 }};`;
 }
 
-test("Qwen held producer joins cancellation and expiry without a cancellation-dependent pull", async t => {
+test("Qwen held producer joins bounded native work, cancellation and expiry", async t => {
   function fixture() {
-    const timers = new Map(), sources = []; let next = 0;
+    const timers = new Map(), sources = [], waits = [], lifetimes = []; let next = 0;
     class CapturedStream extends ReadableStream {
       constructor(source) { super(source); sources.push(source); }
     }
-    const { handler, states } = new Function("ReadableStream", "setTimeout", "clearTimeout",
+    const { handler, states } = new Function("ReadableStream", "setTimeout", "clearTimeout", "scheduler",
       upstreamScript().replace("export default", "const handler =") + ";return {handler,states};")(
       CapturedStream,
       (callback, delay) => { const id = ++next; timers.set(id, { callback, delay }); return id; },
-      id => timers.delete(id));
+      id => timers.delete(id), { wait(delay) { assert.equal(delay,20);return new Promise((resolve,reject)=>waits.push({resolve,reject})); } });
+    const context = {waitUntil(pending){lifetimes.push(pending);void pending.catch(()=>undefined);}};
     const row = rows.find(row => row.mode === "partial"), state = states.get(row.id);
     const response = () => handler.fetch(new Request("https://upstream.fixture/chat/completions", {
       method: "POST", headers: { authorization: "Bearer " + credential(row) },
       body: JSON.stringify({ model: row.model, messages: [], stream: true }),
-    }));
+    }), {}, context);
     const proof = () => handler.fetch(new Request("https://control.fixture/proof/" + row.id));
     const foreignProof = () => handler.fetch(new Request("https://control.fixture/proof/" + rows.find(row => row.mode === "eof").id));
-    return { timers, sources, state, response, proof, foreignProof };
+    return { timers, sources, state, response, proof, foreignProof, waits, lifetimes,
+      advance() { for(const wait of waits.splice(0))wait.resolve(); }, fail(error) { for(const wait of waits.splice(0))wait.reject(error); } };
   }
   for (const phase of ["before first read", "after first read", "with a pending read"]) {
     await t.test(phase, async () => {
       const f = fixture(), response = await f.response(), reader = response.body.getReader();
-      assert.equal(Object.hasOwn(f.sources[0], "pull"), false);
+      assert.equal(typeof f.sources[0].pull, "function");
       assert.equal(f.timers.size, 1); assert.equal([...f.timers.values()][0].delay, 10000);
       assert.equal(f.state.held, 1); assert.equal(f.state.settled, 0);
       assert.ok(f.state.producer instanceof Promise);
+      assert.deepEqual(f.lifetimes,[f.state.producer]);
       let controlSettled = false;
       const control = f.proof().then(value => { controlSettled = true; return value; });
       await Promise.resolve(); assert.equal(controlSettled, false);
       if (phase !== "before first read") assert.equal((await reader.read()).done, false);
       const pending = phase === "with a pending read" ? reader.read() : null;
       const reason = new Error("owned fixture cancellation");
-      await reader.cancel(reason); if (pending) assert.deepEqual(await pending, { value: undefined, done: true });
+      let canceled=false;const cancel=reader.cancel(reason).then(()=>{canceled=true;});
+      await Promise.resolve();if(f.waits.length)assert.equal(canceled,false);f.advance();await cancel;
+      if (pending) assert.deepEqual(await pending, { value: undefined, done: true });
       await reader.closed; reader.releaseLock();
       await f.state.producer;
       const proof = await (await control).json();
       assert.deepEqual([proof.held, proof.canceled, proof.expired, proof.settled], [0, 1, 0, 1]);
+      assert.equal(proof.active,0);assert.equal(proof.cancelReturns,1);
       assert.equal(f.timers.size, 0); assert.equal(response.body.locked, false);
       assert.deepEqual(await (await f.proof()).json(), proof);
     });
@@ -721,12 +728,14 @@ test("Qwen held producer joins cancellation and expiry without a cancellation-de
     await reader.read(); const pending = reader.read().catch(error => error);
     const control = f.proof().catch(error => error), producer = f.state.producer.catch(error => error);
     const [{ callback }] = f.timers.values(); f.timers.clear(); callback();
+    f.advance();
     const original = await producer;
     assert.equal(original.message, "source expired"); assert.equal(await control, original);
     assert.equal((await pending).message, "source expired"); assert.equal((await closed).message, "source expired");
     assert.deepEqual([f.state.held, f.state.canceled, f.state.expired, f.state.settled], [0, 0, 1, 0]);
     await assert.rejects(reader.cancel(), error => error.message === "source expired");
     reader.releaseLock(); assert.equal(f.state.canceled, 0);
+    assert.equal(f.state.active,0);assert.equal(f.state.cancelReturns,0);
     await assert.rejects(f.proof(), error => error === original);
   });
   await t.test("foreign control cannot settle or cancel the source", async () => {
@@ -738,6 +747,18 @@ test("Qwen held producer joins cancellation and expiry without a cancellation-de
     await response.body.cancel();
     const proof = await (await f.proof()).json();
     assert.deepEqual([proof.held, proof.canceled, proof.expired, proof.settled], [0, 1, 0, 1]);
+  });
+  await t.test("native producer failure preserves falsey originals and never becomes cancellation", async () => {
+    for(const reason of [undefined,false,{}]){
+      const f=fixture(),response=await f.response(),reader=response.body.getReader();
+      const closed=reader.closed.catch(error=>({present:true,error}));await reader.read();
+      const read=reader.read().catch(error=>({present:true,error}));
+      const control=f.proof().catch(error=>({present:true,error}));
+      const producer=f.state.producer.catch(error=>({present:true,error}));f.fail(reason);
+      for(const pending of [closed,read,control,producer]){const actual=await pending;assert.equal(actual.present,true);assert.equal(actual.error,reason);}
+      assert.deepEqual([f.state.held,f.state.active,f.state.canceled,f.state.cancelReturns,f.state.expired,f.state.settled],[0,0,0,0,0,0]);
+      assert.equal(f.timers.size,0);reader.releaseLock();
+    }
   });
 });
 
@@ -786,7 +807,7 @@ function assertProof(row, proof) {
   }
   assert.ok(proof.operations.every((o, index) => o.state === (canceled.includes(index) ? "rejected" : "fulfilled")));
   assert.ok(proof.readers.every(r => r.unlocks === 1 && r.returns === 1 && !r.locked));
-  assert.equal(proof.source.held, 0); assert.equal(proof.source.expired, 0);
+  assert.equal(proof.source.held, 0); assert.equal(proof.source.expired, 0); assert.equal(proof.source.active,0);
   const calls = proof.source.calls; assert.equal(calls.length, paid(row) ? 1 : 0); assert.equal(proof.calls.length, calls.length);
   if (calls.length) {
     const call = calls[0]; assert.equal(call.method, "POST"); assert.equal(call.url, bases[regions.indexOf(row.provider)] + "/chat/completions");
@@ -799,7 +820,7 @@ function assertProof(row, proof) {
     if (row.model.startsWith("qwen3.8-")) assert.equal(call.body.reasoning_effort, row.mode === "effort_off" ? undefined : row.mode === "effort_low" ? "low" : row.mode === "effort_medium" ? "medium" : "xhigh");
     assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|synthetic-poison/);
   }
-  if (row.mode === "partial") { assert.equal(proof.source.canceled, 1); assert.equal(proof.source.settled, 1); }
+  if (row.mode === "partial") { assert.equal(proof.source.canceled, 1); assert.equal(proof.source.cancelReturns,1); assert.equal(proof.source.settled, 1); }
   const events = proof.usage.events;
   if (row.mode === "preabort") { assert.equal(proof.requests, 0); assert.equal(events.length, 0); return; }
   if (row.mode === "invalid_caller") { assert.equal(proof.status, 401); assert.equal(events.length, 0); return; }
@@ -2103,6 +2124,38 @@ test("shipping regional Worker reaches each original origin and joins positive m
     for (const row of selected) try { assertProof(row, await readControl(f, "/fixture/join/" + row.id)); } catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, "positive Worker retirement failed");
   }, () => f.close()]);
+});
+
+test("shipping regional Worker joins its partial producer without qualifying unrelated reader failures", { timeout: 60_000 }, async () => {
+  const f = await startFixture(), row = rows.find(row => row.mode === "partial" && !row.simple);
+  await finish(async () => {
+    await readControl(f, "/fixture/setup");
+    const response = await fetch(f.origin + "/v1/native/" + row.provider + "/chat/completions", {
+      method: "POST", headers: { authorization: "Bearer " + key(row.id), "content-type": "application/json" },
+      body: JSON.stringify({ model: row.model, stream: true, max_tokens: 128, messages: [
+        { role: "assistant", content: "", ...(row.model === "qwen3.5-plus" ? {} : { reasoning_content: "synthetic-prior-thinking" }), tool_calls: [{ id: "callfixture", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: "callfixture", content: "synthetic-tool-result" }, { role: "user", content: "synthetic request" },
+      ] }),
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader(); assert.equal((await reader.read()).done, false);
+    await reader.cancel(new Error("owned partial fixture cancellation")); reader.releaseLock();
+    const control = await fetch(f.origin + "/fixture/join/" + row.id), proof = await control.json();
+    assert.ok(proof.source,"source must return its original producer proof");
+    assert.deepEqual([proof.source.held,proof.source.canceled,proof.source.cancelReturns,proof.source.active,proof.source.expired,proof.source.settled],[0,1,1,0,0,1]);
+    assert.ok(proof.readers.every(reader=>reader.unlocks===1&&reader.returns===1&&!reader.locked));
+    if(proof.retired){assert.equal(control.status,200);assertProof(row,proof);}
+    else {
+      assert.equal(control.status,500);assert.deepEqual(proof.workerCancelled,[]);
+      assert.ok(proof.operations.some(operation=>operation.state==="rejected"));
+    }
+    assert.equal(proof.requests,1);assert.equal(proof.status,200);assert.equal(proof.charged,0);
+    assert.equal(proof.budget.ledger,"durable_object");assert.equal(proof.budget.limitMicros,100);assert.equal(proof.budget.spentMicros,7);
+    assert.equal(proof.usage.events.length,1);const event=proof.usage.events[0];
+    assert.equal(event.status,"client_error");assert.equal(event.credential_id,row.id);assert.equal(event.provider,row.provider);
+    assert.equal(event.actual_cost_micros,7);assert.equal(event.cost_basis,"policy_fixed");
+    assert.deepEqual([event.input_tokens,event.output_tokens,event.total_tokens,event.cached_input_tokens],[null,null,null,null]);
+  }, [() => f.close()]);
 });
 
 test("shipping regional Worker rejects missing, empty, foreign and invalid selected credentials before egress", { timeout: 60_000 }, async () => {
@@ -3751,7 +3804,7 @@ async function qwenWorkerWitnessFixture(mode = "owned") {
 async function qwenWorkerAssessmentFixture(mode = "owned") {
   const f = await qwenWorkerWitnessFixture(mode);
   f.state.row = rows.find(row => row.mode === "partial"); f.state.requests = 1; f.state.status = 200;
-  f.source = { held: 0, canceled: 1, expired: 0, settled: 1, calls: [{}] };
+  f.source = { held: 0, canceled: 1, cancelReturns: 1, active: 0, expired: 0, settled: 1, calls: [{}] };
   f.usage = { events: [{ status: "client_error", credential_id: f.state.row.id,
     provider: f.state.row.provider, model: f.state.row.provider + "/" + f.state.row.model }] };
   f.ledger.restore();
@@ -3788,6 +3841,7 @@ for (const mode of ["eof", "pre_cancel", "foreign", "unknown_signal", "repeated"
 test("Qwen Worker cancellation requires actual source settlement and matching accounting", async () => {
   const f = await qwenWorkerAssessmentFixture(), goodSource = f.source, goodUsage = f.usage;
   for (const source of [undefined, {...goodSource,held:1}, {...goodSource,canceled:0}, {...goodSource,canceled:2},
+    {...goodSource,cancelReturns:0}, {...goodSource,cancelReturns:2}, {...goodSource,active:1},
     {...goodSource,expired:1}, {...goodSource,settled:0}, {...goodSource,calls:[]}, {...goodSource,calls:[{},{}]}]) {
     f.source=source; assert.deepEqual(f.assess(), []);
   }
@@ -3831,7 +3885,7 @@ test("Qwen Worker later independent faults cannot be hidden by the first cancell
     const fault=sameReason?f.reason:undefined;f.ledger.recordingFailure(fault);
     f.ledger.restore();let final;
     try{await f.ledger.drain();}catch(error){final=error;}
-    const sealed=f.ledger.seal(), source={held:0,canceled:1,expired:0,settled:1,calls:[{}]};
+    const sealed=f.ledger.seal(), source={held:0,canceled:1,cancelReturns:1,active:0,expired:0,settled:1,calls:[{}]};
     const usage={events:[{status:"client_error",credential_id:f.state.row.id,provider:f.state.row.provider,
       model:f.state.row.provider+"/"+f.state.row.model}]};
     const group=qwenWorkerCancellation(f.state,source,usage,sealed);

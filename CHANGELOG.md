@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Keep the Qwen synthetic upstream producer in its originating request context and use bounded native waits between SSE heartbeats so the cross-Worker pump can observe cancellation. Join the pending producer wait before recording cancel return; require no active work, exactly one returned cancellation and no expiry. Local source-retirement proof does not admit unrelated reader rejections or replace the full hosted SDK/Worker qualification.
+
 - Keep the Qwen partial-stream fixture's bounded producer alive independently of pull completion. Join its original settlement on cancellation or expiry, including cancellation before the first pull. Assess only the exact owned Worker reader rejection group and errors retained from its ledger drains after strict joins, source cancellation and caller-cancellation accounting; retain original rejected states and all independent retirement, control and accounting failures. Hosted cancellation behavior requires fresh qualification.
 
 - Reconcile Qwen SDK completion against its validated partial/provider-error dispositions without erasing original rejection counts. Retain separate Worker-local first-join ownership, cancellation and signal relations plus producer settlement facts; keep Worker retirement, usage and budget acceptance strict.
