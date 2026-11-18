@@ -32,17 +32,18 @@ test("workerd answers a cooling grant pool with 429 and Retry-After, and exhaust
     const feedback = (key, state) => owner.fetch("https://clawrouter.internal/grant-pools/feedback", { method: "POST", body: JSON.stringify({ key, state: { observedAt, source: "provider_response", grantRevision: "2026-01-01T00:00:00Z", ...state } }) });
     // One policy's only grant is rate limited for a minute; another's model-scoped
     // quota is exhausted without a published reset; the third's credential failed.
-    assert.equal((await feedback("oauth/cooling/anthropic", { status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), lastSignal: "rate_limited", windows: [] })).status, 200);
+    const retryAt = new Date(Date.now() + 60_000).toISOString();
+    assert.equal((await feedback("oauth/cooling/anthropic", { status: "cooldown", cooldownUntil: retryAt, lastSignal: "rate_limited", windows: [] })).status, 200);
     assert.equal((await feedback("oauth/exhausted/anthropic", { status: "cooldown", cooldownUntil: null, lastSignal: "quota", windows: [{ id: "week-sonnet", kind: "requests", remaining: 0, limit: 100, resetAt: null, models: ["sonnet"] }] })).status, 200);
     assert.equal((await feedback("oauth/unauthorized/anthropic", { status: "cooldown", cooldownUntil: new Date(Date.now() + 300_000).toISOString(), lastSignal: "authentication", windows: [] })).status, 200);
     const send = (id) => fetch(new URL("/v1/messages", origin), { method: "POST", headers: { authorization: `Bearer clawrouter-live-${id}-${secret}`, "content-type": "application/json" }, body: JSON.stringify({ model: "anthropic/claude-sonnet-5", max_tokens: 16, messages: [{ role: "user", content: "hello" }] }), signal: AbortSignal.timeout(10_000) });
-    const body = (type, requestId) => ({ type: "error", error: { type, message: "provider anthropic has no available scoped upstream grant" }, request_id: requestId });
+    const body = (type, requestId, retryAt) => ({ type: "error", error: { type, message: 'provider anthropic has no available scoped upstream grant for model "claude-sonnet-5"' + (retryAt ? `; earliest possible retry at ${retryAt} (eligibility rechecked on retry)` : "") }, request_id: requestId });
 
     const cooling = await send("cooling");
     assert.equal(cooling.status, 429);
     assert.ok(["59", "60"].includes(cooling.headers.get("retry-after")), cooling.headers.get("retry-after"));
     assert.ok(cooling.headers.get("access-control-expose-headers").split(",").includes("retry-after"));
-    assert.deepEqual(await cooling.json(), body("rate_limit_error", cooling.headers.get("request-id")));
+    assert.deepEqual(await cooling.json(), body("rate_limit_error", cooling.headers.get("request-id"), retryAt));
     assert.equal(cooling.headers.get("x-clawrouter-error-code"), "upstream_grant_pool_unavailable");
 
     const exhausted = await send("exhausted");

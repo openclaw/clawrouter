@@ -25,6 +25,26 @@ export const bifrostCases = ["eof", "preabort", "partial", "provider_error"].fla
 
 export const bifrostControls=["stream","simple"].flatMap(api=>["eof","preabort","partial","provider_error"].map(control=>({id:`bifrost_control_${api}_${control}`,mode:control,api,control})));
 export const bifrostProgressCases=["stream","simple"].map(api=>({id:`bifrost_${api}_progress`,mode:"progress",api}));
+// A discovery receipt cannot stand in for a dispatched chat receipt. Both
+// failure fixtures send output before termination, so the fixed charge survives.
+export function assertBifrostFailedChatAccounting(row, proof) {
+  if (!["partial", "provider_error"].includes(row.mode)) return;
+  const events = proof.events.filter(event => event.capability === "llm.chat");
+  assert.equal(events.length, 1, "one accounting receipt for the dispatched chat");
+  const event = events[0];
+  assert.equal(event.provider, "bifrost");
+  assert.equal(event.policy_id, row.id);
+  assert.equal(event.credential_id, row.id);
+  assert.equal(event.model, "tenant/opaque-a");
+  assert.equal(event.status, row.mode === "partial" ? "client_error" : "provider_error");
+  assert.equal(event.status_code, 200, "retain the original successful SSE HTTP status");
+  assert.equal(event.reserved_cost_micros, 7);
+  assert.equal(event.actual_cost_micros, 7);
+  assert.equal(event.cost_basis, "policy_fixed");
+  for (const field of ["input_tokens", "output_tokens", "total_tokens", "cached_input_tokens"])
+    assert.equal(event[field], null, "no terminal usage was received: " + field);
+  assert.equal(proof.charged, 0, "retirement releases the body capacity reservation");
+}
 export function bifrostNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
  const names=["createBifrostFetchObserver","createBifrostProviderErrorOrigin","createBifrostTransportWitness","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostNativeContract","bifrostCancelOperand","bifrostStoredErrorVector","bifrostProviderErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
@@ -1184,7 +1204,7 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application, 
     assert.equal(proof.disposition,"provisional_worker_deadline_read");
     assert.equal(application?.status,502);
     assert.deepEqual(application.body,{error:{code:"provider_unavailable",message:"upstream request to provider bifrost failed"}});
-    assert.deepEqual(proof.operations.filter(r=>r.state!=="fulfilled").map(r=>[r.ordinal,r.kind,r.state]),[
+    assert.deepEqual(Array.from(proof.operations.filter(r=>r.state!=="fulfilled"),r=>[r.ordinal,r.kind,r.state]),[
       [proof.deadline.readOrdinal,"read","rejected"],[proof.deadline.observerOrdinal,"read_observer","rejected"]]);
   }else assert.ok(proof.operations.every(r=>r.state==='fulfilled'));
   assert.ok(proof.readers.every(r=>r.unlocks===1&&!r.locked));
@@ -2192,6 +2212,35 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   assert.equal(store.profiles[provider.apiKey].provider,"bifrost");
   assert.equal(store.profiles[provider.apiKey].type,"api_key");
  });
+ for (const mode of ["partial", "provider_error"]) {
+  function failedChatEvidence() {
+   const row={id:"owned_"+mode,mode};
+   const discovery={capability:"models.list",provider:"bifrost",policy_id:row.id};
+   const chat={capability:"llm.chat",provider:"bifrost",policy_id:row.id,credential_id:row.id,model:"tenant/opaque-a",
+    status:mode==="partial"?"client_error":"provider_error",status_code:200,reserved_cost_micros:7,actual_cost_micros:7,cost_basis:"policy_fixed",
+    input_tokens:null,output_tokens:null,total_tokens:null,cached_input_tokens:null};
+   return {row,proof:{events:[discovery,chat],charged:0},chat};
+  }
+  test("Bifrost failed-chat accounting accepts owned "+mode+" after discovery in either order",()=>{
+   const {row,proof}=failedChatEvidence();assertBifrostFailedChatAccounting(row,proof);
+   proof.events.reverse();assertBifrostFailedChatAccounting(row,proof);
+  });
+  const mutations={
+   "discovery only":v=>{v.proof.events.pop();},"duplicate chat":v=>{v.proof.events.push({...v.chat});},
+   "foreign provider":v=>{v.chat.provider="foreign";},"foreign policy":v=>{v.chat.policy_id="foreign";},
+   "foreign credential":v=>{v.chat.credential_id="foreign";},"foreign model":v=>{v.chat.model="foreign";},
+   "wrong capability":v=>{v.chat.capability="models.list";},"success status":v=>{v.chat.status="success";},
+   "wrong failure":v=>{v.chat.status=mode==="partial"?"provider_error":"client_error";},
+   "invented wire status":v=>{v.chat.status_code=499;},"refunded charge":v=>{v.chat.actual_cost_micros=0;},
+   "missing reservation":v=>{v.chat.reserved_cost_micros=0;},"wrong basis":v=>{v.chat.cost_basis="none";},
+   "held capacity":v=>{v.proof.charged=1;},
+   ...Object.fromEntries(["input_tokens","output_tokens","total_tokens","cached_input_tokens"].flatMap(field=>[
+    [field+" invented",v=>{v.chat[field]=0;}],[field+" missing",v=>{delete v.chat[field];}]]))
+  };
+  for(const [name,change]of Object.entries(mutations))test("Bifrost failed-chat accounting rejects "+mode+" "+name,()=>{
+   const v=failedChatEvidence();change(v);assert.throws(()=>assertBifrostFailedChatAccounting(v.row,v.proof));
+  });
+ }
  function progressEvidence(){
   const w=nativeEvidence(),t=w.transports[0];w.owner.id="bifrost_progress";t.socketRequest={};t.socket={};t.socketClosedAt=20;w.caller.controlInvoke=21;
   w.caller.progress={accepted:true,enqueued:true,alreadyCanceled:false};
@@ -2348,6 +2397,14 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
     const proof={retired:true,deadline:f,disposition:"provisional_worker_deadline_read",operations:c.s.ops.map(o=>({kind:o.kind,state:o.state,ordinal:o.ordinal})),readers:[{unlocks:1,locked:false}],charged:0,source:c.s.source,calls:c.s.calls};
     const application={status:502,body:{error:{code:"provider_unavailable",message:"upstream request to provider bifrost failed"}}};
     assertBifrostRetired(proof,{workerDeadline:true,application});assert.throws(()=>assertBifrostRetired(proof));
+    const foreign=runInNewContext("JSON.parse(json)",{json:JSON.stringify(proof)});
+    assert.notEqual(Object.getPrototypeOf(foreign.operations),Array.prototype);
+    assertBifrostRetired(foreign,{workerDeadline:true,application});
+    for(const change of [r=>{r.ordinal++;},r=>{r.kind="cancel";},r=>{r.state="pending";}]){
+      const invalid=runInNewContext("JSON.parse(json)",{json:JSON.stringify(proof)});
+      change(invalid.operations.find(r=>r.state==="rejected"));
+      assert.throws(()=>assertBifrostRetired(invalid,{workerDeadline:true,application}));
+    }
     assert.throws(()=>assertBifrostRetired(proof,{workerDeadline:true,application:{status:502,body:{data:[]}}}));
     assert.throws(()=>assertBifrostRetired(proof,{workerDeadline:true}));
   });
@@ -2387,7 +2444,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
       }catch(error){report.mark(index,"assertions","rejected",error);report.flush(index);throw error;}
       },async proof=>{
       report.mark(index,"accounting","enter");
-      try{assert.ok(proof.events.length>=1);
+      try{assert.ok(proof.events.length>=1);assertBifrostFailedChatAccounting(row,proof);
       for(const event of proof.events){assert.equal(event.provider,'bifrost');assert.equal(event.policy_id,row.id);
         if(event.capability==='models.list'){assert.equal(event.model,null);assert.equal(event.actual_cost_micros,0);assert.equal(event.reserved_cost_micros,0);}
         else if(event.status==='success'){assert.equal(event.actual_cost_micros,7);assert.equal(event.input_tokens,4);assert.equal(event.output_tokens,3);}

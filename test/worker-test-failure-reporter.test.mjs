@@ -7,8 +7,10 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
+import { types } from "node:util";
 import { parse } from "yaml";
-import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
+import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
+import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -191,6 +193,19 @@ test("Bifrost Worker diagnostic: full existing LiteLLM group omits the entire Bi
 });
 // END Bifrost Worker diagnostic pure tests.
 
+test("Bifrost Worker evidence cannot be dropped by an incompatible script relay", async () => {
+  const result = await bifrostWorkerDiagnosticCase({ fault: "join" });
+  const worker = bifrostWorkerEvents(result.frames[0]), search = observationEvents();
+  const script = [
+    { type: "test:enqueue", data: search.enqueue },
+    { type: "test:fail", data: search.terminal },
+    ...[observationBoundary(), observationCleanup()].map(row => ({ type: "test:diagnostic",
+      data: { ...search.location, message: observationDiagnosticText(row) } })),
+  ];
+  for (const events of [[...worker, ...script], [...script, ...worker]])
+    await assert.rejects(bifrostWorkerPipeline(events), /conflicting reporter invocation families/);
+});
+
 // BEGIN worker abort diagnostic pure tests.
 function abortDiagnosticSource() {
   const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
@@ -288,14 +303,13 @@ function workerAbortRuntime() {
     argv: ["/fixture/node", "worker/test/litellm-model-discovery.test.mjs", "worker/test/other.test.mjs"],
     execArgv: ["--test", "--test-reporter=./scripts/worker-test-failure-reporter.mjs", "--test-reporter-destination=stdout"], cwd: () => "/fixture" };
 }
-function pureWorkerReporter(runtime = workerAbortRuntime()) {
+function pureWorkerReporter(runtime = workerAbortRuntime(), tracked = file => typeof file === "string" && /^(?:worker\/)?test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(file) ? file : null) {
   const source = readFileSync("scripts/worker-test-failure-reporter.mjs", "utf8");
   const definitions = source.slice(source.indexOf("const failureTypes"), source.indexOf("function trackedTestFiles"))
     + source.slice(source.indexOf("function failureRecord"), source.indexOf("export default workerFailureReport"));
   // Only the unchanged filesystem resolver is inert here; the producer, native
   // event admission, selection and escaped serializer are the actual source.
-  const tracked = file => typeof file === "string" && /^(?:worker\/)?test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(file) ? file : null;
-  return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep);
+  return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", "parseObservationDiagnostic", "searchObservationContract", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep, parseObservationDiagnostic, searchObservationContract);
 }
 function workerAbortNativeEvents(frame) {
   const native = { testId: 7, parentId: undefined, name: "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement",
@@ -1513,6 +1527,132 @@ test("owned HTTP/1 reset pure: producer proof joins original and attached observ
   assert.deepEqual(litellmProducerOwners(r), [{ call: 0, held: true, chat: false, finished: true, eof: false, cancels: 1, fulfilledCancels: 1, operations: 2, observers: 4 }]);
   r.operations[1].producer = { ...producer }; assert.throws(() => litellmProducerOwners(r));
 });
+
+// BEGIN producer final snapshot ordering pure tests.
+async function producerSnapshotCase({ previousOrder = false, alreadySettled = false, cancel = true, expiry = false, rejectWait = false, observerFault = false, reason } = {}) {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("export function litellmObserveProducer("), source.indexOf("export function litellmOwnedH1Reset("));
+  const upstreamText = new Function(code.replace(/^export (?=(?:async )?function )/gm, "") + ";return upstreamFixture();")();
+  let stream, now = 0, resolveWait, rejectWaiting, reachedProof;
+  const held = new Promise((resolve, reject) => { resolveWait = resolve; rejectWaiting = reject; });
+  const proofEntered = new Promise(resolve => { reachedProof = resolve; });
+  const events = [], diagnostics = [];
+  let row;
+  let waitingCalls = 0, finishes = 0;
+  class FakeResponse {
+    constructor(body, { status = 200 } = {}) { this.body = body; this.status = status; this.bodyUsed = false; }
+    static json(value) { const response = new FakeResponse(null); response.value = JSON.stringify(value); return response; }
+    async json() { this.bodyUsed = true; return JSON.parse(this.value); }
+  }
+  class FakeStream { constructor(original) { this.source = original; stream = this; } }
+  class Rows extends Map { set(id, value) { row = value; return super.set(id, value); } }
+  const upstream = new Function("Response", "ReadableStream", "TextEncoder", "scheduler", "Date", "Map", upstreamText.replace("export default", "return"))(
+      FakeResponse, FakeStream, class { encode(text) { return { byteLength: text.length }; } },
+      { wait(ms) { assert.equal(ms, 20); waitingCalls++; return held; } }, { now: () => now }, Rows);
+  const request = { url: "https://gateway.example/team/v1/models", method: "GET", body: null,
+    headers: { get: () => "Bearer fixture-upstream-native_abort" },
+    signal: { addEventListener() {}, removeEventListener() { finishes++; } } };
+  await upstream.fetch({ url: "https://fixture.test/setup", json: async () => [{ id: "native_abort", mode: "held" }] });
+  await upstream.fetch(request);
+  const controller = { enqueue() {}, close() { assert.fail("held producer must not close"); }, error() {} };
+  await stream.source.pull(controller);
+  const pull = stream.source.pull(controller);
+  assert.equal(pull, row.operations[1].promise);
+  if (observerFault) {
+    const op = row.operations[1]; let state = op.state;
+    Object.defineProperty(op, "state", { get: () => state, set(value) { state = value; throw reason; } });
+  }
+  const facts = resetRemoteFacts();
+  const fetchControl = async action => {
+    events.push(action);
+    if (action === "proof") reachedProof();
+    const response = await upstream.fetch({ url: "https://fixture.test/" + action + "/native_abort" });
+    return response.json();
+  };
+  const f = { origin: "https://fixture.test", async started() { events.push("started"); },
+    proof: () => fetchControl("proof"), state: () => fetchControl("state"),
+    async control(action) { events.push(action); return action === "started" ? { started: true } : action === "retire" ? facts.proof : action === "observation" ? facts.observed : facts.usage; } };
+  let cancellation;
+  const owner = () => ({ start() { events.push("caller_start"); }, async ready() { events.push("caller_ready"); },
+    reset() { events.push("reset"); if (cancel && !expiry) { cancellation = stream.source.cancel(); assert.equal(cancellation, row.operations.at(-1).promise); } },
+    async join() { events.push("caller_join"); }, async close() { events.push("caller_close"); return []; } });
+  let callback, body = abortDiagnosticSource().body;
+  if (previousOrder) {
+    const line = '      const source = await f.proof("native_abort");\n';
+    assert.equal(body.split(line).length, 2);
+    body = body.replace(line, "").replace('      const usage = await f.control("usage", "native_abort");\n', value => line + value);
+  }
+  new Function("test", "withGateway", "workerAbortEvidence", "litellmOwnedH1Reset", "httpRequest", "Socket", "key", "assertLiteLLMResetRetirement", "litellmFailurePostlude", "assert", body)(
+    (name, options, fn) => { callback = fn; }, async (rows, run) => run(f), workerAbortEvidence, owner, {}, class {}, () => "inert",
+    resetSourceFunctions().assertLiteLLMResetRetirement, () => assert.fail("retire did not fail"), assert);
+  if (alreadySettled) { resolveWait(); await pull; }
+  let completed = false;
+  const result = callback({ diagnostic(value) { diagnostics.push(value); } }).then(
+    () => { completed = true; return { failed: false }; }, error => { completed = true; return { failed: true, error }; });
+  return { events, operations: row.operations, observerFailures: row.observerFailures, diagnostics, result, proofEntered,
+    completed: () => completed, counts: () => ({ waitingCalls, finishes }),
+    async finish() {
+      if (expiry) now = 10001;
+      if (rejectWait) rejectWaiting(reason); else resolveWait();
+      await Promise.allSettled([pull]);
+      if (cancel && expiry) cancellation = stream.source.cancel();
+      await Promise.allSettled([cancellation]);
+      return result;
+    } };
+}
+test("producer final snapshot pure: existing join precedes final state and preserves request counts", async () => {
+  const old = await producerSnapshotCase({ previousOrder: true });
+  const oldResult = await old.result;
+  assert.equal(oldResult.failed, true); assert.equal(oldResult.error.actual, 1); assert.equal(oldResult.error.expected, 0);
+  assert.ok(!old.events.includes("proof")); await old.finish();
+  const current = await producerSnapshotCase(); await current.proofEntered;
+  assert.equal(current.completed(), false); assert.ok(!current.events.includes("state"));
+  assert.deepEqual(current.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.deepEqual(current.operations.map(op => op.kind), ["pull", "pull", "cancel"]);
+  assert.equal((await current.finish()).failed, false);
+  assert.deepEqual(current.events, ["caller_start", "caller_ready", "started", "started", "reset", "caller_join", "retire", "observation", "proof", "state", "usage", "caller_close"]);
+  assert.deepEqual(current.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.ok(current.operations.every(op => op.state === "fulfilled"));
+  const settledOld = await producerSnapshotCase({ previousOrder: true, alreadySettled: true });
+  assert.equal((await settledOld.finish()).failed, false);
+  const restoredOrder = current.events.filter(name => name !== "proof");
+  restoredOrder.splice(restoredOrder.indexOf("usage"), 0, "proof");
+  assert.deepEqual(settledOld.events, restoredOrder);
+  const original = abortDiagnosticSource().body;
+  for (const call of ['f.proof("native_abort")', 'f.state("native_abort")', 'f.control("observation", "native_abort")', 'f.control("usage", "native_abort")']) assert.equal(original.split(call).length, 2);
+});
+test("producer final snapshot pure: join cannot manufacture cancellation or erase expiry", async () => {
+  const missing = await producerSnapshotCase({ cancel: false }); await missing.proofEntered;
+  assert.deepEqual(missing.counts(), { waitingCalls: 1, finishes: 0 });
+  assert.deepEqual(missing.operations.map(op => op.kind), ["pull", "pull"]);
+  const absent = await missing.finish(); assert.equal(absent.failed, true); assert.equal(absent.error.actual, 0); assert.equal(absent.error.expected, 1);
+  assert.deepEqual(missing.counts(), { waitingCalls: 1, finishes: 0 });
+  const expired = await producerSnapshotCase({ expiry: true }); await expired.proofEntered;
+  const failure = await expired.finish(); assert.equal(failure.failed, true); assert.equal(failure.error.actual, 1); assert.equal(failure.error.expected, 0);
+  assert.deepEqual(expired.counts(), { waitingCalls: 1, finishes: 1 });
+  assert.ok(!expired.events.includes("usage"));
+});
+test("producer final snapshot pure: original and observer rejections stay fatal including undefined", async () => {
+  for (const reason of [undefined, {}]) for (const observerFault of [false, true]) {
+    const c = await producerSnapshotCase({ reason, observerFault, rejectWait: !observerFault }); await c.proofEntered;
+    const result = await c.finish(); assert.equal(result.failed, true); assert.equal(result.error.code, "ERR_ASSERTION");
+    if (observerFault) assert.ok(c.observerFailures.some(value => value === reason));
+    else for (const op of c.operations.slice(1)) { assert.equal(op.state, "rejected"); assert.equal(Object.hasOwn(op, "error"), true); assert.equal(op.error, reason); }
+    assert.ok(c.events.includes("caller_close"));
+  }
+});
+test("producer final snapshot pure: proof shares stage17 and preserves independent cleanup failures", async () => {
+  for (const undefinedFault of [false, true]) {
+    const result = await abortDiagnosticCase({ fault: "proof", undefinedFault, secondary: ["caller_cleanup", "dispose", "remove"] });
+    assert.equal(result.failed, true); assert.deepEqual(result.record.first, [17, 0, !undefinedFault]);
+    const leaves = value => value instanceof AggregateError ? value.errors.flatMap(leaves) : [value];
+    assert.deepEqual(leaves(result.error), Array(4).fill(undefinedFault ? undefined : result.failure));
+    assert.equal(result.calls.filter(value => value === "proof").length, 1);
+    for (const name of ["caller_cleanup", "dispose", "remove"]) assert.ok(result.calls.includes(name));
+    assert.ok(!result.calls.includes("final_state") && !result.calls.includes("usage"));
+  }
+});
+// END producer final snapshot ordering pure tests.
 test("owned HTTP/1 reset pure: restoration late failures and primary undefined stay independent", async () => {
   const c = inertResetCaller({ holdClose: true, removeFault: true }); c.caller.start(); await c.caller.ready(); c.caller.reset();
   const original = {}; c.socket.emit("error", original); c.close();
@@ -1819,7 +1959,7 @@ for (const [name, body] of [
 
 test("a native child exercises the actual reporter without invoking hostile getters", async () => {
   const f = await fixture(prelude + `
-    import { workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
+    import { createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
     test('getter isolation', async () => {
       let reads = 0;
       const error = Object.defineProperties({}, Object.fromEntries(
@@ -1985,8 +2125,379 @@ test("workflow preserves typecheck order, the full default-concurrency glob and 
   const scripts = workflow.jobs["script-tests"], step = scripts.steps.find(step => step.name === "Script tests with bounded failure identities");
   assert.equal(scripts["timeout-minutes"], 10);
   assert.equal(step.run, "node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs");
-  assert.equal(step.if, undefined);
-  assert.equal(scripts.steps.at(-1), step);
+  const validation = scripts.steps.at(-1);
+  assert.equal(scripts.steps.indexOf(validation), scripts.steps.indexOf(step) + 1);
+  assert.equal(validation.name, "Validate native preflight workflow expression contexts");
+  for (const gate of [step, validation]) {
+    assert.equal(gate.if, undefined);
+    assert.equal(gate["continue-on-error"], undefined);
+  }
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:scripts"], "node --test test/*.test.mjs");
   for (const file of ["scripts/worker-test-failure-reporter.mjs", "test/worker-test-failure-reporter.test.mjs", ".github/workflows/ci.yml"]) assert.equal(affectsOpenClawContract(file), false);
 });
+
+// BEGIN inert observation diagnostic tests (extract without native child fixtures).
+const observationBoundary = (overrides = {}) => ({ v: 1, kind: "boundary", case: "variants", operation: "twenty_gets", stage: "begin", state: "rejected", failurePresent: true, reasonDefined: false, ...overrides });
+const observationCleanup = (overrides = {}) => ({ v: 1, kind: "cleanup", case: "variants", registered: true, dispose: "fulfilled", disposeDefined: null, remove: "fulfilled", removeDefined: null, recorderFailures: 0, recorderFirstDefined: null, ...overrides });
+function observationEvents() {
+  const location = { entryFile: searchObservationContract.file, file: searchObservationContract.file, line: 257, column: 1, nesting: 0 };
+  return { location, enqueue: { ...location, name: searchObservationContract.name, testId: 9 }, terminal: { ...location, name: searchObservationContract.name, testId: 9 },
+    failure: { v: 1, kind: "failure", file: searchObservationContract.file, line: 257, failureType: "testCodeFailure", errorClass: "unknown", code: "ERR_TEST_FAILURE" } };
+}
+function inertObservationRelay() { return createObservationRelay(value => value === searchObservationContract.file ? value : null); }
+function feedObservation(relay, events, rows = [observationBoundary(), observationCleanup()]) {
+  relay.observe("test:enqueue", events.enqueue);
+  relay.observe("test:fail", events.terminal, events.failure);
+  for (const row of rows) relay.observe("test:diagnostic", { ...events.location, message: observationDiagnosticText(row) });
+}
+test("inert observation schema preserves undefined presence and canonical complete records", () => {
+  for (const row of [observationBoundary(), observationBoundary({ reasonDefined: true }), observationCleanup()]) assert.deepEqual(parseObservationDiagnostic(observationDiagnosticText(row)), row);
+  assert.throws(() => observationDiagnosticText(observationBoundary({ failurePresent: false })));
+  assert.throws(() => observationDiagnosticText(observationCleanup({ disposeDefined: false })));
+});
+test("inert observation schema refuses duplicate keys, escapes, foreign fields and non-ASCII", () => {
+  const text = observationDiagnosticText(observationBoundary());
+  for (const bad of [text.replace('"v":1', '"v":1,"v":1'), text.replace('"variants"', '"\\u0076ariants"'), text + " ", "preamble" + text, text.replace('"variants"', '"foreign"'), text.replace('"begin"', '"é"'), text + "x".repeat(641)]) assert.throws(() => parseObservationDiagnostic(bad));
+  assert.throws(() => observationDiagnosticText({ ...observationBoundary(), private: "not permitted" }));
+});
+test("inert observation schema and event reader never invoke getters or proxy traps", () => {
+  let reads = 0;
+  const getter = Object.defineProperty({}, "operation", { get() { reads++; throw undefined; } });
+  const proxy = new Proxy({}, { ownKeys() { reads++; throw undefined; }, get() { reads++; throw undefined; }, getOwnPropertyDescriptor() { reads++; throw undefined; } });
+  for (const value of [getter, proxy]) assert.throws(() => observationDiagnosticText(value));
+  const relay = inertObservationRelay(); relay.observe("test:enqueue", proxy); relay.observe("test:diagnostic", Object.defineProperty({}, "file", { get() { reads++; } }));
+  assert.equal(reads, 0); assert.equal(relay.finish().active, false);
+});
+test("inert observation relay binds native coordinates rather than payload case or arrival order", () => {
+  const events = observationEvents(), relay = inertObservationRelay();
+  for (const row of [observationCleanup(), observationBoundary()]) relay.observe("test:diagnostic", { ...events.location, message: observationDiagnosticText(row) });
+  relay.observe("test:fail", events.terminal, events.failure); relay.observe("test:enqueue", events.enqueue);
+  assert.deepEqual(relay.finish().records, [observationBoundary(), observationCleanup()]);
+});
+test("inert observation relay rejects late coordinate collisions including another name", () => {
+  for (const name of [searchObservationContract.name, "unrelated native test"]) {
+    const events = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, events);
+    relay.observe("test:enqueue", { ...events.enqueue, name, testId: 10 });
+    assert.equal(relay.finish().records[0].state, "incomplete");
+    assert.deepEqual(relay.finish().targetFailure, events.failure);
+  }
+});
+test("inert observation relay rejects missing location, terminal and conflicting child identity", () => {
+  for (const variant of ["file", "entryFile", "column", "nesting", "testId", "terminal", "foreignId"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    if (variant !== "terminal" && variant !== "foreignId") delete e.enqueue[variant];
+    relay.observe("test:enqueue", e.enqueue);
+    if (variant !== "terminal") relay.observe("test:fail", variant === "foreignId" ? { ...e.terminal, testId: 77 } : e.terminal, e.failure);
+    for (const row of [observationBoundary(), observationCleanup()]) relay.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(row) });
+    const r = relay.finish(); assert.equal(r.active && r.records.some(row => row.kind === "boundary"), false);
+  }
+});
+test("inert observation relay rejects foreign child diagnostics and duplicate or incomplete pairs", () => {
+  for (const variant of ["foreign", "duplicate", "missing", "malformed"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    feedObservation(relay, e, variant === "missing" ? [observationBoundary()] : [observationBoundary(), observationCleanup()]);
+    if (variant !== "missing") relay.observe("test:diagnostic", { ...e.location, ...(variant === "foreign" ? { entryFile: "test/foreign.test.mjs" } : {}), message: variant === "malformed" ? searchObservationContract.prefix + "{" : observationDiagnosticText(observationBoundary()) });
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+});
+test("inert observation relay treats pending cleanup and contradictory success as incomplete", () => {
+  const e = observationEvents(), pending = inertObservationRelay(); feedObservation(pending, e, [observationBoundary(), observationCleanup({ dispose: "pending" })]);
+  assert.equal(pending.finish().records[0].reason, "cleanup_incomplete");
+  const contradictory = inertObservationRelay(); contradictory.observe("test:enqueue", e.enqueue); contradictory.observe("test:pass", e.terminal);
+  for (const row of [observationBoundary(), observationCleanup()]) contradictory.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(row) });
+  assert.equal(contradictory.finish().records[0].reason, "diagnostics_conflict");
+});
+test("inert observation ledger distinguishes operand rejection from later assertion failure", () => {
+  for (const stage of ["dispatch", "response_ok", "byte_bound", "json", "assertion"]) {
+    const out = [], ledger = createObservationLedger(text => out.push(parseObservationDiagnostic(text)));
+    ledger.select("initial_snapshot"); ledger.mark(stage); ledger.body(true, undefined); ledger.flush();
+    assert.equal(out[0].stage, stage); assert.equal(out[0].reasonDefined, false); assert.equal(out[1].registered, false); assert.equal(out[1].dispose, "unregistered");
+  }
+});
+test("inert observation ledger retains undefined body and both original cleanup failures", async () => {
+  const out = [], order = [], second = {}, ledger = createObservationLedger(text => out.push(parseObservationDiagnostic(text)));
+  ledger.registered(); ledger.body(true, undefined);
+  await assert.rejects(ledger.cleanup(() => { order.push("dispose"); throw undefined; }, () => { order.push("remove"); return Promise.reject(second); }), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === second);
+  assert.deepEqual(order, ["dispose", "remove"]); assert.equal(out[0].reasonDefined, false); assert.equal(out[1].disposeDefined, false); assert.equal(out[1].removeDefined, true);
+  assert.deepEqual(ledger.failures().cleanup, [undefined, second]);
+});
+test("inert observation ledger joins held originals before subsequent cleanup and reporting", async () => {
+  let releaseDispose, releaseRemove; const out = [], order = [], ledger = createObservationLedger(text => out.push(text)); ledger.registered(); ledger.body(false);
+  const disposing = new Promise(resolve => { releaseDispose = resolve; }), removing = new Promise(resolve => { releaseRemove = resolve; });
+  const done = ledger.cleanup(() => { order.push("dispose"); return disposing; }, () => { order.push("remove"); return removing; });
+  await Promise.resolve(); assert.deepEqual(order, ["dispose"]); assert.equal(out.length, 0);
+  releaseDispose(); await Promise.resolve(); assert.deepEqual(order, ["dispose", "remove"]); assert.equal(out.length, 0);
+  releaseRemove(); await done; assert.equal(out.length, 2);
+});
+test("inert observation ledger preserves sole undefined cleanup and all recorder failures", async () => {
+  const ledger = createObservationLedger(() => { throw undefined; }); ledger.registered(); ledger.body(true, undefined);
+  const original = {}; let remove = 0;
+  await assert.rejects(ledger.cleanup(() => { throw original; }, () => { remove++; }), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+  assert.equal(remove, 1); assert.deepEqual(ledger.failures().reporting, [undefined, undefined]);
+  const sole = createObservationLedger(() => {}); sole.registered(); sole.body(false); let caught = false;
+  try { await sole.cleanup(() => { throw undefined; }, () => {}); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+});
+test("inert observation ledgers remain invocation-owned and flush at most once", () => {
+  const a = [], b = [], first = createObservationLedger(x => a.push(parseObservationDiagnostic(x))), second = createObservationLedger(x => b.push(parseObservationDiagnostic(x)));
+  first.select("head"); second.select("post"); first.body(true, undefined); second.body(false); first.flush(); second.flush(); first.flush();
+  assert.equal(a.length, 2); assert.equal(b.length, 2); assert.equal(a[0].operation, "head"); assert.equal(b[0].operation, "post");
+});
+test("inert observation quota keeps target identity inside nine essentials after earlier failures", () => {
+  const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e); const result = relay.finish();
+  const earlier = Array.from({ length: 9 }, (_, i) => ({ ...e.failure, file: "test/another.test.mjs", line: i + 1 }));
+  const selected = selectFailureRecords(earlier, [], result);
+  assert.deepEqual(selected[0], e.failure); assert.equal(selected.length, 7); assert.equal(selected.length + result.records.length, 9);
+  assert.deepEqual(selectFailureRecords(earlier, [], { active: false }), earlier);
+});
+test("inert observation full-stream overflow cannot acquire complete binding", () => {
+  const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+  for (let i = 0; i < 257; i++) relay.observe("test:enqueue", { ...e.enqueue, line: 1000 + i, name: "unrelated" });
+  assert.equal(relay.finish().records[0].reason, "bounded_overflow");
+});
+test("inert observation maximum-width command and total budgets remain closed", () => {
+  for (const row of [observationBoundary({ operation: "observation_create", stage: "cleanup_registration", reasonDefined: true }), observationCleanup({ recorderFailures: 1000000, recorderFirstDefined: false, dispose: "rejected", disposeDefined: false, remove: "rejected", removeDefined: true })]) {
+    const admitted = parseObservationDiagnostic(observationDiagnosticText(row));
+    const command = annotation(admitted, "notice");
+    assert.ok(Buffer.byteLength(command) <= 768); assert.ok(Buffer.byteLength(command) * 10 <= 8192);
+  }
+});
+test("inert observation absent-target output retains the exact original identity bytes", () => {
+  const e = observationEvents(), relay = inertObservationRelay();
+  relay.observe("test:enqueue", { ...e.enqueue, name: "another case" });
+  relay.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(observationBoundary()) });
+  const disposition = relay.finish(); assert.equal(disposition.active, false);
+  const selected = selectFailureRecords([e.failure], [], disposition);
+  assert.equal(selected[0], e.failure);
+  assert.equal(annotation(selected[0], "error"), '::error title=Worker test identity::{"v":1,"kind":"failure","file":"test/search-semantics-observe.test.mjs","line":257,"failureType":"testCodeFailure","errorClass":"unknown","code":"ERR_TEST_FAILURE"}\n');
+  const summary = { v: 1, kind: "summary", failureEvents: 1, reported: 1, omittedEvents: 0, unknownFiles: 0, countsSaturated: false };
+  assert.equal(annotation(summary, "error"), '::error title=Worker test identity::{"v":1,"kind":"summary","failureEvents":1,"reported":1,"omittedEvents":0,"unknownFiles":0,"countsSaturated":false}\n');
+});
+test("inert observation cleanup retains original call receiver, arguments and returned promise", async () => {
+  const receiver = { calls: 0 }, argument = {}, original = Promise.resolve(), out = [];
+  function dispose(value) { assert.equal(this, receiver); assert.equal(value, argument); this.calls++; return original; }
+  const ledger = createObservationLedger(text => out.push(text)); ledger.registered(); ledger.body(false);
+  const bound = () => { const result = dispose.call(receiver, argument); assert.equal(result, original); return result; };
+  await ledger.cleanup(bound, () => {}); assert.equal(receiver.calls, 1); assert.equal(out.length, 2);
+});
+test("inert observation relay rejects late reused child IDs and foreign terminal collisions", () => {
+  for (const type of ["test:enqueue", "test:fail"]) {
+    const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+    relay.observe(type, type === "test:enqueue" ? { ...e.enqueue, line: 999, name: "other" } : { ...e.terminal, name: "other" }, e.failure);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+});
+test("inert terminal P2 missing or non-positive own native ID never completes binding", () => {
+  for (const value of [undefined, 0, -1, 1.5, "9"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    if (value === undefined) delete e.terminal.testId; else e.terminal.testId = value;
+    feedObservation(relay, e);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const e = observationEvents(), relay = inertObservationRelay(); let getters = 0;
+  Object.defineProperty(e.terminal, "testId", { get() { getters++; throw undefined; } });
+  feedObservation(relay, e); assert.equal(relay.finish().records[0].state, "incomplete"); assert.equal(getters, 0);
+});
+test("inert terminal P2 late same-child native ID at different coordinates is conflicting", () => {
+  for (const type of ["test:pass", "test:fail"]) {
+    const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+    relay.observe(type, { ...e.terminal, line: e.terminal.line + 1, name: "other native case" }, e.failure);
+    const result = relay.finish(); assert.equal(result.records[0].state, "incomplete"); assert.equal(result.targetFailure, e.failure);
+  }
+});
+async function inertWorkerIdentityRows(events) {
+  // Exercise the actual map/budget/summary loop with an inert tracked-file predicate.
+  // No native runner, Git discovery, file fixtures, child or event serialization runs.
+  const run = pureWorkerReporter({ ...workerAbortRuntime(), argv: ["/fixture/node", searchObservationContract.file, realtimeObservationContract.file] },
+    file => (file === searchObservationContract.file || file === realtimeObservationContract.file) || /^test\/earlier-[0-9]+\.test\.mjs$/.test(file) ? file : null);
+  const commands = [];
+  for await (const line of run(events)) commands.push(line);
+  assert.ok(commands.length <= 10); assert.ok(Buffer.byteLength(commands.join("")) <= 8192);
+  for (const line of commands) assert.ok(Buffer.byteLength(line) <= 768);
+  return commands.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+}
+test("inert terminal P2 both buffers full before target still retain its original identity", async () => {
+  const e = observationEvents(), events = [{ type: "test:enqueue", data: e.enqueue }];
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { ...e.terminal, entryFile: `test/earlier-${i}.test.mjs`, file: `test/earlier-${i}.test.mjs`, name: "earlier", testId: 100 + i } });
+  for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, line: 1000 + i, name: "other", testId: 1000 + i } });
+  for (const row of [observationBoundary(), observationCleanup()]) events.push({ type: "test:diagnostic", data: { ...e.location, message: observationDiagnosticText(row) } });
+  events.push({ type: "test:fail", data: { ...e.terminal, details: { error: undefined } } });
+  const rows = await inertWorkerIdentityRows(events), failures = rows.filter(r => r.kind === "failure"), summary = rows.at(-1);
+  assert.equal(failures[0].file, searchObservationContract.file); assert.equal(failures[0].line, e.terminal.line);
+  assert.equal(failures[0].errorClass, "undefined"); assert.equal(rows.find(r => r.kind === "observation_delivery").reason, "bounded_overflow");
+  assert.equal(rows.some(r => r.kind === "boundary"), false);
+  assert.equal(summary.failureEvents, 10); assert.equal(summary.reported, 8); assert.equal(summary.omittedEvents, 2);
+  assert.equal(summary.diagnosticsReported, 1); assert.equal(summary.diagnosticsOmitted, 2);
+});
+test("inert terminal P2 buffers filling after target preserve identity without complete credit", async () => {
+  const e = observationEvents(), events = [{ type: "test:enqueue", data: e.enqueue }, { type: "test:fail", data: e.terminal }];
+  for (const row of [observationBoundary(), observationCleanup()]) events.push({ type: "test:diagnostic", data: { ...e.location, message: observationDiagnosticText(row) } });
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { ...e.terminal, entryFile: `test/earlier-${i}.test.mjs`, file: `test/earlier-${i}.test.mjs`, name: "later", testId: 100 + i } });
+  for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, line: 1000 + i, name: "other", testId: 1000 + i } });
+  const rows = await inertWorkerIdentityRows(events);
+  assert.equal(rows[0].file, searchObservationContract.file); assert.equal(rows[0].line, e.terminal.line);
+  assert.equal(rows.find(r => r.kind === "observation_delivery").reason, "bounded_overflow");
+  assert.equal(rows.some(r => r.kind === "boundary"), false); assert.equal(rows.at(-1).failureEvents, 10);
+  assert.equal(rows.at(-1).reported, 8); assert.equal(rows.at(-1).omittedEvents, 2);
+});
+test("inert terminal P2 absent target keeps the actual reporter loop output unchanged", async () => {
+  const rows = await inertWorkerIdentityRows([{ type: "test:fail", data: { file: "test/earlier-0.test.mjs", line: 1, details: { error: undefined } } }]);
+  assert.deepEqual(rows, [
+    { v: 1, kind: "failure", file: "test/earlier-0.test.mjs", line: 1, failureType: "unknown", errorClass: "undefined", code: "unknown" },
+    { v: 1, kind: "summary", failureEvents: 1, reported: 1, omittedEvents: 0, unknownFiles: 0, countsSaturated: false },
+  ]);
+});
+// END inert observation diagnostic tests.
+
+// BEGIN inert realtime diagnostic tests (no native runner or fixture import).
+const realtimeBoundary = (caseId = "r01", extra = {}) => ({ v: 1, kind: "realtime_boundary", case: caseId, operation: "assert_elapsed", failurePresent: true, reasonDefined: false, unreportedCases: 0, ...extra });
+const realtimeCleanup = (caseId = "r01", extra = {}) => ({ v: 1, kind: "realtime_cleanup", case: caseId, registered: true, outcomes: "ffuffffff", recorderFailures: 0, recorderFirstDefined: null, unreportedCases: 0, ...extra });
+function realtimeEvents(index = 0) {
+  const location = { entryFile: realtimeObservationContract.file, file: realtimeObservationContract.file, line: 500 + index, column: 1, nesting: 0 };
+  const native = { ...location, name: realtimeObservationContract.names[index], testId: index + 1 };
+  return { location, enqueue: native, terminal: { ...native }, failure: { v: 1, kind: "failure", file: location.file, line: location.line, failureType: "testCodeFailure", errorClass: "undefined", code: "ERR_TEST_FAILURE" } };
+}
+function inertRealtimeRelay() { return createObservationRelay(file => [searchObservationContract.file, realtimeObservationContract.file].includes(file) ? file : null, true); }
+function feedRealtime(relay, e, rows, failed = true) {
+  relay.observe("test:enqueue", e.enqueue); relay.observe(failed ? "test:fail" : "test:pass", e.terminal, failed ? e.failure : undefined);
+  for (const row of rows) relay.observe("test:diagnostic", { ...e.location, message: realtimeDiagnosticText(row) });
+}
+test("inert realtime all twelve pairs bind separately and select first native failure", () => {
+  const relay = inertRealtimeRelay();
+  for (let i = 0; i < 12; i++) {
+    const id = `r${String(i + 1).padStart(2, "0")}`;
+    feedRealtime(relay, realtimeEvents(i), [realtimeBoundary(id, { failurePresent: i >= 3, reasonDefined: i >= 3 ? false : null }), realtimeCleanup(id)], i >= 3);
+  }
+  const result = relay.finish(); assert.equal(result.records.length, 2);
+  assert.equal(result.records[0].case, "r04"); assert.equal(result.records[0].unreportedCases, 11); assert.equal(result.omitted, 22); assert.equal(result.targetFailure.line, 503);
+});
+test("inert realtime missing failing pair never substitutes a later complete success", () => {
+  const relay = inertRealtimeRelay(); feedRealtime(relay, realtimeEvents(), []);
+  feedRealtime(relay, realtimeEvents(1), [realtimeBoundary("r02", { failurePresent: false, reasonDefined: null }), realtimeCleanup("r02")], false);
+  assert.equal(relay.finish().records[0].reason, "diagnostics_incomplete"); assert.equal(relay.finish().targetFailure.line, 500);
+});
+test("inert realtime shared coordinates and late foreign-name or child-ID reuse deny binding", () => {
+  for (const type of ["test:enqueue", "test:pass", "test:fail"]) {
+    const relay = inertRealtimeRelay(), e = realtimeEvents(); feedRealtime(relay, e, [realtimeBoundary(), realtimeCleanup()]);
+    relay.observe(type, { ...e.terminal, name: "unselected", file: searchObservationContract.file, line: 900 }, e.failure);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const relay = inertRealtimeRelay();
+  for (let i = 0; i < 12; i++) { const e = realtimeEvents(i); e.enqueue.line = e.terminal.line = e.location.line = 368; feedRealtime(relay, e, [realtimeBoundary(`r${String(i + 1).padStart(2, "0")}`), realtimeCleanup(`r${String(i + 1).padStart(2, "0")}`)]); }
+  assert.equal(relay.finish().records[0].reason, "ambiguous_coordinates");
+});
+test("inert realtime missing native fields and wrong payload labels stay incomplete", () => {
+  for (const field of ["testId", "entryFile", "file", "line", "column", "nesting"]) {
+    const e = realtimeEvents(), relay = inertRealtimeRelay(); delete e.terminal[field]; feedRealtime(relay, e, [realtimeBoundary(), realtimeCleanup()]);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+  const e = realtimeEvents(), relay = inertRealtimeRelay(); feedRealtime(relay, e, [realtimeBoundary("r02"), realtimeCleanup("r02")]);
+  assert.equal(relay.finish().records[0].reason, "diagnostics_conflict");
+});
+test("inert realtime exact schema rejects unsafe values, duplicate JSON and bounds", () => {
+  let touched = 0;
+  for (const value of [new Proxy({}, { ownKeys() { touched++; } }), Object.defineProperty({}, "kind", { get() { touched++; } }), realtimeBoundary({ toString() { touched++; } })]) assert.throws(() => realtimeDiagnosticText(value));
+  assert.equal(touched, 0);
+  const text = realtimeDiagnosticText(realtimeBoundary());
+  for (const bad of [text.replace('"v":1', '"v":1,"v":1'), "prefix" + text, text + " ", text.replace('"r01"', '"é"'), text + "x".repeat(641)]) assert.throws(() => parseRealtimeDiagnostic(bad));
+  assert.throws(() => realtimeDiagnosticText({ ...realtimeBoundary(), unknown: true }));
+});
+test("inert realtime original cleanup preserves undefined primary and every independent failure", async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const run = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  const out = [], order = [], reasons = Array.from({ length: 8 }, () => ({}));
+  const ledger = createRealtimeLedger("r01", text => out.push(parseRealtimeDiagnostic(text))); ledger.registered(); ledger.body(true, undefined);
+  const fail = (label, reason) => { order.push(label); throw reason; };
+  await assert.rejects(run(ledger, () => fail("release", undefined), [{ close() { fail("socket", reasons[0]); } }], () => fail("drain", reasons[1]), [Promise.resolve({ failed: true, error: reasons[2] })],
+    { dispose() { fail("dispose", reasons[3]); } }, { finish() { fail("observer", reasons[4]); } }, { close(callback) { order.push("server"); callback(reasons[5]); } }, () => fail("remove", reasons[6]), "synthetic", [reasons[7]], true, undefined), error => {
+      assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [undefined, undefined, ...reasons]); return true;
+    });
+  assert.deepEqual(order, ["release", "socket", "drain", "dispose", "observer", "server", "remove"]);
+  assert.equal(out[0].reasonDefined, false); assert.equal(out[1].outcomes, "rdddddddd");
+});
+test("inert realtime throwing recorder cannot interrupt cleanup or erase original reasons", async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8"), cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const run = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  let releases = 0, disposals = 0, removes = 0; const original = {}, ledger = createRealtimeLedger("r01", () => { throw undefined; }); ledger.registered(); ledger.body(true, original);
+  await assert.rejects(run(ledger, () => { releases++; }, [], undefined, [], { dispose() { disposals++; } }, undefined, undefined, () => { removes++; }, "synthetic", [], true, original), error => error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+  assert.deepEqual([releases, disposals, removes], [1, 1, 1]); assert.deepEqual(ledger.failures(), [undefined, undefined]);
+});
+test("inert realtime unregistered cleanup and pending originals cannot be completed evidence", () => {
+  const out = [], ledger = createRealtimeLedger("r01", text => out.push(parseRealtimeDiagnostic(text))); ledger.body(true, undefined); ledger.flush(); ledger.flush();
+  assert.equal(out.length, 2); assert.equal(out[1].registered, false); assert.equal(out[1].outcomes, "uuuuuuuuu");
+  const relay = inertRealtimeRelay(); feedRealtime(relay, realtimeEvents(), [realtimeBoundary(), realtimeCleanup("r01", { outcomes: "fpuffffff" })]);
+  assert.equal(relay.finish().records[0].reason, "cleanup_incomplete");
+});
+test("inert realtime both full buffers retain both original target identities", async () => {
+  const search = observationEvents(), media = realtimeEvents(), events = [];
+  for (let i = 0; i < 9; i++) events.push({ type: "test:fail", data: { file: `test/earlier-${i}.test.mjs`, line: 1 } });
+  for (const e of [search, media]) {
+    events.push({ type: "test:enqueue", data: e.enqueue });
+    for (let i = 0; i < 256; i++) events.push({ type: "test:pass", data: { ...e.terminal, name: "unselected", line: 1000 + i, testId: 1000 + i } });
+    events.push({ type: "test:fail", data: { ...e.terminal, details: { error: undefined } } });
+  }
+  const rows = await inertWorkerIdentityRows(events), failures = rows.filter(r => r.kind === "failure");
+  assert.equal(failures[0].file, searchObservationContract.file); assert.equal(failures[1].file, realtimeObservationContract.file);
+  assert.equal(failures[0].errorClass, "undefined"); assert.equal(failures[1].errorClass, "undefined");
+  assert.equal(rows.find(r => r.kind === "realtime_delivery").reason, "bounded_overflow"); assert.equal(rows.find(r => r.kind === "realtime_delivery").unreportedCases, null);
+  assert.equal(rows.length, 10); assert.equal(rows.at(-1).reported, 7);
+});
+test("inert realtime both pairs reserve five identities plus four diagnostics and summary", async () => {
+  const search = observationEvents(), media = realtimeEvents(), events = [];
+  for (const [e, pair, encode] of [[search, [observationBoundary(), observationCleanup()], observationDiagnosticText], [media, [realtimeBoundary(), realtimeCleanup()], realtimeDiagnosticText]]) {
+    events.push({ type: "test:enqueue", data: e.enqueue }, { type: "test:fail", data: e.terminal });
+    for (const row of pair) events.push({ type: "test:diagnostic", data: { ...e.location, message: encode(row) } });
+  }
+  for (let i = 0; i < 9; i++) events.unshift({ type: "test:fail", data: { file: `test/earlier-${i}.test.mjs`, line: 1 } });
+  const rows = await inertWorkerIdentityRows(events); assert.equal(rows.length, 10); assert.equal(rows.at(-1).reported, 5); assert.equal(rows.at(-1).diagnosticsReported, 4);
+  for (const row of [realtimeBoundary("r12", { unreportedCases: 1000000 }), realtimeCleanup("r12", { outcomes: "ddddddddd", recorderFailures: 1000000, recorderFirstDefined: false, unreportedCases: 1000000 })]) assert.ok(Buffer.byteLength(annotation(row, "notice")) <= 768);
+});
+test("inert realtime literal registrations preserve exact order, names, arguments and timeout", () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const sites = [...source.matchAll(/^test\('bounded media authority ([^']+)', \{ timeout: 15_000 \}, t => authorityVariant\(t, (false|true), '([^']+)', '(r[0-9]{2})'\)\);$/gm)];
+  assert.equal(sites.length, 12); assert.equal(new Set(sites.map(m => source.slice(0, m.index).split("\n").length)).size, 12);
+  assert.deepEqual(sites.map(m => "bounded media authority " + m[1]), [...realtimeObservationContract.names]);
+  for (const [i, m] of sites.entries()) { assert.equal(m[1], `${m[3]}, ASR=${m[2]}`); assert.equal(m[4], `r${String(i + 1).padStart(2, "0")}`); }
+  assert.ok(source.includes("assert.ok(elapsed <= 250,")); assert.ok(source.includes("await sleep(120); const retiredAppends = (await f.stats()).appends.length;"));
+});
+test("inert realtime pre-registration reporting failures preserve primary including undefined", () => {
+  for (const original of [undefined, {}]) {
+    const ledger = createRealtimeLedger("r01", () => { throw undefined; }); ledger.body(true, original);
+    assert.throws(() => ledger.finishUnregistered(true, original), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+    assert.deepEqual(ledger.failures(), [undefined, undefined]);
+  }
+  const ledger = createRealtimeLedger("r01", () => {}); ledger.body(true, undefined);
+  assert.equal(ledger.finishUnregistered(true, undefined), undefined);
+});
+for (const defined of [false, true]) test(`inert realtime completed anchors retain bundle failure, defined=${defined}`, async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const setup = source.slice(source.indexOf("async function observedRuntime("), source.indexOf("async function fixture("));
+  const cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const callbacks = [], output = [], order = [], original = defined ? {} : undefined;
+  let rejectBuild, builds = 0, starts = 0;
+  const building = new Promise((resolve, reject) => { rejectBuild = reject; });
+  const build = options => { builds++; options.plugins[0].setup({ onLoad(options, callback) { callbacks.push(callback); } }); return building; };
+  const inputs = new Map(["worker/realtime-websocket.ts", "worker/realtime-session.ts"].map(path => [path, readFileSync(path, "utf8")]));
+  const readFile = async (path, encoding) => { assert.equal(encoding, "utf8"); assert.ok(inputs.has(path)); return inputs.get(path); };
+  const ledger = createRealtimeLedger("r01", text => output.push(parseRealtimeDiagnostic(text))); ledger.registered();
+  const run = new Function("build", "readFile", "assert", "router", "session", "dirname", "startBundledWorkerdFixture", "process", setup + "return observedRuntime;")(
+    build, readFile, assert, "__INITIAL_SESSION__ __ASR_SESSION__", value => value, () => "worker", () => { starts++; }, { cwd: () => "/fixture" });
+  const pending = run("synthetic", "upstream", {}, ledger);
+  const outcome = pending.then(() => ({ failed: false }), reason => ({ failed: true, reason }));
+  assert.equal(builds, 1); assert.equal(callbacks.length, 2);
+  for (const [index, path] of [...inputs.keys()].entries()) {
+    const result = await callbacks[index]({ path }); assert.equal(result.loader, "ts"); assert.equal(typeof result.contents, "string");
+  }
+  rejectBuild(original);
+  const result = await outcome;
+  assert.equal(result.failed, true); assert.equal(result.reason, original); assert.equal(starts, 0);
+  ledger.body(true, result.reason);
+  const retire = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  await retire(ledger, () => order.push("release"), [{ close() { order.push("socket"); } }], () => order.push("drain"), [],
+    { dispose() { order.push("dispose"); } }, { finish() { order.push("observer"); } }, { close(callback) { order.push("server"); callback(); } }, () => order.push("remove"), "synthetic", [], true, original);
+  assert.deepEqual(order, ["release", "socket", "drain", "dispose", "observer", "server", "remove"]);
+  assert.equal(output.length, 2); assert.equal(output[0].failurePresent, true); assert.equal(output[0].reasonDefined, defined);
+  assert.equal(output[0].operation, "bundle"); assert.equal(output[1].outcomes, "fffffffff");
+});
+// END inert realtime diagnostic tests.

@@ -18,6 +18,16 @@ The API adapter allows mutations only to the isolated Worker's deployments.
 Native admin requests retain bearer authentication, optional paired Access
 credentials, redirect refusal and selected-version response checks.
 
+During owned deployment convergence, a snapshot GET returning HTTP 500 from
+the exact selected Worker version is recorded as pending within the existing
+phase deadline. Immediate Durable Object code adoption can interrupt a snapshot;
+HTTP 500 alone does not establish that cause. Ownership is checked before every
+observation, and only a successful validated snapshot can establish readiness.
+Persistent errors time out; authentication errors, unknown versions and malformed
+successful responses fail immediately. No activation, admission or inference
+mutation is replayed. The shared `observeNativeControl` helper also supports
+coordinator startup observation with its own admission/runtime guards.
+
 Before dispatch the coordinator must prepare, inspect and own:
 
 - Separate seven actor namespaces, policy KV, content bucket, queue/DLQ,
@@ -75,6 +85,30 @@ Environment `native-qualification` supplies only these distinct secrets:
 - `NATIVE_QUALIFICATION_ADMIN_TOKEN` (the bearer, not its hash)
 - Optional paired `NATIVE_QUALIFICATION_ACCESS_CLIENT_ID` and
   `NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET`
+
+Before activating a prepared rehearsal, run **Read-only isolated native
+authentication** (`preflight-native-auth.yml`) on exact reviewed main, supplying
+`expected_sha`, `worker` and `origin`. This separate five-minute workflow uses
+the actual `native-qualification` environment credentials. It reads the selected
+version, verifies isolated persistent owners and its configured admin hash, sends
+an anonymous HEAD expecting 401 followed by an authenticated HEAD expecting 404,
+then confirms deployment stability. Both responses must identify the selected
+version. The existing admin router authenticates before rejecting HEAD; HEAD
+never calls the pool. This deliberate authentication probe has no GET fallback,
+and a changed route/status contract blocks it. Owner checks admit disabled
+bootstrap versions without requiring native payload lineage; cutover readiness
+checks remain unchanged. Management requests are GETs; there is no activation, admission mutation,
+fixture initialization, inference, retry or recovery job. A previously closed
+isolated Worker can be used without reusing its terminal fixture. Only the safe
+`native-auth-<run>-<attempt>/native-auth.json` receipt is retained.
+
+`NATIVE_QUALIFICATION_ADMIN_TOKEN` contains the **raw bearer** (locally injected as
+`NATIVE_REHEARSAL_ADMIN_TOKEN`), while the isolated Worker's
+`CLAWROUTER_ADMIN_TOKEN_SHA256` plain-text configuration contains its SHA-256 hash.
+This check supplements the metadata-only rehearsal preflight, which does not
+authenticate to the Worker. Authentication does not establish native readiness,
+session continuity or cutover qualification. Stop on failure; do not activate or
+retry the campaign. Recheck if credentials or the target configuration change.
 
 The coordinator supplies six non-secret dispatch inputs:
 

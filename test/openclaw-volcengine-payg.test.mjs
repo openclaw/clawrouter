@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -21,8 +22,9 @@ test("registered ClawRouter catalog routes Volcengine PAYG turns with original g
   assert.ok(provider.models.every(m => m.pricing === null));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-volcengine-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       const model = id.startsWith("closed") ? closed[Number(id.slice(6))] : cards[id] ?? models[0];
@@ -31,7 +33,7 @@ test("registered ClawRouter catalog routes Volcengine PAYG turns with original g
       await kv.put(`credentials/volc_${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: `volc_${id}`, policyGeneration: "fixture" }));
     }
     await kv.put("connections/volcengine", JSON.stringify({ providerId: "volcengine", enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-volcengine-payg-contract.test.ts", import.meta.url),
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, VOLCANO_ENGINE_API_KEY: "must-not-fallback", BYTEPLUS_API_KEY: "must-not-fallback", VOLCENGINE_PLAN_API_KEY: "must-not-fallback" } });
@@ -94,7 +96,12 @@ test("registered ClawRouter catalog routes Volcengine PAYG turns with original g
       }
       assert.doesNotMatch(JSON.stringify(usage), /fixture-upstream|synthetic-reasoning|synthetic-tool-result|synthetic-answer/);
     }
-  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
+  } finally {
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+  }
 });
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";

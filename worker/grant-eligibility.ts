@@ -1,3 +1,4 @@
+import { grantQuotaExclusionReason } from "../shared/grant-quota.ts";
 import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
 import { validGrantSegment } from "./grant-routing.ts";
 export { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, validGrantSegment } from "./grant-routing.ts";
@@ -19,7 +20,7 @@ export interface SelectedGrant {
 export interface GrantSelectionResult {
   selected: SelectedGrant | null;
   hasConfiguredGrant: boolean;
-  // Earliest time a cooling or quota-exhausted pooled grant can serve again.
+  // Earliest possible recovery; retry rechecks all eligibility and freshness.
   retryAt?: string;
 }
 export type PinnedGrant = { key: string | null; revision: string | null } | { key: string; lineage: string };
@@ -83,7 +84,7 @@ function operationConfigured(grant: UpstreamGrant, env: Env, requirement?: Grant
   catch (error) { if (error instanceof HttpError) return false; throw error; }
 }
 
-export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number, privateCopilot = false): GrantCandidates {
+export function filterGrantCandidates(providerId: string, candidates: Array<{ key: string; grant: UpstreamGrant | null; runtimeState: GrantRuntimeState | null }>, excludedKeys: ReadonlySet<string>, routing: GrantRoutingPolicy, pinnedKey: string | null | undefined, requirement: GrantRequirement | undefined, nowMs: number, privateCopilot = false, onExcluded?: (reason: string) => void): GrantCandidates {
   const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId)
     && (privateCopilot ? providerId === "github-copilot" && copilotPrivateCandidate(entry.grant) : grantCredentialPresent(entry.grant)));
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
@@ -92,18 +93,19 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
   const available = configured.filter((entry) => {
     // Keep configured-pool presence (and pinned owner error semantics) even
     // when refresh cannot currently produce a dispatchable access token.
-    if (!privateCopilot && pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) return false;
+    if (!privateCopilot && pinnedKey === undefined && grantRefreshBlocked(entry.grant, nowMs)) { onExcluded?.("credential_refresh_blocked"); return false; }
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
-    if (excludedKeys.has(entry.key)) return false;
+    if (excludedKeys.has(entry.key)) { onExcluded?.("already_attempted"); return false; }
     const scope = parseGrantScope(entry.key);
     if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
     // Stale-deny needs a fresh observation, not elapsed time, to readmit a grant.
-    if (routing.staleState === "deny" && !grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model)) return false;
+    if (routing.staleState === "deny" && !grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model)) { onExcluded?.("quota_not_fresh"); return false; }
     const subscription = entry.grant.kind === "subscription", reserve = subscription ? routing.includedQuotaReservePercent : 0;
     const cooling = grantCoolingDown(entry.runtimeState, nowMs);
     const exhausted = grantQuotaExhausted(entry.runtimeState, requirement?.model, reserve, subscription, nowMs);
     if (!cooling && !exhausted) return true;
+    onExcluded?.(cooling ? entry.runtimeState!.lastSignal === "authentication" ? "authentication" : "cooldown" : grantQuotaExclusionReason(entry.runtimeState, requirement?.model, reserve, subscription, nowMs)!);
     // Only time-limited exclusions remain. Record when the last one lifts;
     // an exhausted window without a published reset has no known recovery.
     // A failed credential (401/403) is not repaired by waiting out its cooldown.

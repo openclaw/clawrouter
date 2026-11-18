@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDiagnosticFixture, createRequestObservation, waitForRequestObservationReadiness, observationResponseDiagnostics, createSemanticsFixture, fixtureOrigin } from "../scripts/search-semantics-fixture.mjs";
+import { createObservationLedger, createDiagnosticFixture, createRequestObservation, waitForRequestObservationReadiness, observationResponseDiagnostics, createSemanticsFixture, fixtureOrigin } from "../scripts/search-semantics-fixture.mjs";
 
 const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
@@ -34,8 +34,10 @@ test("sampled readiness needs three consecutive matching identities; a transitio
   assert.equal(observationResponseDiagnostics(raw).captures, null);
 });
 
-async function runtime(t, { oldObserver = false } = {}) {
+async function runtime(t, { oldObserver = false, diagnostic, ledger } = {}) {
+  diagnostic?.("temporary");
   const temporary = await mkdtemp(join(tmpdir(), "search-observations-test-"));
+  diagnostic?.("observer_bundle");
   const bundle = await build({ stdin: { contents: `
     export { default } from "./worker/fixtures/search-semantics-observe.ts";
     import { SearchSemanticsObject as ObservedObject } from "./worker/fixtures/search-semantics-observe.ts";
@@ -63,10 +65,13 @@ async function runtime(t, { oldObserver = false } = {}) {
         return super.fetch(request);
       }
     }`, resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  diagnostic?.("main_bundle");
   const mainBundle = await build({ stdin: { contents: 'export { default } from "./worker/index.ts";', resolveDir: process.cwd(), loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  diagnostic?.("old_bundle");
   const oldBundle = oldObserver && await build({ entryPoints: ["worker/fixtures/search-semantics.ts"], write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   let forwards = 0, main;
-  const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{ name: "fixture", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
+  diagnostic?.("options");
+  const options = convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{ name: "fixture", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
     bindings: { SEARCH_SEMANTICS_ENVIRONMENT: "fakeco", SEARCH_SEMANTICS_CONTROL_SHA256: createHash("sha256").update(token).digest("hex") },
     durableObjects: { SEARCH_SEMANTICS: { className: "SearchSemanticsObject", useSQLite: true, ...(oldObserver ? { scriptName: "old-object" } : {}) } },
     serviceBindings: { SEARCH_SEMANTICS_ROBOTS_ORIGIN: async request => { forwards++; return main.fetch(request); } },
@@ -75,13 +80,24 @@ async function runtime(t, { oldObserver = false } = {}) {
     outboundService: () => { throw new Error("robots must not call an upstream"); },
   }, ...(oldObserver ? [{ name: "old-object", modules: true, script: oldBundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
     durableObjects: { SEARCH_SEMANTICS: { className: "SearchSemanticsObject", useSQLite: true } },
-  }] : [])] }));
-  t.after(async () => { await mf.dispose(); await rm(temporary, { recursive: true, force: true }); });
+  }] : [])] });
+  diagnostic?.("miniflare");
+  const mf = new Miniflare(options);
+  diagnostic?.("cleanup_registration");
+  if (ledger) {
+    t.after(() => ledger.cleanup(() => mf.dispose(), () => rm(temporary, { recursive: true, force: true })));
+    ledger.registered();
+  } else t.after(async () => { await mf.dispose(); await rm(temporary, { recursive: true, force: true }); });
+  diagnostic?.("ready");
   await mf.ready;
+  diagnostic?.("worker");
   main = await mf.getWorker("main");
   const fetcher = (url, init) => mf.dispatchFetch(url, init);
+  diagnostic?.("namespace");
   const namespace = await mf.getDurableObjectNamespace("SEARCH_SEMANTICS", "fixture");
+  diagnostic?.("observer");
   const observer = namespace.get(namespace.idFromName("request-observations-v1"));
+  diagnostic?.("registry");
   const registry = namespace.get(namespace.idFromName("fixture-v1"));
   return { fetcher, observer, registry, main, forwards: () => forwards };
 }
@@ -187,114 +203,64 @@ test("observation captures robots metadata while forwarding actual main Worker r
 });
 
 test("observations include rejected fixture variants without changing diagnostic/matrix behavior", async t => {
-  let site = "runtime", operand, bodyFailed = false, bodyReason;
+  const ledger = createObservationLedger(text => t.diagnostic(text)), diagnosticStep = ledger.mark;
+  let operand;
   try {
-    const { fetcher } = await runtime(t);
-    site = "matrix_create";
-    const matrix = await createSemanticsFixture({ token, fetcher });
-    site = "diagnostic_create";
-    const diagnostic = await createDiagnosticFixture({ token, fetcher });
-    site = "observation_create";
-    const session = await createRequestObservation({ token, fetcher });
-    site = "initial_snapshot";
-    assert.deepEqual((operand = await session.snapshot(), site = "initial_equality", operand), session.initial, "private controls do not count themselves");
-    site = "aggregate_gets";
+    ledger.select("runtime");
+    const { fetcher } = await runtime(t, { diagnostic: diagnosticStep, ledger });
+    ledger.select("matrix_create");
+    const matrix = await createSemanticsFixture({ token, fetcher, diagnostic: diagnosticStep });
+    ledger.select("diagnostic_create");
+    const diagnostic = await createDiagnosticFixture({ token, fetcher, diagnostic: diagnosticStep });
+    ledger.select("observation_create");
+    const session = await createRequestObservation({ token, fetcher, diagnostic: diagnosticStep });
+    ledger.select("initial_snapshot");
+    assert.deepEqual((operand = await session.snapshot(), ledger.select("initial_equality"), operand), session.initial, "private controls do not count themselves");
+    ledger.select("twenty_gets");
     const gets = await Promise.all(Array.from({ length: 20 }, () => fetcher(diagnostic.url)));
-    site = "first_response_text";
-    assert.ok((operand = await gets[0].text(), site = "marker_assertion", operand).includes(diagnostic.initial.marker));
-    let variant = 0;
+    ledger.select("first_text");
+    assert.ok((operand = await gets[0].text(), ledger.select("marker"), operand).includes(diagnostic.initial.marker));
     for (const init of [{ method: "HEAD" }, { method: "POST", body: "SYNTHETIC_BODY" }]) {
-      site = variant++ === 0 ? "head_request" : "post_request";
+      ledger.select(init.method === "HEAD" ? "head" : "post");
       await fetcher(diagnostic.url, init);
     }
-    site = "query_request";
-    assert.equal((operand = await fetcher(`${diagnostic.url}?private=SYNTHETIC_QUERY`), site = "query_status", operand).status, 404);
-    site = "slash_request";
-    assert.equal((operand = await fetcher(`${diagnostic.url}/`), site = "slash_status", operand).status, 404);
-    site = "unregistered_request";
-    assert.equal((operand = await fetcher(`${fixtureOrigin}/search-semantics/not-registered`), site = "unregistered_status", operand).status, 404);
-    site = "matrix_request";
-    assert.equal((operand = await fetcher(matrix.url("live")), site = "matrix_status", operand).status, 200);
-    site = "counter_snapshot";
+    ledger.select("query");
+    assert.equal((operand = await fetcher(`${diagnostic.url}?private=SYNTHETIC_QUERY`), ledger.mark("status"), operand).status, 404);
+    ledger.select("trailing");
+    assert.equal((operand = await fetcher(`${diagnostic.url}/`), ledger.mark("status"), operand).status, 404);
+    ledger.select("unregistered");
+    assert.equal((operand = await fetcher(`${fixtureOrigin}/search-semantics/not-registered`), ledger.mark("status"), operand).status, 404);
+    ledger.select("matrix_get");
+    assert.equal((operand = await fetcher(matrix.url("live")), ledger.mark("status"), operand).status, 200);
+    ledger.select("snapshot");
     const observed = await session.snapshot();
-    site = "counter_assertion";
+    ledger.select("counters");
     assert.deepEqual(observed.counters, [bucket("diagnostic", "GET", false, 200, 20), bucket("diagnostic", "HEAD", false, 200, 1), bucket("diagnostic", "POST", false, 404, 1), bucket("diagnostic", "GET", true, 404, 1), bucket("diagnostic_variant", "GET", false, 404, 1), bucket("fixture_other", "GET", false, 404, 1), bucket("matrix", "GET", false, 200, 1)]);
-    site = "expiry_assertion";
+    ledger.select("expiry");
     assert.equal(observed.expiresAt, session.initial.expiresAt, "traffic never extends retention");
-    site = "marker_privacy";
+    ledger.select("privacy_marker");
     assert.equal(JSON.stringify(observed).includes(diagnostic.initial.marker), false);
-    site = "matrix_privacy";
+    ledger.select("privacy_id");
     assert.equal(JSON.stringify(observed).includes(matrix.initial.id), false);
-    site = "diagnostic_get_snapshot";
-    assert.equal((operand = await diagnostic.snapshot(), site = "diagnostic_get_assertion", operand).gets, 20);
-    site = "diagnostic_head_snapshot";
-    assert.equal((operand = await diagnostic.snapshot(), site = "diagnostic_head_assertion", operand).heads, 1);
-    site = "matrix_get_snapshot";
-    assert.equal((operand = await matrix.snapshot(), site = "matrix_get_assertion", operand).pages.live.gets, 1);
-    site = "observation_close";
-    await session.close();
-    site = "post_delete_diagnostic_snapshot";
-    assert.equal((operand = await diagnostic.snapshot(), site = "post_delete_diagnostic_assertion", operand).gets, 20, "observation deletion preserves diagnostic");
-    site = "post_delete_matrix_snapshot";
-    assert.equal((operand = await matrix.snapshot(), site = "post_delete_matrix_assertion", operand).pages.live.gets, 1);
-    site = "diagnostic_close";
-    await diagnostic.close();
-    site = "matrix_close";
-    await matrix.close();
-  } catch (reason) {
-    bodyFailed = true;
-    bodyReason = reason;
-  }
-  if (bodyFailed) {
-    // Only native declaration coordinates identify the failed boundary. No error inspection.
-    // A post-await site includes the remaining operand evaluation and assertion, not just assert.
-    let discriminatorFailed = false, discriminatorReason;
-    try {
-      switch (site) {
-        case "runtime": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "observation_create": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "initial_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "initial_equality": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "aggregate_gets": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "first_response_text": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "marker_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "head_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "post_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "query_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "query_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "slash_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "slash_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "unregistered_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "unregistered_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_request": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_status": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "counter_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "counter_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "expiry_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "marker_privacy": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_privacy": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_get_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_get_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_head_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_head_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_get_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_get_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "observation_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "post_delete_diagnostic_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "post_delete_diagnostic_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "post_delete_matrix_snapshot": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "post_delete_matrix_assertion": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "diagnostic_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
-        case "matrix_close": await t.test("observation failure site", () => { throw bodyReason; }); break;
-      }
-    } catch (reason) {
-      discriminatorFailed = true;
-      discriminatorReason = reason;
-    }
-    if (discriminatorFailed) throw new AggregateError([bodyReason, discriminatorReason], "Observation failure-site reporting failed");
-    throw bodyReason;
+    ledger.select("diagnostic_gets");
+    assert.equal((operand = await diagnostic.snapshot(), ledger.mark("assertion"), operand).gets, 20);
+    ledger.select("diagnostic_heads");
+    assert.equal((operand = await diagnostic.snapshot(), ledger.mark("assertion"), operand).heads, 1);
+    ledger.select("matrix_gets");
+    assert.equal((operand = await matrix.snapshot(), ledger.mark("assertion"), operand).pages.live.gets, 1);
+    ledger.select("observation_close"); await session.close();
+    ledger.select("post_diagnostic");
+    assert.equal((operand = await diagnostic.snapshot(), ledger.mark("assertion"), operand).gets, 20, "observation deletion preserves diagnostic");
+    ledger.select("post_matrix");
+    assert.equal((operand = await matrix.snapshot(), ledger.mark("assertion"), operand).pages.live.gets, 1);
+    ledger.select("diagnostic_close"); await diagnostic.close();
+    ledger.select("matrix_close"); await matrix.close();
+    ledger.select("complete"); ledger.mark("complete"); ledger.body(false);
+  } catch (error) {
+    ledger.body(true, error);
+    throw error;
+  } finally {
+    if (!ledger.isRegistered()) ledger.flush();
   }
 });
 
