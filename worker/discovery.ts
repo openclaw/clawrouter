@@ -298,6 +298,14 @@ function catalogProjection(entitlements: ClientEntitlements, publicOrigin: strin
   return { version: "clawrouter.client-catalog.v1", observedAt: entitlements.observedAt, scope: entitlements.scope, providers };
 }
 
+// Authenticated control-plane callers reuse the exact inference eligibility
+// projection. Rebuild from this request's admission; never cache this separately.
+export async function catalogForProxyIdentity(auth: AuthorizedIdentity, env: Env): Promise<ClientCatalog> {
+  return catalogProjection(await entitlementRowsForEntries([auth], env, {
+    authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId,
+  }));
+}
+
 export async function meResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (session) return privateJson(publicSession(session));

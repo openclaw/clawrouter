@@ -7,6 +7,52 @@ import { verifyCutoverRecovery, nativeReceipt, assertNativeOwners } from './depl
 import { verifyObservability } from './deploy-train-observability.mjs';
 
 export const NATIVE_PHASE_TIMEOUT_MS = 10 * 60_000; // includes the existing 460s native drain
+export class NativeControlVersionMismatch extends Error {
+  constructor(expected, actual) {
+    super('Native control selected-version mismatch: expected ' + expected + ', observed ' + actual);
+    this.expected = expected; this.actual = actual;
+  }
+}
+export class NativeControlHttpError extends Error {
+  constructor(method, status, expected, actual) {
+    super('Native control HTTP ' + status + (expected && actual !== expected ? '; selected-version mismatch (' + (actual === null ? 'missing' : 'invalid or unexpected') + ')' : ''));
+    this.method = method; this.status = status; this.expected = expected;
+    // Retain only a version ID, never arbitrary response headers or bodies.
+    this.actual = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(actual ?? '') ? actual : null;
+  }
+}
+
+// Convergence is explicit and bounded. A failed snapshot is never readiness,
+// and neither this helper nor the HTTP client retries a mutation.
+export async function observeNativeControl({ control, version, previousVersions = [], assertOwnership, isReady, validate = () => {},
+  now = Date.now, wait = sleep, timeoutMs = NATIVE_PHASE_TIMEOUT_MS, pollMs = 2000, onPending = () => {},
+  deadlineMessage = 'Native control observation deadline exceeded; preserve custody' }) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollMs) || pollMs <= 0) throw new Error('Invalid native observation bounds');
+  const deadline = now() + timeoutMs;
+  const withinDeadline = () => { if (now() >= deadline) throw new Error(deadlineMessage); };
+  for (;;) {
+    withinDeadline();
+    await assertOwnership();
+    withinDeadline();
+    let s;
+    try { s = await control.snapshot(version); }
+    catch (error) {
+      const previous = error instanceof NativeControlVersionMismatch && error.expected === version && previousVersions.includes(error.actual);
+      // HTTP500 alone cannot identify a reset. Only a GET from the exact
+      // selected version may remain pending inside this owned window.
+      const unavailable = error instanceof NativeControlHttpError && error.method === 'GET' && error.status === 500 &&
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(version ?? '') && error.expected === version && error.actual === version;
+      if (!previous && !unavailable) throw error;
+      onPending(previous ? {kind:'version',actual:error.actual} : {kind:'http',status:500});
+    }
+    withinDeadline();
+    if (s) {
+      validate(s);
+      if (isReady(s)) return s;
+    }
+    await wait(Math.min(pollMs, deadline - now()));
+  }
+}
 function snapshotState(value) {
   if (value?.schema !== 2 || typeof value.accepting !== 'boolean' || !['serving','draining','closed'].includes(value.phase) ||
       !Array.isArray(value.slots) || value.slots.length !== 8 || value.slots.some(s => !Number.isSafeInteger(s.generation) || s.generation < 0 ||
@@ -48,8 +94,14 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
     try { response = await fetchImpl(selected.origin + '/v1/admin/large-http', {
       method, headers, redirect:'error', signal:AbortSignal.timeout(20_000), ...(body ? {body:JSON.stringify(body)} : {}),
     }); } catch { throw new Error('Native control request failed; delivery may be unknown'); }
-    if (!response.ok || version && response.headers.get('x-clawrouter-version-id') !== version) {
-      await response.body?.cancel(); throw new Error('Native control HTTP ' + response.status + ' or selected-version mismatch');
+    const actual = response.headers.get('x-clawrouter-version-id');
+    if (!response.ok || version && actual !== version) {
+      await response.body?.cancel();
+      // Only a successful GET with a well-formed version can be an observation
+      // of the previous deployment. Never classify a POST as safe to replay.
+      if (method === 'GET' && response.status === 200 && version && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(actual ?? ''))
+        throw new NativeControlVersionMismatch(version, actual);
+      throw new NativeControlHttpError(method, response.status, version, actual);
     }
     return response.json();
   }
@@ -90,17 +142,22 @@ async function journal(api,state,version,phase,save,status='rolling',immediate=f
   Object.assign(state,next,{deploymentId:result.id});save(state);
 }
 async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
-  const deadline = now()+timeoutMs;
-  for (;;) {
-    const {latest} = await owned(api,state);
-    if (stableVersion(latest) !== version || latest.id !== state.deploymentId) throw new Error('Native cutover deployment changed during convergence');
-    const s = await control.snapshot(version);
-    const runtimeSha = version === state.green ? state.native.runtimeSha : state.cutover.blueRuntimeSha;
-    if (kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha)) return;
-    if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect');
-    if (now()>=deadline) throw new Error('Native ' + kind + ' deadline exceeded; preserve the remote recovery journal');
-    await wait(Math.min(2000,deadline-now()));
-  }
+  const observed = new Set(), runtimeSha = version === state.green ? state.native.runtimeSha : state.cutover.blueRuntimeSha;
+  await observeNativeControl({control,version,previousVersions:[state.blue,state.green,state.cutover.recovery],now,wait,timeoutMs,
+    assertOwnership:async()=>{
+      const {latest} = await owned(api,state);
+      if (stableVersion(latest) !== version || latest.id !== state.deploymentId) throw new Error('Native cutover deployment changed during convergence');
+    },
+    validate:s=>{ if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect'); },
+    isReady:s=>kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha),
+    onPending:observation=>{
+      const key = observation.kind === 'version' ? observation.actual : 'http500';
+      if (observed.has(key)) return;
+      observed.add(key);
+      console.log('Native control awaiting Worker ' + version + (observation.kind === 'version' ? '; observed owned version ' + observation.actual : '; snapshot returned HTTP 500'));
+    },
+    deadlineMessage:'Native ' + kind + ' deadline exceeded; preserve the remote recovery journal',
+  });
 }
 export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=Date.now,wait=sleep,timeoutMs=NATIVE_PHASE_TIMEOUT_MS}) {
   await verifyCutoverRecovery(api,state);

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
@@ -25,15 +26,16 @@ for (const transport of ["http", "websocket"]) {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-router-"));
     let mf, client;
+    const primary = { failed: false, error: undefined };
     try {
-      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture(), { directRouter: transport === "http" });
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: null, retainRequestContent: false };
       const credential = { enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" };
       await kv.put("policies/fixture", JSON.stringify(policy));
       await kv.put("credentials/fixture", JSON.stringify(credential));
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-      const origin = await mf.ready;
+      const origin = transport === "http" ? (await mf.unsafeGetDirectURL("router")).origin : await mf.ready;
       let currentKey = key;
       const dispatch = (path, credentialKey = currentKey) => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${credentialKey}` }, signal: AbortSignal.timeout(10_000) });
       const discovered = await dispatch("/v1/catalog");
@@ -204,10 +206,11 @@ for (const transport of ["http", "websocket"]) {
       assert.equal((await state()).requests.length, afterRotation.requests.length);
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+    } catch (error) {
+      primary.error = error; primary.failed = true;
+      throw error;
     } finally {
-      await client?.close();
-      await mf?.dispose();
-      await rm(home, { recursive: true, force: true });
+      await cleanupFixture([() => client?.close(), () => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
     }
   });
 }
@@ -498,16 +501,17 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-retry-"));
     let mf, client, httpStarted;
+    const primary = { failed: false, error: undefined };
     const http = { phase: "not-started", headers: false, bodyComplete: false, elapsedMs: 0 };
     const beginHttp = phase => { http.phase = phase; http.headers = false; http.bodyComplete = false; http.elapsedMs = 0; httpStarted = performance.now(); };
     const completeHttp = phase => { http.phase = phase; http.bodyComplete = true; http.elapsedMs = Math.round(performance.now() - httpStarted); };
     try {
-      mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }));
+      mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }), { directRouter: scenario === "interrupt" });
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: null, retainRequestContent: false }));
       await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-      const origin = await mf.ready;
+      const origin = scenario === "interrupt" ? (await mf.unsafeGetDirectURL("router")).origin : await mf.ready;
       const dispatch = path => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
       beginHttp("catalog-headers");
       const discovered = await dispatch("/v1/catalog"); http.headers = true; assert.equal(discovered.status, 200);
@@ -586,15 +590,14 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
       }
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
     } catch (error) {
+      primary.error = error; primary.failed = true;
       try {
         t.diagnostic(JSON.stringify({ fixture: "native-http-defaults-failure", scenario, lastHttp: {
           ...http, elapsedMs: httpStarted === undefined || http.bodyComplete ? http.elapsedMs : Math.round(performance.now() - httpStarted),
         } }));
       } finally { throw error; }
     } finally {
-      await client?.close();
-      await mf?.dispose();
-      await rm(home, { recursive: true, force: true });
+      await cleanupFixture([() => client?.close(), () => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
     }
   });
 }
@@ -605,13 +608,14 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
     await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
     await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-    const origin = await mf.ready;
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const upstream = await mf.getWorker("upstream");
     await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
     await new Promise((resolve, reject) => {
@@ -646,9 +650,11 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
     assert.ok(receipt.actual_cost_micros > 0);
     assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros);
     assert.equal(usage.budget.spentMicros, receipt.actual_cost_micros);
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(home, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(home, { recursive: true, force: true })], primary);
   }
 });
 

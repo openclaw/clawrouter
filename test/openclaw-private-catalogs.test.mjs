@@ -174,7 +174,7 @@ export async function joinPrivateOriginals(s){await s.ledger.drain();s.ledger.as
 export function createPrivateRequestOwnership(owner,context){
  const requests=[],transports=[],readers=[],tokens=new WeakMap();let retired=false;
  const register=(request,credential)=>{if(retired)throw Error('retired private request owner');const token=Object.freeze({owner,request,credential,generation:owner.generation});
-  const entry={id:requests.length,token,request,credential,retired:false};tokens.set(token,entry);requests.push(entry);owner.ledger.touch();return token;};
+  const entry={id:requests.length,token,request,credential,requestId:null,status:null,retired:false};tokens.set(token,entry);requests.push(entry);owner.ledger.touch();return token;};
  const owns=token=>{const r=tokens.get(token);return !retired&&!!r&&requests.includes(r)&&!r.retired&&r.request===token.request&&token.owner===owner&&token.generation===owner.generation;};
  const current=()=>{const token=context.getStore();if(!owns(token))throw Error('foreign or absent private request context');return token;};
  const transport=(token,secret,method,url)=>{if(!owns(token)||secret!=='Bearer synthetic-private-'+owner.id)throw Error('foreign private transport');
@@ -184,7 +184,9 @@ export function createPrivateRequestOwnership(owner,context){
  const reader=(t,value,body,originals)=>{if(!transports.includes(t)||!owns(t.token)||context.getStore()!==t.token||t.body!==body||t.response===null||readers.some(r=>r.reader===value||r.body===body))throw Error('foreign private reader');
   const r={token:t.token,request:t.request,transport:t,response:t.response,body,reader:value,originals,id:readers.length,unlocks:0,unlockEntry:null,unlockReturn:null,pendingAtUnlock:null,cancels:0,eof:false,closed:null,closedRecord:null};
   readers.push(r);owner.ledger.touch();return r;};
- const bound=(r,method,receiver,fn)=>owns(r.token)&&(context.getStore()===r.token||context.getStore()===undefined&&['cancel','releaseLock'].includes(method))&&readers.includes(r)&&transports.includes(r.transport)&&r.request===r.token.request&&
+ // Stream pull callbacks can outlive ingress ALS. An absent context is allowed
+ // only with the full private resource graph below; a present foreign token is not.
+ const bound=(r,method,receiver,fn)=>owns(r.token)&&(context.getStore()===r.token||context.getStore()===undefined&&['read','cancel','releaseLock'].includes(method))&&readers.includes(r)&&transports.includes(r.transport)&&r.request===r.token.request&&
   r.transport.token===r.token&&r.response===r.transport.response&&r.body===r.transport.body&&receiver===r.reader&&r.originals[method]===fn;
  const retire=()=>{if(retired)return;retired=true;for(const r of requests)r.retired=true;owner.ledger.touch();};
  const intact=()=>requests.every(r=>owns(r.token)&&r.request===r.token.request)&&transports.every(t=>owns(t.token)&&t.request===t.token.request&&t.credential===t.token.credential&&t.response!==null&&
@@ -302,7 +304,7 @@ globalThis.fetch=function(input,init){
  if(matches.length!==1)throw Error('unbound selected original private credential');const s=matches[0],token=s.ownership.current();
  if(url.href!==bases[s.row.provider]+'/models'&&url.href!==bases[s.row.provider]+'/chat/completions')throw Error('foreign private destination');
  const method=init?.method??input.method??'GET',transport=s.ownership.transport(token,secret,method,url.href);
- s.calls.push({method,path:url.pathname,query:!!url.search,bodyAbsent:(init?.body??input.body??null)===null,
+ s.calls.push({request:s.ownership.requests.find(r=>r.token===token).id,method,path:url.pathname,query:!!url.search,bodyAbsent:(init?.body??input.body??null)===null,
   originalKey:secret==='Bearer synthetic-private-'+s.id,noCaller:!headers.has('x-api-key')&&!headers.has('x-upstream-url'),redirect:init?.redirect??input.redirect});
  const p=s.ledger.invoke('fetch',nativeFetch,this,arguments,transport);transport.pending=p;
  try{const q=p.then(response=>{const body=response.body;s.ownership.response(transport,response,body);if(!body)return;
@@ -360,7 +362,7 @@ export default {async fetch(request,bindings,originalContext){const u=new URL(re
   if(kind==='complete')return Response.json(await control(s,'complete'));
   if(kind==='join'){
    if(!s.retirement)s.retirement=(async()=>{const outcome=await retirePrivateWorkerOwner(s,()=>control(s,'proof'),()=>usageSnapshot(bindings,'fixture',s.id,{kind:'admin'}),r=>r.body.locked);
-    return {id:s.id,observation:outcome.observation,diagnostic:privateWorkerOperationFacts(s),retired:outcome.retired,operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),calls:s.calls,source:outcome.source??null,events:outcome.usage?.events??[],charged:bodyBudgetCharged(),timeline:s.timeline,authority:s.authority,inspections:s.inspections,readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.locked}))};})();
+    return {id:s.id,observation:outcome.observation,diagnostic:privateWorkerOperationFacts(s),retired:outcome.retired,operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),calls:s.calls,requests:s.ownership.requests.map(r=>({id:r.id,requestId:r.requestId,status:r.status,credential:r.credential})),source:outcome.source??null,events:outcome.usage?.events??[],charged:bodyBudgetCharged(),timeline:s.timeline,authority:s.authority,inspections:s.inspections,readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.locked}))};})();
    const proof=await s.retirement;if(!s.ownership.validate())throw Error('changed private retirement lifetime');return Response.json(proof,{status:proof.retired?200:500});
   }throw Error('unknown private control');
  }
@@ -369,7 +371,7 @@ export default {async fetch(request,bindings,originalContext){const u=new URL(re
  const credential=['inference','discovery','alternate'].find(k=>auth.startsWith('Bearer clawrouter-live-'+s.id+'_'+k+'-')),token=s.ownership.register(request,credential);
  const context={waitUntil:p=>{observe(s,p,'waitUntil',token);originalContext.waitUntil(p);}};
  const pending=s.ownership.run(token,()=>s.ledger.invoke('handler',worker.fetch,worker,[request,s.env,context],token));
- try{observe(s,pending.then(()=>s.timeline.push({phase:'publication',sequence:++s.sequence})),'publication_observer',token,{originalRead:pending});}catch(error){s.ledger.fault(error);}return pending;
+ try{observe(s,pending.then(response=>{const r=s.ownership.requests.find(r=>r.token===token);if(!r||r.request!==request||r.requestId!==null)throw Error('foreign private publication');r.requestId=response.headers.get('x-clawrouter-request-id');r.status=response.status;s.timeline.push({phase:'publication',sequence:++s.sequence});}),'publication_observer',token,{originalRead:pending});}catch(error){s.ledger.fault(error);}return pending;
 },queue:worker.queue};`;
 
 const upstream=`
@@ -468,6 +470,32 @@ export function assertPrivateReceipt(row,p,w=createPrivateReceiptWitness()){
   ok(27,()=>mutation.sequence<refresh.sequence&&refresh.sequence<inspect.sequence&&inspect.sequence<publication.sequence);equal(28,null,()=>p.source.settled,1);}
  if(['stream_abort','simple_abort'].includes(row.scenario)){equal(29,null,()=>p.source.canceled,1);equal(30,null,()=>p.source.settled,1);equal(31,null,()=>p.source.census.filter(r=>r.producer&&r.cancels===1&&r.finished&&!r.explicitRelease).length,1);}
  if(row.scenario==='shared_abort'){equal(32,null,()=>p.source.settled,1);equal(33,null,()=>p.source.canceled,0);}// Explicit completion, not disconnect proof.
+ assertPrivateUsage(row,p);
+}
+export function assertPrivateUsage(row,p){
+ // Bind events to the actual ingress response and dispatch, not the number of
+ // upstream calls alone: denied attempts can legitimately emit extra events.
+ assert.ok(Array.isArray(p.requests));
+ assert.equal(new Set(p.requests.map(r=>r.requestId)).size,p.requests.length);
+ const byId=new Map(p.requests.map((r,i)=>{assert.equal(r.id,i);assert.equal(typeof r.requestId,'string');assert.ok(r.requestId.length>0);
+  assert.ok(Number.isInteger(r.status)&&r.status>=100&&r.status<=599);return [r.requestId,r];}));
+ const seen=new Set();
+ for(const e of p.events){
+  const r=byId.get(e.request_id);assert.ok(r,'usage event must belong to an original ingress response');
+  assert.ok(!seen.has(e.request_id),'duplicate usage event');seen.add(e.request_id);
+  assert.equal(e.provider,row.provider);assert.equal(e.policy_id,row.id);assert.equal(e.key_id,row.id+'_'+r.credential);
+  assert.equal(e.status_code,r.status);
+  const calls=p.calls.filter(c=>c.request===r.id);assert.ok(calls.length<=1,'unexpected repeat dispatch');
+  if(calls.length===0){assert.ok(r.status>=400);assert.notEqual(e.status,'success');assert.equal(e.reserved_cost_micros,0);assert.equal(e.actual_cost_micros,0);continue;}
+  const discovery=calls[0].method==='GET';assert.equal(e.capability,discovery?'models.list':'llm.chat');
+  if(discovery){assert.equal(e.model,null);assert.equal(e.reserved_cost_micros,0);assert.equal(e.actual_cost_micros,0);}
+  else {
+   assert.equal(r.status,200);assert.equal(e.reserved_cost_micros,7);assert.equal(e.actual_cost_micros,7);assert.equal(e.cost_basis,'policy_fixed');
+   assert.equal(e.status,['stream_abort','simple_abort'].includes(row.scenario)?'client_error':row.scenario==='provider_error'?'provider_error':'success');
+  }
+ }
+ for(const c of p.calls){const r=p.requests[c.request];assert.ok(r&&r.id===c.request,'dispatch must retain its original ingress');
+  assert.ok(seen.has(r.requestId),'dispatched request must have its exact usage event');}
 }
 export function reportPrivateJoinFailure(report,row,index,evidence,recordOriginals,primary){
  const failures=[primary];let proof;
@@ -1409,7 +1437,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  // BEGIN Private primary and receipt inert regressions
  function receiptFixture(){const row={id:'inert',provider:'baseten',scenario:'stream_abort'},p={id:'inert',retired:true,operations:[{state:'fulfilled'}],readers:[{unlocks:1,locked:false}],charged:0,
   source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:1,canceled:1,settled:1,census:[{producer:true,cancels:1,finished:true,explicitRelease:false}]},
-  calls:[{originalKey:true,noCaller:true,redirect:'manual',query:false,method:'GET',bodyAbsent:true}],events:[{provider:'baseten',policy_id:'inert',capability:'models.list',model:null,reserved_cost_micros:0,actual_cost_micros:0}],
+  requests:[{id:0,requestId:'receipt-0',status:200,credential:'discovery'}],calls:[{request:0,originalKey:true,noCaller:true,redirect:'manual',query:false,method:'GET',bodyAbsent:true}],events:[{request_id:'receipt-0',key_id:'inert_discovery',status_code:200,status:'success',provider:'baseten',policy_id:'inert',capability:'models.list',model:null,reserved_cost_micros:0,actual_cost_micros:0}],
   observation:{producer:[2,false,null,true,0,0,0,0,1,3,6,1,1,true],accounting:[2,false,null,true,1,true]}};return {row,p};}
  test('Private primary selection failure precedes fixture and never invents collection identity',async()=>{
   const records=[],report=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>records.push(r));let entered=0;
@@ -1456,6 +1484,18 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   for(const [id,change]of cases){const {row,p}=receiptFixture(),w=createPrivateReceiptWitness();change(p);assert.throws(()=>assertPrivateReceipt(row,p,w));assert.equal(w.snapshot().first[0],id);}
   for(const [key,id]of [['actual_cost_micros',21],['cost_basis',22],['reporting_known_cost_micros',23],['total_tokens',24]]){const {row,p}=receiptFixture(),w=createPrivateReceiptWitness();p.events=[{provider:row.provider,policy_id:row.id,capability:'llm.chat',status:'success',actual_cost_micros:7,cost_basis:'policy_fixed',reporting_known_cost_micros:null,total_tokens:7}];p.events[0][key]='wrong';assert.throws(()=>assertPrivateReceipt(row,p,w));assert.equal(w.snapshot().first[0],id);}
   const {row,p}=receiptFixture(),w=createPrivateReceiptWitness();assertPrivateReceipt(row,p,w);assert.equal(w.snapshot().first,null);
+ });
+ test('Private actual receipt requires request-bound accounting without dropping denied attempts',()=>{
+  const make=()=>{const {row,p}=receiptFixture();row.scenario='eof';p.calls.push({...p.calls[0],request:1,method:'POST'});p.source.requests=2;
+   p.requests.push({id:1,requestId:'receipt-1',status:200,credential:'inference'});
+   p.events.push({provider:row.provider,policy_id:row.id,key_id:'inert_inference',request_id:'receipt-1',status_code:200,capability:'llm.chat',status:'success',reserved_cost_micros:7,actual_cost_micros:7,cost_basis:'policy_fixed',reporting_known_cost_micros:null,total_tokens:7});return {row,p};};
+  {const {row,p}=make();assertPrivateReceipt(row,p);}
+  for(const change of [p=>p.events=[],p=>p.events.pop(),p=>p.events.shift(),p=>p.events.push({...p.events[0]}),p=>p.events[1].request_id='foreign',p=>p.events[1].key_id='foreign',p=>p.calls[1].request=99,p=>p.events[1].reserved_cost_micros=0,p=>p.events[1].actual_cost_micros=0,p=>p.events[1].status='client_error',p=>p.events[1].status_code=499,p=>p.events[1].capability='models.list']){
+   const {row,p}=make();change(p);assert.throws(()=>assertPrivateReceipt(row,p));}
+  {const {row,p}=make();p.requests.push({id:2,requestId:'denied',status:401,credential:'inference'});p.events.push({provider:row.provider,policy_id:row.id,key_id:'inert_inference',request_id:'denied',status_code:401,capability:'llm.chat',status:'client_error',reserved_cost_micros:0,actual_cost_micros:0});assertPrivateReceipt(row,p);
+   for(const key of ['reserved_cost_micros','actual_cost_micros']){const copy=structuredClone(p);copy.events[2][key]=7;assert.throws(()=>assertPrivateReceipt(row,copy));}}
+  for(const scenario of ['stream_abort','simple_abort','provider_error']){const {row,p}=make();row.scenario=scenario;p.source.requests=2;p.events[1].status=scenario==='provider_error'?'provider_error':'client_error';p.events[1].total_tokens=null;assertPrivateReceipt(row,p);}
+  assertPrivateUsage({id:'cold',provider:'baseten'},{requests:[],calls:[],events:[]});
  });
  test('Private producer and accounting outcomes distinguish unavailable and valid empty',async()=>{
   const source={joined:true,pending:0,faults:0,expired:0,held:0,requests:0,calls:[],census:[],originals:0,observers:0,canceled:0,settled:0};
@@ -1541,7 +1581,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const f=await privateInertReader(()=>Promise.resolve({done:true})),r=f.s.readers[0],other=f.s.ownership.register({},'alternate');
   assert.equal(f.s.ownership.run(f.token,()=>f.s.ownership.bound(r,'read',f.reader,r.originals.read)),true);
   assert.equal(f.s.ownership.run(other,()=>f.s.ownership.bound(r,'read',f.reader,r.originals.read)),false);
-  assert.equal(f.s.ownership.bound(r,'read',f.reader,r.originals.read),false);
+  assert.equal(f.s.ownership.bound(r,'read',f.reader,r.originals.read),true); // Retained stream pull outside ingress ALS.
   assert.equal(f.s.ownership.bound(r,'cancel',f.reader,r.originals.cancel),true);
   for(const [key,value]of [['response',{}],['body',{}],['request',{}],['transport',{}],['token',{}]]){const saved=r[key];r[key]=value;assert.equal(f.s.ownership.run(f.token,()=>f.s.ownership.bound(r,'cancel',f.reader,r.originals.cancel)),false);r[key]=saved;}
   assert.equal(f.s.ownership.bound(r,'cancel',{},r.originals.cancel),false);assert.equal(f.s.ownership.bound(r,'cancel',f.reader,()=>{}),false);
@@ -1623,6 +1663,17 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const again=(await actual.fetch(request('https://private-control.fixture/proof/inert'))).value;assert.equal(again.originals,result.originals);assert.equal(again.observers,result.observers);
   assert.throws(()=>actual.fetch(request('https://inference.baseten.co/v1/models')));await assert.rejects(actual.fetch(request('https://private-control.fixture/proof/inert')));
  });
+ test('Private retained reader may pull without ingress ALS but rejects foreign ownership',async()=>{
+  const f=await privateInertReader(()=>Promise.resolve({done:true}));
+  await f.reader.read();assert.equal(f.s.ledger.faults.length,0);
+  const r=f.s.readers[0],fn=r.originals.read;
+  assert.equal(f.s.ownership.bound(r,'read',f.reader,fn),true);
+  assert.equal(f.s.ownership.bound(r,'read',{},fn),false);
+  assert.equal(f.s.ownership.bound(r,'read',f.reader,()=>{}),false);
+  for(const field of ['token','request','transport','response','body']){const old=r[field];r[field]={};assert.equal(f.s.ownership.bound(r,'read',f.reader,fn),false);r[field]=old;}
+  f.context.value={};assert.equal(f.s.ownership.bound(r,'read',f.reader,fn),false);f.context.value=undefined;
+  f.s.ownership.retire();assert.equal(f.s.ownership.bound(r,'read',f.reader,fn),false);
+ });
  test('Private Worker held original survives observer registration failure until its actual settlement',async()=>{
   const {s}=privateInertOwner();let resolve,attempts=0,finished=false;const p=new Promise(yes=>{resolve=yes;}),then=p.then;
   Object.defineProperty(p,'then',{value:function(...args){if(++attempts===1)throw undefined;return Reflect.apply(then,this,args);}});
@@ -1632,7 +1683,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  });
  test('Private Worker accounting, public receipt and cleanup gates remain independently strict',async()=>{
   const row={id:'inert',provider:'baseten',scenario:'eof'},receipt={retired:true,operations:[{state:'fulfilled'}],readers:[{unlocks:1,locked:false}],charged:0,
-   source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:0},calls:[],events:[{provider:'baseten',policy_id:'inert',capability:'models.list',model:null,reserved_cost_micros:0,actual_cost_micros:0}]};
+   source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:1},requests:[{id:0,requestId:'receipt-0',status:200,credential:'discovery'}],calls:[{request:0,originalKey:true,noCaller:true,redirect:'manual',query:false,method:'GET',bodyAbsent:true}],events:[{request_id:'receipt-0',key_id:'inert_discovery',status_code:200,status:'success',provider:'baseten',policy_id:'inert',capability:'models.list',model:null,reserved_cost_micros:0,actual_cost_micros:0}]};
   assertPrivateReceipt(row,receipt);
   const changes=[p=>{p.retired=false;},p=>{p.operations[0].state='rejected';},p=>{p.readers[0].locked=true;},p=>{p.readers[0].unlocks=2;},p=>{p.charged=1;},p=>{p.source.expired=1;},p=>{p.source.joined=false;},p=>{p.source.pending=1;},p=>{p.source.faults=1;},p=>{p.events[0].actual_cost_micros=1;},p=>{p.events[0].reserved_cost_micros=1;},p=>{p.events[0].policy_id='foreign';}];
   for(const change of changes){const p=structuredClone(receipt);change(p);assert.throws(()=>assertPrivateReceipt(row,p));}
@@ -1999,6 +2050,19 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
  });
  test('private client inventory, real shipping compilation and additive row',()=>{const manifests=readdirSync('providers').filter(p=>p.endsWith('.provider.yaml')).sort().map(p=>parse(readFileSync('providers/'+p,'utf8')));assert.ok(manifests.length);assert.deepEqual(manifests.map(p=>p.id).sort(),snapshot.providers.map(p=>p.id).sort());assert.deepEqual(compileProviderSnapshot(manifests),snapshot);
   const rows=parse(readFileSync('.github/workflows/openclaw-contract.yml','utf8')).jobs.consumer.strategy.matrix.include;assert.equal(new Set(rows.map(r=>r.consumer)).size,rows.length);assert.deepEqual(rows.filter(r=>r.consumer==='private-catalogs'),[{consumer:'private-catalogs',ref:privateCatalogPin,test:'test/openclaw-private-catalogs.test.mjs'}]);assert.equal(Object.keys(privateGroups).length,14);assert.equal(new Set(privateCases.map(r=>r.id)).size,privateCases.length);
+ });
+ test('Private actual Worker binds catalog and inference accounting to original response IDs',{timeout:60000},async()=>{
+  const f=await startPrivateCatalogFixture();
+  try{for(const provider of privateProviders)for(const scenario of ['eof','provider_error']){
+   const row={id:provider+'_accounting_'+scenario,provider,scenario};await f.setup(row);
+   const base=f.origin+'/v1/native/'+provider;
+   const catalog=await fetch(base+'/models',{headers:{authorization:'Bearer '+privateKey(row.id,'discovery')}});assert.equal(catalog.status,200);await catalog.arrayBuffer();
+   const chat=await fetch(base+'/chat/completions',{method:'POST',headers:{authorization:'Bearer '+privateKey(row.id),'content-type':'application/json'},body:JSON.stringify({model:'tenant/opaque-a',stream:true,messages:[{role:'user',content:'fixture'}]})});assert.equal(chat.status,200);await chat.arrayBuffer();
+   const denied=await fetch(base+'/chat/completions',{method:'POST',headers:{authorization:'Bearer '+privateKey(row.id,'inference','invalid-secret'),'content-type':'application/json'},body:JSON.stringify({model:'tenant/opaque-a',stream:true,messages:[]})});assert.equal(denied.status,401);await denied.arrayBuffer();
+   const proof=await f.join(row);assert.equal(proof.calls.length,2);assert.equal(proof.requests.length,3);assertPrivateReceipt(row,proof);
+   assert.ok(proof.events.some(e=>e.request_id===catalog.headers.get('x-clawrouter-request-id')));
+   assert.ok(proof.events.some(e=>e.request_id===chat.headers.get('x-clawrouter-request-id')));
+  }}finally{await f.close();}
  });
  test('private original Worker bundles and SDK fixture transforms without execution',async()=>{
   const require=createRequire(import.meta.resolve('wrangler/package.json')),build=require('esbuild').build;

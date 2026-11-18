@@ -33,7 +33,7 @@ The existing zero-inference-cost metadata operation does not make inference free
 
 ## Shipping activation and local evidence
 
-The generated snapshot now includes these three declarations. The other 84
+The generated snapshot now includes these three declarations. The other 93
 provider records, model index and unrelated capability-index entries remain
 identical to the frozen parent. Only three discovery capability entries are added.
 Existing Chat endpoints, model cards, prices and authentication declarations

@@ -10,6 +10,8 @@ const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { snapshot } = await import("../providers.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
+const { applyProviderCredential } = await import("../provider-auth.ts");
+const { assertXiaomiTokenPlanCredential } = await import("../xiaomi-plan-credentials.ts");
 
 // Real Worker/SQL boundaries and synthetic upstream wire evidence. Selection is
 // format-driven; this does not certify other formats, clients or live tariffs.
@@ -26,6 +28,31 @@ const configuredModel = "fixture/served-model";
 const configuredDeployment = "deployment";
 const delta = { id: "chat_fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "synthetic-output", reasoning_content: "synthetic-reasoning", tool_calls: messages[0].tool_calls }, finish_reason: null }] };
 const sse = value => `data: ${JSON.stringify(value)}\n\n`;
+const tokenPlanIds = new Set(["xiaomi-token-plan", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams"]);
+const codingPlanIds = new Set(["qwen-coding-global", "qwen-coding-cn"]);
+const syntheticCredential = providerId => tokenPlanIds.has(providerId) ? "tp-synthetic-upstream-key"
+  : codingPlanIds.has(providerId) ? "sk-sp-synthetic-upstream-key" : "synthetic-upstream-key";
+
+test("Xiaomi Chat fixture credentials match selected provider contracts", () => {
+  for (const provider of snapshot.providers) {
+    const credential = syntheticCredential(provider.id);
+    if (!tokenPlanIds.has(provider.id)) { assert.equal(credential, codingPlanIds.has(provider.id) ? "sk-sp-synthetic-upstream-key" : "synthetic-upstream-key"); continue; }
+    assert.throws(() => assertXiaomiTokenPlanCredential(provider.id, "synthetic-upstream-key"), { status: 503, code: "provider_credentials_invalid" });
+    assert.equal(assertXiaomiTokenPlanCredential(provider.id, credential), undefined);
+    const env = Object.fromEntries(provider.config_keys.map(key => [key, credential]));
+    const headers = new Headers();
+    applyProviderCredential(provider, null, env, headers, new URLSearchParams());
+    assert.equal(headers.get("api-key"), credential);
+    const grant = { provider: provider.id, kind: "api_key", credential: "ttp-synthetic-selected-grant" };
+    applyProviderCredential(provider, grant, env, headers, new URLSearchParams());
+    assert.equal(headers.get("api-key"), grant.credential);
+    assert.throws(() => applyProviderCredential(provider, { ...grant, credential: "synthetic-upstream-key" }, env, new Headers(), new URLSearchParams()), { status: 503, code: "provider_credentials_invalid" });
+  }
+  const provider = snapshot.providers.find(row => row.id === "xiaomi"), headers = new Headers();
+  applyProviderCredential(provider, null, { XIAOMI_API_KEY: syntheticCredential(provider.id) }, headers, new URLSearchParams());
+  assert.equal(headers.get("Authorization"), "Bearer synthetic-upstream-key");
+  assert.equal(syntheticCredential("xiaomi-token-plan-other"), "synthetic-upstream-key");
+});
 
 async function fixture(t, provider, dispatch = "manifest-session", outcome = "embedded-error") {
   const pending = [], events = [], diagnostics = [], records = new Map();
@@ -43,10 +70,11 @@ async function fixture(t, provider, dispatch = "manifest-session", outcome = "em
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "independent Chat fixture roots");
   };
   t.after(drain);
+  const credential = syntheticCredential(provider.id);
   const env = Object.fromEntries(provider.config_keys.map(key => [key,
     /(?:URL|ENDPOINT)$/.test(key) ? "https://fixture-upstream.example"
       : /_MODEL$/.test(key) ? configuredModel
-      : /_DEPLOYMENT$/.test(key) ? configuredDeployment : "synthetic-upstream-key"]));
+      : /_DEPLOYMENT$/.test(key) ? configuredDeployment : credential]));
   Object.assign(env, {
     AZURE_OPENAI_API_VERSION: "2024-10-21", AZURE_OPENAI_DEPLOYMENT: configuredDeployment,
     POLICY_KV: {
@@ -88,7 +116,7 @@ async function fixture(t, provider, dispatch = "manifest-session", outcome = "em
       method: "POST", headers: { cookie: "clawrouter_session=" + token, origin: "https://router.example", "content-type": "application/json", "x-request-id": "venice-session-error", ...headers }, body: JSON.stringify({ body }),
     }), env, { waitUntil: track }) };
   };
-  return { env, events, request, drain, session, state, fail(error) { hasPrimary = true; primary = error; diagnostic(); } };
+  return { env, credential, events, request, drain, session, state, fail(error) { hasPrimary = true; primary = error; diagnostic(); } };
 }
 
 function fragmented(wire, onCancel, leaveOpen = false) {
@@ -172,8 +200,8 @@ for (const { provider, endpoint } of cases) for (const dispatch of ["native", "m
           assert.equal(url.pathname, expected.pathname);
           assert.ok(!headers.get("authorization")?.includes("clawrouter-live-"));
           for (const auth of provider.auth.schemes) {
-            if (auth.type === "bearer") assert.equal(headers.get(auth.header), "Bearer synthetic-upstream-key");
-            else if (auth.type === "api_key") assert.equal(headers.get(auth.header), "synthetic-upstream-key");
+            if (auth.type === "bearer") assert.equal(headers.get(auth.header), `Bearer ${f.credential}`);
+            else if (auth.type === "api_key") assert.equal(headers.get(auth.header), f.credential);
             else assert.fail(`Chat fixture needs explicit ${auth.type} authentication coverage`);
           }
           assert.deepEqual(body.messages, messages);

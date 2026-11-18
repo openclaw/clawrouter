@@ -116,10 +116,13 @@ admission rules before rendering or serving resources.
 
 ## Compiled provider contract
 
-[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot, endpoint, model, auth, and quota declarations. Build tools and
-future package compilers can import these types without importing Worker
-bindings, credential records, or adapter implementations. Existing imports from
+`@clawrouter/provider-plugin-contract` owns the existing v1 `ProviderSnapshot`,
+`CompiledProvider`, and `CompiledModel` declarations. They compose the portable
+model, product, endpoint, auth, and quota declarations.
+[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) preserves existing
+imports through type-only compatibility exports. Build tools and package compilers can import these
+types without importing Worker bindings, credential records, or adapter
+implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
 
@@ -129,11 +132,54 @@ exported by `@clawrouter/provider-plugin-contract`. Core imports from
 package owns `ProviderGrantKind`; `shared/provider-snapshot.ts` still exports it
 as `GrantKind` for existing consumers.
 
+Authentication scheme, OAuth authorization/refresh configuration, and compiled
+grant-transport types also belong to the package. Existing imports of
+`AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
+`CompiledGrantTransport` from `shared/provider-snapshot.ts` remain supported.
+Credential storage, refresh ownership, runtime validation, and upstream calls
+remain host responsibilities.
+
 `GrantKind` preserves the legacy `api_key`, `oauth`, and `subscription` values.
 It is a compatibility classification, not the future product or commercial
 model. Product/offer normalization still needs its own migration and parity
 checks. The shared module contains types only; it does not validate a snapshot
 or qualify a provider capability.
+
+Endpoint declarations also belong to the package: `CompiledEndpoint`,
+`ManagedProtocol`, `ManagedFileLinks`, `OutputTokenLimit`, and `ToolPricing`.
+Existing imports from `shared/provider-snapshot.ts` remain supported. These
+compiled types preserve path, format, streaming, lifecycle, and limit fields;
+they do not replace manifest validation or host dispatch and admission.
+
+Quota probe and response-header declarations belong to the package through
+`CompiledQuotaConfig`, `CompiledQuotaProbe`, `CompiledQuotaProbeWindow`,
+`CompiledQuotaWindow`, and `GrantQuotaKind`. `GrantAccount` and `GrantExtraUsage`
+also belong to the package; `shared/provider-observations.ts` preserves existing
+imports. These are provider-reported observations and extraction recipes.
+Polling, freshness, credentials, budgets, and admission remain host-owned.
+
+### Portable model declarations
+
+The package exports `ProviderModelDefinition`, `ModelAvailability`, request-parameter
+support types, and native endpoint capability types, including the OpenAI, Baseten,
+and Sage decision protocols. Existing imports from `shared/provider-model.ts`,
+`shared/model-availability.ts`, `shared/model-request-parameters.ts`, and
+`shared/native-capabilities.ts` remain supported.
+
+The closed `isPublishedMusicInputSupport` validator moves with its support type
+and remains available through the shared import. Its matching rules are unchanged.
+Request assessment, publication permissions, and runtime admission remain in the
+host. These declarations describe compiled provider facts; they do not replace
+the shared model catalogue or add catalogue imports.
+
+### Portable tariff declarations
+
+The contract package exports `ModelPricing`, `RequestPricing`, and their component
+types. Existing imports from `shared/provider-model.ts` and
+`shared/request-pricing.ts` remain supported through type-only exports. These are
+published tariff declarations; runtime policy overrides, admission, and settlement
+remain host-owned. This does not add a model-catalogue importer or change price
+units, nullable values, or provider-specific qualifications.
 
 ### Explicit products
 

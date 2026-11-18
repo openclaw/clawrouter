@@ -1226,13 +1226,14 @@ function registerTests() {
         });
       }
       evidence.stage(17); assert.equal(proof.retired, true);
+      const observed = await f.control("observation", "native_abort");
+      // Join original producer operations before reading their retirement state.
+      const source = await f.proof("native_abort");
       evidence.stage(18); const state = await f.state("native_abort");
       evidence.stage(19); assert.equal(state.calls.length, 1);
       evidence.stage(20); assert.equal(state.canceled, 1);
       evidence.stage(21); assert.equal(state.active, 0);
       evidence.stage(22); assert.equal(state.expired, 0);
-      const observed = await f.control("observation", "native_abort");
-      const source = await f.proof("native_abort");
       // The usage barrier performs another strict original-operation drain.
       const usage = await f.control("usage", "native_abort");
       assertLiteLLMResetRetirement(proof, observed, source, usage);

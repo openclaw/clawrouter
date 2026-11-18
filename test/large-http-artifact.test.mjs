@@ -19,6 +19,12 @@ test('native artifact uses versioned assets without changing main runtime flags 
  assert.equal(manifest.runtime.type,'Asset');
  assert.equal(manifest.runtime.assetPath,'__large_http/artifact/'+digest(native)+'.mjs');
  assert.equal(native.length,manifest.runtime.bytes);assert.equal(digest(native),manifest.runtime.sha256);
+ // Model discovery belongs to the edge. Including its route or upstream client
+ // in the native payload would force an unrelated native runtime cutover.
+ for(const marker of ['/v1/codex/models','https://chatgpt.com/backend-api/codex/models']){
+  assert.ok(worker.includes(marker),'edge must retain Codex discovery: '+marker);
+  assert.ok(!native.toString().includes(marker),'native must omit Codex discovery: '+marker);
+ }
  assert.deepEqual(runtimeConfig.compatibility_flags,['enable_request_signal']);
  assert.equal(runtimeConfig.assets.run_worker_first,true);
  assert.equal(runtimeConfig.assets.directory,'.wrangler/large-http/assets');
