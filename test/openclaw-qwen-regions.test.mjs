@@ -26,7 +26,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `"use strict"; ${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, createQwenSdkErrorWitness, qwenSdkSignalRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `"use strict"; ${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, createQwenSdkErrorWitness, qwenSdkSignalRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "98475146a622f2747e197cd42d7c5862f6ce036407690a374943b4e139a861b4";
+const qwenRunnerFixtureSha256 = "cbc5cf5e8b73ad8395ded5138affe4f60136530f0a89a9c655ef4e37fc2e1be0";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -176,15 +176,16 @@ function createQwenFailureRelay() {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     assert.ok(Reflect.ownKeys(descriptors).every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "closed data fields required");
     value = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
-    assert.ok([1, 2, 3].includes(value.v));
-    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v >= 2 ? ["join"] : []), ...(value.v === 3 ? ["rejections"] : [])].sort());
+    assert.ok([1, 2, 3, 4].includes(value.v));
+    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v >= 2 ? ["join"] : []), ...(value.v >= 3 ? ["rejections"] : []), ...(value.v === 4 ? ["sdk"] : [])].sort());
     if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
     const checked = qwenClosedRecord(value.case, value.phase, value.op, value.state, { operations: value.operations, rejected: value.rejected, pending: value.pending });
     if (value.v >= 2) {
       assert.equal(checked.state, "failed"); checked.v = value.v; checked.join = qwenJoinRecord(value.join);
-      if (value.v === 3) {
+      if (value.v >= 3) {
         checked.rejections = qwenRejectionRecord(value.rejections);
         if (checked.rejections.originals !== null) assert.equal(checked.rejections.originals.length, checked.join[7]);
+        if (value.v === 4) checked.sdk = qwenSdkSignalRecord(value.sdk, checked.rejections);
       }
     }
     const key = value.case + ":" + value.phase + ":" + value.op;
@@ -1833,6 +1834,10 @@ test("Qwen fixture syntax bundles SDK and Worker observer routes without executi
 });
 
 test("registered Qwen regional SDK through shipping Worker and SQLite", { skip: !process.env.CLAWROUTER_OPENCLAW_CHECKOUT, timeout: 300_000 }, async t => {
+  for (const [path, sha] of [
+    ["src/agents/provider-transport-fetch.ts", "2c1cdb87182771ea906ed791fb35dc81f6dcf12198baa51b82a05275bb956e06"],
+    ["packages/ai/src/transports/transport-stream-shared.ts", "d987e6ccdfb3aa106e0c81f1fa67eb52ec22fab45eb783d6904b0adfabdf2cf7"],
+  ]) readQwenValueInput(resolve(process.env.CLAWROUTER_OPENCLAW_CHECKOUT, path), sha);
   let f;
   await withQwenNativeRelay(async relay => {
     f = await startFixture();
@@ -3267,4 +3272,97 @@ test("Qwen accepted cancellation cannot erase unrelated original or observer fai
   await assert.rejects(f.ledger.drain(), error => error.errors.includes(unrelated) && error.errors.includes(undefined));
   assert.equal(f.ledger.cancelledCount(), 3); assert.equal(f.ledger.joinRecord()[7], 4);
   assert.equal(f.owner.rejectionRecord().originals.length, 4); assert.equal(f.ledger.operations.filter(row=>row.state === "rejected").length, 4); f.close();
+});
+
+async function qwenSdkSignalFixture(mode = "owned") {
+  class ControlledAPIError extends Error {
+    constructor() { super("synthetic provider error"); this.status = undefined; this.code = "synthetic_error"; this.error = { code: "synthetic_error", message: "synthetic provider error" }; }
+  }
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), caller = {}, callerAbort = new AbortController(), sdkAbort = new AbortController();
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" }, owner = createQwenOwnership(storage, ledger, expected);
+  owner.installSdkErrors(ControlledAPIError.prototype);
+  const closed = qwenDeferred(), read = qwenDeferred(), cancel = qwenDeferred(), reason = {}, output = { stopReason: "error", errorMessage: "synthetic provider error" };
+  const reader = { closed: closed.promise, read() { return read.promise; }, cancel() { return cancel.promise; }, releaseLock() { body.locked = false; } };
+  const body = { locked: false, getReader() { body.locked = true; return reader; }, cancel() { return Promise.resolve(); } }, response = { body };
+  let getterCalls = 0;
+  const input = mode === "input_proxy" ? new Proxy({}, { getOwnPropertyDescriptor() { getterCalls++; throw undefined; } }) : { signal: sdkAbort.signal };
+  if (mode === "accessor") Object.defineProperty(input, "signal", { get() { getterCalls++; throw undefined; }, configurable: true });
+  if (mode === "unbranded") input.signal = {};
+  if (mode === "signal_proxy") input.signal = new Proxy(sdkAbort.signal, { get() { getterCalls++; throw undefined; } });
+  const fetch = owner.wrapFetch(() => Promise.resolve(response));
+  let originalError, originalResult;
+  const returned = await owner.invoke(async () => {
+    const result = await owner.guard(() => fetch(expected.url, { method: "POST", headers: { authorization: "Bearer fixture" } }).then(response => ({ response, release: () => Promise.resolve() })), undefined, [input]);
+    const actual = result.response.body.getReader(); actual.read();
+    sdkAbort.abort(reason); closed.reject(reason); read.reject(reason); actual.cancel(); cancel.reject(reason);
+    actual.releaseLock(); const release = result.release; await release();
+    if (mode === "changed_input") input.signal = new AbortController().signal;
+    originalError = new ControlledAPIError();
+    if (mode === "wrong_message") originalError.message = "unrelated";
+    if (mode === "wrong_code") originalError.code = "unrelated";
+    if (mode === "foreign_error") Object.setPrototypeOf(originalError, Error.prototype);
+    if (mode === "error_accessor") Object.defineProperty(originalError, "code", { get() { getterCalls++; throw undefined; } });
+    if (mode === "different_reason") originalError = reason;
+    const params = { error: originalError, output, signal: mode === "foreign_caller" ? new AbortController().signal : callerAbort.signal };
+    const observe = () => owner.observeSdkFailure(params);
+    if (mode === "absent_context") storage.run(undefined, observe); else observe();
+    if (mode === "duplicate") observe();
+    originalResult = result; return output;
+  }, undefined, [{}, {}, { signal: callerAbort.signal }], caller);
+  owner.observeCallerResult(mode === "foreign_output" ? {} : returned, caller); owner.closePublic();
+  await assert.rejects(ledger.drain());
+  return { owner, ledger, getterCalls, originalError, originalResult, output, rows: owner.sdkSignalRecord(), close() { ledger.restore(); owner.restore(); } };
+}
+for (const mode of ["owned", "accessor", "input_proxy", "signal_proxy", "unbranded", "changed_input", "wrong_message", "wrong_code", "foreign_error", "error_accessor", "different_reason", "foreign_caller", "foreign_output", "absent_context", "duplicate"]) test(`Qwen SDK signal witness keeps ${mode} qualified or unknown`, async () => {
+  const f = await qwenSdkSignalFixture(mode), row = f.rows[0];
+  assert.equal(f.getterCalls, 0); assert.equal(f.rows.length, 3);
+  assert.ok(f.ledger.operations.filter(row=>row.state === "rejected").length >= 3);
+  if (["foreign_caller", "absent_context", "duplicate"].includes(mode)) assert.deepEqual(row.slice(1), [0,0,0,0,0,0]);
+  else {
+    assert.equal(row[1], 1); assert.equal(row[2], ["wrong_message","wrong_code","foreign_error","error_accessor","different_reason"].includes(mode) ? 0 : 1);
+    assert.equal(row[3], mode === "foreign_output" ? 0 : 1);
+    if (["accessor","input_proxy","signal_proxy","unbranded","changed_input"].includes(mode)) assert.deepEqual(row.slice(4), [0,0,0]);
+    else assert.deepEqual(row.slice(4), [2,1,mode === "different_reason" ? 1 : 2]);
+  }
+  assert.equal(f.ledger.failures().recording.length, mode === "unbranded" ? 1 : 0);
+  assert.deepEqual(qwenSdkSignalRecord(f.rows, f.owner.rejectionRecord()), f.rows); f.close();
+});
+for (const fault of [undefined, false, {}]) test("Qwen native signal observer faults remain independent and falsey", () => {
+  const ledger = createQwenLedger(), signal = new AbortController().signal, callerSignal = new AbortController().signal;
+  const invocation = { args: [{}, {}, { signal: callerSignal }], caller: {} }, acquisition = { invocation, input: { signal } };
+  class ErrorType extends Error {}
+  const observer = createQwenSdkErrorWitness(ledger, () => invocation, new Set([acquisition]), ErrorType.prototype, () => { throw fault; }, () => undefined);
+  observer.input(acquisition); const error = new ErrorType(), output = {};
+  observer.failure({ error, output, signal: callerSignal }); observer.result(output, invocation.caller);
+  assert.deepEqual(ledger.failures().recording, [fault]);
+  assert.deepEqual(observer.row({ ordinal: 1, state: "rejected", reason: error }, acquisition), [1,1,0,1,0,0,0]);
+});
+test("Qwen actual SDK-failure wrapper preserves original receiver, arguments, return and falsey throws", () => {
+  const marker = 'vi.spyOn(transportStream, "failTransportStream").mockImplementation(';
+  const start = fixtureText.indexOf(marker) + marker.length, end = fixtureText.indexOf('\n    });', start) + 6;
+  assert.ok(start > marker.length && end > start);
+  const fn = stripTypeScriptTypes('const wrapper = ' + fixtureText.slice(start, end) + ';');
+  for (const thrown of [false,true]) for (const result of [undefined,false,{}]) {
+    const trace = [], receiver = {}, args = [{ error: {} }, {}];
+    const original = function (...actual) { trace.push("original"); assert.equal(this,receiver); assert.deepEqual(actual,args); if(thrown)throw result;return result; };
+    const observe = { observeSdkFailure(value) { trace.push("observe"); assert.equal(value,args[0]); } };
+    const wrapper = new Function("ownership","originalSdkFailure",`"use strict"; ${fn};return wrapper;`)(observe,original);
+    let caught = false;try{assert.equal(Reflect.apply(wrapper,receiver,args),result);}catch(error){caught=true;assert.equal(error,result);}
+    assert.equal(caught,thrown);assert.deepEqual(trace,["observe","original"]);
+  }
+});
+test("Qwen v4 SDK signal tuple preserves old grammars and existing bounds", async () => {
+  const f = await qwenSdkSignalFixture(), rejections = f.owner.rejectionRecord(), sdk = f.rows;
+  const counts = { operations: f.ledger.operations.length, rejected: 3, pending: 0 };
+  const record = { ...qwenClosedRecord("qr0_provider_error_stream", "join", "closed", "failed", counts), v: 4, join: f.ledger.joinRecord(), rejections, sdk };
+  const relay=createQwenFailureRelay();relay.record(record);assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(record))<=768);
+  const invalid = [[...sdk, sdk[0]], sdk.slice(1)];
+  for(const [slot,value] of [[0,0],[1,2],[2,-1],[3,2],[4,3],[5,3],[6,-1]]){const copy=sdk.map(row=>[...row]);copy[0][slot]=value;invalid.push(copy);}
+  const sparse=[...sdk[0]];sparse.length=8;invalid.push([sparse,...sdk.slice(1)]);
+  let touches=0;const accessor=[...sdk[0]];Object.defineProperty(accessor,2,{get(){touches++;return 1;}});invalid.push([accessor,...sdk.slice(1)]);
+  invalid.push(new Proxy(sdk,{ownKeys(){touches++;return [];}}));for(const value of invalid)assert.throws(()=>qwenSdkSignalRecord(value,rejections));assert.equal(touches,0);
+  const maxRejections={cancellation:[65533,65534,1],originals:Array.from({length:4},(_,i)=>[65531+i,5,65530,65535,65535,3,2,1,1,1])};
+  const maxSdk=maxRejections.originals.map(row=>[row[0],1,1,1,2,1,2]);
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation({...record,rejections:maxRejections,sdk:qwenSdkSignalRecord(maxSdk,maxRejections)}))<=768);
+  const {sdk:omitted,...v3}=record;v3.v=3;assert.doesNotThrow(()=>createQwenFailureRelay().record(v3));assert.throws(()=>createQwenFailureRelay().record({...record,sdk:[]}));f.close();
 });

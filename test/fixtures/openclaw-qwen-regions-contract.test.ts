@@ -4,6 +4,8 @@ import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf
 import * as transport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import * as guard from "../../src/infra/net/fetch-guard.js";
 import * as aiHost from "../../packages/ai/src/host.js";
+import { APIError } from "openai";
+import * as transportStream from "../../packages/ai/src/transports/transport-stream-shared.js";
 import * as openAITransport from "../../packages/ai/src/transports/openai-transport-shared.js";
 import { types as utilTypes } from "node:util";
 import { expect, it, vi } from "vitest";
@@ -393,6 +395,85 @@ function createQwenCallableWitness(ledger: ReturnType<typeof createQwenLedger>, 
   };
 }
 
+// Sample only own data fields and captured native signal accessors. No arbitrary
+// error/signal getter is invoked; these facts never classify a rejected original.
+function createQwenSdkErrorWitness(ledger: ReturnType<typeof createQwenLedger>, current: () => Invocation | undefined,
+  acquisitions: Set<Acquisition>, apiPrototype: object, aborted: Function, reason: Function) {
+  const inputs = new Map<Acquisition, unknown>(), errors = new Map<Invocation, any>();
+  const own = (value: any, key: string) => {
+    if (!value || typeof value !== "object" || utilTypes.isProxy(value)) return undefined;
+    const field = Object.getOwnPropertyDescriptor(value, key);
+    return field && Object.hasOwn(field, "value") ? field : undefined;
+  };
+  const note = (fn: () => void) => { try { fn(); } catch (error) { ledger.recordingFailure(error); } };
+  return {
+    input(acquisition: Acquisition) { note(() => { const field = own(acquisition.input, "signal"); if (field) inputs.set(acquisition, field.value); }); },
+    failure(params: unknown) {
+      note(() => {
+        const invocation = current(); if (!invocation) return;
+        if (errors.has(invocation)) { errors.get(invocation).ambiguous = true; return; }
+        const original = own(params, "error"), output = own(params, "output"), signal = own(params, "signal");
+        const callerSignal = own(invocation.args[2], "signal");
+        if (!original || !output || !signal || !callerSignal || signal.value !== callerSignal.value) return;
+        const error = original.value, payload = own(error, "error")?.value;
+        const controlled = !!error && typeof error === "object" && !utilTypes.isProxy(error)
+          && Object.getPrototypeOf(error) === apiPrototype && !!own(error, "status") && own(error, "status")!.value === undefined
+          && own(error, "message")?.value === "synthetic provider error" && own(error, "code")?.value === "synthetic_error"
+          && !!payload && typeof payload === "object" && !utilTypes.isProxy(payload) && Object.getPrototypeOf(payload) === Object.prototype
+          && Reflect.ownKeys(payload).sort().join() === "code,message"
+          && own(payload, "message")?.value === "synthetic provider error" && own(payload, "code")?.value === "synthetic_error";
+        const observed = { error, output: output.value, controlled, matched: false, ambiguous: false, samples: new Map<Acquisition, any>() };
+        errors.set(invocation, observed);
+        for (const acquisition of acquisitions) if (acquisition.invocation === invocation && inputs.has(acquisition)) {
+          const held = inputs.get(acquisition), field = own(acquisition.input, "signal");
+          if (!field || field.value !== held || !held || typeof held !== "object" || utilTypes.isProxy(held)) continue;
+          // Native getters enforce their internal-slot brand. A foreign object
+          // remains unknown and its thrown reason is an independent fault.
+          note(() => {
+            const value = Reflect.apply(aborted, held, []);
+            if (value !== true && value !== false) throw new Error("invalid native Qwen signal state");
+            observed.samples.set(acquisition, { state: value ? 2 : 1, reason: value ? Reflect.apply(reason, held, []) : undefined });
+          });
+        }
+      });
+    },
+    result(result: unknown, caller: object | undefined) { note(() => {
+      for (const [invocation, observed] of errors) if (invocation.caller === caller && observed.output === result) {
+        if (observed.matched) observed.ambiguous = true;
+        observed.matched = true;
+      }
+    }); },
+    row(operation: Operation & { ordinal: number }, acquisition: Acquisition | undefined) {
+      const observed = acquisition && errors.get(acquisition.invocation);
+      if (!observed || observed.ambiguous) return [operation.ordinal, 0, 0, 0, 0, 0, 0];
+      const sample = observed.samples.get(acquisition), comparable = sample?.state === 2 && operation.state === "rejected";
+      return [operation.ordinal, 1, observed.controlled ? 1 : 0, observed.matched ? 1 : 0, sample?.state ?? 0,
+        comparable ? Object.is(operation.reason, sample.reason) ? 1 : 2 : 0,
+        comparable ? Object.is(observed.error, sample.reason) ? 1 : 2 : 0];
+    },
+  };
+}
+
+function qwenSdkSignalRecord(input: unknown, rejections: ReturnType<typeof qwenRejectionRecord>): number[][] | null {
+  const invalid = (): never => { throw new Error("invalid closed Qwen SDK signal witness"); };
+  if (rejections.originals === null) { if (input !== null) invalid(); return null; }
+  const dense = (value: any, length: number) => {
+    if (!Array.isArray(value) || utilTypes.isProxy(value)) invalid();
+    const fields = Object.getOwnPropertyDescriptors(value);
+    if (fields.length.value !== length || Reflect.ownKeys(fields).join() !== Array.from({ length }, (_, i) => String(i)).concat("length").join()
+      || Object.values(fields).some(field => !Object.hasOwn(field, "value"))) invalid();
+    return Array.from({ length }, (_, i) => fields[i].value);
+  };
+  return dense(input, rejections.originals.length).map((value, index) => {
+    const row = dense(value, 7);
+    if (!row.every(Number.isSafeInteger) || row[0] !== rejections.originals![index][0]
+      || row.slice(1, 4).some(value => value < 0 || value > 1) || row.slice(4).some(value => value < 0 || value > 2)
+      || row[1] === 0 && row.slice(2).some(Boolean) || row[4] !== 2 && row.slice(5).some(Boolean)
+      || row[4] === 2 && (rejections.originals![index][6] === 2 ? row[5] === 0 || row[6] === 0 : row[5] !== 0 || row[6] !== 0) || row[1] === 1 && rejections.originals![index][5] === 0) invalid();
+    return row;
+  });
+}
+
 // Tokens follow actual asynchronous invocation ancestry, never a current case or
 // equality between caller, guard and fetch signals (which have different owners).
 function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType<typeof createQwenLedger>, expected: { url: string; credential: string }) {
@@ -404,6 +485,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   let callable: ReturnType<typeof createQwenCallableWitness> | undefined;
   let values: { bind: (invocation: Invocation) => void; snapshot: (invocation: Invocation | undefined, diagnostic?: boolean) => unknown; close: () => unknown[] } | undefined;
   let unknownEntry = false;
+  let sdkErrors: ReturnType<typeof createQwenSdkErrorWitness> | undefined;
   function passive(record: () => void) {
     try { record(); } catch (error) { ledger.recordingFailure(error); }
   }
@@ -445,6 +527,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
       acquisition = { invocation: outer.invocation, input: args[0], fn, receiver, args: Object.freeze([...args]), context: undefined! };
       const context = acquisition.context = Object.freeze({ invocation: outer.invocation, acquisition });
       acquisitions.add(acquisition);
+      passive(() => { sdkErrors?.input(acquisition!); });
       passive(() => {
         if (observed) { contexts.set(context, observed.invocation); observed.route.created.push(context); }
         else unknownEntry = true;
@@ -523,6 +606,24 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
       values = claim(() => contexts.get(storage.getStore()));
     },
     takeValueFailures() { return values?.close() ?? []; },
+    installSdkErrors(apiPrototype: object) {
+      const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get;
+      const reason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get;
+      if (!aborted || !reason || sdkErrors) throw new Error("Qwen native signal witness unavailable");
+      sdkErrors = createQwenSdkErrorWitness(ledger, () => contexts.get(storage.getStore()), acquisitions, apiPrototype, aborted, reason);
+    },
+    observeSdkFailure(params: unknown) { sdkErrors?.failure(params); },
+    observeCallerResult(result: unknown, caller: object | undefined) { sdkErrors?.result(result, caller); },
+    sdkSignalRecord() {
+      const first = ledger.joinOriginals(), rejections = this.rejectionRecord();
+      if (!first || !rejections) return null;
+      return qwenSdkSignalRecord(rejections.originals === null ? null : first.originals.map(operation => {
+        const relation = rejections.originals!.find(row => row[0] === operation.ordinal);
+        const binding = operation.binding as any, reader = operation.kind === "closed" ? binding : binding?.resource;
+        const acquisition = relation?.[5] && ledger.readers.includes(reader) ? (reader.owner as FetchReceipt).acquisition : undefined;
+        return acquisition && sdkErrors ? sdkErrors.row(operation, acquisition) : [operation.ordinal, 0, 0, 0, 0, 0, 0];
+      }), rejections);
+    },
     cancelledOriginal(operation: Operation, cancellation: Cancellation) {
       // This disposition is enabled only after the actual partial caller outcome
       // assertions. The fresh private reason comes from the pinned abort site;
@@ -952,6 +1053,7 @@ function createQwenEntryWitness(emit: (value: Record<string, any>) => void) {
 
 const originalProviderGuard = transport.fetchWithProviderHttpGuard;
 const originalGuard = guard.fetchWithSsrFGuard;
+const originalSdkFailure = transportStream.failTransportStream;
 try {
 for (const row of qwenRegionCases()) {
 it(`${row.id}: registered Qwen ${row.mode}`, async () => {
@@ -968,6 +1070,11 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     witness.at("loader");
     const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
     witness.at("guard_hooks");
+    ownership.installSdkErrors(APIError.prototype);
+    vi.spyOn(transportStream, "failTransportStream").mockImplementation(function (this: unknown, ...args: Parameters<typeof originalSdkFailure>) {
+      ownership.observeSdkFailure(args[0]);
+      return Reflect.apply(originalSdkFailure, this, args);
+    });
     ownership.installCallables(aiHost, openAITransport, utilTypes.isProxy);
     ownership.installValues(current => valueSink.claim(valueContract,
       qwenRegionCases().findIndex(candidate => candidate.id === row.id) + 1, current));
@@ -1031,6 +1138,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
       partial = true; controller.abort(ledger.cancellationArgument(callerToken, new Error("synthetic caller cancellation"))); ledger.cancellationReturned();
     }
     const result = await ledger.observe("caller", output.result());
+    ownership.observeCallerResult(result, callerToken);
     witness.at("body_assertions");
     const success = ["eof", "rotation", "no_usage", "effort_off", "effort_low", "effort_medium"].includes(row.mode);
     expect(result.stopReason).toBe(success ? "stop" : row.mode === "partial" ? "aborted" : "error");
@@ -1039,6 +1147,10 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
       expect(result.usage.totalTokens).toBe(row.mode === "no_usage" ? 0 : 320);
     }
     if (row.mode === "partial") { expect(partial).toBe(true); expect(controller.signal.aborted).toBe(true); partialCancellation = true; }
+    if (row.mode === "provider_error") {
+      const field = Object.getOwnPropertyDescriptor(result, "errorMessage");
+      expect(field && Object.hasOwn(field, "value") && field.value).toBe("synthetic provider error");
+    }
     if (row.mode === "preabort") expect(result.content).toEqual([]);
   } catch (error) { witness.failed(error); failedPhase = phase; failures.push(error); }
   ownership.closePublic();
@@ -1070,7 +1182,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
   for (const error of entryWitness.takeErrors()) { witness.failed(error); failures.push(error); }
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");
   try {
-    console.log("QWEN_SDK_V1 " + JSON.stringify({ ...qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }), ...(ledger.joinRecord() === null ? {} : { v: 3, join: qwenJoinRecord(ledger.joinRecord()), rejections: ownership.rejectionRecord() }) }));
+    console.log("QWEN_SDK_V1 " + JSON.stringify({ ...qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }), ...(ledger.joinRecord() === null ? {} : { v: 4, join: qwenJoinRecord(ledger.joinRecord()), rejections: ownership.rejectionRecord(), sdk: ownership.sdkSignalRecord() }) }));
   } catch (error) { witness.failed(error); failures.push(error); }
   try {
     const observer = ledger.observerRecord(row.id);

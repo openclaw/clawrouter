@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Relate Qwen first-join rejections to the retained SDK request signal and the actual controlled APIError at the existing transport-failure boundary. Sample only captured native signal accessors and own data fields, keep unknown provenance explicit, and retain strict provider-error and independent retirement failures.
+
 - Recognize the Qwen fixture’s exact owned partial-abort reader disposition only after the asserted aborted outcome and successful resource retirement. Preserve the fresh caller-reason identity, original promises and errors, foreign-owner negatives, and independent cancellation, release and cleanup failures; provider-error handling remains separate.
 
 - Retain bounded original-rejection relations at the first failed Qwen join: private resource binding, reason equality and observed callback order around the original caller cancellation. Preserve all rejection and retirement gates; equality and callback order alone do not prove cancellation causality.
