@@ -138,10 +138,14 @@ test('qualification requires reviewed exact bytes and a real tested ancestor; of
   const row={blueRuntimeSha:oldRuntime,greenRuntimeSha:runtime,evidence:'https://github.com/openclaw/clawrouter/actions/runs/123',source,controlSha256:nativeControlDigest()};
   assert.deepEqual(assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),row);
   assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:'1'.repeat(40)}]},{cwd}),/tested ancestor/);
-  writeFileSync(resolve(cwd,'scripts/deploy-native-cutover.mjs'),'changed controller');git('add','.');git('commit','-qm','drift');
-  const drift=git('rev-parse','HEAD');f.state.sha=drift;
-  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,'a drifted candidate cannot reuse an unchanged qualified ancestor from the controller checkout');
-  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
+  const unchangedCandidate=f.state.sha;
+  for(const file of ['scripts/deploy-native-cutover.mjs','worker/native-rehearsal/bootstrap.ts','worker/native-rehearsal/egress.ts']) {
+    git('checkout','--detach','-q',unchangedCandidate);
+    writeFileSync(resolve(cwd,file),'changed control');git('add','.');git('commit','-qm','drift');
+    const drift=git('rev-parse','HEAD');f.state.sha=drift;
+    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,`${file} drift cannot reuse an unchanged qualified ancestor from the controller checkout`);
+    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
+  }
   for(const receipt of [{schema:1,qualified:[row,row]},{schema:1,qualified:[{...row,greenRuntimeSha:'0'.repeat(64)}]},{schema:1,qualified:[{...row,evidence:'https://example.com/123'}]}])
     assert.throws(()=>assertNativeQualification(f.state,receipt));
 });
