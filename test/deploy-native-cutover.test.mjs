@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { resolve, dirname } from 'node:path';
 import { runNativeCutover, recoverNativeCutover, createNativeControl } from '../scripts/deploy-native-cutover.mjs';
 import { deploymentMessage, deploymentState } from '../scripts/deploy-train-policy.mjs';
@@ -137,10 +138,14 @@ test('qualification requires reviewed exact bytes and a real tested ancestor; of
   const row={blueRuntimeSha:oldRuntime,greenRuntimeSha:runtime,evidence:'https://github.com/openclaw/clawrouter/actions/runs/123',source,controlSha256:nativeControlDigest()};
   assert.deepEqual(assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),row);
   assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:'1'.repeat(40)}]},{cwd}),/tested ancestor/);
-  writeFileSync(resolve(cwd,'scripts/deploy-native-cutover.mjs'),'changed controller');git('add','.');git('commit','-qm','drift');
-  const drift=git('rev-parse','HEAD');f.state.sha=drift;
-  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,'a drifted candidate cannot reuse an unchanged qualified ancestor from the controller checkout');
-  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
+  const unchangedCandidate=f.state.sha;
+  for(const file of ['scripts/deploy-native-cutover.mjs','worker/native-rehearsal/bootstrap.ts','worker/native-rehearsal/egress.ts']) {
+    git('checkout','--detach','-q',unchangedCandidate);
+    writeFileSync(resolve(cwd,file),'changed control');git('add','.');git('commit','-qm','drift');
+    const drift=git('rev-parse','HEAD');f.state.sha=drift;
+    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,`${file} drift cannot reuse an unchanged qualified ancestor from the controller checkout`);
+    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
+  }
   for(const receipt of [{schema:1,qualified:[row,row]},{schema:1,qualified:[{...row,greenRuntimeSha:'0'.repeat(64)}]},{schema:1,qualified:[{...row,evidence:'https://example.com/123'}]}])
     assert.throws(()=>assertNativeQualification(f.state,receipt));
 });
@@ -156,9 +161,35 @@ test('drained cutover requests immediate DO adoption and reconciles its readback
       return Response.json({success:true,result:{deployments:[latest]}});
     }});
     const operation=api.deploy([{version_id:green,percentage:100}],'cutover','d0',{immediate:true});
-    if(acknowledgeStrategy)assert.equal((await operation).id,'d1');else await assert.rejects(operation);
+    assert.equal((await operation).id,'d1');
     assert.equal(posts,1);
   }
+});
+test('actual HTTP reconciles write-only strategy and lost acknowledgement, but refuses foreign journals or allocations',async t=>{
+  for(const scenario of ['acknowledged','lost-ack','foreign-journal','wrong-allocation'])await t.test(scenario,async t=>{
+    let posts=0,latest={id:'d0',versions:[{version_id:blue,percentage:100}]};
+    const server=createServer(async(req,res)=>{
+      if(req.method==='POST'){
+        posts++;let raw='';for await(const chunk of req)raw+=chunk;
+        const body=JSON.parse(raw);assert.deepEqual(body.code_update_strategy,{mode:'immediate'});
+        latest={id:'d1',versions:body.versions,annotations:body.annotations};
+        if(scenario==='foreign-journal')latest.annotations={'workers/message':'foreign'};
+        if(scenario==='wrong-allocation')latest.versions=[{version_id:blue,percentage:100}];
+        if(scenario==='lost-ack'){req.socket.destroy();return;}
+        res.setHeader('content-type','application/json');res.end(JSON.stringify({success:true,result:latest}));return;
+      }
+      res.setHeader('content-type','application/json');res.end(JSON.stringify({success:true,result:{deployments:[latest]}}));
+    });
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+    const origin='http://127.0.0.1:'+server.address().port;
+    const api=createApi({env:{CLOUDFLARE_API_TOKEN:'synthetic',CLOUDFLARE_ACCOUNT_ID:'a'.repeat(32)},wait:async()=>{},fetchImpl:(url,init)=>fetch(origin+new URL(url).pathname,init)});
+    const operation=api.deploy([{version_id:green,percentage:100}],'cutover','d0',{immediate:true});
+    if(['acknowledged','lost-ack'].includes(scenario))assert.equal((await operation).id,'d1');
+    else await assert.rejects(operation,/readback differs/);
+    assert.equal(posts,1);assert.equal(Object.hasOwn(latest,'code_update_strategy'),false);
+    t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,strategyReturned:false}));
+  });
 });
 test('cutover recovery journal fits the deployment annotation byte limit',()=>{
   const f=fixture();f.state.run='99999999999999999999';f.state.cutover.phase='recover-draining-recovery';
@@ -240,4 +271,60 @@ test('unproven zero-percent runtime or owner changes refuse normalization before
   f.api.version=async id=>id===prior?old:original(id);
   await assert.rejects(runNativeCutover(f));assert.deepEqual(f.events,[]);
  }
+});
+
+// Real HTTP control responses model the API/edge visibility gap: the owned
+// deployment is committed before one GET reports its selected Worker version.
+test('owned cutovers converge across known previous-version GETs without replaying admission',async t=>{
+ for(const scenario of ['known-lag','foreign-version','missing-version','http-error','persistent-lag','owner-drift'])await t.test(scenario,async t=>{
+  const f=fixture(),wire=f.control,deploy=f.api.deploy,foreign='99999999-9999-9999-9999-999999999999';
+  let revision=0,posts=0,pending,lagged=0,reads=0;
+  f.api.deploy=async(...args)=>{
+   const previous=f.latest.versions[0].version_id,result=await deploy(...args),next=result.versions[0].version_id;
+   if(next!==previous)pending={previous,next};return result;
+  };
+  const server=createServer(async(req,res)=>{
+   const selected=f.latest.versions[0].version_id;
+   if(req.method==='POST'){
+    posts++;let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);
+    assert.equal(body.expectedRevision,revision);await wire.admission(body.accepting);revision++;
+    res.setHeader('x-clawrouter-version-id',selected);res.setHeader('content-type','application/json');
+    res.end(JSON.stringify({status:200,accepting:body.accepting,revision}));return;
+   }
+   reads++;let actual=selected,status=200;
+   if(pending){
+    lagged++;actual=scenario==='foreign-version'?foreign:pending.previous;
+    if(scenario==='missing-version')actual=null;
+    if(scenario==='http-error')status=503;
+    if(scenario==='owner-drift')f.latest.annotations={'workers/message':'foreign'};
+    if(scenario!=='persistent-lag')pending=null;
+   }
+   const s=await wire.snapshot(selected);s.control.revision=revision;
+   if(actual)res.setHeader('x-clawrouter-version-id',actual);
+   res.statusCode=status;res.setHeader('content-type','application/json');
+   res.end(JSON.stringify({status:200,state:s,control:s.control,slots:s.inspection}));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+  const origin='http://127.0.0.1:'+server.address().port;
+  const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},wait:f.wait,fetchImpl:(url,init)=>{
+   assert.equal(new Headers(init.headers).has('Cloudflare-Workers-Version-Overrides'),false,'normal edge selection remains observable');
+   return fetch(origin+new URL(url).pathname,init);
+  }});
+  if(scenario==='known-lag'){
+   // The fresh recovery controller gets only the owned remote journal.
+   await assert.rejects(runNativeCutover({...f,control,smoke:async()=>{throw Error('planned runner stop');}}),/planned runner stop/);
+   await recoverNativeCutover({...f,control,state:deploymentState(f.latest)});
+   assert.equal(deploymentState(f.latest).status,'rolled-back');assert.equal(f.latest.versions[0].version_id,recovery);
+   assert.equal(lagged,2);assert.equal(posts,4,'one POST for each fenced admission change');
+  }else{
+   const failure=scenario==='persistent-lag'?/control.*deadline/:scenario==='owner-drift'?/not owned/:scenario==='http-error'?/HTTP 503/:/selected-version mismatch/;
+   await assert.rejects(runNativeCutover({...f,control,timeoutMs:10}),failure);
+   assert.equal(posts,1,'candidate admission never opens after rejected observation');
+   assert.equal((await wire.snapshot(green)).accepting,false);
+   assert.equal(deploymentState(f.latest)?.cutover.phase,scenario==='owner-drift'?undefined:'warming');
+   assert.equal(lagged,scenario==='persistent-lag'?2:1);
+  }
+  t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,reads,lagged,mutationReplay:false}));
+ });
 });

@@ -113,9 +113,9 @@ test('non-inference smoke never sends a credential or provider payload, and reje
   const fetchImpl=async(url,init)=>{calls.push({url,init});const path=new URL(url).pathname;
     assert.equal(new Headers(init.headers).has('authorization'),false);
     assert.equal(new Headers(init.headers).get('Cloudflare-Workers-Version-Overrides'),worker+'="'+green+'"');
-    return Response.json(path==='/health'?{versionId:green}:path==='/v1/providers'?{providers:[]}:{error:{code:'unauthorized'}},{status:path==='/v1/responses'?401:200,headers:{'x-clawrouter-version-id':green}});};
+    return Response.json(path==='/v1/health'?{versionId:green}:path==='/v1/providers'?{providers:[]}:{error:{code:'unauthorized'}},{status:path==='/v1/responses'?401:200,headers:{'x-clawrouter-version-id':green}});};
   await smokeNativeCutover({target,env:{CLOUDFLARE_ACCOUNT_ID:account},version:green,fetchImpl});
-  assert.deepEqual(calls.map(x=>new URL(x.url).pathname),['/health','/v1/providers','/v1/responses']);assert.equal(calls.at(-1).init.body,'{}');
+  assert.deepEqual(calls.map(x=>new URL(x.url).pathname),['/v1/health','/v1/providers','/v1/responses']);assert.equal(calls.at(-1).init.body,'{}');
   await assert.rejects(smokeNativeCutover({target,env:{CLOUDFLARE_ACCOUNT_ID:account},version:green,fetchImpl:async()=>Response.json({versionId:green})}),/not honored/);
 });
 test('dispatch and workflow keep exact source and distinct recovery runner without production secrets',async()=>{
