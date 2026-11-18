@@ -38,12 +38,14 @@ export async function observeNativeControl({ control, version, previousVersions 
     try { s = await control.snapshot(version); }
     catch (error) {
       const previous = error instanceof NativeControlVersionMismatch && error.expected === version && previousVersions.includes(error.actual);
-      // HTTP500 alone cannot identify a reset. Only a GET from the exact
-      // selected version may remain pending inside this owned window.
+      // HTTP500 alone cannot identify a reset. A GET stamped by the selected
+      // or explicitly known previous version may remain pending only here;
+      // ownership and the same deadline are checked on every observation.
       const unavailable = error instanceof NativeControlHttpError && error.method === 'GET' && error.status === 500 &&
-        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(version ?? '') && error.expected === version && error.actual === version;
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(version ?? '') && error.expected === version &&
+        (error.actual === version || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(error.actual ?? '') && previousVersions.includes(error.actual));
       if (!previous && !unavailable) throw error;
-      onPending(previous ? {kind:'version',actual:error.actual} : {kind:'http',status:500});
+      onPending(previous ? {kind:'version',actual:error.actual} : {kind:'http',status:500,...(error.actual === version ? {} : {actual:error.actual})});
     }
     withinDeadline();
     if (s) {
@@ -151,10 +153,10 @@ async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
     validate:s=>{ if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect'); },
     isReady:s=>kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha),
     onPending:observation=>{
-      const key = observation.kind === 'version' ? observation.actual : 'http500';
+      const key = observation.kind === 'version' ? observation.actual : 'http500:' + (observation.actual ?? version);
       if (observed.has(key)) return;
       observed.add(key);
-      console.log('Native control awaiting Worker ' + version + (observation.kind === 'version' ? '; observed owned version ' + observation.actual : '; snapshot returned HTTP 500'));
+      console.log('Native control awaiting Worker ' + version + (observation.kind === 'version' ? '; observed owned version ' + observation.actual : '; snapshot returned HTTP 500' + (observation.actual ? '; observed owned version ' + observation.actual : '')));
     },
     deadlineMessage:'Native ' + kind + ' deadline exceeded; preserve the remote recovery journal',
   });
