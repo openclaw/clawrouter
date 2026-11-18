@@ -8,6 +8,7 @@ import {readJson,sha256Hex} from './utils.ts';
 import {rehearsalConfig,journal,journalCall,type RehearsalEnv} from './native-rehearsal/contract.ts';
 import {startupStep,readinessValid,monitorFailure} from './native-rehearsal/startup.ts';
 import {bootstrapProbePrefix,bootstrapReceiptUrl,bootstrapReceiptValid} from './native-rehearsal/bootstrap.ts';
+import {observeEgress} from './native-rehearsal/egress.ts';
 export {PolicyBindingIndexObject,BudgetLedgerObject,GrantCredentialObject,UsageLedgerObject,ContentArchiveCleanupObject} from './index.ts';
 export {LargeHttpPool} from './large-http/lifecycle.ts';
 export {NativeRehearsalState} from './native-rehearsal/state.ts';
@@ -72,6 +73,7 @@ export class NativeRehearsalDeny extends WorkerEntrypoint<RehearsalEnv,{slot:num
 export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:number;generation:number;runtimeSha:string}> {
  async fetch(r:Request):Promise<Response>{
   const c=rehearsalConfig(this.env,Date.now(),true),u=new URL(r.url),props=this.ctx.props;
+  return observeEgress(this.env,props,r,c.origin,async forwarding=>{
   if(u.username||u.password||u.search||u.hash)return new Response(null,{status:403});
   if(u.origin==='https://api.openai.com'&&u.pathname==='/v1/responses'&&r.method==='POST'){
    rehearsalConfig(this.env);
@@ -92,9 +94,11 @@ export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:n
     const x=v.body;event.usage={idHash:await sha256Hex(String(x.id)),requestIdHash:await sha256Hex(String(x.request_id)),actualCostMicros:x.actual_cost_micros,reservedCostMicros:x.reserved_cost_micros,status:x.status,statusCode:x.status_code,contentRetained:x.content_retained};
    }
   }
+  await forwarding();
   const response=await fetch(r,{redirect:'error'});
   if(event)await journalCall(this.env,'callback',{...event,status:response.status});
   return response;
+  });
  }
 }
 export default {
