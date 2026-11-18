@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Export compiled model, availability, request-parameter, and native capability contracts from the provider plugin package while preserving shared imports and support validation. Include pinned contract sources when reproducing native recovery artifacts.
+
 - Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
 
 - Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.

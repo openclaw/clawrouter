@@ -31,7 +31,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   execFileSync("tar", ["-xzf", join(root, archives[0]), "--strip-components=1", "-C", installed], { timeout: 30_000 });
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
-    "LICENSE", "README.md", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js",
+    "LICENSE", "README.md", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/models.d.ts", "dist/models.js", "dist/model-availability.d.ts", "dist/model-availability.js", "dist/model-request-parameters.d.ts", "dist/model-request-parameters.js", "dist/native-capabilities.d.ts", "dist/native-capabilities.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js",
     "dist/observations.d.ts", "dist/observations.js", "dist/quota.d.ts", "dist/quota.js", "dist/package-index.d.ts", "dist/package-index.js", "dist/pricing.d.ts", "dist/pricing.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
@@ -41,18 +41,20 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   writeFileSync(join(consumer, "smoke.mjs"), `
 import assert from "node:assert/strict";
 import { parseProviderPluginDescriptor, providerPluginFiles, ProviderPluginContractError,
-  parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
+  isPublishedMusicInputSupport, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
 const descriptor = parseProviderPluginDescriptor({ schema: PROVIDER_PLUGIN_SCHEMA, id: "example", version: "1.0.0",
   manifest: "example.provider.yaml", documentation: "README.md", license: "LICENSE" });
 assert.deepEqual(providerPluginFiles(descriptor), ["LICENSE", "README.md", "example.provider.yaml"]);
 assert.throws(() => parseProviderPluginDescriptor({}), ProviderPluginContractError);
 assert.equal(typeof parseProviderConformanceScenario, "function");
 assert.equal(PROVIDER_CONFORMANCE_SCHEMA, "clawrouter.provider-conformance.v1");
+assert.equal(isPublishedMusicInputSupport({}), false);
 `);
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
 import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
   type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
+  type ProviderModelDefinition, type ModelAvailability, type ProviderReasoningEffort, type ParameterSupport, type ModelRequestParameters, type OpenAiDecisionCapabilities, type BasetenSystemOneDecisionCapabilities, type SageDecisionCapabilities, type NativeDecisionCapabilities, type OpaquePcmSpeechProfile, type InlineMusicReferenceImage, type PublishedMusicInputSupport, type NativeEndpointCapabilities, type NativeModelCapabilities,
   type ManagedProtocol, type ManagedFileLinks, type OutputTokenLimit, type ToolPricing, type CompiledEndpoint,
   type TokenRates, type LongContextPricing, type ServiceTierPricing, type AnthropicPriceModifiers, type TokenPricing, type CharacterPricing, type ImageTokenPricing, type ModelPricing, type SuccessfulRequestPricing, type OutcomeRequestPricing, type ImageRequestPricing, type DeepSeekSearchRequestPricing, type RequestPricing,
   type AuthScheme, type AuthorizationConfig, type RefreshConfig, type GrantTransportAuth, type CompiledGrantTransport,
@@ -95,6 +97,19 @@ const quota: CompiledQuotaConfig = { responseHeaders: [], probes: [{ grantKinds:
 const invalidAccountFacts: NonNullable<CompiledQuotaProbe["facts"]>["account"] = { accessToken: "/token" };
 // @ts-expect-error Credential classifications are not quota measurement kinds.
 const invalidQuotaKind: GrantQuotaKind = "oauth";
+const availability: ModelAvailability = { version: "clawrouter.model-availability.v1", effectiveAt: "2026-01-01",
+  checkedAt: "2026-01-01", sources: [], status: "upstream_alias", servingModel: "serving-model" };
+const decision: OpenAiDecisionCapabilities = { protocol: "openai-decisions", questions: {
+  boolean: { probabilities: "boolean", abstention: true } }, limits: { maxQuestions: 16 } };
+const model: ProviderModelDefinition = { id: "example/model", upstream: "model", capabilities: ["inference.decision"],
+  pricing_ref: null, pricing: null, availability, supportedReasoningEfforts: ["low", "high"],
+  requestParameters: { invoke: { sources: [], checkedAt: "2026-01-01", temperature: "requires_reasoning_none" } },
+  nativeCapabilities: { version: "clawrouter.native-capabilities.v1", endpoints: {
+    invoke: { sources: [], checkedAt: "2026-01-01", inference: { decision } } } } };
+// @ts-expect-error An upstream alias must name its serving model.
+const invalidAvailability: ModelAvailability = { version: "clawrouter.model-availability.v1", effectiveAt: "2026-01-01", checkedAt: "2026-01-01", sources: [], status: "upstream_alias" };
+// @ts-expect-error Request-parameter support is a finite qualification vocabulary.
+const invalidParameterSupport: ParameterSupport = "maybe";
 const kind: ProviderGrantKind = "subscription";
 const binding: ProviderProductBinding = { type: "grant-transport", grantKind: kind };
 const selection: ProviderProductOffer = { endpoint: "invoke", capability: "tool.invoke", models: null };
@@ -110,7 +125,7 @@ const index: ProviderPackageIndex = { schema: "clawrouter.provider-package-index
 declare const scenario: ProviderConformanceScenario;
 declare const validation: ProviderConformanceValidation;
 declare const execution: ProviderConformanceExecution;
-export { account, extraUsage, quota, endpoint, fileLinks, modelPrice, requestPrice, descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
+export { model, decision, availability, account, extraUsage, quota, endpoint, fileLinks, modelPrice, requestPrice, descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
 `);
   writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, noEmit: true },
