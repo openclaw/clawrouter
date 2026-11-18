@@ -162,6 +162,55 @@ export function decodeWorkerAbortDiagnostic(record) {
 }
 export function validateWorkerAbortDiagnostic(record) { return decodeWorkerAbortDiagnostic(record) !== null; }
 
+// Bifrost Worker evidence is opt-in and reports only source-owned boundaries.
+// A stage is not an error cause, native retirement proof or accounting success.
+export const bifrostWorkerPrefix = "BIFROST_WORKER_STAGE_V1 ";
+export const bifrostWorkerStages = Object.freeze([
+  "fixture", "setup", "request", "response_body", "response_record", "response_status",
+  "no_publication", "join", "retirement", "accounting", "producer_state", "request_ownership",
+  "close", "calls", "canceled", "settled", "expired",
+]);
+export function bifrostWorkerEvidence() {
+  let stage = 1, first = null, failures = 0, undefinedFailures = 0;
+  const reporting = [];
+  const attempt = fn => { try { return fn(); } catch (error) { reporting.push(error); } };
+  const failed = error => attempt(() => {
+    failures = Math.min(limit, failures + 1);
+    if (error === undefined) undefinedFailures = Math.min(limit, undefinedFailures + 1);
+    first ??= [stage, true, error !== undefined];
+  });
+  return {
+    stage(value) { attempt(() => {
+      if (!Number.isInteger(value) || value < 1 || value > bifrostWorkerStages.length) throw new Error("invalid Bifrost boundary");
+      stage = value;
+    }); },
+    failed,
+    escaping(error) { if (failures === 0) failed(error); },
+    report(context) {
+      if (failures || reporting.length) attempt(() => {
+        const record = { v: 1, kind: "bifrost_worker_stage", first, counts: [failures, undefinedFailures, Math.min(limit, reporting.length)] };
+        if (!decodeBifrostWorkerDiagnostic(record)) throw new Error("invalid Bifrost diagnostic");
+        context.diagnostic(bifrostWorkerPrefix + JSON.stringify(record));
+      });
+      return reporting.slice();
+    },
+  };
+}
+export function decodeBifrostWorkerDiagnostic(value) {
+  if (!value || typeof value !== "object" || types.isProxy(value)) return null;
+  const keys = ["v", "kind", "first", "counts"];
+  if (Reflect.ownKeys(value).length !== keys.length || !keys.every(key => own(value, key).present)
+    || own(value, "v").value !== 1 || own(value, "kind").value !== "bifrost_worker_stage") return null;
+  const counts = closedDiagnosticTuple(own(value, "counts").value, 3, n => Number.isSafeInteger(n) && n >= 0 && n <= limit);
+  const raw = own(value, "first").value;
+  const first = raw === null ? null : closedDiagnosticTuple(raw, 3, (x, i) => i === 0
+    ? Number.isInteger(x) && x >= 1 && x <= bifrostWorkerStages.length : i === 1 ? x === true : typeof x === "boolean");
+  if (!counts || counts[1] > counts[0] || (raw !== null && !first) || (counts[0] === 0) !== (first === null)
+    || first && (first[2] ? counts[0] !== limit && counts[1] === counts[0] : counts[1] === 0)) return null;
+  return { v: 1, kind: "bifrost_worker_stage", first, counts };
+}
+export function parseBifrostWorkerDiagnostic(payload) { return parseCanonicalWorkerRecord(payload, decodeBifrostWorkerDiagnostic); }
+
 // Fixed semantic components. Payload references are consistency checks, never
 // authority for a native case. The reporter binds every part independently.
 export const workerAbortParts = Object.freeze(["retire", "bad_a", "bad_b", "resource", "relations", "signals", "abort", "coverage"]);
@@ -420,9 +469,12 @@ export const workerAbortAdmissionSites = Object.freeze([
 // Node's FileTest forwards own entryFile on child events, but not on its parent
 // wrapper. Child IDs are root-local. A file name alone never establishes a root:
 // admission also requires the qualified invocation and one completed wrapper.
-export function workerAbortAdmission(tracked, invocation) {
-  const targetFile = "worker/test/litellm-model-discovery.test.mjs";
-  const targetName = "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement";
+export function workerAbortAdmission(tracked, invocation, bifrost = false) {
+  // Two fixed source targets share the same full-stream ownership census.
+  const targetFile = bifrost ? "worker/test/bifrost-model-discovery.test.mjs" : "worker/test/litellm-model-discovery.test.mjs";
+  const targetName = bifrost ? "Bifrost shipping 30-second deadline cancels an incomplete original response without publication"
+    : "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement";
+  if (bifrost && !invocation?.files.includes(targetFile)) invocation = null;
   const wrappers = new Map(), parentIds = new Map(), ids = new Map(), coordinates = new Map(), diagnostics = [];
   const expected = new Set(invocation?.files ?? []);
   let census = 0, childEvents = 0, overflow = false, recognized = 0, rejected = 0, targetFailure = null;
@@ -445,7 +497,7 @@ export function workerAbortAdmission(tracked, invocation) {
       const eventIndex = ["test:enqueue", "test:fail", "test:pass", "test:complete", "test:diagnostic"].indexOf(type);
       if (eventIndex < 0) return;
       const message = type === "test:diagnostic" ? own(data, "message").value : null;
-      if (type === "test:diagnostic" && (typeof message !== "string" || !message.startsWith(workerAbortPrefix) && !message.startsWith(workerAbortRelationalPrefix) && !message.startsWith(workerAbortRelationalPrefixV3))) return;
+      if (type === "test:diagnostic" && (typeof message !== "string" || (bifrost ? !message.startsWith(bifrostWorkerPrefix) : !message.startsWith(workerAbortPrefix) && !message.startsWith(workerAbortRelationalPrefix) && !message.startsWith(workerAbortRelationalPrefixV3)))) return;
       phase = eventIndex + 1;
       const f = keys.map(key => own(data, key));
       const [entry, sourceFile, line, column, nesting, id, parent, name] = f;
@@ -461,7 +513,7 @@ export function workerAbortAdmission(tracked, invocation) {
         recognized = Math.min(limit, recognized + 1);
         const relationalVersion = message.startsWith(workerAbortRelationalPrefixV3)?3:message.startsWith(workerAbortRelationalPrefix)?2:null;
         const relational = relationalVersion !== null; relationalSeen ||= relational;
-        const record = relational ? parseWorkerAbortPart(message.slice((relationalVersion===3?workerAbortRelationalPrefixV3:workerAbortRelationalPrefix).length)) : parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
+        const record = bifrost ? parseBifrostWorkerDiagnostic(message.slice(bifrostWorkerPrefix.length)) : relational ? parseWorkerAbortPart(message.slice((relationalVersion===3?workerAbortRelationalPrefixV3:workerAbortRelationalPrefix).length)) : parseWorkerAbortDiagnostic(message.slice(workerAbortPrefix.length));
         if (relational && record?.v !== relationalVersion) { rejected = Math.min(limit, rejected + 1); gate(18, false); return; }
         if (!gate(18, record !== null)) { rejected = Math.min(limit, rejected + 1); return; }
         if (diagnostics.length >= 32) { overflow = true; gate(2, false); return; }
@@ -543,12 +595,13 @@ export function workerAbortAdmission(tracked, invocation) {
         if (!gate(26, records.every(value => decodeWorkerReporterRecord(value) !== null))) records = [];
       } else if (bound) {
         const data = matches[0].record;
-        record = { v: 1, kind: "worker_abort", at: row.at, stage: data.first,
-          counts: [data.failures, data.undefinedFailures, data.reportingFailures], worker: data.worker, upstream: data.upstream };
+        record = bifrost ? { v: 1, kind: "bifrost_worker", at: row.at, first: data.first, counts: data.counts }
+          : { v: 1, kind: "worker_abort", at: row.at, stage: data.first,
+            counts: [data.failures, data.undefinedFailures, data.reportingFailures], worker: data.worker, upstream: data.upstream };
         if (!gate(26, Buffer.byteLength(JSON.stringify(record)) <= 512)) record = null;
       }
       const admitted = record !== null || records.length === 8;
-      if (!admitted && recognized) {
+      if (!bifrost && !admitted && recognized) {
         record = { v: 1, kind: "worker_abort_unbound", reason: first?.reason ?? null, gates: first?.gates ?? [0, 0], fields: first?.fields ?? [0, 0, 0],
           census: [expected.size, wrappers.size, childEvents, ids.size, rows.length, matches.length],
           scope: [Boolean(invocation), !parentInvalid, Boolean(complete), !childInvalid, true] };
@@ -568,6 +621,16 @@ export function decodeWorkerReporterRecord(value) {
   const get = key => own(value, key).value;
   const exact = keys => Reflect.ownKeys(value).length === keys.length && keys.every(key => own(value, key).present);
   const count = n => Number.isSafeInteger(n) && n >= 0 && n <= limit;
+  const bf = own(value, "bifrostDiagnostics");
+  if (get("kind") === "summary" && bf.present) {
+    const keys = Reflect.ownKeys(value);
+    if (keys.some(key => typeof key !== "string" || !own(value, key).present)) return null;
+    const base = decodeWorkerReporterRecord(Object.fromEntries(keys.filter(key => key !== "bifrostDiagnostics").map(key => [key, get(key)])));
+    const counts = closedDiagnosticTuple(bf.value, 5, (x, i) => i === 4 ? typeof x === "boolean" : count(x));
+    if (!base || !counts || counts[1] > 1 || counts[0] !== counts[1] + counts[2] + counts[3]) return null;
+    const result = { ...base, bifrostDiagnostics: counts };
+    return Buffer.byteLength(JSON.stringify(result)) <= 512 ? result : null;
+  }
   if ([2,3].includes(get("v"))) {
     let result;
     if (get("kind") === "worker_abort_relation") {
@@ -596,6 +659,12 @@ export function decodeWorkerReporterRecord(value) {
       || ![...failureTypes, "unknown"].includes(get("failureType")) || ![...codes, "unknown"].includes(get("code"))
       || !["missing", "undefined", "null", "native_error", "unknown"].includes(get("errorClass"))) return null;
     result = Object.fromEntries(keys.map(key => [key, get(key)]));
+  } else if (get("kind") === "bifrost_worker") {
+    if (!exact(["v", "kind", "at", "first", "counts"])) return null;
+    const at = closedDiagnosticTuple(get("at"), 4, (x, i) => i === 0 ? x === "worker/test/bifrost-model-discovery.test.mjs" : count(x) && (i === 3 || x > 0));
+    const data = decodeBifrostWorkerDiagnostic({ v: 1, kind: "bifrost_worker_stage", first: get("first"), counts: get("counts") });
+    if (!at || !data) return null;
+    result = { v: 1, kind: "bifrost_worker", at, first: data.first, counts: data.counts };
   } else if (get("kind") === "worker_abort") {
     if (!exact(["v", "kind", "at", "stage", "counts", "worker", "upstream"])) return null;
     const at = closedDiagnosticTuple(get("at"), 4, (x, i) => i === 0 ? x === "worker/test/litellm-model-discovery.test.mjs" : count(x) && (i === 3 || x > 0));
@@ -629,6 +698,20 @@ export function decodeWorkerReporterRecord(value) {
     }
   } else return null;
   return Buffer.byteLength(JSON.stringify(result)) <= 512 ? result : null;
+}
+
+// Whole-pair decoder. The caller must derive the declaration line from the
+// exact bound source; this function never assigns native ownership from payloads.
+export function decodeBifrostWorkerGroup(records, declarationLine) {
+  if (!Array.isArray(records) || types.isProxy(records) || records.length > 10 || !Number.isSafeInteger(declarationLine) || declarationLine < 1) return null;
+  const rows = closedDiagnosticTuple(records, records.length, () => true)?.map(decodeWorkerReporterRecord);
+  if (!rows || rows.some(row => !row) || new Set(rows.map(row => JSON.stringify(row))).size !== rows.length) return null;
+  const summaries = rows.filter(row => row.kind === "summary"), stages = rows.filter(row => row.kind === "bifrost_worker");
+  if (summaries.length !== 1 || stages.length !== 1 || JSON.stringify(summaries[0].bifrostDiagnostics) !== "[1,1,0,0,false]") return null;
+  const stage = stages[0], matches = rows.filter(row => row.kind === "failure" && row.file === stage.at[0] && row.line === declarationLine);
+  if (stage.at[1] !== declarationLine || matches.length !== 1 || rows.filter(row => row.kind === "failure").length !== summaries[0].reported
+    || rows.length - 1 > 9 || rows.reduce((n, row) => n + Buffer.byteLength(annotation(row, "error")), 0) > 8192) return null;
+  return { failure: matches[0], diagnostic: stage, summary: summaries[0] };
 }
 
 function trackedTestFiles(cwd) {
@@ -834,10 +917,11 @@ export function selectFailureRecords(leaves, parents, relay) {
 export async function* workerFailureReport(source, { cwd = process.cwd() } = {}) {
   const tracked = trackedTestFiles(cwd), leaves = new Map(), parents = new Map();
   const observation = createObservationRelay(tracked), realtime = createObservationRelay(tracked, true);
-  const admission = workerAbortAdmission(tracked, workerAbortInvocation(process, cwd));
+  const invocation = workerAbortInvocation(process, cwd);
+  const admission = workerAbortAdmission(tracked, invocation), bifrost = workerAbortAdmission(tracked, invocation, true);
   let failures = 0, unknownFiles = 0;
   for await (const event of source) {
-    admission.observe(event);
+    admission.observe(event); bifrost.observe(event);
     const type = own(event, "type").value, data = own(event, "data").value;
     if (type !== "test:fail") { observation.observe(type, data); realtime.observe(type, data); continue; }
     failures = Math.min(limit, failures + 1);
@@ -850,11 +934,12 @@ export async function* workerFailureReport(source, { cwd = process.cwd() } = {})
   }
   const search = observation.finish(), media = realtime.finish();
   const relay = !media.active ? search : { active: true, records: [...search.records, ...media.records], targetFailures: [search.targetFailure, media.targetFailure].filter(Boolean), omitted: search.omitted + media.omitted };
-  const evidence = admission.finish();
+  const evidence = admission.finish(), bf = bifrost.finish();
   if (relay.active) {
     // Script diagnostic families and the qualified Worker invocation are disjoint.
     // An inconsistent mixed stream cannot truncate either atomic evidence group.
-    if (evidence.failure || evidence.record || evidence.records.length || evidence.diagnostics || evidence.relational) throw new Error("conflicting reporter invocation families");
+    if (evidence.failure || evidence.record || evidence.records.length || evidence.diagnostics || evidence.relational ||
+        bf.failure || bf.record || bf.records.length || bf.diagnostics || bf.relational) throw new Error("conflicting reporter invocation families");
     const selected = selectFailureRecords([...leaves.values()], [...parents.values()], relay);
     const summary = { v: 1, kind: "summary", failureEvents: failures, reported: selected.length,
       omittedEvents: Math.max(0, failures - selected.length), unknownFiles, countsSaturated: failures === limit,
@@ -865,13 +950,18 @@ export async function* workerFailureReport(source, { cwd = process.cwd() } = {})
     return;
   }
   const prioritized = [...(evidence.failure ? [evidence.failure] : []), ...(evidence.records.length ? evidence.records : evidence.record ? [evidence.record] : [])];
-  const selected = [...prioritized, ...[...leaves.values(), ...parents.values()].filter(record => !evidence.failure || JSON.stringify(record) !== JSON.stringify(evidence.failure))].slice(0, 9);
+  // Preserve the existing LiteLLM group. Reserve the complete Bifrost pair before
+  // optional identities only when both records fit; otherwise report it omitted.
+  const pair = bf.record && bf.failure && prioritized.length <= 7 ? [bf.failure, bf.record] : [];
+  const reserved = [...prioritized, ...pair], reservedKeys = new Set(reserved.map(record => JSON.stringify(record)));
+  const selected = [...reserved, ...[...leaves.values(), ...parents.values()].filter(record => !reservedKeys.has(JSON.stringify(record)))].slice(0, 9);
   const identities = selected.filter(record => record.kind === "failure").length;
   // Construct every command before yielding. A relational group is all eight or
   // none; native failure identities and the summary never depend on its validity.
   const summary = { v: evidence.relational ? 2 : 1, kind: "summary", failureEvents: failures, reported: identities,
     omittedEvents: Math.max(0, failures - identities), unknownFiles, countsSaturated: failures === limit,
-    ...(evidence.diagnostics ? { diagnostics: evidence.diagnostics } : {}), ...(evidence.relational ? { relational: evidence.relational } : {}) };
+    ...(evidence.diagnostics ? { diagnostics: evidence.diagnostics } : {}), ...(evidence.relational ? { relational: evidence.relational } : {}),
+    ...(bf.diagnostics ? { bifrostDiagnostics: [bf.diagnostics[0], pair.length ? 1 : 0, bf.diagnostics[2], bf.diagnostics[0] - bf.diagnostics[2] - (pair.length ? 1 : 0), bf.diagnostics[4]] } : {}) };
   const commands = [...selected.map(record => annotation(record, "error")), annotation(summary, failures ? "error" : "notice")];
   if (commands.length > 10 || commands.reduce((n,line)=>n+Buffer.byteLength(line),0)>8192) throw new Error("worker diagnostic group exceeds quota");
   for (const command of commands) yield command;

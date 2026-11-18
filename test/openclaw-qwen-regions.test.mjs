@@ -884,7 +884,7 @@ test("Qwen shipping snapshot covers complete source inventory and exact consumer
   const strategy = parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy;
   const matrix = strategy.matrix.include;
   assert.equal(strategy["max-parallel"], 4);
-  assert.equal(matrix[0].consumer, "qwen-regions");
+  assert.equal(matrix.filter(row => row.consumer !== "bifrost")[0].consumer, "qwen-regions");
   assert.equal(new Set(matrix.map(r => r.consumer)).size, matrix.length);
   assert.deepEqual(matrix.filter(r => r.consumer === "qwen-regions"), [{ consumer: "qwen-regions", ref: sourceHead, test: "test/openclaw-qwen-regions.test.mjs" }]);
   assert.ok(fixtureText.includes(sourceHead)); assert.equal(rows.filter(r => r.mode === "eof").length, 44);

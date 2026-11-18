@@ -9,12 +9,203 @@ import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { types } from "node:util";
 import { parse } from "yaml";
-import { createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
+import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
 import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
 const marker = "synthetic-private-marker-do-not-report";
+// BEGIN Bifrost Worker diagnostic pure tests.
+function bifrostWorkerSource() {
+  const source = readFileSync("worker/test/bifrost-model-discovery.test.mjs", "utf8");
+  const start = source.indexOf("test('Bifrost shipping 30-second deadline");
+  return { source, line: source.slice(0, start).split("\n").length,
+    name: "Bifrost shipping 30-second deadline cancels an incomplete original response without publication" };
+}
+async function bifrostWorkerDiagnosticCase(options = {}) {
+  const source = options.source ?? bifrostWorkerSource().source;
+  const outer = options.outer ?? readFileSync("test/openclaw-bifrost.test.mjs", "utf8");
+  const between = (text, a, b) => text.slice(text.indexOf(a), text.indexOf(b, text.indexOf(a)));
+  const finish = new Function(between(outer, "export async function finishBifrostOwned(", "// BEGIN Bifrost owned producer/control retirement helpers.").replace("export ", "") + ";return finishBifrostOwned;")();
+  const trace = [], frames = [], reason = Object.hasOwn(options, "reason") ? options.reason : {};
+  let boundary = 1, callback, observed, held = false;
+  const hit = (name, ...args) => { trace.push([name, ...args]); if (options.fault === name) throw reason; };
+  const assertions = Object.fromEntries(["equal", "deepEqual", "ok"].map(name => [name, (...args) => {
+    hit("assert:" + boundary, name, ...args); return assert[name](...args);
+  }]));
+  const retirement = new Function("assert", "bifrostDeadlineQualified", between(outer, "export function assertBifrostRetired(", "export async function bifrostParentRelayInertCases(").replace("export ", "") + ";return assertBifrostRetired;")(assertions, () => true);
+  const proof = { retired: true, disposition: "provisional_worker_deadline_read", deadline: { readOrdinal: 6, observerOrdinal: 7 },
+    operations: [{ ordinal: 6, kind: "read", state: "rejected" }, { ordinal: 7, kind: "read_observer", state: "rejected" }],
+    readers: [{ unlocks: 1, locked: false }], charged: 0, source: { held: 0, canceled: 1, settled: 1, expired: 0 },
+    calls: [{ noCaller: true, redirect: "manual", original: true }] };
+  const f = { origin: "https://fixture.test", async setup(row) { hit("setup", row); }, async join(id) {
+    hit("join", id); if (options.joinGate) { held = true; await options.joinGate; } return proof;
+  }, async close() { hit("close"); if (Object.hasOwn(options, "closeReason")) throw options.closeReason; } };
+  const evidence = () => {
+    observed = bifrostWorkerEvidence(); const stage = observed.stage;
+    observed.stage = value => { boundary = value; stage(value); }; return observed;
+  };
+  const fetch = async (...args) => { hit("fetch", ...args); return {
+    get status() { hit("status"); return 502; },
+    async text() { hit("text"); return JSON.stringify({ error: { code: "provider_unavailable", message: "upstream request to provider bifrost failed" } }); },
+    headers: { get(...args) { hit("headers", ...args); return "private, no-store"; } },
+  }; };
+  const context = { startBifrostFixture: async (...args) => { hit("fixture", ...args); return f; }, finishBifrostOwned: finish,
+    assertBifrostRetired: retirement, fetch, bifrostKey: id => "synthetic-" + id, assert: assertions, selected: "tenant/opaque-a", bifrostWorkerEvidence: evidence,
+    test(name, options, fn) { callback = fn; } };
+  const run = between(source, "async function run(", "test('Bifrost shipping declaration");
+  const testBody = between(source, "test('Bifrost shipping 30-second deadline", "for(const mode of ['account_a'");
+  new Function(...Object.keys(context), "let count=0;" + run + testBody)(...Object.values(context));
+  let failed = false, error;
+  const pending = callback({ diagnostic(frame) {
+    hit("diagnostic"); if (Object.hasOwn(options, "reportReason")) throw options.reportReason; frames.push(frame);
+  } });
+  options.started?.({ pending, trace, frames, held: () => held });
+  try { await pending; } catch (value) { failed = true; error = value; }
+  return { failed, error, reason, trace, frames, record: frames.length ? parseBifrostWorkerDiagnostic(frames[0].slice(bifrostWorkerPrefix.length)) : null };
+}
+function bifrostWorkerEvents(frame) {
+  const { line, name } = bifrostWorkerSource(), file = "worker/test/bifrost-model-discovery.test.mjs";
+  const data = { testId: 7, parentId: 0, name, file, entryFile: file, line, column: 1, nesting: 0 };
+  return [{ type: "test:enqueue", data },
+    { type: "test:fail", data: { ...data, details: { error: { failureType: "testCodeFailure", code: "ERR_TEST_FAILURE" } } } },
+    { type: "test:diagnostic", data: { entryFile: file, file, line, column: 1, nesting: 0, message: frame, level: "info" } }];
+}
+async function bifrostWorkerPipeline(events, options = {}) {
+  const runtime = workerAbortRuntime(); runtime.argv.push("worker/test/bifrost-model-discovery.test.mjs");
+  const wrappers = runtime.argv.slice(1).map((file, i) => ({ testId: i + 1, parentId: 0, name: file, file, line: 1, column: 1, nesting: 0 }));
+  return workerAbortPipeline(events, { runtime, wrappers, ...options });
+}
+test("Bifrost Worker diagnostic: actual registered callback retains boundaries, original undefined and cleanup", async () => {
+  const cases = { fixture: 1, setup: 2, fetch: 3, text: 4, status: 5, "assert:6": 6, "assert:7": 7, join: 8,
+    "assert:9": 9, "assert:10": 10, "assert:11": 11, "assert:12": 12, close: 13,
+    "assert:14": 14, "assert:15": 15, "assert:16": 16, "assert:17": 17 };
+  for (const [fault, boundary] of Object.entries(cases)) for (const reason of [undefined, {}]) {
+    const r = await bifrostWorkerDiagnosticCase({ fault, reason });
+    assert.equal(r.failed, true);
+    const cleanupAssertion = ["setup", "fetch", "text", "status"].includes(fault);
+    if (cleanupAssertion) { assert.equal(r.error.errors[0], reason); assert.equal(r.error.errors.length, 2); assert.ok(r.error.errors[1] instanceof Error); }
+    else assert.equal(r.error, reason);
+    assert.deepEqual(r.record.first, [boundary, true, reason !== undefined]);
+    assert.deepEqual(r.record.counts, [cleanupAssertion ? 2 : 1, reason === undefined ? 1 : 0, 0]);
+    assert.equal(r.trace.filter(x => x[0] === "close").length, fault === "fixture" ? 0 : 1);
+    assert.equal(r.trace.at(-1)[0], "diagnostic");
+  }
+  const r = await bifrostWorkerDiagnosticCase({ fault: "assert:6", reason: undefined, closeReason: undefined, reportReason: undefined });
+  assert.equal(r.failed, true); assert.deepEqual(r.error.errors[0].errors, [undefined, undefined]);
+  assert.equal(r.error.errors.length, 2); assert.equal(r.error.errors[1], undefined);
+  const success = await bifrostWorkerDiagnosticCase(); assert.equal(success.failed, false); assert.deepEqual(success.frames, []);
+  assert.deepEqual(success.trace.filter(x => !x[0].startsWith("assert:")).map(x => x[0]), ["fixture", "setup", "fetch", "text", "status", "headers", "join", "close"]);
+});
+test("Bifrost Worker diagnostic: held original join completes before close and report", async () => {
+  let release, view; const joinGate = new Promise(resolve => { release = resolve; });
+  const pending = bifrostWorkerDiagnosticCase({ fault: "fetch", joinGate, started(value) { view = value; } });
+  for (let i = 0; i < 20 && !view.held(); i++) await Promise.resolve();
+  assert.equal(view.held(), true); assert.deepEqual(view.frames, []); assert.equal(view.trace.some(x => x[0] === "close"), false);
+  release(); const r = await pending; assert.equal(r.failed, true);
+  assert.ok(r.trace.findIndex(x => x[0] === "join") < r.trace.findIndex(x => x[0] === "close"));
+  assert.equal(r.trace.at(-1)[0], "diagnostic");
+});
+test("Bifrost Worker diagnostic: original observer faults never prevent cleanup or replace undefined", async () => {
+  const outer = readFileSync("test/openclaw-bifrost.test.mjs", "utf8"), start = outer.indexOf("export async function finishBifrostOwned(");
+  const finish = new Function(outer.slice(start, outer.indexOf("// BEGIN Bifrost owned producer/control retirement helpers.", start)).replace("export ", "") + ";return finishBifrostOwned;")();
+  const trace = [], primary = {}, cleanup = {};
+  let caught; try { await finish(() => { throw primary; }, [() => { trace.push(1); throw cleanup; }, () => { trace.push(2); }], () => { throw undefined; }); } catch (error) { caught = error; }
+  assert.deepEqual(trace, [1, 2]); assert.deepEqual(caught.errors[0].errors, [primary, cleanup]); assert.deepEqual(caught.errors.slice(1), [undefined, undefined]);
+});
+test("Bifrost Worker diagnostic: actual producer/native reporter/whole decoder in both orders", async () => {
+  for (const reason of [undefined, {}]) {
+    const r = await bifrostWorkerDiagnosticCase({ fault: "assert:10", reason });
+    for (const order of [[0,1,2], [0,2,1]]) {
+      const events = bifrostWorkerEvents(r.frames[0]); const { rows } = await bifrostWorkerPipeline(order.map(i => events[i]));
+      for (const input of [rows, [...rows].reverse()]) {
+        const result = decodeBifrostWorkerGroup(input, bifrostWorkerSource().line);
+        assert.ok(result); assert.deepEqual(result.diagnostic.first, [10, true, reason !== undefined]);
+        assert.deepEqual(result.summary.bifrostDiagnostics, [1,1,0,0,false]);
+      }
+    }
+  }
+});
+test("Bifrost Worker diagnostic: successful LiteLLM cannot supply a Bifrost boundary", async () => {
+  const r = await bifrostWorkerDiagnosticCase({ fault: "join" });
+  const lite = workerAbortEvidence(); lite.stage(14); let frame; lite.report({ diagnostic(value) { frame = value; } });
+  const events = workerAbortNativeEvents(frame); events[1].type = "test:pass";
+  const result = await bifrostWorkerPipeline([...events, ...bifrostWorkerEvents(r.frames[0])]);
+  const decoded = decodeBifrostWorkerGroup(result.rows, bifrostWorkerSource().line);
+  assert.ok(decoded); assert.deepEqual(decoded.diagnostic.first, [8,true,true]);
+  assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+});
+test("Bifrost Worker diagnostic: complete census, canonical frame and native identity fail closed", async () => {
+  const r = await bifrostWorkerDiagnosticCase({ fault: "join" });
+  const mutations = [e => { delete e[0].data.testId; }, e => { e[1].data.testId = 8; }, e => { e[0].data.parentId = null; },
+    e => { e[0].data.name += " foreign"; }, e => { delete e[2].data.entryFile; }, e => { e[2].data.file = "worker/test/other.test.mjs"; },
+    e => { e[2].data.line++; }, e => { e[2].data.message += " "; }, e => { e[2].data.message += "\x1b"; },
+    e => { e[2].data.message = bifrostWorkerPrefix + "{}"; }, e => { e[2].data.message = r.frames[0].replace('"v":1', '"v":2'); },
+    e => { e[2].data.message = r.frames[0].replace('"v":1', '"v":1,"v":1'); }, e => e.push(e[2]), e => e.push(e[0]),
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, name: "unrelated", line: 999 } }),
+    e => e.push({ type: "test:pass", data: e[1].data }), e => e.splice(1, 1)];
+  for (const mutate of mutations) { const events = bifrostWorkerEvents(r.frames[0]); mutate(events); const { rows } = await bifrostWorkerPipeline(events); assert.equal(decodeBifrostWorkerGroup(rows, bifrostWorkerSource().line), null); }
+  for (const options of [{ complete: false }, { runtime: { ...workerAbortRuntime(), versions: { node: "26.13.0" } } }]) {
+    const { rows } = await bifrostWorkerPipeline(bifrostWorkerEvents(r.frames[0]), options); assert.equal(decodeBifrostWorkerGroup(rows, bifrostWorkerSource().line), null);
+  }
+  const { rows } = await bifrostWorkerPipeline(bifrostWorkerEvents(r.frames[0]));
+  for (const input of [rows.slice(1), rows.slice(0,-1), [...rows, rows[0]], rows.map(x => x.kind === "summary" ? { ...x, bifrostDiagnostics: [1,0,0,1,false] } : x)]) assert.equal(decodeBifrostWorkerGroup(input, bifrostWorkerSource().line), null);
+});
+test("Bifrost Worker diagnostic: maximum closed widths fit and complete pair survives optional saturation", async () => {
+  const max = { v: 1, kind: "bifrost_worker_stage", first: [17,true,true], counts: [1000000,1000000,1000000] };
+  const frame = bifrostWorkerPrefix + JSON.stringify(max), events = bifrostWorkerEvents(frame);
+  const extra = Array.from({ length: 30 }, (_, i) => ({ type: "test:fail", data: { entryFile: "worker/test/other.test.mjs", file: "worker/test/" + "x".repeat(217) + String(i).padStart(2, "0") + ".test.mjs", testId: i+1, parentId: 0, name: "other", line: 1000000, column: 1, nesting: 0, details: { error: Object.assign(new Error(), { failureType: "parentAlreadyFinished", code: "ERR_INVALID_ARG_TYPE" }) } } }));
+  const { rows, lines } = await bifrostWorkerPipeline([...extra, ...events]);
+  assert.equal(rows.length, 10); assert.ok(decodeBifrostWorkerGroup(rows, bifrostWorkerSource().line));
+  assert.equal(rows.filter(x => x.kind === "failure").length, 8); assert.equal(rows.at(-1).omittedEvents, 23);
+  assert.ok(lines.every(x => Buffer.byteLength(x) <= 768)); assert.ok(lines.reduce((n,x) => n+Buffer.byteLength(x),0) <= 8192);
+  const wide = rows.map(row => row.kind === "summary" ? { ...row, failureEvents: 1000000, omittedEvents: 999992, unknownFiles: 999992, countsSaturated: true } : row);
+  for (const input of [wide,[...wide].reverse()]) assert.ok(decodeBifrostWorkerGroup(input, bifrostWorkerSource().line));
+  assert.ok(wide.every(row => Buffer.byteLength(JSON.stringify(row)) <= 512));
+  for (const first of [[0,true,true],[18,true,true],[1,false,true],[1,true,null]]) assert.equal(decodeBifrostWorkerDiagnostic({ ...max, first }), null);
+  assert.equal(decodeBifrostWorkerDiagnostic({ ...max, first: null }), null);
+  let reads = 0; const hostile = { ...max }; Object.defineProperty(hostile, "first", { get() { reads++; throw undefined; } });
+  assert.equal(decodeBifrostWorkerDiagnostic(hostile), null); assert.equal(reads, 0);
+});
+test("Bifrost Worker diagnostic: first boundary is immutable and report faults preserve undefined", () => {
+  const evidence = bifrostWorkerEvidence(), frames = [], primary = {};
+  evidence.stage(6); evidence.failed(primary); evidence.stage(13); evidence.failed(undefined); evidence.escaping({});
+  assert.deepEqual(evidence.report({ diagnostic(value) { frames.push(value); } }), []);
+  assert.deepEqual(parseBifrostWorkerDiagnostic(frames[0].slice(bifrostWorkerPrefix.length)),
+    { v: 1, kind: "bifrost_worker_stage", first: [6,true,true], counts: [2,1,0] });
+  for (const reason of [undefined, {}]) assert.deepEqual(evidence.report({ diagnostic() { throw reason; } }).at(-1), reason);
+  const invalid = bifrostWorkerEvidence(); invalid.stage(0); let frame;
+  const errors = invalid.report({ diagnostic(value) { frame = value; } });
+  assert.equal(errors.length, 1); assert.ok(errors[0] instanceof Error);
+  assert.deepEqual(parseBifrostWorkerDiagnostic(frame.slice(bifrostWorkerPrefix.length)),
+    { v: 1, kind: "bifrost_worker_stage", first: null, counts: [0,0,1] });
+});
+test("Bifrost Worker diagnostic: full existing LiteLLM group omits the entire Bifrost pair", async () => {
+  const original = await workerRelationCase(), { frames } = workerRelationFrames(original.project());
+  const r = await bifrostWorkerDiagnosticCase({ fault: "join" });
+  for (const reverse of [false,true]) {
+    const result = await bifrostWorkerPipeline([...workerRelationEvents(frames, reverse), ...bifrostWorkerEvents(r.frames[0])]);
+    assert.equal(relationRecords(result.rows).length, 8); assert.equal(result.rows.length, 10);
+    assert.equal(result.rows.some(row => row.kind === "bifrost_worker"), false);
+    assert.deepEqual(result.rows.at(-1).bifrostDiagnostics, [1,0,0,1,false]);
+    for (const rows of [result.rows,[...result.rows].reverse()]) assert.equal(decodeBifrostWorkerGroup(rows, bifrostWorkerSource().line), null);
+  }
+});
+// END Bifrost Worker diagnostic pure tests.
+
+test("Bifrost Worker evidence cannot be dropped by an incompatible script relay", async () => {
+  const result = await bifrostWorkerDiagnosticCase({ fault: "join" });
+  const worker = bifrostWorkerEvents(result.frames[0]), search = observationEvents();
+  const script = [
+    { type: "test:enqueue", data: search.enqueue },
+    { type: "test:fail", data: search.terminal },
+    ...[observationBoundary(), observationCleanup()].map(row => ({ type: "test:diagnostic",
+      data: { ...search.location, message: observationDiagnosticText(row) } })),
+  ];
+  for (const events of [[...worker, ...script], [...script, ...worker]])
+    await assert.rejects(bifrostWorkerPipeline(events), /conflicting reporter invocation families/);
+});
+
 // BEGIN worker abort diagnostic pure tests.
 function abortDiagnosticSource() {
   const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
@@ -1479,7 +1670,12 @@ test("owned HTTP/1 reset pure: actual module bindings target name and unchanged 
   assert.ok(source.includes('import { request as httpRequest } from "node:http";'));
   assert.ok(source.includes('import { Socket } from "node:net";'));
   const name = "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement";
-  assert.equal(source.split('test("' + name + '"').length - 1, 1); assert.ok(reporter.includes('const targetName = "' + name + '"'));
+  assert.equal(source.split('test("' + name + '"').length - 1, 1);
+  const bifrostName = "Bifrost shipping 30-second deadline cancels an incomplete original response without publication";
+  const bifrostFile = "worker/test/bifrost-model-discovery.test.mjs";
+  assert.equal(readFileSync(bifrostFile, "utf8").split("test('" + bifrostName + "'").length - 1, 1);
+  assert.ok(reporter.includes('const targetFile = bifrost ? "' + bifrostFile + '" : "worker/test/litellm-model-discovery.test.mjs";'));
+  assert.ok(reporter.includes('const targetName = bifrost ? "' + bifrostName + '"\n    : "' + name + '";'));
   for (const binding of ["litellmOwnedH1Reset", "assertLiteLLMResetRetirement"]) assert.ok(source.includes("export function " + binding + "("));
   assert.ok(source.includes('call: (id, path = "/v1/native/litellm/models", init = {}) => fetch(origin + path, { ...init, headers: { authorization: "Bearer " + key(id), ...init.headers } })'));
   const target = source.slice(source.indexOf('test("' + name), source.indexOf('test("shipping 30000ms'));

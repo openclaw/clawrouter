@@ -23,6 +23,24 @@
 
 ## Unreleased
 
+- Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
+
+- Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
+
+- Distinguish search-observation body failure boundaries through literal native subtest locations, preserving original operations, failures and cleanup. Missing failure-site delivery remains unknown.
+
+- Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
+
+- Separate Bifrost progress-case Worker residual failures from the SDK retirement response verdict in bounded diagnostics. Preserve original failures, strict retirement and financial gates; missing observations remain unknown.
+
+- Bind Bifrost origin evidence to the original public chat-completion return and observe the SDK's original prototype iterator through authored normalization. Preserve lazy parsing, original returns and failures, exact restoration, and independent native retirement and financial gates.
+
+- Record the first Bifrost SDK origin-witness fault site in the existing bounded diagnostics, preserving original failures and strict native, retirement and financial qualification.
+
+- Bind Bifrost's explicit negative SSE cases to their original public SDK response, iterator and controller before admitting the exact same-reader rejection vector. Keep raw failures, independent Worker retirement and financial assertions, with fail-closed origin and restoration checks.
+
+- Preserve the captured global timer receiver in Bifrost partial fixtures and report bounded producer failure sites after original joins, without changing deadlines, cancellation or accounting acceptance.
+
 - Keep Xiaomi replay sanitization in each case's captured provider generation, including regional token-plan routing. Compose the current runner diagnostics and credential checks without borrowing Qwen native qualification or relaxing retirement and accounting assertions.
 
 - Show bounded immediate-prototype and public-code facts for the first original Xiaomi reader rejection and one shallow cause in its existing failure display. Preserve original errors and strict retirement/accounting; unmatched facts and origin remain unknown.
@@ -85,7 +103,6 @@
 
 - Export authentication scheme, OAuth configuration, and grant-transport types from the provider plugin contract while preserving core type imports.
 
-- Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
 - Route Qwen regional cancellation fixtures through the direct Worker ingress, preserving existing SDK, retirement and accounting assertions.
 
@@ -115,6 +132,22 @@
 - Transport the complete Edge CLI test fixture over stdin instead of an oversized command argument, and validate census bindings across all import declarations and the current control-bound sampling closure. Production execution and qualification rules are unchanged.
 
 - Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.
+
+- Reserve complete Bifrost diagnostic groups before optional parent records and join output completion without changing native failure acceptance.
+
+- Bound Bifrost partial-fixture demand to nonterminal SSE comments before holding, retaining the original cancellation lifetime, escape deadline and strict retirement/accounting checks.
+
+- Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
+
+- Use the existing direct Worker socket for Bifrost SDK and control requests, retaining strict producer cancellation, nonexpiry and accounting checks.
+
+- Compare Bifrost inert cleanup failures by their original reason identities across VM realms, preserving order and undefined failures.
+
+- Preserve failed Bifrost producer, control-response and accounting observations after original joins without changing native retirement acceptance.
+
+- Join Bifrost fixture producers and their already-attached progress observers explicitly, preserving original failures and retiring acquired control bodies before reporting cleanup failures.
+
+- Activate Bifrost model discovery and versioned native aliases with original-owner catalog checks; add a pinned registered-client fixture for discovery and opaque-ID streaming.
 
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
 
@@ -1003,6 +1036,8 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Declare Bifrost model discovery from its configured API base, preserving the original managed owner and intersecting admitted and current model policies without an environment-key fallback.
+
 - Declare LiteLLM model discovery and literal versioned native aliases through its configured gateway and original managed key, preserving first capability bindings, opaque aliases and current-policy filtering without inferring prices or context limits.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
 - Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
