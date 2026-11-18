@@ -21,6 +21,7 @@ function clientFailure(error){
  if(error?.name==='AssertionError')return {kind:'assertion'};
  if(['AbortError','TimeoutError'].includes(error?.name))return {kind:'timeout'};
  if(['ENOENT','EEXIST','EACCES','ENOSPC','EIO'].includes(error?.code))return {kind:'filesystem',code:error.code};
+ if(error instanceof TypeError&&['UND_ERR_SOCKET','ECONNRESET','EPIPE','UND_ERR_RES_CONTENT_LENGTH_MISMATCH'].includes(error.cause?.code))return {kind:'transport',code:error.cause.code};
  return {kind:'unexpected'};
 }
 function clientDiagnostic(root,command,args){
@@ -183,16 +184,59 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
  if(command==='workloads'){
   const [version]=args;versionId(version);const initial=await control.snapshot(version);assert.ok([p.blueRuntimeSha,p.greenRuntimeSha].includes(initial.control.runtimeSha)&&nativeWarm(initial,initial.control.runtimeSha));
   local.pending={id:id(),mode:'workloads'};await save();const outcomes=[];
-  for(const mode of ['success','reject','lost','max','overflow']){
+  // Leave delivery uncertainty last; an expected quarantine must not hide
+  // otherwise independent envelope observations behind a transport assertion.
+  for(const mode of ['success','reject','max','overflow','lost']){
    const caseId=id(),trace='prf_'+id();
    const body=workloadBody({caseId,mode,seed:local.seed});
-   const r=await fetch(target.origin+'/v1/responses',{method:'POST',headers:{...accessHeaders,authorization:'Bearer '+key,'content-type':'application/json','x-canary-trace-id':trace},body,redirect:'error',signal:AbortSignal.timeout(180000)});
-   const status=r.status;await r.arrayBuffer();assert.equal(r.headers.get('x-clawrouter-version-id'),version,'workload response selected version');assert.equal(status,mode==='reject'?400:mode==='lost'?424:mode==='overflow'?413:200);
-   local.pending={...local.pending,caseId,completedMode:mode};
-   const pool=await until(async()=>{const s=await control.snapshot(version);return (mode==='overflow'?s.pool.seen[trace]===undefined:s.pool.seen[trace]===(mode==='lost'?'quarantined':'complete'))&&s;});
-   if(mode==='lost'){const s=await api('snapshot'),x=s.cases.find(x=>x.id===caseId);assert.ok(x);assert.ok(pool.pool.members[x.slot]?.quarantined);assert.equal(pool.slots.filter((m,i)=>i!==x.slot&&m.phase==='ready').length,7,'uncertainty must not evict unaffected members');}
-   if(mode==='overflow'){const s=await api('snapshot');assert.equal(s.cases.some(x=>x.id===caseId),false,'overflow must not reach provider');}
-   outcomes.push({mode,caseId,traceHash:hash(trace),status,bytes:Buffer.byteLength(body),at:Date.now(),pool:projectPool(pool)});await save();
+   const path=join(root,'workload-'+mode+'-diagnostic.json');
+   const receipt={schema:1,command:'workloads',mode,caseId,traceHash:hash(trace),version,startedAt:Date.now(),stage:'fixture_before',outcome:'running'};
+   await writeFile(path,JSON.stringify(receipt,null,2)+'\n',{mode:0o600,flag:'wx'});
+   const persist=async()=>{receipt.updatedAt=Date.now();await atomic(path,receipt);};
+   try{
+    local.pending={...local.pending,caseId,workloadMode:mode,traceHash:hash(trace)};await save();
+    const before=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length===s.cases.length&&s;});
+    assert.equal(before.requests,before.cases.length);assert.equal(before.replays,0);
+    receipt.stage='request';await persist();
+    const r=await fetch(target.origin+'/v1/responses',{method:'POST',headers:{...accessHeaders,authorization:'Bearer '+key,'content-type':'application/json','x-canary-trace-id':trace},body,redirect:'error',signal:AbortSignal.timeout(180000)});
+    const status=r.status,selected=r.headers.get('x-clawrouter-version-id');
+    receipt.response={status,version:/^[a-f0-9-]{36}$/.test(selected??'')?selected:selected===null?null:'invalid',bodyComplete:false};
+    receipt.stage='response_body';await persist();
+    // A body error after headers cannot become a new HTTP 424. Only the
+    // deliberate lost case may accept this bounded transport failure, and
+    // only after independent ownership/fixture/accounting verification below.
+    try{await r.arrayBuffer();receipt.response.bodyComplete=true;}
+    catch(error){receipt.response.failure=clientFailure(error);if(mode!=='lost'||status!==200||receipt.response.failure.kind!=='transport')throw error;}
+    await persist();
+    assert.equal(selected,version,'workload response selected version');
+    if(mode==='lost')assert.ok(status===424&&receipt.response.bodyComplete||status===200&&!receipt.response.bodyComplete,'lost response must be 424 or a truncated 200');
+    else assert.equal(status,mode==='reject'?400:mode==='overflow'?413:200);
+    receipt.stage='pool_settlement';await persist();
+    const pool=await until(async()=>{const s=await control.snapshot(version);return (mode==='overflow'?s.pool.seen[trace]===undefined:s.pool.seen[trace]===(mode==='lost'?'quarantined':'complete'))&&s;});
+    assert.equal(pool.control.runtimeSha,initial.control.runtimeSha);
+    receipt.stage='fixture_accounting';await persist();
+    const delta=mode==='overflow'?0:1,cost=['reject','overflow'].includes(mode)?0:7;
+    const snapshot=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length>=before.accounting.events.length+delta&&(delta===0||s.callbacks.some(c=>c.op==='finish'&&c.idHash===hash(trace)))&&s;});
+    assert.equal(snapshot.requests,before.requests+delta);assert.equal(snapshot.cases.length,before.cases.length+delta);assert.equal(snapshot.replays,0);
+    const cases=snapshot.cases.filter(x=>x.id===caseId);assert.equal(cases.length,delta,'exactly one provider attempt, none for overflow');
+    if(delta){
+     const x=cases[0];assert.equal(x.runtimeSha,initial.control.runtimeSha);assert.equal(x.mode,mode);assert.equal(x.outcome,mode==='lost'?'delivery_unknown':mode==='reject'?'rejected':'completed');
+     const finishes=snapshot.callbacks.filter(c=>c.op==='finish'&&c.idHash===hash(trace));assert.equal(finishes.length,1);
+     const finish=finishes[0];assert.equal(finish.clean,mode!=='lost');assert.equal(finish.status,200);assert.equal(finish.slot,x.slot);assert.equal(finish.generation,x.generation);assert.equal(finish.runtimeSha,x.runtimeSha);
+     if(mode==='lost'){
+      assert.ok(pool.pool.members[x.slot]?.quarantined);assert.equal(pool.slots[x.slot].generation,x.generation);
+      assert.ok(pool.pool.grants.some(g=>g.id===trace&&g.slot===x.slot&&g.generation===x.generation&&g.stage==='intent'));
+      assert.equal(pool.slots.filter((m,i)=>i!==x.slot&&m.phase==='ready'&&pool.pool.members[i]?.quarantined===false).length,7,'uncertainty must not evict unaffected members');
+     }
+    }
+    const previous=new Set(before.accounting.events.map(x=>x.idHash)),events=snapshot.accounting.events.filter(x=>!previous.has(x.idHash));
+    assert.equal(snapshot.accounting.events.length,before.accounting.events.length+delta);assert.equal(events.length,delta);
+    assert.equal(snapshot.accounting.policySpentMicros,before.accounting.policySpentMicros+cost);assert.equal(snapshot.accounting.providerSpentMicros,before.accounting.providerSpentMicros+cost);
+    if(delta){assert.equal(events[0].actualCostMicros,cost);assert.equal(events[0].reservedCostMicros,7);assert.equal(events[0].contentRetained,false);assert.equal(events[0].status,mode==='lost'?'provider_error':mode==='reject'?'client_error':'success');}
+    const result={mode,caseId,traceHash:hash(trace),status,response:receipt.response,bytes:Buffer.byteLength(body),at:Date.now(),pool:projectPool(pool)};
+    receipt.stage='evidence_save';await persist();outcomes.push(result);evidence.steps.push({kind:'workload-case',...result});await save();
+    receipt.outcome='completed';await persist();
+   }catch(error){receipt.outcome='failed';receipt.failure=clientFailure(error);await persist();throw error;}
   }
   const snapshot=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length>=s.cases.length?s:false;});
   assert.equal(snapshot.replays,0);assert.ok(snapshot.callbacks.some(x=>x.op==='finish'&&x.clean===false),'uncertain attempt must remain quarantined');

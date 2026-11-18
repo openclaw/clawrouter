@@ -146,12 +146,26 @@ node scripts/native-rehearsal-client.mjs workloads "$P" "$C" "$RECOVERY_VERSION"
 node scripts/native-rehearsal-client.mjs inspect "$P" "$C"
 ```
 
-Workloads send success, definitive HTTP 400 rejection, a partial-response loss,
-exactly 64 MiB and 64 MiB + 1. They check actual selected version, settlement,
+Workloads send success, definitive HTTP 400 rejection, exactly 64 MiB,
+64 MiB + 1, then a partial-response loss. They check actual selected version, settlement,
 content non-retention, no replay, quarantine of only the affected slot and no
 provider call for overflow. The lost attempt must remain charged/quarantined;
 rejection must refund. Upstream scanning permits 1 MiB transform overhead beyond
 the native ingress limit (e.g. inserted store:false); client limits do not change.
+
+The deliberate loss can return a complete HTTP 424 before response delivery, or
+HTTP 200 followed by a body transport failure after headers were forwarded.
+A complete HTTP 200 body, timeout, wrong version, or unrelated failure does not
+satisfy the loss case. Both accepted outcomes still require one matching fixture
+attempt, its exact quarantined grant/generation and finish callback, seven
+unaffected members, one charged usage event, and matching policy/provider totals.
+No uncertain request is replayed.
+
+Each workload persists its case intent before dispatch and a separate
+`workload-<mode>-diagnostic.json` with bounded stages, response status/version,
+body completion and failure category. Successful cases also enter `evidence.json`
+individually, so a later failure preserves earlier envelope results. Diagnostics
+exclude raw errors, bodies, prompts and credentials; cleanup retains them.
 
 Every mutation records an intent first. On failure, run inspect; do not rerun a
 pending seed/turn/workload or clear its journal to get a green result. Keep the
