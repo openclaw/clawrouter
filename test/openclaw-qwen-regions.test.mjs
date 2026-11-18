@@ -26,7 +26,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `"use strict"; ${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `"use strict"; ${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenRejectionRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "3ddd9f92c8a0a0eae0c34c67ddea25cee56a5851bf13674c4689beee823cfa38";
+const qwenRunnerFixtureSha256 = "12dfb1b9874f4d1c3bd8ea50069ac683f4d77f376a5ecb454fa0ac0fae7f5d7a";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -176,12 +176,16 @@ function createQwenFailureRelay() {
     const descriptors = Object.getOwnPropertyDescriptors(value);
     assert.ok(Reflect.ownKeys(descriptors).every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "closed data fields required");
     value = Object.fromEntries(Object.entries(descriptors).map(([key, descriptor]) => [key, descriptor.value]));
-    assert.ok(value.v === 1 || value.v === 2);
-    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v === 2 ? ["join"] : [])].sort());
+    assert.ok([1, 2, 3].includes(value.v));
+    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending", ...(value.v >= 2 ? ["join"] : []), ...(value.v === 3 ? ["rejections"] : [])].sort());
     if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
     const checked = qwenClosedRecord(value.case, value.phase, value.op, value.state, { operations: value.operations, rejected: value.rejected, pending: value.pending });
-    if (value.v === 2) {
-      assert.equal(checked.state, "failed"); checked.v = 2; checked.join = qwenJoinRecord(value.join);
+    if (value.v >= 2) {
+      assert.equal(checked.state, "failed"); checked.v = value.v; checked.join = qwenJoinRecord(value.join);
+      if (value.v === 3) {
+        checked.rejections = qwenRejectionRecord(value.rejections);
+        if (checked.rejections.originals !== null) assert.equal(checked.rejections.originals.length, checked.join[7]);
+      }
     }
     const key = value.case + ":" + value.phase + ":" + value.op;
     const encoded = JSON.stringify(checked);
@@ -3074,4 +3078,110 @@ for (const reason of [undefined, false, {}]) test("Qwen detached release preserv
   assert.equal(caught, true); assert.equal(calls, 1); assert.deepEqual(ledger.failures().ownership, []);
   await assert.rejects(ledger.drain(), error => error.errors.length === 1 && error.errors[0] === reason);
   ledger.restore(); owner.restore();
+});
+
+async function qwenRejectionFixture(mode = "owned", reason) {
+  if (arguments.length < 2) reason = {};
+  const ledger = createQwenLedger(), expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" };
+  const owner = createQwenOwnership(new AsyncLocalStorage(), ledger, expected), caller = {}, closed = qwenDeferred(), read = qwenDeferred(), cancel = qwenDeferred();
+  const releaseReason = {}, releaseP = mode === "release_failure" ? qwenDeferred() : null;
+  const reader = { closed: closed.promise, read() { return read.promise; }, cancel() { return cancel.promise; }, releaseLock() { body.locked = false; } };
+  const body = { locked: false, cancel() { return Promise.resolve(); }, getReader() { body.locked = true; return reader; } }, response = { body };
+  const native = owner.wrapFetch(() => Promise.resolve(response));
+  const result = await owner.invoke(() => owner.guard(() => native(expected.url, { method: "POST", headers: { authorization: "Bearer fixture" } }).then(response => ({ response, release: () => releaseP?.promise ?? Promise.resolve() })), undefined, []), undefined, [{}], caller);
+  const actual = result.response.body.getReader();
+  assert.equal(Reflect.apply(actual.read, mode === "foreign_reader" ? {} : actual, []), read.promise);
+  if (mode === "before_cancel") { read.reject(reason); closed.reject(reason); await Promise.resolve(); await Promise.resolve(); }
+  if (mode !== "eof") {
+    assert.equal(ledger.cancellationArgument(mode === "foreign_invocation" ? {} : caller, reason), reason);
+    if (mode !== "before_cancel") closed.reject(reason);
+    ledger.cancellationReturned();
+    assert.equal(actual.cancel(), cancel.promise); cancel.reject(reason);
+    if (!["before_cancel", "held"].includes(mode)) read.reject(reason);
+  } else { closed.resolve(); read.resolve({ done: true }); }
+  actual.releaseLock(); const detached = result.release; const released = detached();
+  if (releaseP) { assert.equal(released, releaseP.promise); releaseP.reject(releaseReason); }
+  owner.closePublic();
+  return { ledger, owner, caller, closed, read, cancel, reason, releaseReason, close() { ledger.restore(); owner.restore(); } };
+}
+for (const mode of ["owned", "before_cancel", "foreign_invocation", "foreign_reader", "release_failure", "held"]) test(`Qwen original rejection provenance distinguishes ${mode} without admitting it`, async () => {
+  const f = await qwenRejectionFixture(mode); let finished = false;
+  const joined = f.ledger.drain().catch(error => { finished = true; return error; });
+  if (mode === "held") {
+    await Promise.resolve(); await Promise.resolve(); assert.equal(finished, false); assert.equal(f.owner.rejectionRecord(), null); f.read.reject(f.reason);
+  }
+  const error = await joined; assert.ok(error instanceof AggregateError);
+  const record = qwenRejectionRecord(f.owner.rejectionRecord()), originals = record.originals;
+  assert.equal(originals.length, mode === "release_failure" ? 4 : 3);
+  assert.deepEqual(originals.map(row => row[1]).sort((a,b) => a-b), mode === "release_failure" ? [5,6,8,9] : [5,6,8]);
+  assert.ok(originals.every(row => row[6] === 2 && row[7] === 1));
+  const resourceRows = originals.filter(row => row[1] !== 9);
+  assert.ok(resourceRows.every(row => row[4] === 1 && row[8] === 1 && row[9] === 1));
+  if (mode === "foreign_invocation") assert.ok(resourceRows.every(row => row[5] === 1));
+  else if (mode === "foreign_reader") assert.equal(resourceRows.find(row => row[1] === 5)[5], 0);
+  else assert.ok(resourceRows.every(row => row[5] === 3));
+  if (mode === "before_cancel") assert.ok(resourceRows.filter(row => row[1] !== 6).every(row => row[3] < record.cancellation[0]));
+  else assert.ok(resourceRows.every(row => row[3] > record.cancellation[1]));
+  if (mode === "release_failure") {
+    const release = originals.find(row => row[1] === 9); assert.equal(release[4], 0); assert.equal(release[5], 3); assert.equal(release[8], 2);
+    assert.ok(error.errors.includes(f.releaseReason));
+  }
+  const frozen = JSON.stringify(record); await assert.rejects(f.ledger.drain()); assert.equal(JSON.stringify(f.owner.rejectionRecord()), frozen);
+  f.close();
+});
+for (const reason of [undefined, false]) test("Qwen original rejection definedness never promotes equal falsey values to causality", async () => {
+  const f = await qwenRejectionFixture("owned", reason); await assert.rejects(f.ledger.drain());
+  const record = f.owner.rejectionRecord(); assert.equal(record.cancellation[2], reason === undefined ? 0 : 1);
+  assert.ok(record.originals.every(row => row[7] === record.cancellation[2] && row[8] === 1));
+  assert.equal(f.ledger.failures().ownership.length, 0); f.close();
+});
+test("Qwen EOF has no fabricated cancellation or rejection witness", async () => {
+  const f = await qwenRejectionFixture("eof"); await f.ledger.drain(); f.owner.verify(1);
+  assert.equal(f.owner.rejectionRecord(), null); f.close(); await f.ledger.drain(); f.ledger.seal();
+});
+test("Qwen rejection records retain bounds, exact tuple keys and original relay admission", async () => {
+  const f = await qwenRejectionFixture(); await assert.rejects(f.ledger.drain());
+  const record = f.owner.rejectionRecord();
+  const malformed = [{ ...record, extra: 0 }, { ...record, cancellation: [0,1,1] }, { ...record, cancellation: [3,2,1] }, { ...record, originals: [...record.originals, ...record.originals] }];
+  for (const [index, value] of [[0,0],[1,11],[2,0],[3,0],[4,-1],[5,2],[6,0],[7,-1],[8,3],[9,0]]) {
+    const rows = record.originals.map(row => [...row]); rows[0][index] = value; malformed.push({ ...record, originals: rows });
+  }
+  const sparse = [...record.originals[0]]; sparse.length = 11; malformed.push({ ...record, originals: [sparse] });
+  let reads = 0; const accessor = [...record.originals[0]]; Object.defineProperty(accessor, 0, { get() { reads++; return 1; } });
+  malformed.push({ ...record, originals: [accessor] }, new Proxy(record, { ownKeys() { reads++; return []; } }));
+  for (const value of malformed) assert.throws(() => qwenRejectionRecord(value)); assert.equal(reads, 0);
+  const relay = createQwenFailureRelay(), witness = createQwenEntryWitness(value => relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)));
+  witness.moduleEvaluated(); rows.forEach(row => witness.registered(row.id)); witness.registrationComplete();
+  const current = witness.enter(rows[0].id), counts = { operations: f.ledger.operations.length, rejected: 3, pending: 0 };
+  current.at("owned_drain"); current.failed(undefined);
+  const diagnostic = { ...qwenClosedRecord(rows[0].id, "join", "closed", "failed", counts), v: 3, join: f.ledger.joinRecord(), rejections: record };
+  relay.text("QWEN_SDK_V1 " + JSON.stringify(diagnostic)); current.complete(counts);
+  const packet = relay.output("failed"); assert.deepEqual(packet.find(row => row.v === 3), diagnostic);
+  const maximum = { cancellation: [65533,65534,1], originals: Array.from({ length: 4 }, (_, i) => [65531+i,5,65530,65535,65535,3,2,1,1,1]) };
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation({ ...diagnostic, rejections: qwenRejectionRecord(maximum) })) <= 768);
+  assert.ok(Buffer.byteLength(packet.map(qwenBoundaryAnnotation).join("\n")) <= 8192);
+  assert.throws(() => createQwenFailureRelay().record({ ...diagnostic, rejections: { ...record, originals: [] } }));
+  f.close();
+  const ledger = createQwenLedger(), owner = createQwenOwnership(new AsyncLocalStorage(), ledger, { url: "https://qwen.fixture", credential: "fixture" });
+  for (let i = 0; i < 5; i++) ledger.observe("read", Promise.reject(undefined));
+  await assert.rejects(ledger.drain()); assert.deepEqual(owner.rejectionRecord(), { cancellation: [0,0,-1], originals: null });
+});
+
+test("Qwen actual cancellation expression preserves callee, argument, receiver and throw order", () => {
+  const expression = fixtureText.split("\n").find(line => line.includes('partial = true; controller.abort(ledger.cancellationArgument'));
+  assert.ok(expression);
+  const invoke = new Function("controller", "ledger", "callerToken", "Error", `"use strict"; let partial = false; ${expression}; return partial;`);
+  for (const fail of [false, true]) for (const reason of [undefined, {}]) {
+    const trace = [], caller = {}, marker = {}, ledger = {
+      cancellationArgument(token, value) { trace.push("argument"); assert.equal(token, caller); assert.equal(value, marker); return value; },
+      cancellationReturned() { trace.push("returned"); },
+    };
+    const controller = Object.defineProperty({}, "abort", { get() {
+      trace.push("callee"); return function (...args) { trace.push("call"); assert.equal(this, controller); assert.deepEqual(args, [marker]); if (fail) throw reason; };
+    } });
+    const Error = function () { trace.push("construct"); return marker; };
+    let caught = false; try { assert.equal(invoke(controller, ledger, caller, Error), true); }
+    catch (error) { caught = true; assert.equal(error, reason); }
+    assert.equal(caught, fail); assert.deepEqual(trace, ["callee", "construct", "argument", "call", ...(!fail ? ["returned"] : [])]);
+  }
 });

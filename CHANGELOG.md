@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Retain bounded original-rejection relations at the first failed Qwen join: private resource binding, reason equality and observed callback order around the original caller cancellation. Preserve all rejection and retirement gates; equality and callback order alone do not prove cancellation causality.
+
 - Observe Qwen guarded-fetch release as the receiver-free callback declared and used by the pinned SDK. Bind it to its captured acquisition and result while preserving the actual receiver, arguments, promise and errors; retain foreign-resource, release-count and retirement assertions.
 
 - Retain the first failed Qwen retirement join’s closed fault counts and already-evaluated reader operands. Keep skipped operands unknown and preserve original errors, reader getters, joins and native acceptance.
