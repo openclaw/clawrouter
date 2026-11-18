@@ -240,7 +240,7 @@ test("HTTP shared setup and report failures retain ordered identity without fabr
 function reporter() {
   const prefix=reporterSource.slice(reporterSource.indexOf("const failureTypes"),reporterSource.indexOf("// Node-side fixture evidence"));
   const tail=reporterSource.slice(reporterSource.indexOf("function failureRecord("),reporterSource.indexOf("export default workerFailureReport")).replace(/^export /gm,"");
-  const decoder=reporterSource.slice(reporterSource.indexOf("export function decodeWorkerReporterRecord"),reporterSource.indexOf("function trackedTestFiles")).replace("export function", "function");
+  const decoder=reporterSource.slice(reporterSource.indexOf("export function decodeWorkerReporterRecord"),reporterSource.indexOf("function trackedTestFiles")).replace(/^export /gm, "");
   const context={types,Buffer,parseObservationDiagnostic,searchObservationContract,process:{cwd:()=>"/fixture"},trackedTestFiles:()=>file=>file,workerAbortInvocation:()=>null,workerAbortAdmission:()=>({observe(){},finish(){return {failure:null,records:[],record:null};}})};
   vm.createContext(context);vm.runInContext(prefix+decoder+tail+"\nglobalThis.report=workerFailureReport;globalThis.decode=decodeWorkerReporterRecord;",context);return { report:context.report, decode:context.decode };
 }

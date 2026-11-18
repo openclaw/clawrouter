@@ -456,7 +456,7 @@ export function bifrostProgressWitness(w:any,proof:any,allowed:any[],worker:bool
   const events=proof?.events?.filter((e:any)=>e.capability==="llm.chat")??[],event=events[0];
   return {uniqueRequest:!!t?.socketRequest&&!!t.socket,callerAborted:c.abortedAfter===true,actualText:c.delivered>0,nativeQualified:allowed.length===3&&vector?.length===3&&allowed.every(o=>vector.includes(o)),
    workerRetired:worker,inboundAborted:proof?.inboundChatAborted===true,sourceCanceled:source?.canceled===1,sourceJoined:source?.settled===1,
-   noExpiry:source?.expired===0,onePost:source?.calls?.filter((v:any)=>v.chat).length===1,accounting:events.length===1&&event.provider==="bifrost"&&event.policy_id===w.owner.id&&event.credential_id===w.owner.id&&event.model==="tenant/opaque-a"&&event.status==="client_error"&&event.status_code===499&&event.actual_cost_micros===7&&event.reserved_cost_micros===7&&event.input_tokens===null&&event.output_tokens===null&&event.total_tokens===null&&proof?.charged===0,
+   noExpiry:source?.expired===0,onePost:source?.calls?.filter((v:any)=>v.chat).length===1,accounting:events.length===1&&event.provider==="bifrost"&&event.policy_id===w.owner.id&&event.credential_id===w.owner.id&&event.model==="tenant/opaque-a"&&event.status==="client_error"&&event.status_code===200&&event.actual_cost_micros===7&&event.reserved_cost_micros===7&&event.input_tokens===null&&event.output_tokens===null&&event.total_tokens===null&&proof?.charged===0,
    allOriginalsJoined:w.originals.every(o=>o.state==="fulfilled"||allowed.includes(o)),restored:w.restored,singleProgress:source?.progressCalls===1,
    nonterminal:source?.progressTerminal===false&&source?.completed===0&&[0,1].includes(source?.progressEnqueued)&&c.progress?.accepted===true&&c.progress?.enqueued===(source?.progressEnqueued===1)&&c.progress?.alreadyCanceled===(source?.progressEnqueued===0),
    delivered:c.delivered,abortInvoke:c.abortInvoke,socketClosed:t?.socketClosedAt,controlInvoke:c.controlInvoke,failures:w.failures.length+w.observerFailures.length+w.syncFailures.length+workerFailures.length};
@@ -488,7 +488,7 @@ export function validateBifrostWorkerResidual(v:any):boolean {
 }
 export function bifrostObserveRetirementVerdict(c:any,response:any,value:any):boolean {
  const status200=response.status===200,retired=value.retired;
- c.verdict=[status200,retired,value.disposition==="strict"?1:value.disposition==="provisional_worker_deadline_read"?2:0];
+ c.verdict=[status200,retired,value.disposition==="strict"?1:value.disposition==="provisional_worker_deadline_read"?2:value.disposition==="owned_worker_progress_read"?3:0];
  return status200&&retired===true;
 }
 export function bifrostSignalEvidence(signal:unknown):any {
@@ -590,7 +590,7 @@ export function validateBifrostEvidence(record:any):void {
   // Mandatory only in the two progress cases under this source-bound schema.
   if(record?.part==="postlude"&&[30,31].includes(record.case))fields.postlude.worker=(v:any)=>Array.isArray(v)&&v.length===5&&v[0]===1&&
     (v[1]===null?v[2]===null&&v[3]===null:validateBifrostWorkerResidual(v.slice(0,4)))&&
-    (v[4]===null||Array.isArray(v[4])&&v[4].length===3&&typeof v[4][0]==="boolean"&&typeof v[4][1]==="boolean"&&[1,2].includes(v[4][2]));
+    (v[4]===null||Array.isArray(v[4])&&v[4].length===3&&typeof v[4][0]==="boolean"&&typeof v[4][1]==="boolean"&&[1,2,3].includes(v[4][2]));
   // Optional only for the source-owned stream-partial control; not a success predicate.
  if(record?.part==="postlude"&&Object.hasOwn(record,"transport")){
   if(record.case!==2)throw Error("foreign transport witness");
@@ -784,7 +784,8 @@ export function validateBifrostSourceProof(value:any,id:string):boolean {
 }
 export function validateBifrostRetirementProof(value:any,id:string):boolean {
  return !!value&&value.owner===id&&typeof value.retired==="boolean"&&Array.isArray(value.calls)&&Array.isArray(value.operations)&&Array.isArray(value.readers)&&Array.isArray(value.events)&&
-  Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read"].includes(value.disposition)&&
+  Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read","owned_worker_progress_read"].includes(value.disposition)&&
+  (value.disposition!=="owned_worker_progress_read"||Array.isArray(value.progressRead)&&value.progressRead.length===2&&value.progressRead.every(x=>Number.isSafeInteger(x)&&x>=0)&&value.progressRead[0]!==value.progressRead[1])&&
   (value.source===null||validateBifrostSourceProof(value.source,id))&&!!value.observation&&value.observation.owner===id&&
   Array.isArray(value.observation.phases)&&value.observation.phases.length===4&&value.observation.phases.every(r=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null))&&
    (value.observation.producer===null||validateBifrostSourceProof(value.observation.producer,id))&&typeof value.observation.usageObserved==="boolean"&&

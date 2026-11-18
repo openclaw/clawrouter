@@ -946,6 +946,37 @@ export async function collectBifrostOperations(s) {
   while(at<s.roots.length){const batch=s.roots.slice(at);at=s.roots.length;for(const outcome of await Promise.allSettled(batch))if(outcome.status==="rejected")s.observerFailures.push(outcome.reason);}
   return s.ops.filter(r=>r.state!=="fulfilled");
 }
+// The shipping cancellation contract joins the original read and cancel before
+// release. This admits the owned read outcome, not a native error-cause claim.
+export function bifrostProgressReadDisposition(s, usage, charged, facts) {
+  if(s.mode!=="progress"||s.workerDeadline||s.sync.length||s.observerFailures.length||charged!==0)return null;
+  const bad=s.ops.filter(o=>o.state!=="fulfilled"),read=bad.find(o=>o.kind==="read"),observer=bad.find(o=>o.kind==="read_observer");
+  if(bad.length!==2||!read||!observer||read.state!=="rejected"||observer.state!=="rejected"||
+    !Object.hasOwn(read,"error")||!Object.hasOwn(observer,"error")||!Object.is(read.error,observer.error)||
+    !read.pending||observer.originalRead!==read.pending||observer.reader!==read.reader)return null;
+  const r=read.reader,t=r?.transport,index=s.transports.indexOf(t),call=s.calls[index];
+  if(!r||!t||s.readers.filter(v=>v===r).length!==1||s.transports.filter(v=>v===t).length!==1||
+    s.requests.filter(v=>v===t.request).length!==1||s.readers.filter(v=>v.transport===t).length!==1||
+    call?.method!=="POST"||call.url!=="https://gateway.fixture/openai/v1/chat/completions"||
+    !call.noCaller||!call.original||call.redirect!=="manual"||s.calls.filter(v=>v.method==="POST").length!==1)return null;
+  const rows=kind=>s.ops.filter(o=>o.reader===r&&o.kind===kind);
+  if(rows("cancel").length!==1||rows("closed").length!==1||rows("read").filter(o=>o.state==="rejected").length!==1)return null;
+  if(!["prefix","receiverIdentity","fetchFulfilled","cancelFulfilled","closedFulfilled","bodyUnlocked","otherOperationsFulfilled"].every(k=>facts[k]===true)||facts.unlocks!==1)return null;
+  const times=[facts.prefixSettled,facts.readInvoked,facts.cancelInvoked,facts.readSettled,facts.cancelSettled,facts.closedSettled,facts.unlockObserved];
+  if(!times.every(v=>Number.isSafeInteger(v)&&v>0)||!(facts.prefixSettled<facts.readInvoked&&facts.readInvoked<facts.cancelInvoked&&facts.cancelInvoked<facts.readSettled&&
+    Math.max(facts.readSettled,facts.cancelSettled,facts.closedSettled)<facts.unlockObserved))return null;
+  const source=s.source,producer=source?.producer;
+  if(source?.owner!==s.id||source.held!==0||source.canceled!==1||source.settled!==1||source.expired!==0||source.completed!==0||
+    source.progressCalls!==1||source.progressTerminal!==false||![0,1].includes(source.progressEnqueued)||
+    source.calls.filter(v=>v.chat).length!==1||producer?.joined!==true||producer.faults!==0||producer.failures!==0||producer.undefinedFailures!==0||
+    producer.roles.length!==4||new Set(producer.roles.map(v=>v[0])).size!==4||
+    !producer.roles.every(v=>["producer","progressTask","progressObserved","progressCommand"].includes(v[0])&&v[1]==="fulfilled"&&v[2]===null))return null;
+  const events=usage?.events?.filter(e=>e.capability==="llm.chat")??[],e=events[0];
+  if(events.length!==1||e.provider!=="bifrost"||e.policy_id!==s.id||e.credential_id!==s.id||e.model!=="tenant/opaque-a"||
+    e.status!=="client_error"||e.status_code!==200||e.actual_cost_micros!==7||e.reserved_cost_micros!==7||e.cost_basis!=="policy_fixed"||
+    !["input_tokens","output_tokens","total_tokens","cached_input_tokens"].every(k=>e[k]===null))return null;
+  return [read.ordinal,observer.ordinal];
+}
 export function bifrostDeadlineQualified(f) {
   // This is a post-join data-outcome disposition, not a cause classifier. A
   // concurrent read fault observed after the deadline can satisfy it too.
@@ -1009,6 +1040,7 @@ ${observeBifrostOperation.toString()}
 ${collectBifrostOperations.toString()}
 ${bifrostWorkerResidual.toString()}
 ${bifrostDeadlineQualified.toString()}
+${bifrostProgressReadDisposition.toString()}
 ${bifrostDeadlineWitness.toString()}
 ${bifrostCheckpointFunctions().createBifrostRetirementReader.toString()}
 ${bifrostCheckpointFunctions().validateBifrostProducerSite.toString()}
@@ -1100,12 +1132,12 @@ export default {async fetch(request,bindings,originalContext){
     let usage,usageObserved=false;try{usage=await invoke(s,'usage',()=>usageSnapshot(bindings,'fixture',s.id,{kind:'admin'}));usageObserved=true;phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
     try{await drain(s);phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
     const charged=bodyBudgetCharged(),deadline=bifrostDeadlineWitness(s,InternalHttpAbort,usage,charged);
-    const candidate=bifrostDeadlineQualified(deadline);
-    for(const o of s.ops)if(o.state!=='fulfilled'&&!(candidate&&(o.ordinal===deadline.readOrdinal||o.ordinal===deadline.observerOrdinal)))failures.push(o.error);
+    const candidate=bifrostDeadlineQualified(deadline),progressRead=bifrostProgressReadDisposition(s,usage,charged,deadline);
+    for(const o of s.ops)if(o.state!=='fulfilled'&&!(candidate&&(o.ordinal===deadline.readOrdinal||o.ordinal===deadline.observerOrdinal))&&!progressRead?.includes(o.ordinal))failures.push(o.error);
     failures.push(...s.sync,...s.observerFailures);
      let residual=null;if(s.mode==='progress')try{residual=bifrostWorkerResidual(s);}catch(error){failures.push(error);}
      const proof={owner:s.id,observation:{owner:s.id,phases,producer:s.producerObservation??null,usageObserved,...(s.mode==='progress'?{residual}: {})},calls:s.calls,operations:publicOperations(s),readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.body.locked})),source:s.source??null,events:usage?.events??[],charged,prefix:s.prefix,mutated:s.mutated,inspected:!!s.inspected,inboundChatAborted:s.inboundChatAborted===true,deadline,
-      disposition:candidate?'provisional_worker_deadline_read':'strict',retired:failures.length===0,syncFailures:s.sync.length};
+      progressRead,disposition:candidate?'provisional_worker_deadline_read':progressRead?'owned_worker_progress_read':'strict',retired:failures.length===0,syncFailures:s.sync.length};
     s.retirementFailures=failures;return proof;
    })();
    const proof=await s.retirement;return Response.json(proof,{status:proof.retired?200:500});
@@ -1206,6 +1238,13 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application, 
     assert.deepEqual(application.body,{error:{code:"provider_unavailable",message:"upstream request to provider bifrost failed"}});
     assert.deepEqual(Array.from(proof.operations.filter(r=>r.state!=="fulfilled"),r=>[r.ordinal,r.kind,r.state]),[
       [proof.deadline.readOrdinal,"read","rejected"],[proof.deadline.observerOrdinal,"read_observer","rejected"]]);
+   }else if(proof.disposition==="owned_worker_progress_read"){
+    assert.ok(Array.isArray(proof.progressRead)&&proof.progressRead.length===2&&proof.progressRead.every(Number.isSafeInteger)&&proof.progressRead[0]!==proof.progressRead[1]);
+    assert.deepEqual(Array.from(proof.operations.filter(r=>r.state!=="fulfilled"),r=>[r.ordinal,r.kind,r.state]),[
+      [proof.progressRead[0],"read","rejected"],[proof.progressRead[1],"read_observer","rejected"]]);
+    assertBifrostFailedChatAccounting({id:proof.owner,mode:"partial"},proof);
+    assert.equal(proof.source.owner,proof.owner);assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);
+    assert.equal(proof.source.producer.joined,true);assert.equal(proof.source.producer.faults,0);assert.equal(proof.source.producer.failures,0);
   }else assert.ok(proof.operations.every(r=>r.state==='fulfilled'));
   assert.ok(proof.readers.every(r=>r.unlocks===1&&!r.locked));
   evidence?.stage(10);assert.equal(proof.charged,0);
@@ -1301,7 +1340,7 @@ export async function bifrostResidualInertCases(assert, source) {
   const start=source.indexOf("if(!s.retirement)s.retirement=(async()=>{")+"if(!s.retirement)s.retirement=(async()=>{".length;
   const end=source.indexOf("})();",start);assert.ok(start>0&&end>start);
   const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-  const retire=new AsyncFunction("s","drain","control","invoke","usageSnapshot","bindings","bodyBudgetCharged","bifrostDeadlineWitness","bifrostDeadlineQualified","InternalHttpAbort","publicOperations","bifrostWorkerResidual",source.slice(start,end));
+  const retire=new AsyncFunction("s","drain","control","invoke","usageSnapshot","bindings","bodyBudgetCharged","bifrostDeadlineWitness","bifrostDeadlineQualified","InternalHttpAbort","publicOperations","bifrostWorkerResidual","bifrostProgressReadDisposition",source.slice(start,end));
   const group=(proof,c={})=>f.bifrostCaseEvidence(30,{transports:[],acquisitions:[],originals:[],caller:{},failures:[],syncFailures:[],observerFailures:[],evidenceRestoreFailures:0,evidenceRestoreUndefined:0},proof,false,[],c);
   for(const kind of ["healthy","same defined P/Q","undefined P/Q","sync only","observer only","mixed"]){
     await run(kind,async()=>{
@@ -1315,7 +1354,7 @@ export async function bifrostResidualInertCases(assert, source) {
       if(["sync only","mixed"].includes(kind))s.sync.push(sync);
       if(["observer only","mixed"].includes(kind))s.observerFailures.push(observer);
       const sourceProof={owner:s.id,held:0,canceled:1,expired:0,settled:1,completed:0,progressCalls:1,progressEnqueued:1,progressTerminal:false,calls:[],producer:{v:1,joined:true,roles:["producer","progressTask","progressObserved","progressCommand"].map(k=>[k,"fulfilled",null]),faults:0,failures:0,undefinedFailures:0}};
-      const proof=await retire(s,collectBifrostOperations,async()=>{s.producerObservation=sourceProof;return sourceProof;},(s,k,start)=>observeBifrostOperation(s,k,start),async()=>({events:[{},{}]}),{},()=>0,bifrostDeadlineWitness,bifrostDeadlineQualified,function InternalHttpAbort(){},s=>s.ops.map(o=>({kind:o.kind,state:o.state})),bifrostWorkerResidual);
+      const proof=await retire(s,collectBifrostOperations,async()=>{s.producerObservation=sourceProof;return sourceProof;},(s,k,start)=>observeBifrostOperation(s,k,start),async()=>({events:[{},{}]}),{},()=>0,bifrostDeadlineWitness,bifrostDeadlineQualified,function InternalHttpAbort(){},s=>s.ops.map(o=>({kind:o.kind,state:o.state})),bifrostWorkerResidual,bifrostProgressReadDisposition);
       assert.deepEqual(proof.observation.phases,Array.from({length:4},()=>[2,null]));assert.equal(proof.retired,kind==="healthy");
       assert.equal(f.validateBifrostWorkerResidual(proof.observation.residual),true);assert.equal(proof.deadline.workerOnly,false);
       const expected=kind.includes("P/Q")||kind==="mixed"?[E,E]:[];if(s.sync.length)expected.push(sync);if(s.observerFailures.length)expected.push(observer);
@@ -1345,7 +1384,7 @@ export async function bifrostResidualInertCases(assert, source) {
   });
   for(const [label,mutate]of [
     ["version",r=>r.worker[0]=2],["boolean count",r=>r.worker[1]=[true,0,0]],["overflow",r=>r.worker[1]=[1000001,0,0]],
-    ["missing",r=>delete r.worker],["foreign case",r=>r.case=29],["disposition",r=>r.worker[4]=[false,false,3]],
+    ["missing",r=>delete r.worker],["foreign case",r=>r.case=29],["disposition",r=>r.worker[4]=[false,false,4]],
     ["extra field",r=>r.worker.push(0)],["impossible pair",r=>r.worker=[1,[0,0,0],null,[1,1,true,true,true,2,2],null]],
   ])await run("strict residual schema "+label,()=>{const r=JSON.parse(JSON.stringify(groups[0][4]));mutate(r);assert.throws(()=>f.validateBifrostCheckpoint(r));});
   for(const [label,residual]of [
@@ -2241,11 +2280,91 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    const v=failedChatEvidence();change(v);assert.throws(()=>assertBifrostFailedChatAccounting(v.row,v.proof));
   });
  }
+ function progressReadEvidence(...values) {
+  const reason=values.length?values[0]:{},request={signal:new AbortController().signal},signal=new AbortController().signal,t={request,signal};
+  const r={body:{locked:false},transport:t,unlocks:1,eof:false,unlockReceiver:true,unlockSequence:12};
+  const pending=Promise.resolve(),read={kind:"read",ordinal:1,reader:r,receiverIdentity:true,state:"rejected",error:reason,pending,invoke:4,settle:9};
+  const observer={kind:"read_observer",ordinal:2,reader:r,receiverIdentity:true,state:"rejected",error:reason,originalRead:pending,invoke:5,settle:10};
+  const ops=[{kind:"read",ordinal:0,reader:r,receiverIdentity:true,state:"fulfilled",value:{done:false,value:new Uint8Array([1])},invoke:1,settle:3},read,observer,
+   {kind:"closed",ordinal:3,reader:r,receiverIdentity:true,state:"fulfilled",invoke:2,settle:10},
+   {kind:"cancel",ordinal:4,reader:r,receiverIdentity:true,state:"fulfilled",invoke:8,settle:11},
+   {kind:"fetch",ordinal:5,transport:t,state:"fulfilled"},{kind:"handler",ordinal:6,state:"fulfilled",value:{status:200}}];
+  const source={owner:"owned",held:0,canceled:1,settled:1,expired:0,completed:0,progressCalls:1,progressEnqueued:1,progressTerminal:false,calls:[{chat:true}],
+   producer:{v:1,joined:true,faults:0,failures:0,undefinedFailures:0,roles:["producer","progressTask","progressObserved","progressCommand"].map(k=>[k,"fulfilled",null])}};
+  const event={capability:"llm.chat",provider:"bifrost",policy_id:"owned",credential_id:"owned",model:"tenant/opaque-a",status:"client_error",status_code:200,
+   actual_cost_micros:7,reserved_cost_micros:7,cost_basis:"policy_fixed",input_tokens:null,output_tokens:null,total_tokens:null,cached_input_tokens:null};
+  const s={id:"owned",mode:"progress",workerDeadline:false,ops,readers:[r],transports:[t],requests:[request],sync:[],observerFailures:[],source,
+   calls:[{method:"POST",url:"https://gateway.fixture/openai/v1/chat/completions",noCaller:true,original:true,redirect:"manual"}]};
+  return {s,read,observer,r,t,source,event,usage:{events:[event]},charged:0};
+ }
+ const progressReadResult=v=>bifrostProgressReadDisposition(v.s,v.usage,v.charged,bifrostDeadlineWitness(v.s,Error,v.usage,v.charged));
+ for(const reason of [undefined,{},false])test("Bifrost progress read outcome preserves "+(reason===undefined?"undefined":typeof reason),()=>{
+  const v=progressReadEvidence(reason),original=v.read.pending;
+  assert.deepEqual(progressReadResult(v),[1,2]);assert.equal(v.read.pending,original);assert.equal(v.read.error,reason);assert.equal(v.observer.error,reason);
+  assert.equal(v.read.state,"rejected");assert.equal(v.observer.state,"rejected");
+  const proof={owner:v.s.id,retired:true,disposition:"owned_worker_progress_read",progressRead:[1,2],operations:v.s.ops,readers:[{unlocks:1,locked:false}],
+   source:v.source,charged:0,events:v.usage.events,calls:v.s.calls};assertBifrostRetired(proof);
+  for(const pair of [[2,1],[1,1],[1,99],[]])assert.throws(()=>assertBifrostRetired({...proof,progressRead:pair}));
+ });
+ const progressReadNegatives={
+  "wrong mode":v=>{v.s.mode="provider_error";},"deadline":v=>{v.s.workerDeadline=true;},
+  "foreign reader":v=>{v.observer.reader={};},"foreign promise":v=>{v.observer.originalRead={};},"independent observer reason":v=>{v.observer.error={};},
+  "unowned reader":v=>{v.s.readers=[];},"foreign request":v=>{v.s.requests=[{}];},"foreign transport":v=>{v.s.transports=[{}];},
+  "reacquired reader":v=>{v.s.readers.push({...v.r});},"duplicate request":v=>{v.s.requests.push(v.t.request);},
+  "wrong endpoint":v=>{v.s.calls[0].url="https://gateway.fixture/other";},"foreign credential":v=>{v.s.calls[0].original=false;},
+  "pre-cancel failure":v=>{v.read.settle=7;},"read after cancel":v=>{v.read.invoke=9;},"missing prefix":v=>{v.s.ops[0].value.done=true;},
+  "failed cancel":v=>{v.s.ops[4].state="rejected";v.s.ops[4].error=v.read.error;},"duplicate cancel":v=>{v.s.ops.push({...v.s.ops[4]});},
+  "closed rejection":v=>{v.s.ops[3].state="rejected";v.s.ops[3].error=v.read.error;},"cancel pending":v=>{v.s.ops[4].state="pending";},
+  "early release":v=>{v.r.unlockSequence=10;},"duplicate release":v=>{v.r.unlocks=2;},"foreign receiver":v=>{v.read.receiverIdentity=false;},
+  "locked body":v=>{v.r.body.locked=true;},"control failure":v=>{v.s.ops.push({kind:"control_body",state:"rejected",error:undefined});},
+  "source owner":v=>{v.source.owner="foreign";},"source held":v=>{v.source.held=1;},"source uncanceled":v=>{v.source.canceled=0;},
+  "duplicate source cancel":v=>{v.source.canceled=2;},"source unjoined":v=>{v.source.settled=0;},"source expired":v=>{v.source.expired=1;},
+  "producer error":v=>{v.source.producer.failures=1;},"producer falsey failure":v=>{v.source.producer.undefinedFailures=1;},
+  "producer pending":v=>{v.source.producer.roles[0][1]="pending";},"producer incomplete":v=>{v.source.producer.joined=false;},
+  "progress absent":v=>{v.source.progressCalls=0;},"forced EOF":v=>{v.source.completed=1;},
+  "missing accounting":v=>{v.usage.events=[];},"duplicate accounting":v=>{v.usage.events.push({...v.event});},
+  "provider-first":v=>{v.event.status="provider_error";},"refunded charge":v=>{v.event.actual_cost_micros=0;},
+  "foreign event":v=>{v.event.credential_id="other";},"held capacity":v=>{v.charged=1;},
+  "independent sync falsey":v=>{v.s.sync.push(undefined);},"independent observer falsey":v=>{v.s.observerFailures.push(undefined);},
+  "same-values foreign aggregate":v=>{v.s.sync.push(new AggregateError([v.read.error,v.observer.error]));}
+ };
+ for(const [name,change]of Object.entries(progressReadNegatives))test("Bifrost progress read outcome rejects "+name,()=>{
+  const v=progressReadEvidence();change(v);assert.equal(progressReadResult(v),null);
+ });
+ test("Bifrost progress actual retirement retains independent failures",async()=>{
+  const text=readFileSync(new URL("./openclaw-bifrost.test.mjs",import.meta.url),"utf8"),anchor="if(!s.retirement)s.retirement=(async()=>{";
+  const start=text.indexOf(anchor)+anchor.length,end=text.indexOf("})();",start),AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+  const retire=new AsyncFunction("s","drain","control","invoke","usageSnapshot","bindings","bodyBudgetCharged","bifrostDeadlineWitness","bifrostDeadlineQualified","InternalHttpAbort","publicOperations","bifrostWorkerResidual","bifrostProgressReadDisposition",text.slice(start,end));
+  for(const original of [null,{reason:undefined},{reason:new AggregateError([undefined,undefined])}]){
+   const v=progressReadEvidence(undefined);v.s.roots=[];let n=0;
+   const proof=await retire(v.s,async()=>{if(n++===0&&original)throw original.reason;},async()=>v.source,(_s,_k,fn)=>fn(),async()=>v.usage,{},()=>0,
+    bifrostDeadlineWitness,bifrostDeadlineQualified,Error,s=>s.ops.map(o=>({kind:o.kind,state:o.state,ordinal:o.ordinal})),bifrostWorkerResidual,bifrostProgressReadDisposition);
+   assert.equal(proof.retired,original===null);assert.equal(proof.operations.filter(o=>o.state==="rejected").length,2);
+   assert.deepEqual(proof.progressRead,[1,2]);assert.equal(proof.disposition,"owned_worker_progress_read");
+   assert.equal(v.s.retirementFailures.length,original?1:0);if(original)assert.equal(v.s.retirementFailures[0],original.reason);
+   const f=bifrostCheckpointFunctions();assert.equal(f.validateBifrostRetirementProof(proof,v.s.id),true);
+   const c={};assert.equal(f.bifrostObserveRetirementVerdict(c,{status:proof.retired?200:500},proof),original===null);assert.equal(c.verdict[2],3);
+  }
+ });
+ test("Bifrost progress real Worker joins the canceled original read and accounting",{timeout:30000},async()=>{
+  const row={id:"bifrost_local_progress",mode:"progress",api:"stream"},f=await startBifrostFixture();
+  await finishBifrostOwned(async()=>{
+   await f.setup(row);
+   const discovery=await fetch(f.origin+"/v1/native/bifrost/v1/models",{headers:{authorization:"Bearer "+bifrostDiscoveryKey(row.id)}});assert.equal(discovery.status,200);await discovery.arrayBuffer();
+   const controller=new AbortController(),response=await fetch(f.origin+"/v1/native/bifrost/v1/chat/completions",{method:"POST",headers:{authorization:"Bearer "+bifrostKey(row.id),"content-type":"application/json"},
+    body:JSON.stringify({model:"tenant/opaque-a",stream:true,messages:[{role:"user",content:"synthetic local progress"}]}),signal:controller.signal});
+   assert.equal(response.status,200);const reader=response.body.getReader();assert.ok((await reader.read()).value.byteLength>0);
+   const pending=reader.read();controller.abort(new Error("synthetic local cancellation"));await Promise.allSettled([pending]);reader.releaseLock();
+   const progress=await fetch(f.origin+"/__bifrost/progress/"+row.id,{method:"POST"});assert.equal(progress.status,200);await progress.arrayBuffer();
+   const proof=await f.join(row.id);assertBifrostRetired(proof);assertBifrostFailedChatAccounting({id:row.id,mode:"partial"},proof);
+   assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);assert.equal(proof.source.expired,0);assert.equal(proof.source.producer.joined,true);
+  },[()=>f.close()]);
+ });
  function progressEvidence(){
   const w=nativeEvidence(),t=w.transports[0];w.owner.id="bifrost_progress";t.socketRequest={};t.socket={};t.socketClosedAt=20;w.caller.controlInvoke=21;
   w.caller.progress={accepted:true,enqueued:true,alreadyCanceled:false};
   const proof={inboundChatAborted:true,charged:0,source:{canceled:1,settled:1,expired:0,calls:[{chat:true}],progressCalls:1,progressEnqueued:1,progressTerminal:false,completed:0},
-   events:[{capability:"llm.chat",provider:"bifrost",policy_id:w.owner.id,credential_id:w.owner.id,model:"tenant/opaque-a",status:"client_error",status_code:499,actual_cost_micros:7,reserved_cost_micros:7,input_tokens:null,output_tokens:null,total_tokens:null}]};
+   events:[{capability:"llm.chat",provider:"bifrost",policy_id:w.owner.id,credential_id:w.owner.id,model:"tenant/opaque-a",status:"client_error",status_code:200,actual_cost_micros:7,reserved_cost_micros:7,input_tokens:null,output_tokens:null,total_tokens:null}]};
   // The live builder uses the case id retained on the caller's owner.
   return {w,proof,allowed:w.originals.filter(o=>o.state==="rejected"),worker:true,workerFailures:[]};
  }

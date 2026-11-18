@@ -23,6 +23,8 @@
 
 ## Unreleased
 
+- Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
+
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
 
 - Distinguish search-observation body failure boundaries through literal native subtest locations, preserving original operations, failures and cleanup. Missing failure-site delivery remains unknown.
