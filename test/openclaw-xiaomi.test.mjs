@@ -16,7 +16,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const sdkSource = readFileSync(new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), "utf8");
 const proofCode = stripTypeScriptTypes(sdkSource.slice(sdkSource.indexOf("// BEGIN Xiaomi proof functions."), sdkSource.indexOf("// END Xiaomi proof functions.")));
-const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures };")();
+const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiWorkerReaderDisposition, xiaomiSdkErrorWitness, xiaomiSdkProviderErrorDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiWorkerReaderDisposition, xiaomiSdkErrorWitness, xiaomiSdkProviderErrorDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow, xiaomiConsumeControlWitness, xiaomiControlQualification, xiaomiPostludeFailures };")();
 const planRows = xiaomiPlanCases(), allPlanRows = [...xiaomiNativeControls(), ...planRows], diagnostic = xiaomiDiagnostic(nodeTypes.isProxy);
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -24,7 +24,7 @@ function xiaomiRunnerReport() {
   let reported = false, summary;
   const options = {
     expectedInvocations: 1,
-    fixtureSha256: "98411a139877ac0fe92e221d8f68b400f2b1740373914aa282c57fbc8fa1bebc",
+    fixtureSha256: "8c93b0bde95c42d7e16d0724387d9fc9b3b18a590e777cb2c9bd839112461e14",
     reporterSha256: "9c39bb702834528918c1e2f69509cea9de1e557d20ecf8205a9c36cb53f2a478",
     onReport(packet) {
       summary = undefined;
@@ -73,7 +73,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
   const failures = [], evidence = diagnostic.store(), runner = xiaomiRunnerReport(); let helperFulfilled = false, phase = "setup", sdkCount = null;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true, requestContext: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       const model = id === "retired_pro" ? "mimo-v2.5-pro" : id === "retired" ? "mimo-v2.5" : cards[id] ?? "mimo-v2.6-pro";
@@ -150,9 +150,11 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+import { usageSnapshot, budgetStatus } from "./worker/ledgers.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
 ${proofCode}
 ${planRouter.toString()}
-const plan = planRouter(handler, putGrantCredentials, revokeGrantCredentials);
+const plan = planRouter(handler, putGrantCredentials, revokeGrantCredentials, new AsyncLocalStorage(), usageSnapshot, budgetStatus);
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) {
@@ -261,19 +263,19 @@ async function assertPlanOracles(origin, calls, physical, report) {
 }
 
 // Embedded only in the fixture Worker. Each record owns its original operations.
-function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
+function planRouter(handler, putGrantCredentials, revokeGrantCredentials, requestContext, usageSnapshot, budgetStatus) {
   const rows = [...xiaomiNativeControls(), ...xiaomiPlanCases()], diagnostic = xiaomiDiagnostic(), records = diagnostic.store(), inputs = [], requests = [], budgets = [], materializations = [];
-  const originalFetch = globalThis.fetch; let retirement, sequence = 0; const tick = () => ++sequence;
+  const originalFetch = globalThis.fetch, generation = {}; let retirement, sequence = 0; const tick = () => ++sequence;
   const identify = value => rows.find(row => value === `${row.prefix}-fixture-upstream-${row.id}` || row.kind === "rotation" && value === `ttp-fixture-upstream-${row.id}`);
   globalThis.fetch = function(input, init) {
     const headers = new Headers(init?.headers !== undefined ? init.headers : input instanceof Request ? input.headers : undefined);
     const row = identify(headers.get("api-key"));
-    const item = { ordinal: inputs.length + 1, observations: [], row, errors: [], state: "invoke", invoked: tick() }; inputs.push(item);
+    const item = { owner: requestContext?.getStore(), generation, ordinal: inputs.length + 1, observations: [], row, errors: [], state: "invoke", invoked: tick() }; inputs.push(item);
     let returned;
     try { returned = Reflect.apply(originalFetch, this, arguments); item.returned = returned; }
     catch (error) { item.state = "sync_throw"; item.settled = tick(); item.errors.push(error); throw error; }
     void returned.then(response => {
-      item.state = "fulfilled"; item.settled = tick();
+      item.state = "fulfilled"; item.response = response; item.settled = tick();
       try { if (response.body) item.observations.push(xiaomiObserveBody(response.body, init?.signal ?? (input instanceof Request ? input.signal : undefined),
         (object, name, replacement) => { object[name] = replacement; },
         (phase, checkpoint, failed, error) => records.add(diagnostic.record("worker", row?.id ?? "payg", phase, checkpoint, failed, error)), tick)); }
@@ -287,14 +289,40 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
       for (const observation of input.observations) for (const value of xiaomiReaderWitnesses(diagnostic, "worker", input.row.id, input.ordinal, observation)) records.add(value);
     } catch (error) { failures.push(error); }
   }
-  async function retire() {
+  async function sourceCalls(id) {
+    const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"]);
+    const calls = (await response.json()).filter(value => value.planId === id);
+    return { calls, ok: response.ok };
+  }
+  async function joinInput(input, env, calls) {
+    await input.returned;
+    await Promise.all(input.observations.map(value => value.settle()));
+    if (!input.selection && ["c_cancel", "n_cancel"].includes(input.row?.id) && requestContext && usageSnapshot && budgetStatus) {
+      if (calls === undefined) {
+        const source = await sourceCalls(input.row.id); calls = source.calls;
+        if (!source.ok) throw new Error("owned upstream source join failed");
+      }
+      if (calls.length !== 1) throw new Error("ambiguous original source owner");
+      const policyId = `xiaomi_plan_${input.row.id}`;
+      let usage;
+      for (let attempt = 0; attempt < 150; attempt++) {
+        usage = await usageSnapshot(env, "fixture", policyId, { kind: "credential", id: policyId });
+        if (usage.events.length) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      const budget = await budgetStatus(env, policyId, { tenantId: "fixture", monthlyBudgetMicros: 100 });
+      input.selection = { worker: { generation, input, requests, inputs, source: calls[0], usage, budget } };
+    }
+    await Promise.all(input.observations.map(value => value.join(input.selection)));
+  }
+  async function retire(env) {
     const failures = [];
     for (const request of requests) {
       const result = await Promise.allSettled([request.returned]); failures.push(...result.flatMap(v => v.status === "rejected" ? [v.reason] : []));
       let done = 0; while (done < request.pending.length) { const batch = request.pending.slice(done); done += batch.length; failures.push(...(await Promise.allSettled(batch)).flatMap(v => v.status === "rejected" ? [v.reason] : [])); }
     }
     for (const input of inputs) {
-      failures.push(...(await Promise.allSettled([input.returned, ...input.observations.map(value => value.join())])).flatMap(v => v.status === "rejected" ? [v.reason] : []), ...input.errors);
+      failures.push(...(await Promise.allSettled([joinInput(input, env)])).flatMap(v => v.status === "rejected" ? [v.reason] : []), ...input.errors);
       snapshotInput(input, failures);
     }
     failures.push(...(await Promise.allSettled(budgets.map(row => row.joined))).flatMap(v => v.status === "rejected" ? [v.reason] : []));
@@ -321,7 +349,7 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
       }
       if (url.pathname === "/fixture/diagnostics") return Response.json(records.values());
       if (url.pathname === "/fixture/retire") {
-        retirement ??= retire();
+        retirement ??= retire(env);
         const failures = []; let result;
         try { result = await retirement; } catch (error) { failures.push(error); }
         // Only the existing final postlude seals, after control/accounting work.
@@ -340,16 +368,16 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
             let done = 0; while (done < owned.pending.length) { const batch = owned.pending.slice(done); done += batch.length;
               failures.push(...(await Promise.allSettled(batch)).flatMap(value => value.status === "rejected" ? [value.reason] : [])); }
           }
-          for (const owned of matchingInputs) {
-            failures.push(...(await Promise.allSettled([owned.returned, ...owned.observations.map(value => value.join())])).flatMap(value => value.status === "rejected" ? [value.reason] : []), ...owned.errors);
-            snapshotInput(owned, failures);
-          }
           // Control I/O is deliberately outside the observed inference fetch. It
           // consumes its actual response before returning only fixed safe facts.
           let calls = [];
-          try { const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"]); calls = (await response.json()).filter(value => value.planId === id);
-            if (!response.ok) throw new Error("owned upstream source join failed"); }
+          try { const source = await sourceCalls(id); calls = source.calls;
+            if (!source.ok) throw new Error("owned upstream source join failed"); }
           catch (error) { failures.push(error); }
+          for (const owned of matchingInputs) {
+            failures.push(...(await Promise.allSettled([joinInput(owned, env, calls)])).flatMap(value => value.status === "rejected" ? [value.reason] : []), ...owned.errors);
+            snapshotInput(owned, failures);
+          }
           const witness = { caseId: id, joined: failures.length === 0, requests: matchingRequests.length, inputs: matchingInputs.length, calls: calls.length,
             reserves: budgets.filter(value => value.id === id && value.path === "/reserve" && value.allowed).length,
             canceled: calls.some(value => value.canceled), expired: calls.some(value => value.expired), sourceJoined: calls.every(value => value.sourceJoined), completed: calls.length > 0 && calls.every(value => value.completed === true) };
@@ -366,7 +394,7 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
     fetch(request, env, context) {
       const row = rows.find(value => request.headers.get("authorization") === `Bearer clawrouter-live-xiaomi_plan_${value.id}-fixture-secret`);
       if (request.method !== "POST" || !new URL(request.url).pathname.startsWith("/v1/native/")) return handler.fetch(request, env, context);
-      const record = { pending: [], row, signal: request.signal }; requests.push(record);
+      const record = { pending: [], generation, row, signal: request.signal }; requests.push(record);
       const bound = row ? { ...env, [row.binding]: row.source === "env" ? `${row.prefix}-fixture-upstream-${row.id}` : "tp-fixture-poison-environment" } : env;
       if (row) {
         const credentials = env.GRANT_CREDENTIALS;
@@ -400,7 +428,12 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
           } };
         } };
       }
-      try { record.returned = handler.fetch(request, bound, { ...context, waitUntil(pending) { record.pending.push(pending); return context.waitUntil(pending); } }); }
+      try {
+        const invoke = () => handler.fetch(request, bound, { ...context, waitUntil(pending) { record.pending.push(pending); return context.waitUntil(pending); } });
+        record.returned = requestContext ? requestContext.run(record, invoke) : invoke();
+        const observed = record.returned.then(response => { record.status = response.status; });
+        record.pending.push(observed); context.waitUntil(observed);
+      }
       catch (error) { record.returned = Promise.reject(error); void record.returned.catch(() => {}); throw error; }
       return record.returned;
     },
@@ -468,8 +501,18 @@ function planUpstream(wait) {
           timerController = new AbortController(); timerState = "pending";
           timer = wait(10000, { signal: timerController.signal });
           timerObserved = timer.then(() => { timerState = "fulfilled"; }, reason => { timerState = "rejected"; timerReason = reason; });
+          track("producer", async () => {
+            try { await joinTimer(); }
+            catch (error) {
+              try { c.error(error); } catch (independent) { throw new AggregateError([error, independent], "source failure and stream error failed"); }
+              throw error;
+            }
+          });
         }
-        await joinTimer();
+        // A held pull can prevent cross-service cancellation from reaching the
+        // source. Yield bounded SSE comments; the original timer still owns expiry.
+        await wait(20);
+        if (timerState === "pending" && !call.canceled) c.enqueue(new TextEncoder().encode(": fixture heartbeat\n\n"));
       }); },
       cancel() { return track("cancel", async () => {
         call.canceled = true; call.cancelCalls++;
@@ -1198,7 +1241,7 @@ test("native Xiaomi setup selects the existing direct router socket without anot
   const actual = new Function("startWorkerdFixture", "temporary", "routerFixture", "upstreamFixture",
     "return (async () => { let mf, origin; " + setup + "; return origin; })();");
   const origin = await actual(async (...args) => {
-    starts++; assert.deepEqual(args, ["owned", "router", "upstream", { directRouter: true }]);
+    starts++; assert.deepEqual(args, ["owned", "router", "upstream", { directRouter: true, requestContext: true }]);
     return { get ready() { proxy++; throw new Error("proxy origin is not direct ingress"); },
       async unsafeGetDirectURL(name) { direct++; assert.equal(name, "router"); return { origin: "https://direct.fixture.invalid" }; } };
   }, "owned", () => "router", () => "upstream");
@@ -1346,7 +1389,7 @@ test("default Node spec reporter leaves fresh bounded annotations at column zero
 });
 test("owned held-source timer joins its original timer on cancellation and rejects expiry", async () => {
   let signal, fail, calls = 0;
-  const upstream = planUpstream((delay, options) => { calls++; assert.equal(delay, 10000); signal = options.signal; return new Promise((_, reject) => { fail = reject; signal.addEventListener("abort", () => reject(signal.reason), { once: true }); }); });
+  const upstream = planUpstream((delay, options) => { if (delay === 20) return Promise.resolve(); calls++; assert.equal(delay, 10000); signal = options.signal; return new Promise((_, reject) => { fail = reject; signal.addEventListener("abort", () => reject(signal.reason), { once: true }); }); });
   const response = await upstream.fetch(new Request("https://token-plan-sgp.xiaomimimo.com/v1/chat/completions", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: JSON.stringify({ model: "mimo-v2.6-pro" }) }));
   const reader = response.body.getReader(); while (!calls) await reader.read();
   // The pending source pull is owned by the response; cancellation joins it.
@@ -1362,14 +1405,14 @@ test("source callback retirement preserves held work, foreign controls and false
   const request = () => new Request("https://fixture.example", { method: "POST", headers: { "api-key": "tp-fixture-upstream-n_cancel" }, body: "{}" });
   for (const reason of [undefined, false]) {
     let reject, started = false; const retained = [];
-    const upstream = planUpstream(() => { started = true; return new Promise((_, fail) => { reject = fail; }); });
+    const upstream = planUpstream(delay => { if (delay === 20) return Promise.resolve(); started = true; return new Promise((_, fail) => { reject = fail; }); });
     const response = await upstream.fetch(request(), { waitUntil(pending) { retained.push(pending); } });
     const reader = response.body.getReader(); while (!started) await reader.read();
     const read = reader.read(), cancel = reader.cancel();
     let joined = false; const join = upstream.join().then(result => { joined = true; return result; });
     await Promise.resolve(); await Promise.resolve();
     assert.equal(joined, false); assert.equal(upstream.calls[0].sourceJoined, false);
-    assert.equal(upstream.calls[0].cancelReturned, 0); assert.equal(upstream.calls[0].active, 2);
+    assert.equal(upstream.calls[0].cancelReturned, 0); assert.ok(upstream.calls[0].active >= 2);
     assert.deepEqual(await planUpstream(() => Promise.resolve()).join(), []);
     assert.equal(joined, false, "a foreign control cannot retire this source");
     reject(reason);
@@ -1385,7 +1428,7 @@ test("source callback retirement preserves held work, foreign controls and false
   assert.deepEqual(await early.join(), []);
   assert.deepEqual([early.calls[0].cancelCalls, early.calls[0].cancelReturned, early.calls[0].active, early.calls[0].settled, early.calls[0].sourceJoined], [1, 1, 0, true, true]);
   const original = new Error("independent source failure");
-  const failed = planUpstream(() => Promise.reject(original));
+  const failed = planUpstream(delay => delay === 20 ? Promise.resolve() : Promise.reject(original));
   const failedResponse = await failed.fetch(request());
   await assert.rejects(failedResponse.text(), error => error === original);
   assert.deepEqual(await failed.join(), [original]); assert.equal(failed.calls[0].sourceJoined, false);
@@ -1395,7 +1438,7 @@ test("source callback retirement preserves held work, foreign controls and false
       signal = { aborted: false };
       abort() { throw reason; }
     });
-    const upstream = actual(() => { started = true; return new Promise((_, fail) => { reject = fail; }); });
+    const upstream = actual(delay => { if (delay === 20) return Promise.resolve(); started = true; return new Promise((_, fail) => { reject = fail; }); });
     const response = await upstream.fetch(request()); const reader = response.body.getReader();
     while (!started) await reader.read();
     const cancel = reader.cancel(); const result = await Promise.allSettled([cancel]);
@@ -1448,7 +1491,7 @@ test("actual Worker controls relay safe evidence, activated env/grant rows and r
   const temporary = await mkdtemp(join(tmpdir(), "xiaomi-plan-worker-")); const failures = []; let mf;
   try {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture()); const origin = String(await mf.ready).replace(/\/$/, "");
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { requestContext: true }); const origin = String(await mf.ready).replace(/\/$/, "");
     await provisionPlans(await mf.getKVNamespace("POLICY_KV", "router"));
     let r = await fetch(origin + "/fixture/grants", { method: "POST" }); await r.arrayBuffer(); assert.equal(r.status, 204);
     const row = diagnostic.record("sdk", "p0", "assert", 1, true, undefined);
@@ -1471,6 +1514,167 @@ test("actual Worker controls relay safe evidence, activated env/grant rows and r
   try { await mf?.dispose(); } catch (error) { failures.push(error); }
   try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   if (failures.length === 1) throw failures[0]; if (failures.length) throw new AggregateError(failures, "Worker control or cleanup failures");
+});
+test("actual Xiaomi router cancellation retires the original cross-service producer", { timeout: 45000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "xiaomi-router-source-")); const failures = []; let mf;
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true, requestContext: true });
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    await provisionPlans(await mf.getKVNamespace("POLICY_KV", "router"));
+    const grants = await fetch(origin + "/fixture/grants", { method: "POST" }); await grants.arrayBuffer(); assert.equal(grants.status, 204);
+    const controller = new AbortController();
+    const response = await fetch(origin + "/v1/native/xiaomi-token-plan/chat/completions", { method: "POST", signal: controller.signal,
+      headers: { authorization: "Bearer clawrouter-live-xiaomi_plan_c_cancel-fixture-secret", "content-type": "application/json" },
+      body: JSON.stringify({ model: "mimo-v2.6-pro", stream: true, messages: [] }) });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader(); let text = "";
+    while (!text.includes("synthetic-plan-answer")) { const part = await reader.read(); assert.equal(part.done, false); text += new TextDecoder().decode(part.value); assert.ok(text.length < 8192); }
+    const pending = reader.read(); controller.abort(new Error("owned local client cancellation"));
+    await Promise.allSettled([pending, reader.closed]); reader.releaseLock();
+    const upstream = await mf.getWorker("upstream"); const state = await upstream.fetch("https://fixture.example/state"); const calls = await state.json();
+    assert.equal(state.status, 200); assert.equal(calls.length, 1);
+    assert.deepEqual([calls[0].planId, calls[0].canceled, calls[0].cancelCalls, calls[0].cancelReturned, calls[0].settled, calls[0].active, calls[0].expired, calls[0].sourceJoined],
+      ["c_cancel", true, 1, 1, true, 0, false, true]);
+    // The owned reader outcome also requires the actual source and accounting joins.
+    const control = await fetch(origin + "/fixture/plan/c_cancel/witness"); const witness = await control.json();
+    assert.equal(witness.caseId, "c_cancel"); assert.equal(witness.calls, 1);
+    assert.equal(witness.canceled, true); assert.equal(witness.expired, false); assert.equal(witness.sourceJoined, true);
+    assert.equal(control.status, 200); assert.equal(witness.joined, true);
+    const records = await readDiagnostics(origin);
+    t.diagnostic(JSON.stringify({ sourceJoined: witness.sourceJoined, controlStatus: control.status, workerJoined: witness.joined,
+      readers: records.filter(row => row.source === "worker" && row.caseId === "c_cancel" && row.phase === "reader_witness").map(row => row.facts),
+      rejected: records.filter(row => row.source === "worker" && row.caseId === "c_cancel" && row.phase === "operation_witness" && row.facts.state === 3).map(row => row.facts) }));
+  } catch (error) { failures.push(error); }
+  try { await mf?.dispose(); } catch (error) { failures.push(error); }
+  try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0]; if (failures.length) throw new AggregateError(failures, "router source or cleanup failed");
+});
+// These controls execute the actual observer and disposition, preserving rejected originals.
+async function xiaomiWorkerOutcomeFixture(reason, change = () => {}) {
+  const pending = Promise.withResolvers(); let count = 0;
+  const f = xiaomiInertReader({ read: () => ++count === 1 ? Promise.resolve({ done: false, value: new Uint8Array([1]) }) : pending.promise });
+  await f.reader.read(); const original = f.reader.read(); const canceled = f.reader.cancel();
+  pending.reject(reason); await Promise.allSettled([original, canceled]); f.reader.releaseLock(); await f.proof.settle();
+  const row = xiaomiNativeControls().find(value => value.id === "c_cancel"), generation = {}, controller = new AbortController(); controller.abort();
+  const owner = { row, generation, status: 200, signal: controller.signal };
+  const input = { row, generation, owner, state: "fulfilled", observations: [f.proof], response: { body: f.body }, returned: Promise.resolve(), errors: [] };
+  const source = { planId: row.id, sourceJoined: true, canceled: true, cancelCalls: 1, cancelReturned: 1, settled: true, active: 0, expired: false, completed: false };
+  const event = { status: "client_error", credential_id: `xiaomi_plan_${row.id}`, provider: row.provider, model: `${row.provider}/${row.model}`,
+    actual_cost_micros: 7, cost_basis: "policy_fixed", input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null };
+  const worker = { generation, input, requests: [owner], inputs: [input], source, usage: { events: [event] }, budget: { ledger: "durable_object", limitMicros: 100, spentMicros: 7 } };
+  const selection = { worker }, reader = f.proof.readers[0];
+  change({ f, worker, input, owner, source, event, reader });
+  return { ...f, selection, original, reason, record: reader };
+}
+test("Worker owned cancellation admits a joined read outcome without rewriting distinct or undefined reasons", async () => {
+  for (const ingressAborted of [false, true]) for (const reason of [{ distinct: true }, undefined]) {
+    const f = await xiaomiWorkerOutcomeFixture(reason, ({ owner }) => { if (!ingressAborted) owner.signal = new AbortController().signal; }); await f.proof.join(f.selection); await xiaomiSealReaderObservations([f.proof]);
+    const read = f.record.operations.find(operation => operation.state === "rejected");
+    assert.equal(read.pending, f.original); assert.equal(read.reason, reason); assert.equal(read.reasonPresent, true);
+    assert.equal(read.original.result.reason, reason); assert.equal(f.proof.joinAccepted, true); assert.equal(f.proof.sealed, true);
+  }
+});
+test("Worker cancellation refuses foreign ownership, incomplete source, accounting and independent reader faults", async () => {
+  const changes = [
+    ({ input }) => { input.owner = { ...input.owner }; }, ({ owner }) => { owner.generation = {}; },
+    ({ input }) => { input.generation = {}; }, ({ worker }) => { worker.inputs.push(worker.input); },
+    ({ worker }) => { worker.requests.push(worker.input.owner); }, ({ input }) => { input.response = { body: {} }; },
+    ({ input }) => { input.errors.push(undefined); },
+    ({ owner }) => { owner.status = 500; }, ({ event }) => { event.status = "provider_error"; },
+    ({ event }) => { event.credential_id = "foreign"; }, ({ event }) => { event.total_tokens = 1; },
+    ({ event }) => { event.actual_cost_micros = 0; }, ({ worker }) => { worker.budget.spentMicros = 0; },
+    ...[["sourceJoined",false],["canceled",false],["cancelCalls",2],["cancelReturned",0],["settled",false],["active",1],["expired",true],["completed",true],["planId","foreign"]]
+      .map(([key,value]) => ({ source }) => { source[key] = value; }),
+    ({ reader }) => { reader.faults.push(undefined); }, ({ reader }) => { reader.unlockReturns = 0; },
+    ({ reader }) => { reader.closedState = "rejected"; }, ({ reader }) => { reader.closedState = "pending"; },
+    ({ reader }) => { reader.operations[1].settled = reader.operations[2].invoked - 1; },
+    ({ reader }) => { reader.operations[1].original = { ...reader.operations[1].original, pending: Promise.resolve() }; },
+    ({ reader }) => { reader.operations[2].state = "rejected"; }, ({ reader }) => { reader.operations[2].state = "pending"; },
+    ({ reader }) => { reader.operations.push({ ...reader.operations[2] }); },
+    ({ reader }) => { reader.operations[0].state = "rejected"; },
+    ({ reader }) => { reader.operations[1].settled = reader.unlockInvoked + 1; },
+  ];
+  for (const [index, change] of changes.entries()) {
+    const f = await xiaomiWorkerOutcomeFixture(undefined, change);
+    assert.equal(xiaomiWorkerReaderDisposition(f.selection, f.record), false, `counterfactual ${index}`);
+    await assert.rejects(f.proof.join(f.selection), error => error instanceof AggregateError && error.errors.includes(undefined));
+  }
+});
+async function xiaomiProviderErrorFixture(change = () => {}, id = "c_provider_error") {
+  class ControlledAPIError extends Error {
+    constructor() { super("Synthetic rejection"); this.status = undefined; this.code = "synthetic"; this.error = { code: "synthetic", message: "Synthetic rejection" }; }
+  }
+  const caller = new AbortController(), sdk = new AbortController(), reason = {}, faults = [], read = Promise.withResolvers(), closed = Promise.withResolvers();
+  const invocation = { id, control: id === "c_provider_error", bodyPassed: true, resultErrorEmpty: true, caller: xiaomiSignal(caller.signal, () => 1), acquisitions: [] };
+  let current = invocation;
+  const errors = xiaomiSdkErrorWitness(() => current, nodeTypes.isProxy, ControlledAPIError.prototype,
+    Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted").get, Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason").get, error => faults.push(error));
+  invocation.sdkErrors = errors;
+  const f = xiaomiInertReader({ closed: closed.promise, read: () => read.promise, cancel: () => Promise.reject(reason) });
+  const reader = f.proof.readers[0], acquisition = { invocation, bound: true, accepted: true, state: "fulfilled", guard: { signal: reader.signal },
+    guardInput: { signal: sdk.signal }, observation: f.proof, releases: [{ state: "fulfilled" }] };
+  invocation.acquisitions.push(acquisition);
+  const output = { stopReason: "error", errorMessage: "Synthetic rejection" }, error = new ControlledAPIError();
+  const context = { f, reader, invocation, acquisition, errors, output, error, sdk, reason, faults, caller, params: { error, output, signal: caller.signal }, current: value => { current = value; } };
+  change(context, "input"); errors.input(acquisition);
+  const original = f.reader.read(); sdk.abort(reason); closed.reject(reason); read.reject(reason);
+  const cancel = f.reader.cancel(); await Promise.allSettled([original, cancel, closed.promise]); f.reader.releaseLock(); await f.proof.settle();
+  change(context, "failure"); errors.failure(context.params); errors.result(invocation, output); change(context, "result");
+  return { ...context, selection: { acquisition, control: invocation.control, qualified: !invocation.control } };
+}
+test("actual SDK failure observer preserves receiver, arguments, original return and falsey failure", () => {
+  const start = sdkSource.indexOf('vi.spyOn(transportStream, "failTransportStream").mockImplementation(');
+  const begin = sdkSource.indexOf("function", start), end = sdkSource.indexOf("\n  });", begin);
+  assert.ok(start > 0 && end > begin);
+  const callback = stripTypeScriptTypes("(" + sdkSource.slice(begin, end) + "\n  })");
+  for (const throws of [false, true]) {
+    const faults = [], returned = Promise.resolve(), receiver = {}, params = {}, args = [params, {}]; let calls = 0;
+    const errors = xiaomiSdkErrorWitness(() => { throw undefined; }, nodeTypes.isProxy, Error.prototype, () => false, () => undefined, error => faults.push(error));
+    const original = function(...actual) { calls++; assert.equal(this, receiver); assert.deepEqual(actual, args); if (throws) throw undefined; return returned; };
+    const invoke = new Function("planSdkErrors", "originalSdkFailure", "return (" + callback + ");")(errors, original);
+    if (throws) { let caught = false; try { invoke.apply(receiver, args); } catch (error) { caught = true; assert.equal(error, undefined); } assert.equal(caught, true); }
+    else assert.equal(invoke.apply(receiver, args), returned);
+    assert.equal(calls, 1); assert.deepEqual(faults, [undefined]);
+  }
+});
+test("SDK controlled provider error binds its original output, acquisition signal and three rejected originals", async () => {
+  for (const id of ["c_provider_error", "n_embedded"]) {
+    const f = await xiaomiProviderErrorFixture(() => {}, id);
+    assert.equal(xiaomiSdkProviderErrorDisposition(f.selection, f.reader), true);
+    await f.f.proof.join(f.selection); await xiaomiSealReaderObservations([f.f.proof]);
+    assert.equal(f.reader.closedState, "rejected"); assert.equal(f.reader.closedReason, f.reason);
+    assert.deepEqual(f.reader.operations.map(row => row.state), ["rejected", "rejected"]);
+    assert.deepEqual(f.faults, []);
+  }
+});
+test("SDK provider-error witness refuses arbitrary errors, foreign signals, changed outputs and independent failures", async () => {
+  const changes = [
+    ["input", f => { Object.defineProperty(f.acquisition.guardInput, "signal", { get() { throw new Error("must not read"); } }); }],
+    ["input", f => { f.acquisition.guardInput = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error("must not inspect"); } }); }],
+    ["input", f => { f.acquisition.guardInput.signal = {}; }],
+    ["failure", f => { f.acquisition.guardInput.signal = new AbortController().signal; }],
+    ["failure", f => { f.current({ id: "foreign" }); }],
+    ["failure", f => { f.params.signal = new AbortController().signal; }],
+    ["failure", f => { f.params.error = new Error("Synthetic rejection"); }],
+    ["failure", f => { f.error.code = "unrelated"; }], ["failure", f => { f.error.message = "unrelated"; }],
+    ["failure", f => { f.error.error.extra = true; }],
+    ["failure", f => { Object.defineProperty(f.error, "code", { get() { throw new Error("must not read"); } }); }],
+    ["failure", f => { f.params.output = { ...f.output }; }],
+    ["result", f => { f.errors.result(f.invocation, f.output); }], ["result", f => { f.errors.failure(f.params); }],
+    ["result", f => { f.caller.abort(f.reason); }], ["result", f => { f.output.errorMessage = "unrelated"; }],
+    ["result", f => { f.acquisition.releases[0].state = "rejected"; }],
+    ["result", f => { f.acquisition.bound = false; }], ["result", f => { f.invocation.acquisitions.push(f.acquisition); }],
+    ["result", f => { f.reader.faults.push(undefined); }], ["result", f => { f.reader.unlockReturns = 0; }],
+    ["result", f => { f.reader.operations[0].reason = undefined; }],
+    ["result", f => { f.reader.operations[1].operandDefined = true; f.reader.operations[1].operands = [{}]; }],
+    ["result", f => { f.reader.originalClosed = { pending: Promise.resolve(), result: { status: "rejected", reason: f.reason } }; }],
+  ];
+  for (const [index, [phase, mutate]] of changes.entries()) {
+    const f = await xiaomiProviderErrorFixture((value, at) => { if (at === phase) mutate(value); });
+    assert.equal(xiaomiSdkProviderErrorDisposition(f.selection, f.reader), false, `counterfactual ${index}`);
+    await assert.rejects(f.f.proof.join(f.selection), error => error instanceof AggregateError && error.errors.includes(f.reason));
+  }
 });
 test("SDK body reporting retains undefined primary and independent writer errors without a callback-rethrow duplicate", () => {
   for (const primary of [undefined, {}]) {
