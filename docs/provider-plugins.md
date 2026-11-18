@@ -117,10 +117,10 @@ admission rules before rendering or serving resources.
 ## Compiled provider contract
 
 [`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot, model, and quota declarations, and re-exports portable endpoint
-and auth declarations. Build tools and future package compilers can import these
-types without importing Worker
-bindings, credential records, or adapter implementations. Existing imports from
+v1 snapshot and model declarations, and re-exports portable endpoint, auth,
+and quota declarations. Build tools and future package compilers can import these
+types without importing Worker bindings, credential records, or adapter
+implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
 type-only re-exports. The snapshot wire shape and runtime behavior are unchanged.
 
@@ -148,6 +148,13 @@ Endpoint declarations also belong to the package: `CompiledEndpoint`,
 Existing imports from `shared/provider-snapshot.ts` remain supported. These
 compiled types preserve path, format, streaming, lifecycle, and limit fields;
 they do not replace manifest validation or host dispatch and admission.
+
+Quota probe and response-header declarations belong to the package through
+`CompiledQuotaConfig`, `CompiledQuotaProbe`, `CompiledQuotaProbeWindow`,
+`CompiledQuotaWindow`, and `GrantQuotaKind`. `GrantAccount` and `GrantExtraUsage`
+also belong to the package; `shared/provider-observations.ts` preserves existing
+imports. These are provider-reported observations and extraction recipes.
+Polling, freshness, credentials, budgets, and admission remain host-owned.
 
 ### Portable tariff declarations
 

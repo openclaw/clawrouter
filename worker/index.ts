@@ -1,3 +1,4 @@
+declare const __CLAWROUTER_LARGE_RUNTIME__: boolean;
 import { emptyUsageSnapshot } from "./usage-sharding.ts";
 import { sessionUsageReport } from "./usage-report-session.ts";
 import {lifecycleCall} from './large-http/lifecycle-client.ts';
@@ -143,6 +144,10 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     }
     return proxyNative(request, env, context, `/v1/native/${match[1]}/v1/models/${encodeURIComponent(match[2])}`);
   }
+  // Catalog reads stay at the edge; the native ingress only dispatches inference.
+  // Eliminate the optional catalog module from the fingerprinted native payload.
+  if (!(typeof __CLAWROUTER_LARGE_RUNTIME__ !== "undefined" && __CLAWROUTER_LARGE_RUNTIME__ === true)
+    && request.method === "GET" && path === "/v1/codex/models") return (await import("./codex-models.ts")).codexModelsResponse(request, env);
   if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env, context);
   if (request.method === "GET" && path === "/v1/oauth/callback") return oauthCallback(request, env);
   if (path.startsWith("/v1/pool-submissions/")) return poolSubmissionApi(request, env, path);

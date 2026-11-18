@@ -7,6 +7,8 @@ export type { ProviderGrantKind, ProviderProductBinding, ProviderProductOffer, P
 export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "./auth.ts";
 export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing, SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "./pricing.ts";
 export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./endpoints.ts";
+export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "./quota.ts";
+export type { GrantAccount, GrantExtraUsage } from "./observations.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 

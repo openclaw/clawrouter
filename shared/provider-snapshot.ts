@@ -1,7 +1,6 @@
 import type { CompiledEndpoint } from "../packages/provider-plugin-contract/src/endpoints.ts";
 import type { AuthScheme, AuthorizationConfig, RefreshConfig, CompiledGrantTransport } from "../packages/provider-plugin-contract/src/auth.ts";
-import type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
-import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+import type { CompiledQuotaConfig } from "../packages/provider-plugin-contract/src/quota.ts";
 import type { ProviderModelDefinition } from "./provider-model.ts";
 import type { ProviderOfferDefinition, ProviderProduct } from "./provider-products.ts";
 
@@ -10,6 +9,7 @@ import type { ProviderOfferDefinition, ProviderProduct } from "./provider-produc
 export type { AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport } from "../packages/provider-plugin-contract/src/auth.ts";
 export type { ProviderGrantKind as GrantKind } from "../packages/provider-plugin-contract/src/products.ts";
 export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "../packages/provider-plugin-contract/src/endpoints.ts";
+export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "../packages/provider-plugin-contract/src/quota.ts";
 
 export interface ProviderSnapshot {
   version: string;
@@ -29,43 +29,5 @@ export interface CompiledProvider {
   endpoints: CompiledEndpoint[]; models: CompiledModel[]; billing: { meter: string | null; dimensions: string[]; counters: Array<{ name: string; source: string; unit?: string | null }> }; meter: string | null;
   quota: CompiledQuotaConfig;
 }
-
-export type GrantQuotaKind = "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
-export interface CompiledQuotaWindow {
-  id: string;
-  kind: GrantQuotaKind;
-  unit: string | null;
-  window: string | null;
-  limitHeaders: string[];
-  remainingHeaders: string[];
-  usedHeaders: string[];
-  resetHeaders: string[];
-  fixedLimit: number | null;
-  metricScale: number;
-}
-export interface CompiledQuotaProbeWindow {
-  models?: string[] | null;
-  collection?: { pointer: string; filter: { pointer: string; equals: string }; modelPointer?: string } | null;
-  id: string;
-  kind: GrantQuotaKind;
-  unit: string | null;
-  window: string | null;
-  limitPointer: string | null;
-  remainingPointer: string | null;
-  usedPointer: string | null;
-  resetPointer: string | null;
-  fixedLimit: number | null;
-  metricScale: number;
-}
-export interface CompiledQuotaProbe {
-  grantKinds: GrantKind[];
-  requiresRefreshToken: boolean;
-  url: string;
-  method: "GET" | "POST";
-  headers: Record<string, string>;
-  windows: CompiledQuotaProbeWindow[];
-  facts?: { account?: Partial<Record<keyof GrantAccount, string>>; extraUsage?: Partial<Record<keyof GrantExtraUsage, string>> };
-}
-export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
 
 export type CompiledModel = ProviderModelDefinition;

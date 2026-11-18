@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
+
 - Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.
 
 - Retain two-site activation counts and a closed first-failure value disposition for Qwen diagnostics, distinguishing producer unknowns from relay binding rejection without relaxing ownership or retirement checks.

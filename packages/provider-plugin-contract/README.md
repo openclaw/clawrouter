@@ -1,7 +1,7 @@
 # Provider plugin contract
 
 Data-only descriptors, conformance fixtures, package indexes, product/offer
-declarations, authentication configuration, endpoints, and published tariffs for ClawRouter
+declarations, authentication configuration, endpoints, quotas, and published tariffs for ClawRouter
 provider packages. No Worker, filesystem, network, or runtime
 dependencies. Validation does not authorize a provider or qualify its execution.
 
@@ -38,6 +38,7 @@ import {
   type ModelPricing,
   type RequestPricing,
   type CompiledEndpoint,
+  type CompiledQuotaConfig,
 } from "@clawrouter/provider-plugin-contract";
 ```
 
@@ -64,3 +65,8 @@ that a price is current or applicable to an account.
 `ToolPricing` describe compiled endpoint configuration. They preserve lifecycle
 links, formats, limits, and pricing references. They do not validate manifests,
 load adapters, or authorize requests.
+
+`CompiledQuotaConfig` and its probe/window types declare where to read quota
+observations. `GrantAccount` and `GrantExtraUsage` describe provider-reported
+metadata. These types do not poll providers, store credentials, or establish
+entitlement, remaining budget, or an admission decision.

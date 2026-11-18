@@ -69,9 +69,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "4ffdeff290f7ce781775a5fd323a945d0cfca7f9",
-    "sha256": "6d343e763157feb9c9799fa1e1dd2240737739af4a9ea0bb07213202f5eac64a",
-    "bytes": 2814
+    "blob": "907c9928711d6ce688d831db2d4d8b69dfe3e857",
+    "sha256": "716d6860b19c0d0363f20910510a44b83f9f5f90413b4123429cceaa11b481e9",
+    "bytes": 3140
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
@@ -99,9 +99,15 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "40a88b680a5fe1b59fb0c5de93f45274c73d8fb8",
-    "sha256": "83b8669c71ad3d4ac34a0bb26240bcc134b519056fa2acbb0ae8bed96edf332a",
-    "bytes": 6187
+    "blob": "15ecd151c99b23889a003b54d43d033175644d35",
+    "sha256": "1374d449fec3a532f94b41a65e017ac907c2bd61238fe8a578158407236dba04",
+    "bytes": 6397
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/observations.ts",
+    "blob": "4b58eaab06b268954182fda822e6db94f1a1862b",
+    "sha256": "138f7801c7205c35fb4bc4132eb630c2d16de27da5eab2372a6fad26de1721e5",
+    "bytes": 416
   },
   {
     "path": "packages/provider-plugin-contract/src/package-index.ts",
@@ -126,6 +132,12 @@ export const currentInputInventory = Object.freeze(
     "blob": "82e30671358be91baa5720d624170821aca1dfd3",
     "sha256": "23533b59fb4c71a13649f707ec564a2d6ffb6d7fe7366b07a8aec6dd342b0ada",
     "bytes": 1374
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/quota.ts",
+    "blob": "ecdc2303d869657da4973c1a944dc37a7ed60d57",
+    "sha256": "f45d6251dc221c4f9806fee7a846306612db4a42e2b98a55a3382f58324f769c",
+    "bytes": 1526
   },
   {
     "path": "packages/provider-plugin-contract/tsconfig.json",

@@ -32,7 +32,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
     "LICENSE", "README.md", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js",
-    "dist/package-index.d.ts", "dist/package-index.js", "dist/pricing.d.ts", "dist/pricing.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
+    "dist/observations.d.ts", "dist/observations.js", "dist/quota.d.ts", "dist/quota.js", "dist/package-index.d.ts", "dist/package-index.js", "dist/pricing.d.ts", "dist/pricing.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.deepEqual(manifest.dependencies ?? {}, {});
@@ -52,6 +52,7 @@ assert.equal(PROVIDER_CONFORMANCE_SCHEMA, "clawrouter.provider-conformance.v1");
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
 import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
+  type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
   type ManagedProtocol, type ManagedFileLinks, type OutputTokenLimit, type ToolPricing, type CompiledEndpoint,
   type TokenRates, type LongContextPricing, type ServiceTierPricing, type AnthropicPriceModifiers, type TokenPricing, type CharacterPricing, type ImageTokenPricing, type ModelPricing, type SuccessfulRequestPricing, type OutcomeRequestPricing, type ImageRequestPricing, type DeepSeekSearchRequestPricing, type RequestPricing,
   type AuthScheme, type AuthorizationConfig, type RefreshConfig, type GrantTransportAuth, type CompiledGrantTransport,
@@ -85,6 +86,15 @@ const endpoint: CompiledEndpoint = { id: "invoke", method: "POST", methods: ["PO
 const invalidLinks: ManagedFileLinks = { mode: "download_only", metadata: "get", download: "download" };
 // @ts-expect-error Lifecycle protocols are a finite compiled contract.
 const invalidProtocol: ManagedProtocol = "custom.jobs";
+const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
+const extraUsage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
+const quota: CompiledQuotaConfig = { responseHeaders: [], probes: [{ grantKinds: ["oauth"], requiresRefreshToken: false,
+  url: "https://example.invalid/quota", method: "GET", headers: {}, windows: [],
+  facts: { account: { displayName: "/name" }, extraUsage: { usedCredits: "/used" } } }] };
+// @ts-expect-error Quota extraction is limited to declared account metadata fields.
+const invalidAccountFacts: NonNullable<CompiledQuotaProbe["facts"]>["account"] = { accessToken: "/token" };
+// @ts-expect-error Credential classifications are not quota measurement kinds.
+const invalidQuotaKind: GrantQuotaKind = "oauth";
 const kind: ProviderGrantKind = "subscription";
 const binding: ProviderProductBinding = { type: "grant-transport", grantKind: kind };
 const selection: ProviderProductOffer = { endpoint: "invoke", capability: "tool.invoke", models: null };
@@ -100,7 +110,7 @@ const index: ProviderPackageIndex = { schema: "clawrouter.provider-package-index
 declare const scenario: ProviderConformanceScenario;
 declare const validation: ProviderConformanceValidation;
 declare const execution: ProviderConformanceExecution;
-export { endpoint, fileLinks, modelPrice, requestPrice, descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
+export { account, extraUsage, quota, endpoint, fileLinks, modelPrice, requestPrice, descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
 `);
   writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, noEmit: true },
