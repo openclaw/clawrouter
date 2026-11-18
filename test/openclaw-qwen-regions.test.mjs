@@ -26,7 +26,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function("utilTypes", `"use strict"; ${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, createQwenCallableWitness, qwenClosedRecord, qwenJoinRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)(utilTypes);
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "bd2c21fb9b1b09e47602c4631c9346fd33bb2df3a0ee4060500a74c1e00c17e5";
+const qwenRunnerFixtureSha256 = "3ddd9f92c8a0a0eae0c34c67ddea25cee56a5851bf13674c4689beee823cfa38";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -2965,7 +2965,7 @@ test("Qwen first join preserves independent snapshot failure after original fals
   const primary = undefined, reporting = {}, nativeFreeze = Object.freeze;
   let armed = false;
   const faults = Object.create(Object); faults.freeze = value => { if (armed) throw reporting; return nativeFreeze(value); };
-  const factory = new Function("utilTypes", "Object", `${functions}; return createQwenLedger;`)(utilTypes, faults);
+  const factory = new Function("utilTypes", "Object", `"use strict"; ${functions}; return createQwenLedger;`)(utilTypes, faults);
   const ledger = factory(); ledger.fail(primary); armed = true;
   await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors[0] === primary && error.errors[1] === reporting);
   assert.equal(ledger.joinRecord(), null); assert.equal(ledger.failures().recording[0], reporting);
@@ -3012,7 +3012,7 @@ test("Qwen first join keeps held observer and reader closed identities distinct"
 test("Qwen locked-operand undefined throw preserves original identity and independent reporting error", async () => {
   const reporting = {}, nativeFreeze = Object.freeze; let armed = false;
   const faults = Object.create(Object); faults.freeze = value => { if (armed) throw reporting; return nativeFreeze(value); };
-  const factory = new Function("utilTypes", "Object", `${functions}; return createQwenLedger;`)(utilTypes, faults);
+  const factory = new Function("utilTypes", "Object", `"use strict"; ${functions}; return createQwenLedger;`)(utilTypes, faults);
   for (const reportFails of [false, true]) {
     armed = false; const ledger = factory(), source = qwenInertReader(); ledger.body(source.body);
     const reader = source.body.getReader(); reader.releaseLock(); let reads = 0;
@@ -3025,4 +3025,53 @@ test("Qwen locked-operand undefined throw preserves original identity and indepe
     else assert.deepEqual(qwenJoinRecord(ledger.joinRecord()).slice(10), [0,1,1,2,2]);
     armed = false; ledger.restore();
   }
+});
+
+for (const receiver of [undefined, null, {}]) test("Qwen receiver-free release preserves actual receiver, operands and original promise", async () => {
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), model = {}, expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" };
+  const owner = createQwenOwnership(storage, ledger, expected), response = { body: null }, releaseP = Promise.resolve(), calls = [];
+  const fetchP = Promise.resolve(response), options = { method: "POST", headers: { authorization: "Bearer fixture" } };
+  const native = owner.wrapFetch(() => fetchP);
+  const originalRelease = function (...args) { calls.push([this, args]); return releaseP; };
+  const publicCall = () => owner.guard(() => native(expected.url, options).then(response => ({ response, release: originalRelease })), undefined, []);
+  const result = await owner.invoke(publicCall, undefined, [model], {}), detached = result.release;
+  const args = [undefined, {}]; assert.equal(Reflect.apply(detached, receiver, args), releaseP);
+  assert.equal(calls.length, 1); assert.equal(calls[0][0], receiver); assert.deepEqual(calls[0][1], args);
+  owner.closePublic(); await ledger.drain(); owner.verify(1);
+  const operation = ledger.operations.find(row => row.kind === "release");
+  assert.equal(operation.pending, releaseP); assert.equal(operation.binding.original, originalRelease);
+  assert.equal(operation.binding.receiver, receiver); assert.equal(operation.binding.resource, result);
+  assert.equal([...owner.acquisitions][0].result, result); assert.deepEqual(ledger.failures().ownership, []);
+  assert.equal(ledger.operations.filter(row => row.kind === "release").length, owner.acquisitions.size);
+  ledger.restore(); owner.restore(); await ledger.drain(); ledger.seal();
+});
+for (const mode of ["foreign_response", "foreign_acquisition", "missing_release"]) test(`Qwen detached release does not qualify ${mode}`, async () => {
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" };
+  const owner = createQwenOwnership(storage, ledger, expected), response = { body: null }, releaseP = Promise.resolve();
+  const native = owner.wrapFetch(() => Promise.resolve(response)); let calls = 0;
+  const result = await owner.invoke(() => owner.guard(() => native(expected.url, { method: "POST", headers: { authorization: "Bearer fixture" } }).then(() => ({
+    response: mode === "foreign_response" ? { body: null } : response, release() { calls++; return releaseP; }
+  })), undefined, []), undefined, [{}], {});
+  if (mode === "foreign_acquisition") [...owner.acquisitions][0].result = {};
+  if (mode !== "missing_release") { const detached = result.release; assert.equal(detached(), releaseP); }
+  owner.closePublic();
+  if (mode === "missing_release") {
+    await ledger.drain(); owner.verify(1);
+    assert.notEqual(ledger.operations.filter(row => row.kind === "release").length, owner.acquisitions.size);
+    assert.equal(calls, 0);
+  } else {
+    await assert.rejects(ledger.drain()); assert.equal(calls, 1);
+    assert.ok(ledger.failures().ownership.length > 0);
+    if (mode === "foreign_response") assert.throws(() => owner.verify(1));
+  }
+  ledger.restore(); owner.restore();
+});
+for (const reason of [undefined, false, {}]) test("Qwen detached release preserves original thrown identity", async () => {
+  const ledger = createQwenLedger(), owner = createQwenOwnership(new AsyncLocalStorage(), ledger, { url: "https://qwen.fixture/chat/completions", credential: "fixture" });
+  const response = { body: null }, native = owner.wrapFetch(() => Promise.resolve(response)); let calls = 0;
+  const result = await owner.invoke(() => owner.guard(() => native("https://qwen.fixture/chat/completions", { method: "POST", headers: { authorization: "Bearer fixture" } }).then(response => ({ response, release() { calls++; throw reason; } })), undefined, []), undefined, [{}], {});
+  let caught = false; try { const release = result.release; release(); } catch (error) { caught = true; assert.equal(error, reason); }
+  assert.equal(caught, true); assert.equal(calls, 1); assert.deepEqual(ledger.failures().ownership, []);
+  await assert.rejects(ledger.drain(), error => error.errors.length === 1 && error.errors[0] === reason);
+  ledger.restore(); owner.restore();
 });

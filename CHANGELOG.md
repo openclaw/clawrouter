@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Observe Qwen guarded-fetch release as the receiver-free callback declared and used by the pinned SDK. Bind it to its captured acquisition and result while preserving the actual receiver, arguments, promise and errors; retain foreign-resource, release-count and retirement assertions.
+
 - Retain the first failed Qwen retirement join’s closed fault counts and already-evaluated reader operands. Keep skipped operands unknown and preserve original errors, reader getters, joins and native acceptance.
 
 - Keep Qwen replay sanitization in its case-owned provider generation. Use the captured provider with the existing generation scope so replay lookup does not acquire a second plugin graph; retain the actual sanitizer, original stream entrypoints and all ownership, cancellation and accounting assertions.

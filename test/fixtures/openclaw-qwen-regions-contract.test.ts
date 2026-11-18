@@ -425,8 +425,10 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
       // Release is owned even when identity validation fails afterward.
       const release = result.release;
       ledger.replace(result, "release", function (this: unknown, ...operands: unknown[]) {
-        if (this !== result) ledger.fail(new Error("foreign original release receiver"));
-        return ledger.invoke("release", release, this, operands);
+        // GuardedFetchResult.release is a receiver-free closure. Its resource
+        // belongs to this captured acquisition, not to a caller-supplied this.
+        if (!acquisition || acquisition.result !== result) ledger.fail(new Error("foreign original release acquisition"));
+        return ledger.invoke("release", release, this, operands, result);
       });
       const transport = acquisition?.transport;
       if (!acquisition || !transport || acquisition.result || responses.get(result.response) !== transport || transport.response !== result.response) incomplete();
