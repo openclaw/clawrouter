@@ -207,7 +207,7 @@ export function qwenValueConfigText(plan) {
   return `import base from "../test/vitest/vitest.extension-providers.config.ts";
 import { createQwenValuePlugin } from "./callsite-observer.mjs";
 const plugin = createQwenValuePlugin(new URL("../", import.meta.url), new URL("./", import.meta.url), ${JSON.stringify(plan)});
-export default { ...base, plugins: [...(base.plugins ?? []), plugin] };
+export default { ...base, test: { ...base.test, isolate: true, runner: undefined }, plugins: [...(base.plugins ?? []), plugin] };
 `;
 }
 

@@ -49,7 +49,7 @@ const retainedNativeFailures = new WeakMap();
 
 const qwenRunnerFixtureSha256 = "d5ad167a1efaf63c253052df1add5a52583ca1b3b0c258c7c1c2d4c4ee341679";
 const qwenRunnerReporterSha256 = "351d2c199b6aa09124073b8c8b9e58d195abe1f462ac40e8a7b72c544476b40a";
-const qwenValueObserverSha256 = "22336f3a29f7cf956965056726b062edbd6443d2a59e1d394f244bb8c7d87241";
+const qwenValueObserverSha256 = "9956892d934eaa548c714387d5205f29fee895e5e437913d78a92e30d25a8dd2";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -586,7 +586,10 @@ test("Qwen shipping snapshot covers complete source inventory and exact consumer
     assert.ok(actual.models.every(m => m.pricing === null));
     assert.deepEqual(actual.endpoints.map(e => e.path), ["/chat/completions"]);
   }
-  const matrix = parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy.matrix.include;
+  const strategy = parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy;
+  const matrix = strategy.matrix.include;
+  assert.equal(strategy["max-parallel"], 4);
+  assert.equal(matrix[0].consumer, "qwen-regions");
   assert.equal(new Set(matrix.map(r => r.consumer)).size, matrix.length);
   assert.deepEqual(matrix.filter(r => r.consumer === "qwen-regions"), [{ consumer: "qwen-regions", ref: sourceHead, test: "test/openclaw-qwen-regions.test.mjs" }]);
   assert.ok(fixtureText.includes(sourceHead)); assert.equal(rows.filter(r => r.mode === "eof").length, 44);
@@ -2127,6 +2130,31 @@ const qwenValueOriginals = [
 ].map(text => Buffer.from(text));
 const qwenValueHash = bytes => createHash("sha256").update(bytes).digest("hex");
 
+test("Qwen isolated config preserves provider setup, aliases, pool and reporter plugin", () => {
+  const plugin = { name: "bound-value-observer" };
+  const setupFiles = ["test/setup.extensions.ts", "test/setup-openclaw-runtime.ts"];
+  const alias = { "@openclaw/ai": "/fixture/sdk/packages/ai/src/index.ts" };
+  const base = { resolve: { alias }, test: { isolate: false, runner: "/fixture/non-isolated-runner.ts",
+    setupFiles, pool: "forks", maxWorkers: 4, include: ["extensions/qwen/*.test.ts"],
+    env: { existing: "retained" } }, plugins: [{ name: "existing" }] };
+  const before = structuredClone(base);
+  const text = qwenValueConfigText({ nonce: "a".repeat(64) });
+  const expression = text.split("export default ")[1];
+  assert.ok(expression, "actual emitted config export is present");
+  const evaluate = new Function("base", "plugin", "return " + expression);
+  for (const input of [base, { ...base, plugins: undefined }]) {
+    const actual = evaluate(input, plugin);
+    assert.equal(actual.test.isolate, true);
+    assert.equal(actual.test.runner, undefined, "D8 non-isolated runner must not survive isolation");
+    assert.deepEqual(actual.test, { ...input.test, isolate: true, runner: undefined });
+    assert.equal(actual.test.setupFiles, setupFiles);
+    assert.equal(actual.resolve, base.resolve);
+    assert.deepEqual(actual.plugins, [...(input.plugins ?? []), plugin]);
+    assert.equal(actual.plugins.at(-1), plugin);
+  }
+  assert.deepEqual(base, before, "shared provider config remains unchanged");
+});
+
 test("Qwen loader binds exact originals, overlay inputs, cache nonce and native argv", () => {
   const helperBytes = readFileSync(new URL("./helpers/openclaw-qwen-callsite-observer.mjs", import.meta.url));
   const fixtureSHA = qwenRunnerFixtureSha256, helperSHA = qwenValueHash(helperBytes);
@@ -2142,7 +2170,7 @@ test("Qwen loader binds exact originals, overlay inputs, cache nonce and native 
   assert.notEqual(second.plan.contract, bundle.plan.contract); assert.notEqual(second.configSHA, bundle.configSHA);
   assert.notEqual(second.plan.virtualSHA, bundle.plan.virtualSHA);
   assert.ok(bundle.config.includes('import base from "../test/vitest/vitest.extension-providers.config.ts"'));
-  assert.ok(bundle.config.includes('export default { ...base, plugins: [...(base.plugins ?? []), plugin] }'));
+  assert.ok(bundle.config.includes('export default { ...base, test: { ...base.test, isolate: true, runner: undefined }, plugins: [...(base.plugins ?? []), plugin] }'));
   assert.equal(bundle.config, qwenValueConfigText(bundle.plan));
   const directory = "/fixture/sdk/.clawrouter-runner-report-control";
   const reporters = ["--reporter=default", "--reporter=" + directory + "/reporter.mjs", "--outputFile=" + directory + "/report.jsonl"];
