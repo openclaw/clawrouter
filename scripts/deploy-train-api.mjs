@@ -43,8 +43,10 @@ export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep, 
       try {
         await cloudflare(`${workerPath}/deployments`, { method: 'POST', body: { strategy: 'percentage', versions, annotations: { 'workers/message': message }, ...(immediate ? { code_update_strategy: { mode: 'immediate' } } : {}) } });
       } catch (cause) { error = cause; }
-      // A lost mutation response is ambiguous. Read back, never blindly retry POST.
-      const matches = (deployment) => deployment?.annotations?.['workers/message'] === message && (!immediate || deployment?.code_update_strategy?.mode === 'immediate') && deployment?.versions?.length === versions.length && deployment.versions.every((v, i) => v.version_id === versions[i].version_id && v.percentage === versions[i].percentage);
+      // code_update_strategy is write-only. Reconcile the owned journal and
+      // version allocation; the native controller separately proves adoption.
+      // A lost mutation response is ambiguous: never blindly retry POST.
+      const matches = (deployment) => deployment?.annotations?.['workers/message'] === message && deployment?.versions?.length === versions.length && deployment.versions.every((v, i) => v.version_id === versions[i].version_id && v.percentage === versions[i].percentage);
       let actual = await this.latest();
       // The deployments list can trail an accepted POST. Re-read only while it
       // still shows the deployment that existed before; any other split fails now.

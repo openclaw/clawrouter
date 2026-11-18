@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { resolve, dirname } from 'node:path';
 import { runNativeCutover, recoverNativeCutover, createNativeControl } from '../scripts/deploy-native-cutover.mjs';
 import { deploymentMessage, deploymentState } from '../scripts/deploy-train-policy.mjs';
@@ -156,9 +157,35 @@ test('drained cutover requests immediate DO adoption and reconciles its readback
       return Response.json({success:true,result:{deployments:[latest]}});
     }});
     const operation=api.deploy([{version_id:green,percentage:100}],'cutover','d0',{immediate:true});
-    if(acknowledgeStrategy)assert.equal((await operation).id,'d1');else await assert.rejects(operation);
+    assert.equal((await operation).id,'d1');
     assert.equal(posts,1);
   }
+});
+test('actual HTTP reconciles write-only strategy and lost acknowledgement, but refuses foreign journals or allocations',async t=>{
+  for(const scenario of ['acknowledged','lost-ack','foreign-journal','wrong-allocation'])await t.test(scenario,async t=>{
+    let posts=0,latest={id:'d0',versions:[{version_id:blue,percentage:100}]};
+    const server=createServer(async(req,res)=>{
+      if(req.method==='POST'){
+        posts++;let raw='';for await(const chunk of req)raw+=chunk;
+        const body=JSON.parse(raw);assert.deepEqual(body.code_update_strategy,{mode:'immediate'});
+        latest={id:'d1',versions:body.versions,annotations:body.annotations};
+        if(scenario==='foreign-journal')latest.annotations={'workers/message':'foreign'};
+        if(scenario==='wrong-allocation')latest.versions=[{version_id:blue,percentage:100}];
+        if(scenario==='lost-ack'){req.socket.destroy();return;}
+        res.setHeader('content-type','application/json');res.end(JSON.stringify({success:true,result:latest}));return;
+      }
+      res.setHeader('content-type','application/json');res.end(JSON.stringify({success:true,result:{deployments:[latest]}}));
+    });
+    await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+    const origin='http://127.0.0.1:'+server.address().port;
+    const api=createApi({env:{CLOUDFLARE_API_TOKEN:'synthetic',CLOUDFLARE_ACCOUNT_ID:'a'.repeat(32)},wait:async()=>{},fetchImpl:(url,init)=>fetch(origin+new URL(url).pathname,init)});
+    const operation=api.deploy([{version_id:green,percentage:100}],'cutover','d0',{immediate:true});
+    if(['acknowledged','lost-ack'].includes(scenario))assert.equal((await operation).id,'d1');
+    else await assert.rejects(operation,/readback differs/);
+    assert.equal(posts,1);assert.equal(Object.hasOwn(latest,'code_update_strategy'),false);
+    t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,strategyReturned:false}));
+  });
 });
 test('cutover recovery journal fits the deployment annotation byte limit',()=>{
   const f=fixture();f.state.run='99999999999999999999';f.state.cutover.phase='recover-draining-recovery';
