@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Recognize the Qwen fixture’s exact owned partial-abort reader disposition only after the asserted aborted outcome and successful resource retirement. Preserve the fresh caller-reason identity, original promises and errors, foreign-owner negatives, and independent cancellation, release and cleanup failures; provider-error handling remains separate.
+
 - Retain bounded original-rejection relations at the first failed Qwen join: private resource binding, reason equality and observed callback order around the original caller cancellation. Preserve all rejection and retirement gates; equality and callback order alone do not prove cancellation causality.
 
 - Observe Qwen guarded-fetch release as the receiver-free callback declared and used by the pinned SDK. Bind it to its captured acquisition and result while preserving the actual receiver, arguments, promise and errors; retain foreign-resource, release-count and retirement assertions.

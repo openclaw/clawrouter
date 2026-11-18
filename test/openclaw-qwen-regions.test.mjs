@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "12dfb1b9874f4d1c3bd8ea50069ac683f4d77f376a5ecb454fa0ac0fae7f5d7a";
+const qwenRunnerFixtureSha256 = "1ca10b2777a1eac9416d71b9c3677b9cba62d034f2c53cb132192fe5bb6ae468";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -3080,10 +3080,12 @@ for (const reason of [undefined, false, {}]) test("Qwen detached release preserv
   ledger.restore(); owner.restore();
 });
 
-async function qwenRejectionFixture(mode = "owned", reason) {
+async function qwenRejectionFixture(mode = "owned", reason, admit = false) {
   if (arguments.length < 2) reason = {};
-  const ledger = createQwenLedger(), expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" };
-  const owner = createQwenOwnership(new AsyncLocalStorage(), ledger, expected), caller = {}, closed = qwenDeferred(), read = qwenDeferred(), cancel = qwenDeferred();
+  let owner;
+  const ledger = createQwenLedger((operation, cancellation) => admit && owner.cancelledOriginal(operation, cancellation)), expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" };
+  owner = createQwenOwnership(new AsyncLocalStorage(), ledger, expected);
+  const caller = {}, closed = qwenDeferred(), read = qwenDeferred(), cancel = qwenDeferred();
   const releaseReason = {}, releaseP = mode === "release_failure" ? qwenDeferred() : null;
   const reader = { closed: closed.promise, read() { return read.promise; }, cancel() { return cancel.promise; }, releaseLock() { body.locked = false; } };
   const body = { locked: false, cancel() { return Promise.resolve(); }, getReader() { body.locked = true; return reader; } }, response = { body };
@@ -3095,8 +3097,9 @@ async function qwenRejectionFixture(mode = "owned", reason) {
   if (mode !== "eof") {
     assert.equal(ledger.cancellationArgument(mode === "foreign_invocation" ? {} : caller, reason), reason);
     if (mode !== "before_cancel") closed.reject(reason);
+    if (mode === "reused_reason") ledger.cancellationArgument(caller, reason);
     ledger.cancellationReturned();
-    assert.equal(actual.cancel(), cancel.promise); cancel.reject(reason);
+    assert.equal(actual.cancel(), cancel.promise); cancel.reject(mode === "cancel_failure" ? releaseReason : reason);
     if (!["before_cancel", "held"].includes(mode)) read.reject(reason);
   } else { closed.resolve(); read.resolve({ done: true }); }
   actual.releaseLock(); const detached = result.release; const released = detached();
@@ -3184,4 +3187,56 @@ test("Qwen actual cancellation expression preserves callee, argument, receiver a
     catch (error) { caught = true; assert.equal(error, reason); }
     assert.equal(caught, fail); assert.deepEqual(trace, ["callee", "construct", "argument", "call", ...(!fail ? ["returned"] : [])]);
   }
+});
+
+for (const mode of ["owned", "before_cancel", "foreign_invocation", "foreign_reader", "release_failure", "cancel_failure", "reused_reason", "held"]) test(`Qwen partial-abort disposition keeps ${mode} source-bound`, async () => {
+  const reason = new Error("fixture cancellation"), f = await qwenRejectionFixture(mode, reason, true);
+  let finished = false; const joined = f.ledger.drain().then(() => { finished = true; }, error => { finished = true; return error; });
+  if (mode === "held") { await Promise.resolve(); await Promise.resolve(); assert.equal(finished, false); f.read.reject(reason); }
+  const error = await joined;
+  if (["owned", "held"].includes(mode)) {
+    assert.equal(error, undefined); f.owner.verify(1); assert.equal(f.ledger.joinRecord(), null);
+    assert.equal(f.ledger.operations.filter(row => row.state === "rejected").length, 3);
+    assert.ok(f.ledger.operations.filter(row => row.state === "rejected").every(row => row.reason === reason));
+    f.close(); await f.ledger.drain(); f.ledger.seal();
+  } else {
+    assert.ok(error instanceof AggregateError);
+    assert.ok(error.errors.includes(mode === "release_failure" || mode === "cancel_failure" ? f.releaseReason : reason)); f.close();
+  }
+});
+for (const reason of [undefined, false, null, "fixture cancellation"]) test("Qwen abort disposition never admits equal primitive or undefined reasons", async () => {
+  const f = await qwenRejectionFixture("owned", reason, true);
+  await assert.rejects(f.ledger.drain(), error => error.errors.length === 3 && error.errors.every(value => Object.is(value, reason))); f.close();
+});
+test("Qwen real reader abort rejections retain original identity and retire independently", async () => {
+  let owner, controller;
+  const ledger = createQwenLedger((operation, cancellation) => owner.cancelledOriginal(operation, cancellation));
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" }, caller = {}, abort = new AbortController();
+  owner = createQwenOwnership(new AsyncLocalStorage(), ledger, expected);
+  const body = new ReadableStream({ start(value) { controller = value; } });
+  abort.signal.addEventListener("abort", () => controller.error(abort.signal.reason), { once: true });
+  const native = owner.wrapFetch(() => Promise.resolve(new Response(body)));
+  const result = await owner.invoke(() => owner.guard(() => native(expected.url, { method: "POST", headers: { authorization: "Bearer fixture" } }).then(response => ({ response, release: () => Promise.resolve() })), undefined, []), undefined, [{}], caller);
+  const reader = result.response.body.getReader(), original = reader.read();
+  const reason = new Error("fixture cancellation"); abort.abort(ledger.cancellationArgument(caller, reason)); ledger.cancellationReturned();
+  const cancelled = reader.cancel(); reader.releaseLock(); const detached = result.release; await detached(); owner.closePublic();
+  await ledger.drain(); owner.verify(1);
+  assert.equal(ledger.operations.find(row => row.kind === "read").pending, original);
+  assert.equal(ledger.operations.find(row => row.kind === "cancel").pending, cancelled);
+  assert.deepEqual(ledger.operations.filter(row => row.state === "rejected").map(row => row.kind), ["closed", "read", "cancel"]);
+  assert.ok(ledger.operations.filter(row => row.state === "rejected").every(row => row.reason === reason));
+  assert.equal(body.locked, false); ledger.restore(); owner.restore(); await ledger.drain(); ledger.seal();
+});
+test("Qwen successful reader release alone does not fabricate caller-abort admission", async () => {
+  let owner;
+  const ledger = createQwenLedger((operation, cancellation) => owner.cancelledOriginal(operation, cancellation));
+  owner = createQwenOwnership(new AsyncLocalStorage(), ledger, { url: "https://qwen.fixture", credential: "fixture" });
+  const body = new ReadableStream(); ledger.body(body); const reader = body.getReader(); reader.read(); reader.releaseLock();
+  await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors.every(reason => reason instanceof TypeError));
+  assert.equal(body.locked, false); assert.equal(ledger.readers[0].returns, 1); ledger.restore(); owner.restore();
+});
+for (const fault of [undefined, false, {}]) test("Qwen disposition failure preserves original then independent falsey fault", async () => {
+  const reason = {}, ledger = createQwenLedger(() => { throw fault; });
+  ledger.observe("read", Promise.reject(reason)); ledger.cancellationArgument({}, {}); ledger.cancellationReturned();
+  await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors[0] === reason && error.errors[1] === fault);
 });
