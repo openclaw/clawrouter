@@ -95,16 +95,28 @@ receipts. Do not run two mutating clients against one directory. An owner
 subdirectory prevents concurrent writers; an abrupt runner death leaves that
 lock for operator reconciliation, not automatic inference replay.
 
-Each seed writes `seed-diagnostic.json` in the client directory. It retains the
-last fixed stage (readiness, catalog request/export/projection, Codex
-initialization/thread, or turn), outcome, timestamps, and a bounded error
-category with an HTTP status or filesystem code when available. It contains no
-exception text, RPC payloads, prompts, responses, or credentials. Preserve this
-file alongside `evidence.json`; cleanup retains it after removing private client
-material. A second seed in that directory refuses to overwrite the first receipt
-or replay the request, including when the first seed failed before inference.
+The seed writes `seed-diagnostic.json`; resumed commands write
+`overlap-<direction>-diagnostic.json` or `followup-<direction>-diagnostic.json`,
+where direction is `forward` or `recovery`. Each retains the last fixed stage
+(readiness, catalog, Codex initialization/resumption, session save, turn, overlap
+checkpoint, or client close), outcome, timestamps, and a bounded error category
+with an HTTP status or filesystem code when available. These receipts contain no
+exception text, RPC payloads, prompts, responses, or credentials. Preserve them
+alongside `evidence.json`; cleanup retains them after removing private client
+material. A second invocation of the same command/direction refuses to overwrite
+the first receipt or replay the request, including a failure before inference.
 If the process dies abruptly, a `running` receipt identifies the last entered
-stage; it does not prove whether that stage completed.
+stage; it does not prove whether that stage completed. Readiness remains an
+immediate strict eight-slot attestation; diagnostics do not retry observation or
+inference. Resumed app-servers are closed even if saving the pending journal fails.
+
+Coordinators can import `exerciseActions` from
+`scripts/native-rehearsal-actions.mjs` to watch the overlap child while waiting
+for its held checkpoint.
+If the child exits or fails first, stop the bounded attempt and run cleanup; do
+not wait out the checkpoint deadline, dispatch the controller, or replay the
+client. Cleanup must cancel outstanding checkpoint observations and stop owned
+process groups.
 
 ```sh
 P=.native-rehearsal-package/preparation.json

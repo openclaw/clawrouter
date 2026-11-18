@@ -14,8 +14,8 @@ import {nativeControlDigest} from './deploy-native-qualification.mjs';
 import {versionId} from './deploy-train-policy.mjs';
 const hash=x=>createHash('sha256').update(x).digest('hex'),id=()=>randomBytes(16).toString('hex');
 const caseText=(caseId,mode,direction)=>'NATIVE_REHEARSAL_CASE:'+caseId+':'+mode+':'+direction;
-const seedStages=new Set(['client_inputs','native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','client_close']);
-function seedFailure(error){
+const clientStages=new Set(['client_inputs','native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','held_active','admission_close','held_release','native_after_readiness','followup_start','followup_complete','fixture_verification','evidence_save','client_close']);
+function clientFailure(error){
  const status=error?.status;
  if(Number.isInteger(status)&&status>=400&&status<=599)return {kind:'http',status};
  if(error?.name==='AssertionError')return {kind:'assertion'};
@@ -23,9 +23,11 @@ function seedFailure(error){
  if(['ENOENT','EEXIST','EACCES','ENOSPC','EIO'].includes(error?.code))return {kind:'filesystem',code:error.code};
  return {kind:'unexpected'};
 }
-function seedDiagnostic(root){
- const path=join(root,'seed-diagnostic.json'),next=path+'.next';
- const receipt={schema:1,command:'seed',startedAt:Date.now(),stage:'client_inputs',outcome:'running'};
+function clientDiagnostic(root,command,args){
+ const direction=['overlap','followup'].includes(command)?args[0]:undefined;
+ if(command!=='seed'&&(!['overlap','followup'].includes(command)||!['forward','recovery'].includes(direction)))return null;
+ const path=join(root,[command,direction,'diagnostic.json'].filter(Boolean).join('-')),next=path+'.next';
+ const receipt={schema:1,command,...(direction?{direction}:{}),startedAt:Date.now(),stage:'client_inputs',outcome:'running'};
  let created=false;
  const persist=async()=>{
   receipt.updatedAt=Date.now();const text=JSON.stringify(receipt,null,2)+'\n';
@@ -33,9 +35,9 @@ function seedDiagnostic(root){
   else{await writeFile(next,text,{mode:0o600,flag:'wx'});await rename(next,path);}
  };
  return {
-  async stage(stage){assert(seedStages.has(stage));receipt.stage=stage;await persist();},
+  async stage(stage){assert(clientStages.has(stage));receipt.stage=stage;await persist();},
   async complete(){receipt.outcome='completed';await persist();},
-  async failed(error){if(!created)return;receipt.outcome='failed';receipt.failure=seedFailure(error);await persist();},
+  async failed(error){if(!created)return;receipt.outcome='failed';receipt.failure=clientFailure(error);await persist();},
  };
 }
 export function workloadBody({caseId,mode,seed}){
@@ -69,7 +71,7 @@ export async function runClient(command,preparation,directory,args=[],env=proces
  const root=resolve(directory);if(command==='setup')await mkdir(root,{mode:0o700});
  if(command==='inspect')return runClientOwned(command,preparation,root,args,env);
  const lock=join(root,'owner');await mkdir(lock,{mode:0o700});
- const diagnostic=command==='seed'?seedDiagnostic(root):null;
+ const diagnostic=clientDiagnostic(root,command,args);
  const onStage=stage=>diagnostic?.stage(stage);
  try{
   await onStage('client_inputs');
@@ -139,33 +141,43 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
  }
  if(command==='followup'){
   const [direction,version]=args;if(!['forward','recovery'].includes(direction)||!local.threadId)throw Error('Expected saved thread and direction');versionId(version);
+  await onStage('native_readiness');
   const runtime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha,snapshot=await control.snapshot(version);assert.ok(nativeWarm(snapshot,runtime));
-  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv});local.pending={id:id(),mode:'followup',direction};await save();
-  try{const started=await turn(client,caseText(local.pending.id,'recall',direction));evidence.steps.push({kind:'followup',direction,version,threadId:local.threadId,pool:projectPool(snapshot),...await finishTurn(client,started,hash(local.seed+':'+direction+':'+local.pending.id))});local.pending=null;await save();return {resumed:true,qualified:false};}finally{await client.close();}
+  await onStage('codex_start');
+  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
+  try{
+   await onStage('session_save');local.pending={id:id(),mode:'followup',direction};await save();
+   await onStage('turn_start');const started=await turn(client,caseText(local.pending.id,'recall',direction));
+   await onStage('turn_complete');const completed=await finishTurn(client,started,hash(local.seed+':'+direction+':'+local.pending.id));
+   await onStage('evidence_save');evidence.steps.push({kind:'followup',direction,version,threadId:local.threadId,pool:projectPool(snapshot),...completed});local.pending=null;await save();
+   await onStage('client_close');return {resumed:true,qualified:false};
+  }finally{await client.close();}
  }
  if(command==='overlap'){
   const [direction,beforeVersion,afterVersion]=args;if(!['forward','recovery'].includes(direction)||!local.threadId)throw Error('Expected saved thread and direction');versionId(beforeVersion);versionId(afterVersion);
   if(evidence.steps.some(s=>s.kind==='overlap'&&s.direction===direction))throw Error('Direction already observed');
   const beforeRuntime=direction==='forward'?p.blueRuntimeSha:p.greenRuntimeSha,afterRuntime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha;
-  assert.ok(nativeWarm(await control.snapshot(beforeVersion),beforeRuntime));
-  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv});
-  const held=id();local.pending={id:held,mode:'overlap',direction};await save();
+  await onStage('native_readiness');assert.ok(nativeWarm(await control.snapshot(beforeVersion),beforeRuntime));
+  await onStage('codex_start');
+  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
   try{
-   const startedAt=Date.now(),started=await turn(client,caseText(held,'hold',direction));
-   const active=await until(async()=>{const s=await api('snapshot');return s.cases.find(x=>x.id===held&&x.outcome==='active');});
-   const closed=await until(async()=>{const s=await control.snapshot(beforeVersion);if(s.accepting)return false;
+   await onStage('session_save');const held=id();local.pending={id:held,mode:'overlap',direction};await save();
+   await onStage('turn_start');const startedAt=Date.now(),started=await turn(client,caseText(held,'hold',direction));
+   await onStage('held_active');const active=await until(async()=>{const s=await api('snapshot');return s.cases.find(x=>x.id===held&&x.outcome==='active');});
+   await onStage('admission_close');const closed=await until(async()=>{const s=await control.snapshot(beforeVersion);if(s.accepting)return false;
     assert.ok(s.pool.grants.some(g=>g.slot===active.slot&&g.generation===active.generation&&g.stage==='intent'),'held request must still own dispatched capacity');
     assert.equal(client.notifications.some(n=>n.method==='turn/completed'&&n.params.turn.id===started.turn.id),false,'native turn must be active at admission close');return {at:Date.now(),pool:projectPool(s)};});
-   await api('release',{id:held});const completed=await finishTurn(client,started,hash(local.seed+':'+direction+':'+held));
-   const after=await until(async()=>{try{const s=await control.snapshot(afterVersion);return nativeWarm(s,afterRuntime)&&s;}catch{return false;}},10*60000);
+   await onStage('held_release');await api('release',{id:held});
+   await onStage('turn_complete');const completed=await finishTurn(client,started,hash(local.seed+':'+direction+':'+held));
+   await onStage('native_after_readiness');const after=await until(async()=>{try{const s=await control.snapshot(afterVersion);return nativeWarm(s,afterRuntime)&&s;}catch{return false;}},10*60000);
    // A DISTINCT follow-up, without repeating the seed, in the SAME saved thread.
-   const followup=id(),followupStartedAt=Date.now(),followupTurn=await turn(client,caseText(followup,'recall',direction));
-   const recalled=await finishTurn(client,followupTurn,hash(local.seed+':'+direction+':'+followup));
-   const snap=await api('snapshot');assert.equal(snap.cases.filter(x=>[held,followup].includes(x.id)).length,2);assert.equal(snap.replays,0);
+   await onStage('followup_start');const followup=id(),followupStartedAt=Date.now(),followupTurn=await turn(client,caseText(followup,'recall',direction));
+   await onStage('followup_complete');const recalled=await finishTurn(client,followupTurn,hash(local.seed+':'+direction+':'+followup));
+   await onStage('fixture_verification');const snap=await api('snapshot');assert.equal(snap.cases.filter(x=>[held,followup].includes(x.id)).length,2);assert.equal(snap.replays,0);
    assert.equal(active.runtimeSha,beforeRuntime);assert.equal(snap.cases.find(x=>x.id===followup).runtimeSha,afterRuntime);
    assert.ok(snap.callbacks.some(x=>x.op==='finish'&&x.runtimeSha===beforeRuntime&&x.at>=closed.at&&x.status===200&&x.clean===true),'old callback must settle after admission closes');
-   evidence.steps.push({kind:'overlap',direction,threadId:local.threadId,beforeVersion,afterVersion,heldCaseId:held,followupCaseId:followup,startedAt,closed,after:projectPool(after),...completed,followupStartedAt,followup:recalled});
-   local.pending=null;await save();return {observed:direction,qualified:false};
+   await onStage('evidence_save');evidence.steps.push({kind:'overlap',direction,threadId:local.threadId,beforeVersion,afterVersion,heldCaseId:held,followupCaseId:followup,startedAt,closed,after:projectPool(after),...completed,followupStartedAt,followup:recalled});
+   local.pending=null;await save();await onStage('client_close');return {observed:direction,qualified:false};
   }finally{await client.close();}
  }
  if(command==='workloads'){
