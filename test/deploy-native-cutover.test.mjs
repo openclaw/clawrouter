@@ -268,3 +268,59 @@ test('unproven zero-percent runtime or owner changes refuse normalization before
   await assert.rejects(runNativeCutover(f));assert.deepEqual(f.events,[]);
  }
 });
+
+// Real HTTP control responses model the API/edge visibility gap: the owned
+// deployment is committed before one GET reports its selected Worker version.
+test('owned cutovers converge across known previous-version GETs without replaying admission',async t=>{
+ for(const scenario of ['known-lag','foreign-version','missing-version','http-error','persistent-lag','owner-drift'])await t.test(scenario,async t=>{
+  const f=fixture(),wire=f.control,deploy=f.api.deploy,foreign='99999999-9999-9999-9999-999999999999';
+  let revision=0,posts=0,pending,lagged=0,reads=0;
+  f.api.deploy=async(...args)=>{
+   const previous=f.latest.versions[0].version_id,result=await deploy(...args),next=result.versions[0].version_id;
+   if(next!==previous)pending={previous,next};return result;
+  };
+  const server=createServer(async(req,res)=>{
+   const selected=f.latest.versions[0].version_id;
+   if(req.method==='POST'){
+    posts++;let raw='';for await(const chunk of req)raw+=chunk;const body=JSON.parse(raw);
+    assert.equal(body.expectedRevision,revision);await wire.admission(body.accepting);revision++;
+    res.setHeader('x-clawrouter-version-id',selected);res.setHeader('content-type','application/json');
+    res.end(JSON.stringify({status:200,accepting:body.accepting,revision}));return;
+   }
+   reads++;let actual=selected,status=200;
+   if(pending){
+    lagged++;actual=scenario==='foreign-version'?foreign:pending.previous;
+    if(scenario==='missing-version')actual=null;
+    if(scenario==='http-error')status=503;
+    if(scenario==='owner-drift')f.latest.annotations={'workers/message':'foreign'};
+    if(scenario!=='persistent-lag')pending=null;
+   }
+   const s=await wire.snapshot(selected);s.control.revision=revision;
+   if(actual)res.setHeader('x-clawrouter-version-id',actual);
+   res.statusCode=status;res.setHeader('content-type','application/json');
+   res.end(JSON.stringify({status:200,state:s,control:s.control,slots:s.inspection}));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve));});
+  const origin='http://127.0.0.1:'+server.address().port;
+  const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},wait:f.wait,fetchImpl:(url,init)=>{
+   assert.equal(new Headers(init.headers).has('Cloudflare-Workers-Version-Overrides'),false,'normal edge selection remains observable');
+   return fetch(origin+new URL(url).pathname,init);
+  }});
+  if(scenario==='known-lag'){
+   // The fresh recovery controller gets only the owned remote journal.
+   await assert.rejects(runNativeCutover({...f,control,smoke:async()=>{throw Error('planned runner stop');}}),/planned runner stop/);
+   await recoverNativeCutover({...f,control,state:deploymentState(f.latest)});
+   assert.equal(deploymentState(f.latest).status,'rolled-back');assert.equal(f.latest.versions[0].version_id,recovery);
+   assert.equal(lagged,2);assert.equal(posts,4,'one POST for each fenced admission change');
+  }else{
+   const failure=scenario==='persistent-lag'?/control.*deadline/:scenario==='owner-drift'?/not owned/:scenario==='http-error'?/HTTP 503/:/selected-version mismatch/;
+   await assert.rejects(runNativeCutover({...f,control,timeoutMs:10}),failure);
+   assert.equal(posts,1,'candidate admission never opens after rejected observation');
+   assert.equal((await wire.snapshot(green)).accepting,false);
+   assert.equal(deploymentState(f.latest)?.cutover.phase,scenario==='owner-drift'?undefined:'warming');
+   assert.equal(lagged,scenario==='persistent-lag'?2:1);
+  }
+  t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,reads,lagged,mutationReplay:false}));
+ });
+});
