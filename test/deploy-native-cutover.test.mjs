@@ -84,12 +84,19 @@ test('owner mismatch and rollback-unsafe candidates fail before admission closes
   }
 });
 test('ambiguous admission responses are reconciled by readback, never POST replay',async()=>{
+ for(const response of ['lost','http500']){
   let posts=0,accepting=true,revision=0;
   const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},fetchImpl:async(url,init)=>{
-    if(init.method==='POST'){posts++;const body=JSON.parse(init.body);assert.equal(body.expectedRevision,0);assert.ok(body.operationId);accepting=body.accepting;revision++;throw Error('response lost');}
-    const s=attested(snapshot(accepting,accepting),blue,revision);return Response.json({status:200,state:s,control:s.control,slots:s.inspection});
+    const headers={'x-clawrouter-version-id':blue};
+    if(init.method==='POST'){
+      posts++;const body=JSON.parse(init.body);assert.equal(body.expectedRevision,0);assert.ok(body.operationId);accepting=body.accepting;revision++;
+      if(response==='lost')throw Error('response lost');
+      return new Response(null,{status:500,headers});
+    }
+    const s=attested(snapshot(accepting,accepting),blue,revision);return Response.json({status:200,state:s,control:s.control,slots:s.inspection},{headers});
   }});
-  await control.admission(false);assert.equal(posts,1);
+  await control.admission(false,blue);assert.equal(posts,1);
+ }
 });
 test('control requires credentials, refuses redirects and never exposes response bodies',async()=>{
   assert.throws(()=>createNativeControl({env:{}}),/credential/);
@@ -275,8 +282,8 @@ test('unproven zero-percent runtime or owner changes refuse normalization before
 
 // Real HTTP control responses model the API/edge visibility gap: the owned
 // deployment is committed before one GET reports its selected Worker version.
-test('owned cutovers converge across known previous-version GETs without replaying admission',async t=>{
- for(const scenario of ['known-lag','foreign-version','missing-version','http-error','persistent-lag','owner-drift'])await t.test(scenario,async t=>{
+test('owned cutovers converge across previous-version GETs and snapshot resets without replaying admission',async t=>{
+ for(const scenario of ['known-lag','snapshot-reset','foreign-version','missing-version','http-error','persistent-lag','persistent-reset','owner-drift','reset-owner-drift','reset-deployment-drift'])await t.test(scenario,async t=>{
   const f=fixture(),wire=f.control,deploy=f.api.deploy,foreign='99999999-9999-9999-9999-999999999999';
   let revision=0,posts=0,pending,lagged=0,reads=0;
   f.api.deploy=async(...args)=>{
@@ -296,8 +303,10 @@ test('owned cutovers converge across known previous-version GETs without replayi
     lagged++;actual=scenario==='foreign-version'?foreign:pending.previous;
     if(scenario==='missing-version')actual=null;
     if(scenario==='http-error')status=503;
-    if(scenario==='owner-drift')f.latest.annotations={'workers/message':'foreign'};
-    if(scenario!=='persistent-lag')pending=null;
+    if(['snapshot-reset','persistent-reset','reset-owner-drift','reset-deployment-drift'].includes(scenario)){actual=selected;status=500;}
+    if(['owner-drift','reset-owner-drift'].includes(scenario))f.latest.annotations={'workers/message':'foreign'};
+    if(scenario==='reset-deployment-drift')f.latest.id='new-deployment';
+    if(!['persistent-lag','persistent-reset'].includes(scenario))pending=null;
    }
    const s=await wire.snapshot(selected);s.control.revision=revision;
    if(actual)res.setHeader('x-clawrouter-version-id',actual);
@@ -311,19 +320,20 @@ test('owned cutovers converge across known previous-version GETs without replayi
    assert.equal(new Headers(init.headers).has('Cloudflare-Workers-Version-Overrides'),false,'normal edge selection remains observable');
    return fetch(origin+new URL(url).pathname,init);
   }});
-  if(scenario==='known-lag'){
+  if(['known-lag','snapshot-reset'].includes(scenario)){
    // The fresh recovery controller gets only the owned remote journal.
    await assert.rejects(runNativeCutover({...f,control,smoke:async()=>{throw Error('planned runner stop');}}),/planned runner stop/);
    await recoverNativeCutover({...f,control,state:deploymentState(f.latest)});
    assert.equal(deploymentState(f.latest).status,'rolled-back');assert.equal(f.latest.versions[0].version_id,recovery);
    assert.equal(lagged,2);assert.equal(posts,4,'one POST for each fenced admission change');
   }else{
-   const failure=scenario==='persistent-lag'?/control.*deadline/:scenario==='owner-drift'?/not owned/:scenario==='http-error'?/HTTP 503/:/selected-version mismatch/;
-   await assert.rejects(runNativeCutover({...f,control,timeoutMs:10}),failure);
+   const ownerDrift=['owner-drift','reset-owner-drift'].includes(scenario),deploymentDrift=scenario==='reset-deployment-drift';
+   const failure=['persistent-lag','persistent-reset'].includes(scenario)?/control.*deadline/:ownerDrift?/not owned/:deploymentDrift?/deployment changed/:scenario==='http-error'?/HTTP 503/:/selected-version mismatch/;
+   await assert.rejects(runNativeCutover({...f,control,timeoutMs:ownerDrift||deploymentDrift?5000:10}),failure);
    assert.equal(posts,1,'candidate admission never opens after rejected observation');
    assert.equal((await wire.snapshot(green)).accepting,false);
-   assert.equal(deploymentState(f.latest)?.cutover.phase,scenario==='owner-drift'?undefined:'warming');
-   assert.equal(lagged,scenario==='persistent-lag'?2:1);
+   assert.equal(deploymentState(f.latest)?.cutover.phase,ownerDrift?undefined:'warming');
+   assert.equal(lagged,1,'never start another snapshot after the deadline or ownership loss');
   }
   t.diagnostic(JSON.stringify({provider:'controlled loopback HTTP',scenario,posts,reads,lagged,mutationReplay:false}));
  });

@@ -14,6 +14,7 @@ export type { ModelAvailability } from "./model-availability.ts";
 export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./model-request-parameters.ts";
 export { isPublishedMusicInputSupport } from "./native-capabilities.ts";
 export type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "./native-capabilities.ts";
+export type { ProviderSnapshot, CompiledProvider, CompiledModel } from "./snapshot.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 

@@ -116,9 +116,11 @@ admission rules before rendering or serving resources.
 
 ## Compiled provider contract
 
-[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) owns the existing
-v1 snapshot declarations, and re-exports portable model, endpoint, auth,
-and quota declarations. Build tools and future package compilers can import these
+`@clawrouter/provider-plugin-contract` owns the existing v1 `ProviderSnapshot`,
+`CompiledProvider`, and `CompiledModel` declarations. They compose the portable
+model, product, endpoint, auth, and quota declarations.
+[`shared/provider-snapshot.ts`](../shared/provider-snapshot.ts) preserves existing
+imports through type-only compatibility exports. Build tools and package compilers can import these
 types without importing Worker bindings, credential records, or adapter
 implementations. Existing imports from
 `worker/types.ts` and `worker/managed-lifecycle-types.ts` remain supported through
