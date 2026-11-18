@@ -95,7 +95,10 @@ export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:n
    }
   }
   await forwarding();
-  const response=await fetch(r,{redirect:'error'});
+  // Workers supports only follow/manual. Reject redirects without forwarding
+  // the callback credential or body to a Location target.
+  const response=await fetch(r,{redirect:'manual'});
+  if(response.status>=300&&response.status<400){await response.body?.cancel();throw Error('rehearsal_redirect_refused');}
   if(event)await journalCall(this.env,'callback',{...event,status:response.status});
   return response;
   });
