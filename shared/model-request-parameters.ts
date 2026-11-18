@@ -1,15 +1,5 @@
-export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-export type ParameterSupport = "supported" | "unsupported" | "requires_reasoning_none";
-
-export interface ModelRequestParameters {
-  sources: string[];
-  checkedAt: string;
-  defaultReasoningEffort?: ProviderReasoningEffort;
-  temperature?: ParameterSupport;
-  topP?: ParameterSupport;
-  logprobs?: ParameterSupport;
-  toolCalling?: ParameterSupport;
-}
+import type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "../packages/provider-plugin-contract/src/model-request-parameters.ts";
+export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "../packages/provider-plugin-contract/src/model-request-parameters.ts";
 
 interface ParameterModel {
   supportedReasoningEfforts?: ProviderReasoningEffort[];

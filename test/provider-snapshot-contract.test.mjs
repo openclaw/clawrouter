@@ -25,7 +25,7 @@ test("compiled provider declarations build and typecheck without client or Worke
   const options = { target: "ES2022", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2022"],
     types: [], strict: true, allowImportingTsExtensions: true };
   compile(root, "build", { ...options, declaration: true, emitDeclarationOnly: true, rootDir: repo, outDir: output },
-    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts")]);
+    [join(repo, "shared/provider-snapshot.ts"), join(repo, "shared/request-pricing.ts"), join(repo, "shared/provider-observations.ts"), join(repo, "shared/model-availability.ts"), join(repo, "shared/model-request-parameters.ts"), join(repo, "shared/native-capabilities.ts")]);
   const files = readdirSync(output, { recursive: true }).map(file => file.replaceAll("\\", "/"));
   assert.ok(files.includes("shared/provider-snapshot.d.ts"));
   assert.ok(files.includes("shared/provider-model.d.ts"));
@@ -57,6 +57,17 @@ import type { GrantAccount as PortableAccount, GrantExtraUsage as PortableExtraU
 declare const portableQuota: [GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, PortableQuotaProbe, CompiledQuotaConfig, PortableAccount, PortableExtraUsage];
 const legacyQuota: [LegacyGrantQuotaKind, LegacyCompiledQuotaWindow, LegacyCompiledQuotaProbeWindow, LegacyCompiledQuotaProbe, LegacyCompiledQuotaConfig, GrantAccount, GrantExtraUsage] = portableQuota;
 const roundTripQuota: typeof portableQuota = legacyQuota;
+import type { ProviderModelDefinition as LegacyProviderModelDefinition } from "./declarations/shared/provider-model.js";
+import type { ProviderModelDefinition } from "./declarations/packages/provider-plugin-contract/src/models.js";
+import type { ModelAvailability as LegacyModelAvailability } from "./declarations/shared/model-availability.js";
+import type { ModelAvailability } from "./declarations/packages/provider-plugin-contract/src/model-availability.js";
+import type { ProviderReasoningEffort as LegacyProviderReasoningEffort, ParameterSupport as LegacyParameterSupport, ModelRequestParameters as LegacyModelRequestParameters } from "./declarations/shared/model-request-parameters.js";
+import type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./declarations/packages/provider-plugin-contract/src/model-request-parameters.js";
+import type { OpenAiDecisionCapabilities as LegacyOpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities as LegacyBasetenSystemOneDecisionCapabilities, SageDecisionCapabilities as LegacySageDecisionCapabilities, NativeDecisionCapabilities as LegacyNativeDecisionCapabilities, OpaquePcmSpeechProfile as LegacyOpaquePcmSpeechProfile, InlineMusicReferenceImage as LegacyInlineMusicReferenceImage, PublishedMusicInputSupport as LegacyPublishedMusicInputSupport, NativeEndpointCapabilities as LegacyNativeEndpointCapabilities, NativeModelCapabilities as LegacyNativeModelCapabilities } from "./declarations/shared/native-capabilities.js";
+import type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "./declarations/packages/provider-plugin-contract/src/native-capabilities.js";
+declare const portableModels: [ProviderModelDefinition, ModelAvailability, ProviderReasoningEffort, ParameterSupport, ModelRequestParameters, OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities];
+const legacyModels: [LegacyProviderModelDefinition, LegacyModelAvailability, LegacyProviderReasoningEffort, LegacyParameterSupport, LegacyModelRequestParameters, LegacyOpenAiDecisionCapabilities, LegacyBasetenSystemOneDecisionCapabilities, LegacySageDecisionCapabilities, LegacyNativeDecisionCapabilities, LegacyOpaquePcmSpeechProfile, LegacyInlineMusicReferenceImage, LegacyPublishedMusicInputSupport, LegacyNativeEndpointCapabilities, LegacyNativeModelCapabilities] = portableModels;
+const roundTripModels: typeof portableModels = legacyModels;
 declare const portableAuth: [AuthScheme, AuthorizationConfig, RefreshConfig, GrantTransportAuth, CompiledGrantTransport];
 const legacyAuth: [LegacyAuth, LegacyAuthorization, LegacyRefresh, LegacyTransportAuth, LegacyTransport] = portableAuth;
 const roundTripAuth: typeof portableAuth = legacyAuth;
@@ -71,7 +82,7 @@ const provider: CompiledProvider = snapshot.providers[0];
 const facts: NonNullable<CompiledQuotaProbe["facts"]> = { account: { email: "/email" }, extraUsage: { currency: "/currency" } };
 const account: GrantAccount = { displayName: "Synthetic account", extraUsageEnabled: false };
 const usage: GrantExtraUsage = { usedCredits: 0, spendLimitReached: false };
-export { roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
+export { roundTripModels, roundTripQuota, roundTripEndpoints, roundTripPricing, provider, facts, account, usage, roundTripAuth, roundTripProduct, roundTripKind };
 `);
   compile(root, "consumer", { ...options, noEmit: true }, [consumer]);
 });

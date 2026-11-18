@@ -21,6 +21,8 @@
 
 - Run the Qwen contract in an isolated Vitest module context and prioritize its unchanged consumer matrix row as a controlled diagnostic trial. Preserve the pinned SDK, public stream entrypoint and all ownership, cancellation and accounting assertions; isolation is not evidence of a provider fix.
 
+- Export compiled model, availability, request-parameter, and native capability contracts from the provider plugin package while preserving shared imports and support validation. Include pinned contract sources when reproducing native recovery artifacts.
+
 - Export quota recipes and provider-reported account metadata types from the provider plugin contract while preserving existing shared imports.
 
 - Export compiled endpoint and lifecycle declaration types from the provider plugin contract while preserving existing shared imports.

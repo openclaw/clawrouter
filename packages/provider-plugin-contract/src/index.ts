@@ -9,6 +9,11 @@ export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPrice
 export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./endpoints.ts";
 export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "./quota.ts";
 export type { GrantAccount, GrantExtraUsage } from "./observations.ts";
+export type { ProviderModelDefinition } from "./models.ts";
+export type { ModelAvailability } from "./model-availability.ts";
+export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./model-request-parameters.ts";
+export { isPublishedMusicInputSupport } from "./native-capabilities.ts";
+export type { OpenAiDecisionCapabilities, BasetenSystemOneDecisionCapabilities, SageDecisionCapabilities, NativeDecisionCapabilities, OpaquePcmSpeechProfile, InlineMusicReferenceImage, PublishedMusicInputSupport, NativeEndpointCapabilities, NativeModelCapabilities } from "./native-capabilities.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 

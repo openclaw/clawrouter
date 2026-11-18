@@ -69,9 +69,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "907c9928711d6ce688d831db2d4d8b69dfe3e857",
-    "sha256": "716d6860b19c0d0363f20910510a44b83f9f5f90413b4123429cceaa11b481e9",
-    "bytes": 3140
+    "blob": "c1d5793820500663a805cecc6daad37864e4f6d1",
+    "sha256": "f059ca92a016946e043d5ff6192f2b2a218c7698d1636984b4021f417c93834d",
+    "bytes": 3617
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
@@ -99,9 +99,33 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "15ecd151c99b23889a003b54d43d033175644d35",
-    "sha256": "1374d449fec3a532f94b41a65e017ac907c2bd61238fe8a578158407236dba04",
-    "bytes": 6397
+    "blob": "2a9d3949994c58cf4768b25326c603959c01acaf",
+    "sha256": "a50f75af0f187afd9769233ece6a92760d313b6c6d37155e01fd14d0069464c5",
+    "bytes": 7016
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-availability.ts",
+    "blob": "5525659c1be1c6506bcdc84db80b801ff2f9e0a0",
+    "sha256": "5525e683152c9c40859055ec1b424f31e88987084b9ca600888b3302b93be9cf",
+    "bytes": 309
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-request-parameters.ts",
+    "blob": "352762ccb542da4493336d6a937105eb04305acc",
+    "sha256": "44ce4b2380156ced3ef3ff5d50e469b12c7454c2e64269067e4dec8cae76103a",
+    "bytes": 457
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/models.ts",
+    "blob": "b97d9b44d929281b4fed23290de1460cb5a46efa",
+    "sha256": "03df7f231c46345e2121d66e71dafdc38d92d8156911232f6854b5bc42ee0c63",
+    "bytes": 850
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/native-capabilities.ts",
+    "blob": "ea796c0011ad29f5b86f687727b8351829094ab2",
+    "sha256": "537886d04e5a1cc79bd733fbc13fb1017fe9158430ad2a61e0c93c211e6b6027",
+    "bytes": 5169
   },
   {
     "path": "packages/provider-plugin-contract/src/observations.ts",
