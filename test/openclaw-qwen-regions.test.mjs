@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "cbc5cf5e8b73ad8395ded5138affe4f60136530f0a89a9c655ef4e37fc2e1be0";
+const qwenRunnerFixtureSha256 = "1fdbdb298e31847302782b7a008c621f7bcd3b1c12c553a5495a666a325c7645";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -3274,11 +3274,11 @@ test("Qwen accepted cancellation cannot erase unrelated original or observer fai
   assert.equal(f.owner.rejectionRecord().originals.length, 4); assert.equal(f.ledger.operations.filter(row=>row.state === "rejected").length, 4); f.close();
 });
 
-async function qwenSdkSignalFixture(mode = "owned") {
+async function qwenSdkSignalFixture(mode = "owned", admit = false, mutate) {
   class ControlledAPIError extends Error {
     constructor() { super("synthetic provider error"); this.status = undefined; this.code = "synthetic_error"; this.error = { code: "synthetic_error", message: "synthetic provider error" }; }
   }
-  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), caller = {}, callerAbort = new AbortController(), sdkAbort = new AbortController();
+  const ledger = createQwenLedger(undefined, operation => admit && owner.providerErrorOriginal(operation)), storage = new AsyncLocalStorage(), caller = {}, callerAbort = new AbortController(), sdkAbort = new AbortController();
   const expected = { url: "https://qwen.fixture/chat/completions", credential: "fixture" }, owner = createQwenOwnership(storage, ledger, expected);
   owner.installSdkErrors(ControlledAPIError.prototype);
   const closed = qwenDeferred(), read = qwenDeferred(), cancel = qwenDeferred(), reason = {}, output = { stopReason: "error", errorMessage: "synthetic provider error" };
@@ -3310,8 +3310,12 @@ async function qwenSdkSignalFixture(mode = "owned") {
     originalResult = result; return output;
   }, undefined, [{}, {}, { signal: callerAbort.signal }], caller);
   owner.observeCallerResult(mode === "foreign_output" ? {} : returned, caller); owner.closePublic();
-  await assert.rejects(ledger.drain());
-  return { owner, ledger, getterCalls, originalError, originalResult, output, rows: owner.sdkSignalRecord(), close() { ledger.restore(); owner.restore(); } };
+  mutate?.({ owner, ledger, output, originalResult, originalError, reason, reader, response, sdkAbort, callerAbort });
+  let failure;
+  try { await ledger.drain(); } catch (error) { failure = { error }; }
+  if (!admit) assert.ok(failure);
+  return { owner, ledger, getterCalls, originalError, originalResult, output, failure, rows: owner.sdkSignalRecord(),
+    admit() { admit = true; }, close() { ledger.restore(); owner.restore(); } };
 }
 for (const mode of ["owned", "accessor", "input_proxy", "signal_proxy", "unbranded", "changed_input", "wrong_message", "wrong_code", "foreign_error", "error_accessor", "different_reason", "foreign_caller", "foreign_output", "absent_context", "duplicate"]) test(`Qwen SDK signal witness keeps ${mode} qualified or unknown`, async () => {
   const f = await qwenSdkSignalFixture(mode), row = f.rows[0];
@@ -3365,4 +3369,81 @@ test("Qwen v4 SDK signal tuple preserves old grammars and existing bounds", asyn
   const maxSdk=maxRejections.originals.map(row=>[row[0],1,1,1,2,1,2]);
   assert.ok(Buffer.byteLength(qwenBoundaryAnnotation({...record,rejections:maxRejections,sdk:qwenSdkSignalRecord(maxSdk,maxRejections)}))<=768);
   const {sdk:omitted,...v3}=record;v3.v=3;assert.doesNotThrow(()=>createQwenFailureRelay().record(v3));assert.throws(()=>createQwenFailureRelay().record({...record,sdk:[]}));f.close();
+});
+
+test("Qwen controlled provider error admits only its complete owned SDK-abort group", async () => {
+  const f = await qwenSdkSignalFixture("owned", true);
+  assert.equal(f.failure, undefined); assert.equal(f.ledger.providerCancelledCount(), 3); assert.equal(f.ledger.cancelledCount(), 0);
+  const rejected = f.ledger.operations.filter(row => row.state === "rejected");
+  assert.deepEqual(rejected.map(row => row.kind), ["closed", "read", "cancel"]);
+  assert.equal(new Set(rejected.map(row => row.reason)).size, 1);
+  assert.notEqual(rejected[0].reason, f.originalError);
+  f.owner.verify(1); f.close(); await f.ledger.drain(); f.ledger.seal();
+  assert.equal(f.ledger.providerCancelledCount(), 3);
+});
+for (const mode of ["accessor", "input_proxy", "signal_proxy", "unbranded", "changed_input", "wrong_message", "wrong_code", "foreign_error", "error_accessor", "different_reason", "foreign_caller", "foreign_output", "absent_context", "duplicate"])
+  test(`Qwen provider disposition rejects ${mode} evidence`, async () => {
+    const f = await qwenSdkSignalFixture(mode, true);
+    assert.ok(f.failure); assert.equal(f.ledger.providerCancelledCount(), 0);
+    assert.equal(f.getterCalls, 0); assert.ok(f.ledger.operations.filter(row => row.state === "rejected").length >= 3); f.close();
+  });
+for (const [name, mutate] of [
+  ["wrong outcome", ({ output }) => { output.stopReason = "stop"; }],
+  ["wrong output error", ({ output }) => { output.errorMessage = "another error"; }],
+  ["foreign reader", ({ ledger }) => { ledger.readers[0].owner = {}; }],
+  ["foreign generation", ({ ledger }) => { ledger.readers[0].generation = {}; }],
+  ["foreign response", ({ ledger }) => { ledger.readers[0].response = {}; }],
+  ["missing release", ({ ledger }) => { ledger.operations.find(row => row.kind === "release").binding = {}; }],
+  ["foreign original", ({ ledger }) => { ledger.operations.find(row => row.kind === "read").binding = {}; }],
+  ["foreign original reason", ({ ledger }) => { ledger.operations.find(row => row.kind === "read").reason = {}; }],
+  ["undefined original reason", ({ ledger }) => { ledger.operations.find(row => row.kind === "read").reason = undefined; }],
+  ["missing original", ({ ledger }) => { ledger.operations.find(row => row.kind === "cancel").kind = "body_cancel"; }],
+  ["wrong receiver", ({ ledger }) => { const row = ledger.operations.find(row => row.kind === "read"); row.binding = { ...row.binding, receiver: {} }; }],
+  ["unlock missing", ({ ledger }) => { ledger.readers[0].unlocks = 0; }],
+  ["unlock duplicated", ({ ledger }) => { ledger.readers[0].unlocks = 2; }],
+  ["release did not return", ({ ledger }) => { ledger.readers[0].returns = 0; }],
+]) test(`Qwen provider disposition keeps ${name} fatal`, async () => {
+  const f = await qwenSdkSignalFixture("owned", true, mutate);
+  assert.ok(f.failure); assert.equal(f.ledger.providerCancelledCount(), 0); f.close();
+});
+for (const [name, mutate] of [
+  ["synchronous", ({ ledger }, reason) => ledger.invoke("release", () => { throw reason; }, undefined, [])],
+  ["ownership", ({ ledger }, reason) => ledger.fail(reason)],
+  ["recording", ({ ledger }, reason) => ledger.recordingFailure(reason)],
+  ["unrelated original", ({ ledger }, reason) => ledger.observe("caller", Promise.reject(reason))],
+  ["release rejection", ({ ledger, originalResult }, reason) => ledger.invoke("release", () => Promise.reject(reason), undefined, [], originalResult)],
+  ["observer", ({ ledger }, reason) => ledger.follow("observer", Promise.resolve(), [() => { throw reason; }])],
+]) for (const reason of [undefined, false, {}]) test(`Qwen provider disposition preserves independent ${name} identity`, async () => {
+  const f = await qwenSdkSignalFixture("owned", true, args => { try { mutate(args, reason); } catch (error) { assert.equal(error, reason); } });
+  assert.ok(f.failure); assert.ok(f.failure.error.errors.some(error => Object.is(error, reason))); f.close();
+});
+test("Qwen provider disposition still joins a held independent original", async () => {
+  const f = await qwenSdkSignalFixture(), held = qwenDeferred(); f.admit();
+  f.ledger.observe("caller", held.promise); let completed = false;
+  const joining = f.ledger.drain().finally(() => { completed = true; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(completed, false);
+  held.resolve(); await joining; assert.equal(f.ledger.providerCancelledCount(), 3); f.close();
+});
+test("Qwen provider disposition cannot hide restoration failure", async () => {
+  const f = await qwenSdkSignalFixture("owned", true);
+  f.ledger.readers[0].reader.read = () => Promise.resolve();
+  assert.throws(() => f.ledger.restore()); f.owner.restore();
+  await assert.rejects(f.ledger.drain(), error => error.errors.length > 0);
+});
+test("Qwen v3 completion retains controlled provider rejections without extending v1 or v2", async () => {
+  const f = await qwenSdkSignalFixture("owned", true), relay = createQwenFailureRelay(), emitted = [];
+  const witness = createQwenEntryWitness(value => { emitted.push(value); relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)); });
+  witness.moduleEvaluated(); for (const row of rows) witness.registered(row.id); witness.registrationComplete();
+  for (const row of rows) {
+    const entry = witness.enter(row.id), provider = row.mode === "provider_error";
+    entry.complete(provider ? { operations: f.ledger.operations.length, rejected: 3, pending: 0 } : { operations: 0, rejected: 0, pending: 0 }, 0, provider ? f.ledger.providerCancelledCount() : 0);
+  }
+  assert.deepEqual(witness.takeErrors(), []); assert.doesNotThrow(() => relay.output("passed"));
+  const accepted = emitted.filter(row => row.v === 3); assert.equal(accepted.length, 6);
+  for (const row of accepted) { assert.equal(row.providerCancelled, 3); assert.equal(row.rejected, 3); }
+  const valid = accepted[0];
+  for (const patch of [{v:1}, {v:2}, {providerCancelled:0}, {providerCancelled:2}, {providerCancelled:4}, {providerCancelled:3.5}, {rejected:0}, {pending:1}, {case:rows[0].id,index:0}, {state:"failed",failurePresent:true,reasonDefined:true,stage:"owned_drain"}, {cancelled:3}, {extra:true}]) assert.throws(() => qwenEntryRecord({...valid,...patch}));
+  const { providerCancelled, ...old } = valid; old.v = 1;
+  assert.throws(() => qwenEntryRecord(old)); assert.doesNotThrow(() => qwenEntryRecord({...old,rejected:0}));
+  f.close();
 });

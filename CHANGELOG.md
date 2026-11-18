@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Recognize only the Qwen fixture’s fully owned, settled SDK-abort reader group after the exact controlled provider error and returned result. Keep the API error distinct from the request-abort reason, retain original rejected states and counts, and preserve all independent release, observer and restoration failures.
+
 - Relate Qwen first-join rejections to the retained SDK request signal and the actual controlled APIError at the existing transport-failure boundary. Sample only captured native signal accessors and own data fields, keep unknown provenance explicit, and retain strict provider-error and independent retirement failures.
 
 - Recognize the Qwen fixture’s exact owned partial-abort reader disposition only after the asserted aborted outcome and successful resource retirement. Preserve the fresh caller-reason identity, original promises and errors, foreign-owner negatives, and independent cancellation, release and cleanup failures; provider-error handling remains separate.

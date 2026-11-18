@@ -54,13 +54,13 @@ function qwenRegionCases(): Row[] {
   });
 }
 
-function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cancellation) => boolean) {
+function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cancellation) => boolean, providerCancelled?: (operation: Operation) => boolean) {
   const generation = Object.freeze({});
   const operations: Operation[] = [], observers: Array<{ pending: Promise<unknown>; terminal?: Promise<unknown>; state: string; reason?: unknown }> = [];
   const synchronous: unknown[] = [], registration: unknown[] = [], observerFailures: unknown[] = [], ownershipFailures: unknown[] = [], restorationFailures: unknown[] = [], lateFailures: unknown[] = [];
   const recordingFailures: unknown[] = [];
   let firstObserverFailure: any, firstJoinFailure: readonly number[] | undefined;
-  let cancelledOriginals = 0;
+  let cancelledOriginals = 0, providerCancelledOriginals = 0;
   let order = 0, cancellation: Cancellation | undefined;
   let firstJoinOriginals: Array<Operation & { ordinal: number }> | undefined, firstJoinCancellation: typeof cancellation;
   const restorers: Array<() => void> = [];
@@ -161,13 +161,14 @@ function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cance
     } while (originalCursor < operations.length || observerCursor < observers.length);
     const counts = [synchronous.length, registration.length, observerFailures.length, ownershipFailures.length,
       restorationFailures.length, lateFailures.length, recordingFailures.length, 0, 0, 0];
-    cancelledOriginals = 0;
+    cancelledOriginals = 0; providerCancelledOriginals = 0;
     const dispositionFaults: unknown[] = [];
     const failedOriginals = operations.filter(operation => {
       if (operation.state === "fulfilled") return false;
       counts[7]++;
       try {
         if (operation.state === "rejected" && cancellation && cancelled?.(operation, cancellation) === true) { cancelledOriginals++; return false; }
+        if (operation.state === "rejected" && providerCancelled?.(operation) === true) { providerCancelledOriginals++; return false; }
       } catch (error) { recordingFailures.push(error); dispositionFaults.push(error); }
       return true;
     });
@@ -263,7 +264,7 @@ function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cance
       : qwenObserverRecord({ ...checked, v: 9, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
-    captureObserverFailure, observerRecord, cancelledCount: () => cancelledOriginals, joinRecord: () => firstJoinFailure ?? null,
+    captureObserverFailure, observerRecord, cancelledCount: () => cancelledOriginals, providerCancelledCount: () => providerCancelledOriginals, joinRecord: () => firstJoinFailure ?? null,
     joinOriginals: () => firstJoinOriginals && { originals: firstJoinOriginals, cancellation: firstJoinCancellation },
     cancellationArgument<T>(caller: object | undefined, reason: T): T {
       // Only the fixed partial-abort expression supplies this reason, freshly
@@ -443,6 +444,19 @@ function createQwenSdkErrorWitness(ledger: ReturnType<typeof createQwenLedger>, 
         observed.matched = true;
       }
     }); },
+    cancelled(operation: Operation, acquisition: Acquisition) {
+      const observed = errors.get(acquisition.invocation), sample = observed?.samples.get(acquisition);
+      const callerSignal = own(acquisition.invocation.args[2], "signal");
+      // The controlled parser error and the SDK request abort are separate
+      // identities. Neither a message nor an arbitrary aborted signal suffices.
+      return !!observed && !observed.ambiguous && observed.controlled && observed.matched
+        && sample?.state === 2 && !!sample.reason && typeof sample.reason === "object"
+        && !Object.is(observed.error, sample.reason) && !!callerSignal
+        && inputs.get(acquisition) !== callerSignal.value
+        && operation.state === "rejected" && Object.is(operation.reason, sample.reason)
+        && own(observed.output, "stopReason")?.value === "error"
+        && own(observed.output, "errorMessage")?.value === "synthetic provider error";
+    },
     row(operation: Operation & { ordinal: number }, acquisition: Acquisition | undefined) {
       const observed = acquisition && errors.get(acquisition.invocation);
       if (!observed || observed.ambiguous) return [operation.ordinal, 0, 0, 0, 0, 0, 0];
@@ -623,6 +637,24 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
         const acquisition = relation?.[5] && ledger.readers.includes(reader) ? (reader.owner as FetchReceipt).acquisition : undefined;
         return acquisition && sdkErrors ? sdkErrors.row(operation, acquisition) : [operation.ordinal, 0, 0, 0, 0, 0, 0];
       }), rejections);
+    },
+    providerErrorOriginal(operation: Operation) {
+      if (!sdkErrors || operation.state !== "rejected" || !["closed", "read", "cancel"].includes(operation.kind)
+        || invocations.size !== 1 || acquisitions.size !== 1 || fetches.size !== 1) return false;
+      const binding = operation.binding as any, reader = operation.kind === "closed" ? binding : binding?.resource;
+      if (!ledger.readers.includes(reader) || ledger.readers.length !== 1 || reader.generation !== ledger.generation
+        || reader.unlocks !== 1 || reader.returns !== 1) return false;
+      const receipt = reader.owner as FetchReceipt, acquisition = receipt?.acquisition;
+      if (!receipt || !fetches.has(receipt) || receipt.generation !== ledger.generation || reader.response !== receipt.response
+        || responses.get(reader.response) !== receipt || !acquisition || !acquisitions.has(acquisition)
+        || acquisition.transport !== receipt || !acquisition.result || !invocations.has(acquisition.invocation)
+        || acquisition.invocation.generation !== ledger.generation) return false;
+      const release = ledger.operations.filter(row => row.kind === "release" && (row.binding as any)?.resource === acquisition.result);
+      if (release.length !== 1 || release[0].state !== "fulfilled") return false;
+      const group = ledger.operations.filter(row => row.state !== "fulfilled" && (row.kind === "closed" ? row.binding === reader : (row.binding as any)?.resource === reader));
+      return group.length === 3 && ["closed", "read", "cancel"].every(kind => group.filter(row => row.kind === kind).length === 1)
+        && group.every(row => row.generation === ledger.generation && sdkErrors!.cancelled(row, acquisition)
+          && (row.kind === "closed" ? row.pending === reader.closed : (row.binding as any).receiver === reader.reader));
     },
     cancelledOriginal(operation: Operation, cancellation: Cancellation) {
       // This disposition is enabled only after the actual partial caller outcome
@@ -974,7 +1006,8 @@ function qwenEntryRecord(input: unknown): Record<string, any> {
   else if (value.kind !== "module_evaluated") invalid();
   if (value.kind === "case_complete") keys.push("stage", "state", "failurePresent", "reasonDefined", "operations", "rejected", "pending");
   if (value.v === 2 && value.kind === "case_complete") keys.push("cancelled");
-  if (Object.keys(value).sort().join(",") !== keys.sort().join(",") || ![1, 2].includes(value.v) || value.v === 2 && value.kind !== "case_complete"
+  if (value.v === 3 && value.kind === "case_complete") keys.push("providerCancelled");
+  if (Object.keys(value).sort().join(",") !== keys.sort().join(",") || ![1, 2, 3].includes(value.v) || value.v !== 1 && value.kind !== "case_complete"
     || value.pin !== "d8bb939408aa4d2be7df0161748edb52ebf3b1fb") invalid();
   const rows = qwenRegionCases();
   if (value.kind === "registration") {
@@ -1002,6 +1035,9 @@ function qwenEntryRecord(input: unknown): Record<string, any> {
       // turn rejected promises into fulfilled promises or establish ownership.
       if (rows[value.index].mode !== "partial" || value.state !== "passed" || value.pending !== 0
         || !Number.isSafeInteger(value.cancelled) || value.cancelled <= 0 || value.cancelled !== value.rejected) invalid();
+    } else if (value.v === 3) {
+      if (rows[value.index].mode !== "provider_error" || value.state !== "passed" || value.pending !== 0
+        || value.providerCancelled !== 3 || value.rejected !== value.providerCancelled) invalid();
     } else if (value.state === "passed" && (value.rejected !== 0 || value.pending !== 0)) invalid();
   }
   return value;
@@ -1039,10 +1075,11 @@ function createQwenEntryWitness(emit: (value: Record<string, any>) => void) {
           void original.then(() => {}, reason => { first ??= { stage: operationStage, reason }; });
           return original;
         },
-        complete(counts: { operations: number; rejected: number; pending: number }, cancelled = 0) {
+        complete(counts: { operations: number; rejected: number; pending: number }, cancelled = 0, providerCancelled = 0) {
           send({ kind: "case_complete", case: id, index, stage: first?.stage ?? "completed",
             state: first ? "failed" : "passed", failurePresent: !!first, reasonDefined: !!first && first.reason !== undefined, ...counts,
-            ...(!first && cancelled ? { v: 2, cancelled } : {}) });
+            ...(!first && cancelled ? { v: 2, cancelled } : {}),
+            ...(!first && providerCancelled ? { v: 3, providerCancelled } : {}) });
         },
       };
     },
@@ -1058,8 +1095,9 @@ try {
 for (const row of qwenRegionCases()) {
 it(`${row.id}: registered Qwen ${row.mode}`, async () => {
   const witness = entryWitness.enter(row.id);
-  let partialCancellation = false, ownership: ReturnType<typeof createQwenOwnership>;
-  const ledger = createQwenLedger((operation, cancellation) => partialCancellation && ownership.cancelledOriginal(operation, cancellation)), failures: unknown[] = [];
+  let partialCancellation = false, providerCancellation = false, ownership: ReturnType<typeof createQwenOwnership>;
+  const ledger = createQwenLedger((operation, cancellation) => partialCancellation && ownership.cancelledOriginal(operation, cancellation),
+    operation => providerCancellation && ownership.providerErrorOriginal(operation)), failures: unknown[] = [];
   let partial = false, phase = "setup", failedPhase = "setup", callerToken: object | undefined;
   const controller = new AbortController();
   const key = `clawrouter-live-${row.id}-${row.mode === "invalid_caller" ? "invalid" : "fixture-secret"}`;
@@ -1150,6 +1188,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     if (row.mode === "provider_error") {
       const field = Object.getOwnPropertyDescriptor(result, "errorMessage");
       expect(field && Object.hasOwn(field, "value") && field.value).toBe("synthetic provider error");
+      providerCancellation = true;
     }
     if (row.mode === "preabort") expect(result.content).toEqual([]);
   } catch (error) { witness.failed(error); failedPhase = phase; failures.push(error); }
@@ -1158,8 +1197,8 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     witness.at("owned_drain");
     await ledger.drain();
     // This asserts attachment to the actual runtime graph. Zero observations
-    // cannot qualify a successful stream. Only the owned partial-abort
-    // disposition above can classify its original reader rejections.
+    // cannot qualify a successful stream. Only the exact owned caller-abort or
+    // controlled provider-error disposition can classify reader rejections.
   } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
   try {
     witness.at("ownership_assertions");
@@ -1188,7 +1227,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     const observer = ledger.observerRecord(row.id);
     if (observer) console.log("QWEN_OBSERVER_V1 " + JSON.stringify(observer));
   } catch (error) { witness.failed(error); failures.push(error); }
-  witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }, ledger.cancelledCount());
+  witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }, ledger.cancelledCount(), ledger.providerCancelledCount());
   failures.push(...entryWitness.takeErrors());
   if (failures.length) throw new AggregateError(failures, "Qwen case and original retirement failed");
 }, 60_000);
