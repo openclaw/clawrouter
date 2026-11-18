@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Qualify a Qwen fixture's single owned read rejection only after caller-cancellation accounting, fulfilled original cancel and closed promises, joined release, and complete source retirement. Preserve the rejected reason and count, the existing strict three-rejection disposition, and every independent control, observer, source and accounting failure. This outcome check makes no claim about the native read error's cause.
+
 - Keep the Qwen synthetic upstream producer in its originating request context and use bounded native waits between SSE heartbeats so the cross-Worker pump can observe cancellation. Join the pending producer wait before recording cancel return; require no active work, exactly one returned cancellation and no expiry. Local source-retirement proof does not admit unrelated reader rejections or replace the full hosted SDK/Worker qualification.
 
 - Keep the Qwen partial-stream fixture's bounded producer alive independently of pull completion. Join its original settlement on cancellation or expiry, including cancellation before the first pull. Assess only the exact owned Worker reader rejection group and errors retained from its ledger drains after strict joins, source cancellation and caller-cancellation accounting; retain original rejected states and all independent retirement, control and accounting failures. Hosted cancellation behavior requires fresh qualification.
