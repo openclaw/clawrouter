@@ -14,6 +14,30 @@ import {nativeControlDigest} from './deploy-native-qualification.mjs';
 import {versionId} from './deploy-train-policy.mjs';
 const hash=x=>createHash('sha256').update(x).digest('hex'),id=()=>randomBytes(16).toString('hex');
 const caseText=(caseId,mode,direction)=>'NATIVE_REHEARSAL_CASE:'+caseId+':'+mode+':'+direction;
+const seedStages=new Set(['client_inputs','native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','client_close']);
+function seedFailure(error){
+ const status=error?.status;
+ if(Number.isInteger(status)&&status>=400&&status<=599)return {kind:'http',status};
+ if(error?.name==='AssertionError')return {kind:'assertion'};
+ if(['AbortError','TimeoutError'].includes(error?.name))return {kind:'timeout'};
+ if(['ENOENT','EEXIST','EACCES','ENOSPC','EIO'].includes(error?.code))return {kind:'filesystem',code:error.code};
+ return {kind:'unexpected'};
+}
+function seedDiagnostic(root){
+ const path=join(root,'seed-diagnostic.json'),next=path+'.next';
+ const receipt={schema:1,command:'seed',startedAt:Date.now(),stage:'client_inputs',outcome:'running'};
+ let created=false;
+ const persist=async()=>{
+  receipt.updatedAt=Date.now();const text=JSON.stringify(receipt,null,2)+'\n';
+  if(!created){await writeFile(path,text,{mode:0o600,flag:'wx'});created=true;}
+  else{await writeFile(next,text,{mode:0o600,flag:'wx'});await rename(next,path);}
+ };
+ return {
+  async stage(stage){assert(seedStages.has(stage));receipt.stage=stage;await persist();},
+  async complete(){receipt.outcome='completed';await persist();},
+  async failed(error){if(!created)return;receipt.outcome='failed';receipt.failure=seedFailure(error);await persist();},
+ };
+}
 export function workloadBody({caseId,mode,seed}){
  const text='NATIVE_REHEARSAL_SEED:'+seed+'\n'+caseText(caseId,mode==='overflow'?'max':mode,'baseline');
  let body=JSON.stringify({model:'openai/gpt-6-astra',stream:false,max_output_tokens:32,input:[{role:'user',content:[{type:'input_text',text},{type:'input_text',text:''}]}]});
@@ -22,10 +46,12 @@ export function workloadBody({caseId,mode,seed}){
 }
 export async function until(fn,ms=120000){const deadline=Date.now()+ms;do{const value=await fn();if(value)return value;await sleep(500);}while(Date.now()<deadline);throw Error('Rehearsal observation deadline; do not replay uncertain work');}
 export function projectPool(s){return {accepting:s.accepting,phase:s.phase,control:s.control&&{schema:s.control.schema,revision:s.control.revision,runtimeSha:s.control.runtimeSha,fingerprint:s.control.fingerprint},grants:s.pool.grants.map(g=>({idHash:hash(g.id),slot:g.slot,generation:g.generation,stage:g.stage})),slots:s.slots.map((m,slot)=>({slot,phase:m.phase,generation:m.generation,ids:m.ids.length})),inspection:s.inspection?.map(x=>({slot:x.slot,qualified:x.qualified,protocol:x.protocol,phase:x.phase,generation:x.generation,boot:x.boot,fingerprint:x.fingerprint,runtimeSha:x.runtimeSha}))};}
-export async function openSavedCodex({binary,home,key,threadId,env={}}){
+export async function openSavedCodex({binary,home,key,threadId,env={},onStage=async()=>{}}){
  const client=nativeCodexClient({signal:AbortSignal.timeout(20*60000)},binary,home,{PATH:process.env.PATH,HOME:home,CODEX_HOME:home,RUST_LOG:'off',CLAWROUTER_API_KEY:key,...env});
  try{
+  await onStage('codex_initialize');
   await client.rpc('initialize',{clientInfo:{name:'native_rehearsal',version:'1'},capabilities:{experimentalApi:true}});client.child.stdin.write('{"method":"initialized"}\n');
+  await onStage('codex_thread');
   const {thread}=await client.rpc(threadId?'thread/resume':'thread/start',threadId?{threadId,model:'gpt-6-astra',modelProvider:'rehearsal',cwd:home,approvalPolicy:'never',sandbox:'read-only'}:{model:'gpt-6-astra',modelProvider:'rehearsal',cwd:home,ephemeral:false,approvalPolicy:'never',sandbox:'read-only'});
   if(threadId)assert.equal(thread.id,threadId,'resumption must retain the saved thread');
   return {client,threadId:thread.id};
@@ -43,9 +69,20 @@ export async function runClient(command,preparation,directory,args=[],env=proces
  const root=resolve(directory);if(command==='setup')await mkdir(root,{mode:0o700});
  if(command==='inspect')return runClientOwned(command,preparation,root,args,env);
  const lock=join(root,'owner');await mkdir(lock,{mode:0o700});
- try{return await runClientOwned(command,preparation,root,args,env);}finally{await rm(lock,{recursive:true});}
+ const diagnostic=command==='seed'?seedDiagnostic(root):null;
+ const onStage=stage=>diagnostic?.stage(stage);
+ try{
+  await onStage('client_inputs');
+  const result=await runClientOwned(command,preparation,root,args,env,onStage);
+  await diagnostic?.complete();return result;
+ }catch(error){
+  // Keep only fixed stages and bounded values. Never persist native exception
+  // text, stderr, request/response bodies, prompts, credentials or RPC payloads.
+  try{await diagnostic?.failed(error);}catch{ /* Preserve the original failure if evidence storage also fails. */ }
+  throw error;
+ }finally{await rm(lock,{recursive:true});}
 }
-async function runClientOwned(command,preparation,directory,args,env){
+async function runClientOwned(command,preparation,directory,args,env,onStage=async()=>{}){
  const p=JSON.parse(await readFile(preparation,'utf8'));
  if(p.schema!==1||p.qualified!==false||p.controlSha256!==nativeControlDigest())throw Error('Preparation/control source mismatch');
  const target=isolatedNativeTarget({worker:p.worker,origin:p.origin,account:env.NATIVE_REHEARSAL_ACCOUNT_ID});
@@ -84,13 +121,20 @@ async function runClientOwned(command,preparation,directory,args,env){
  const turn=async(client,text)=>client.rpc('turn/start',{threadId:local.threadId,input:[{type:'text',text}],serviceTier:'default'});
  if(command==='seed'){
   const [version]=args;versionId(version);if(local.threadId)throw Error('Saved thread already exists');
+  await onStage('native_readiness');
   assert.ok(nativeWarm(await control.snapshot(version),p.blueRuntimeSha),'old native must be attested');
-  const {catalog,producer}=await readCodexCatalog({routerUrl:target.origin,providerId:'openai',codex:binary,headers:accessHeaders,env:{PATH:process.env.PATH,HOME:home,CODEX_HOME:home,CLAWROUTER_API_KEY:key}});
+  const {catalog,producer}=await readCodexCatalog({routerUrl:target.origin,providerId:'openai',codex:binary,headers:accessHeaders,env:{PATH:process.env.PATH,HOME:home,CODEX_HOME:home,CLAWROUTER_API_KEY:key},onStage});
+  await onStage('catalog_write');
   await writeFile(join(home,'models.json'),JSON.stringify(catalog),{mode:0o600,flag:'wx'});
   await writeFile(join(home,'config.toml'),['model = "gpt-6-astra"','model_provider = "rehearsal"','model_catalog_json = '+JSON.stringify(join(home,'models.json')),'web_search = "disabled"','approval_policy = "never"','sandbox_mode = "read-only"','cli_auth_credentials_store = "file"','[model_providers.rehearsal]','name = "Synthetic native rehearsal"','base_url = '+JSON.stringify(target.origin+'/v1/native/openai/v1'),'env_key = "CLAWROUTER_API_KEY"','wire_api = "responses"','requires_openai_auth = false','supports_websockets = false','request_max_retries = 0','stream_max_retries = 0','stream_idle_timeout_ms = 180000',...(env.CF_ACCESS_CLIENT_ID?['env_http_headers = { \"CF-Access-Client-Id\" = \"CF_ACCESS_CLIENT_ID\", \"CF-Access-Client-Secret\" = \"CF_ACCESS_CLIENT_SECRET\" }']:[])].join('\n')+'\n',{mode:0o600,flag:'wx'});
-  const opened=await openSavedCodex({binary,home,key,env:clientEnv});local.threadId=opened.threadId;local.producer=producer;local.pending={id:id(),mode:'seed'};await save();
-  try{const started=await turn(opened.client,'NATIVE_REHEARSAL_SEED:'+local.seed+'\n'+caseText(local.pending.id,'seed','baseline'));
+  await onStage('codex_start');
+  const opened=await openSavedCodex({binary,home,key,env:clientEnv,onStage});
+  try{
+   await onStage('session_save');local.threadId=opened.threadId;local.producer=producer;local.pending={id:id(),mode:'seed'};await save();
+   await onStage('turn_start');const started=await turn(opened.client,'NATIVE_REHEARSAL_SEED:'+local.seed+'\n'+caseText(local.pending.id,'seed','baseline'));
+   await onStage('turn_complete');
    evidence.steps.push({kind:'seed',threadId:local.threadId,producer,...await finishTurn(opened.client,started,hash(local.seed+':baseline:'+local.pending.id))});local.pending=null;await save();
+   await onStage('client_close');
   }finally{await opened.client.close();}return {seeded:true,threadId:local.threadId,qualified:false};
  }
  if(command==='followup'){
