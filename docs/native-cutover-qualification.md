@@ -91,8 +91,13 @@ authentication** (`preflight-native-auth.yml`) on exact reviewed main, supplying
 `expected_sha`, `worker` and `origin`. This separate five-minute workflow uses
 the actual `native-qualification` environment credentials. It reads the selected
 version, verifies isolated persistent owners and its configured admin hash, sends
-one version-checked admin snapshot GET, then confirms deployment stability.
-All Cloudflare requests are GETs; there is no activation, admission mutation,
+an anonymous HEAD expecting 401 followed by an authenticated HEAD expecting 404,
+then confirms deployment stability. Both responses must identify the selected
+version. The existing admin router authenticates before rejecting HEAD; HEAD
+never calls the pool. This deliberate authentication probe has no GET fallback,
+and a changed route/status contract blocks it. Owner checks admit disabled
+bootstrap versions without requiring native payload lineage; cutover readiness
+checks remain unchanged. Management requests are GETs; there is no activation, admission mutation,
 fixture initialization, inference, retry or recovery job. A previously closed
 isolated Worker can be used without reusing its terminal fixture. Only the safe
 `native-auth-<run>-<attempt>/native-auth.json` receipt is retained.
