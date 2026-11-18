@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { buildCodexCatalog } from "../shared/codex-catalog.ts";
 export { buildCodexCatalog } from "../shared/codex-catalog.ts";
 
-export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env, headers = {}, catalogMode = "local", webSearch = "disabled" }) {
+export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env, headers = {}, catalogMode = "local", webSearch = "disabled", onStage = async () => {} }) {
   if (!["local", "remote"].includes(catalogMode) || catalogMode === "remote" && providerId !== "openai") throw new Error("remote Codex metadata currently supports only the openai provider");
   let origin;
   try { origin = new URL(routerUrl); } catch { throw new Error("router URL is invalid"); }
@@ -16,11 +16,12 @@ export async function readCodexCatalog({ routerUrl, providerId, codex = "codex",
   const key = env.CLAWROUTER_API_KEY;
   if (!key?.trim()) throw new Error("CLAWROUTER_API_KEY is required");
   let routerBytes;
+  await onStage("catalog_request");
   try {
     const response = await fetch(new URL("/v1/catalog", origin), { headers: { ...headers, authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error(`authorized router catalog returned HTTP ${response.status}`);
+      throw Object.assign(new Error(`authorized router catalog returned HTTP ${response.status}`), { status: response.status });
     }
     const chunks = [];
     let size = 0;
@@ -35,6 +36,7 @@ export async function readCodexCatalog({ routerUrl, providerId, codex = "codex",
     throw new Error("authorized router catalog request failed");
   }
   let bundledBytes, version;
+  await onStage("catalog_native_export");
   try {
     const nativeEnv = { ...env, CLAWROUTER_API_KEY: undefined };
     const options = { encoding: "utf8", env: nativeEnv, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] };
@@ -50,6 +52,7 @@ export async function readCodexCatalog({ routerUrl, providerId, codex = "codex",
     if (webSearch !== "disabled") catalogUrl.searchParams.set("standalone_search", "true");
     const fetchUrl = new URL(catalogUrl);
     fetchUrl.searchParams.set("client_version", release.slice(1, 4).join("."));
+    await onStage("catalog_remote_request");
     try {
       const response = await fetch(fetchUrl, { headers: { ...headers, authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
       if (!response.ok) { void response.body?.cancel(); throw new Error("remote catalog rejected"); }
@@ -64,10 +67,12 @@ export async function readCodexCatalog({ routerUrl, providerId, codex = "codex",
     } catch { throw new Error("authorized remote Codex catalog request failed; no files changed"); }
   }
   let router, bundled;
+  await onStage("catalog_decode");
   try { router = JSON.parse(routerBytes); bundled = JSON.parse(bundledBytes); }
   catch { throw new Error("router catalog or native export is invalid JSON"); }
   // Remote descriptors already use inference slugs. An alias-only policy may
   // omit its source descriptor; do not try to apply codexModel a second time.
+  await onStage("catalog_projection");
   const projection = catalogMode === "remote" ? { ...router, providers: router.providers.map(provider => provider.id === providerId
     ? { ...provider, models: provider.models.map(model => ({ ...model, codexModel: model.upstream })) } : provider) } : router;
   const result = buildCodexCatalog(projection, bundled, providerId);
