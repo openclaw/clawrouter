@@ -7,6 +7,12 @@ import { verifyCutoverRecovery, nativeReceipt, assertNativeOwners } from './depl
 import { verifyObservability } from './deploy-train-observability.mjs';
 
 export const NATIVE_PHASE_TIMEOUT_MS = 10 * 60_000; // includes the existing 460s native drain
+export class NativeControlVersionMismatch extends Error {
+  constructor(expected, actual) {
+    super('Native control selected-version mismatch: expected ' + expected + ', observed ' + actual);
+    this.expected = expected; this.actual = actual;
+  }
+}
 function snapshotState(value) {
   if (value?.schema !== 2 || typeof value.accepting !== 'boolean' || !['serving','draining','closed'].includes(value.phase) ||
       !Array.isArray(value.slots) || value.slots.length !== 8 || value.slots.some(s => !Number.isSafeInteger(s.generation) || s.generation < 0 ||
@@ -48,8 +54,14 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
     try { response = await fetchImpl(selected.origin + '/v1/admin/large-http', {
       method, headers, redirect:'error', signal:AbortSignal.timeout(20_000), ...(body ? {body:JSON.stringify(body)} : {}),
     }); } catch { throw new Error('Native control request failed; delivery may be unknown'); }
-    if (!response.ok || version && response.headers.get('x-clawrouter-version-id') !== version) {
-      await response.body?.cancel(); throw new Error('Native control HTTP ' + response.status + ' or selected-version mismatch');
+    const actual = response.headers.get('x-clawrouter-version-id');
+    if (!response.ok || version && actual !== version) {
+      await response.body?.cancel();
+      // Only a successful GET with a well-formed version can be an observation
+      // of the previous deployment. Never classify a POST as safe to replay.
+      if (method === 'GET' && response.status === 200 && version && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(actual ?? ''))
+        throw new NativeControlVersionMismatch(version, actual);
+      throw new Error('Native control HTTP ' + response.status + (version && actual !== version ? '; selected-version mismatch (' + (actual === null ? 'missing' : 'invalid or unexpected') + ')' : ''));
     }
     return response.json();
   }
@@ -90,15 +102,28 @@ async function journal(api,state,version,phase,save,status='rolling',immediate=f
   Object.assign(state,next,{deploymentId:result.id});save(state);
 }
 async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
-  const deadline = now()+timeoutMs;
+  const deadline = now()+timeoutMs, observedVersions = new Set();
+  let lastVersion;
   for (;;) {
     const {latest} = await owned(api,state);
     if (stableVersion(latest) !== version || latest.id !== state.deploymentId) throw new Error('Native cutover deployment changed during convergence');
-    const s = await control.snapshot(version);
+    let s;
+    try { s = await control.snapshot(version); }
+    catch (error) {
+      if (!(error instanceof NativeControlVersionMismatch) || error.expected !== version ||
+          ![state.blue,state.green,state.cutover.recovery].includes(error.actual)) throw error;
+      // The owned deployment can be visible in the API before an edge selects
+      // it. Discard that response; recheck ownership on every read-only poll.
+      lastVersion = error.actual;
+      if (!observedVersions.has(lastVersion)) {
+        observedVersions.add(lastVersion);
+        console.log('Native control awaiting Worker ' + version + '; observed owned version ' + lastVersion);
+      }
+    }
     const runtimeSha = version === state.green ? state.native.runtimeSha : state.cutover.blueRuntimeSha;
-    if (kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha)) return;
-    if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect');
-    if (now()>=deadline) throw new Error('Native ' + kind + ' deadline exceeded; preserve the remote recovery journal');
+    if (s && (kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha))) return;
+    if (s?.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect');
+    if (now()>=deadline) throw new Error('Native ' + kind + ' deadline exceeded; preserve the remote recovery journal' + (lastVersion ? '; last mismatched Worker ' + lastVersion : ''));
     await wait(Math.min(2000,deadline-now()));
   }
 }
