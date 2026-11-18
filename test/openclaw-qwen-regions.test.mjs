@@ -47,7 +47,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "1ca10b2777a1eac9416d71b9c3677b9cba62d034f2c53cb132192fe5bb6ae468";
+const qwenRunnerFixtureSha256 = "98475146a622f2747e197cd42d7c5862f6ce036407690a374943b4e139a861b4";
 const qwenRunnerReporterSha256 = "1497a77b2d195ed7168b89ba25b1b589edad7a9f46e04a9c38f01bed1a0f0fd9";
 const qwenValueObserverSha256 = "57160367213719c4faebc32fafd0b3c44192819caf469b4d5332188fbc0c3d60";
 
@@ -3239,4 +3239,32 @@ for (const fault of [undefined, false, {}]) test("Qwen disposition failure prese
   const reason = {}, ledger = createQwenLedger(() => { throw fault; });
   ledger.observe("read", Promise.reject(reason)); ledger.cancellationArgument({}, {}); ledger.cancellationReturned();
   await assert.rejects(ledger.drain(), error => error.errors.length === 2 && error.errors[0] === reason && error.errors[1] === fault);
+});
+
+test("Qwen partial-abort completion preserves rejected counts through the actual witness and relay", async () => {
+  const f = await qwenRejectionFixture("owned", new Error("fixture cancellation"), true); await f.ledger.drain();
+  const relay = createQwenFailureRelay(), emitted = [];
+  const witness = createQwenEntryWitness(value => { emitted.push(value); relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value)); });
+  witness.moduleEvaluated(); for (const row of rows) witness.registered(row.id); witness.registrationComplete();
+  for (const row of rows) {
+    const entry = witness.enter(row.id), partial = row.mode === "partial";
+    const counts = partial ? { operations: f.ledger.operations.length, rejected: 3, pending: 0 } : { operations: 0, rejected: 0, pending: 0 };
+    entry.complete(counts, partial ? f.ledger.cancelledCount() : 0);
+  }
+  assert.deepEqual(witness.takeErrors(), []);
+  assert.equal(emitted.filter(row => row.v === 2).length, 6);
+  for (const row of emitted.filter(row => row.v === 2)) { assert.equal(row.cancelled, 3); assert.equal(row.rejected, 3); assert.equal(row.state, "passed"); }
+  assert.doesNotThrow(() => relay.output("passed"));
+  const valid = emitted.find(row => row.v === 2);
+  for (const change of [{v:1}, {cancelled:0}, {cancelled:2}, {cancelled:3.5}, {pending:1}, {kind:"case_enter"}, {state:"failed",failurePresent:true,reasonDefined:true,stage:"owned_drain"}, {case:rows[0].id,index:0}, {extra:true}]) assert.throws(() => qwenEntryRecord({...valid,...change}));
+  const { cancelled, ...old } = valid; old.v = 1; assert.throws(() => qwenEntryRecord(old));
+  assert.deepEqual(qwenEntryRecord({...old,rejected:0}), {...old,rejected:0});
+  f.close(); await f.ledger.drain(); f.ledger.seal();
+});
+test("Qwen accepted cancellation cannot erase unrelated original or observer failure diagnostics", async () => {
+  const f = await qwenRejectionFixture("owned", new Error("fixture cancellation"), true), unrelated = {};
+  f.ledger.observe("caller", Promise.reject(unrelated)); f.ledger.recordingFailure(undefined);
+  await assert.rejects(f.ledger.drain(), error => error.errors.includes(unrelated) && error.errors.includes(undefined));
+  assert.equal(f.ledger.cancelledCount(), 3); assert.equal(f.ledger.joinRecord()[7], 4);
+  assert.equal(f.owner.rejectionRecord().originals.length, 4); assert.equal(f.ledger.operations.filter(row=>row.state === "rejected").length, 4); f.close();
 });

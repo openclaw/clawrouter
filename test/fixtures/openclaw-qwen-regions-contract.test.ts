@@ -58,6 +58,7 @@ function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cance
   const synchronous: unknown[] = [], registration: unknown[] = [], observerFailures: unknown[] = [], ownershipFailures: unknown[] = [], restorationFailures: unknown[] = [], lateFailures: unknown[] = [];
   const recordingFailures: unknown[] = [];
   let firstObserverFailure: any, firstJoinFailure: readonly number[] | undefined;
+  let cancelledOriginals = 0;
   let order = 0, cancellation: Cancellation | undefined;
   let firstJoinOriginals: Array<Operation & { ordinal: number }> | undefined, firstJoinCancellation: typeof cancellation;
   const restorers: Array<() => void> = [];
@@ -158,12 +159,13 @@ function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cance
     } while (originalCursor < operations.length || observerCursor < observers.length);
     const counts = [synchronous.length, registration.length, observerFailures.length, ownershipFailures.length,
       restorationFailures.length, lateFailures.length, recordingFailures.length, 0, 0, 0];
+    cancelledOriginals = 0;
     const dispositionFaults: unknown[] = [];
     const failedOriginals = operations.filter(operation => {
       if (operation.state === "fulfilled") return false;
       counts[7]++;
       try {
-        if (operation.state === "rejected" && cancellation && cancelled?.(operation, cancellation) === true) return false;
+        if (operation.state === "rejected" && cancellation && cancelled?.(operation, cancellation) === true) { cancelledOriginals++; return false; }
       } catch (error) { recordingFailures.push(error); dispositionFaults.push(error); }
       return true;
     });
@@ -259,7 +261,7 @@ function createQwenLedger(cancelled?: (operation: Operation, cancellation: Cance
       : qwenObserverRecord({ ...checked, v: 9, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
-    captureObserverFailure, observerRecord, joinRecord: () => firstJoinFailure ?? null,
+    captureObserverFailure, observerRecord, cancelledCount: () => cancelledOriginals, joinRecord: () => firstJoinFailure ?? null,
     joinOriginals: () => firstJoinOriginals && { originals: firstJoinOriginals, cancellation: firstJoinCancellation },
     cancellationArgument<T>(caller: object | undefined, reason: T): T {
       // Only the fixed partial-abort expression supplies this reason, freshly
@@ -870,7 +872,8 @@ function qwenEntryRecord(input: unknown): Record<string, any> {
   else if (value.kind === "case_enter" || value.kind === "case_complete") keys.push("case", "index");
   else if (value.kind !== "module_evaluated") invalid();
   if (value.kind === "case_complete") keys.push("stage", "state", "failurePresent", "reasonDefined", "operations", "rejected", "pending");
-  if (Object.keys(value).sort().join(",") !== keys.sort().join(",") || value.v !== 1
+  if (value.v === 2 && value.kind === "case_complete") keys.push("cancelled");
+  if (Object.keys(value).sort().join(",") !== keys.sort().join(",") || ![1, 2].includes(value.v) || value.v === 2 && value.kind !== "case_complete"
     || value.pin !== "d8bb939408aa4d2be7df0161748edb52ebf3b1fb") invalid();
   const rows = qwenRegionCases();
   if (value.kind === "registration") {
@@ -893,7 +896,12 @@ function qwenEntryRecord(input: unknown): Record<string, any> {
       if (!Number.isSafeInteger(value[key]) || value[key] < 0 || value[key] > 65535) invalid();
     }
     if (value.rejected + value.pending > value.operations) invalid();
-    if (value.state === "passed" && (value.rejected !== 0 || value.pending !== 0)) invalid();
+    if (value.v === 2) {
+      // Counts remain original outcomes. This source-bound assessment does not
+      // turn rejected promises into fulfilled promises or establish ownership.
+      if (rows[value.index].mode !== "partial" || value.state !== "passed" || value.pending !== 0
+        || !Number.isSafeInteger(value.cancelled) || value.cancelled <= 0 || value.cancelled !== value.rejected) invalid();
+    } else if (value.state === "passed" && (value.rejected !== 0 || value.pending !== 0)) invalid();
   }
   return value;
 }
@@ -930,9 +938,10 @@ function createQwenEntryWitness(emit: (value: Record<string, any>) => void) {
           void original.then(() => {}, reason => { first ??= { stage: operationStage, reason }; });
           return original;
         },
-        complete(counts: { operations: number; rejected: number; pending: number }) {
+        complete(counts: { operations: number; rejected: number; pending: number }, cancelled = 0) {
           send({ kind: "case_complete", case: id, index, stage: first?.stage ?? "completed",
-            state: first ? "failed" : "passed", failurePresent: !!first, reasonDefined: !!first && first.reason !== undefined, ...counts });
+            state: first ? "failed" : "passed", failurePresent: !!first, reasonDefined: !!first && first.reason !== undefined, ...counts,
+            ...(!first && cancelled ? { v: 2, cancelled } : {}) });
         },
       };
     },
@@ -1067,7 +1076,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     const observer = ledger.observerRecord(row.id);
     if (observer) console.log("QWEN_OBSERVER_V1 " + JSON.stringify(observer));
   } catch (error) { witness.failed(error); failures.push(error); }
-  witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length });
+  witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length }, ledger.cancelledCount());
   failures.push(...entryWitness.takeErrors());
   if (failures.length) throw new AggregateError(failures, "Qwen case and original retirement failed");
 }, 60_000);
