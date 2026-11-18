@@ -153,11 +153,17 @@ export function createQwenValueSink(contract) {
         // 0=value, 1=poisoned, 2=owner unknown, 3=recording fault, 4=unbound,
         // 5/6=client/guard activation, 7=open evaluation, 8=no complete group,
         // 9=snapshot threw. Relay-only 10/11 mean missing/mismatched binding.
-        let reason = 9;
+        let reason = 9, valueSites = null;
         const values = safe(owner, () => {
           const row = owner.rows.get(invocation);
           reason = poisoned ? 1 : owner.unknown ? 2 : owner.errors.length ? 3 : !row ? 4
             : activations[0] !== 1 ? 5 : activations[1] !== 1 ? 6 : owner.stack.length ? 7 : 0;
+          if (diagnostic && (reason === 0 || reason === 7)) {
+            const [client, guard] = row.sites;
+            // Private retained state only: present, phase mask, closed per site.
+            valueSites = freeze([client ? 1 : 0, client?.bits ?? 0, client?.closed ? 1 : 0,
+              guard ? 1 : 0, guard?.bits ?? 0, guard?.closed ? 1 : 0]);
+          }
           if (reason) return null;
           const [client, guard] = row.sites;
           // Missing or partial groups are UNKNOWN (zero), never "call absent".
@@ -170,7 +176,8 @@ export function createQwenValueSink(contract) {
             c?.branch ?? 0, c?.kind ?? 0, g?.id ?? 0, g?.bits ?? 0, 3, 0]);
         }) ?? null;
         return diagnostic ? freeze({ values,
-          valueState: freeze([activations[0], activations[1], values === null && reason === 0 ? 9 : reason]) }) : values;
+          valueState: freeze([activations[0], activations[1], values === null && reason === 0 ? 9 : reason]),
+          valueSites: values === null && reason === 0 ? null : valueSites }) : values;
       },
       close() {
         safe(owner, () => {
@@ -207,7 +214,7 @@ export function qwenValueConfigText(plan) {
   return `import base from "../test/vitest/vitest.extension-providers.config.ts";
 import { createQwenValuePlugin } from "./callsite-observer.mjs";
 const plugin = createQwenValuePlugin(new URL("../", import.meta.url), new URL("./", import.meta.url), ${JSON.stringify(plan)});
-export default { ...base, test: { ...base.test, isolate: true, runner: undefined }, plugins: [...(base.plugins ?? []), plugin] };
+export default { ...base, plugins: [...(base.plugins ?? []), plugin] };
 `;
 }
 

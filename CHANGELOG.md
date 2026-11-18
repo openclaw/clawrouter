@@ -19,7 +19,7 @@
 
 ## Unreleased
 
-- Run the Qwen contract in an isolated Vitest module context and prioritize its unchanged consumer matrix row as a controlled diagnostic trial. Preserve the pinned SDK, public stream entrypoint and all ownership, cancellation and accounting assertions; isolation is not evidence of a provider fix.
+- Retain per-site entry, phase-mask and closed state in the existing bounded first-failure Qwen observation. Revert the isolated-runner trial after it reproduced the same missing-receipt failure; retain Qwen-first consumer scheduling. Preserve the SDK pin, original calls, ownership and retirement assertions; these observations do not establish a provider fix.
 
 - Export compiled model, availability, request-parameter, and native capability contracts from the provider plugin package while preserving shared imports and support validation. Include pinned contract sources when reproducing native recovery artifacts.
 

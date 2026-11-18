@@ -47,9 +47,9 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "d5ad167a1efaf63c253052df1add5a52583ca1b3b0c258c7c1c2d4c4ee341679";
+const qwenRunnerFixtureSha256 = "ac809a3ccdc492d8a89c183d8e9ce092b43cb567015440b987409400d6a39b7e";
 const qwenRunnerReporterSha256 = "351d2c199b6aa09124073b8c8b9e58d195abe1f462ac40e8a7b72c544476b40a";
-const qwenValueObserverSha256 = "9956892d934eaa548c714387d5205f29fee895e5e437913d78a92e30d25a8dd2";
+const qwenValueObserverSha256 = "ca93740ba5ffe0e079bea80d3b13c0a448ce681c845540ab944f52df1a22e7d4";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
 function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
@@ -195,7 +195,7 @@ function createQwenFailureRelay() {
     stage = "record_schema";
     assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
     const checked = qwenObserverRecord(value);
-    assert.ok(checked.v !== 5 || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
+    assert.ok(![5, 6].includes(checked.v) || checked.valueState[2] <= 9, "relay disposition cannot originate in worker");
     stage = "entry_required"; assert.ok(entered.has(checked.case), "observer lacks case entry");
     stage = "terminal_census";
     const original = sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined;
@@ -318,12 +318,12 @@ function createQwenFailureRelay() {
     // completion and helper/runner summaries. Absence conveys no local proof.
     if (firstFailed && observerFailures.has(firstFailed.case)) {
       const observer = JSON.parse(observerFailures.get(firstFailed.case));
-      if ((observer.v === 4 || observer.v === 5) && observer.values !== null) {
+      if ([4, 5, 6].includes(observer.v) && observer.values !== null) {
         const binding = runner?.find(record => record.kind === "runner_binding");
         // Missing/foreign actual reporter binding never admits a worker claim.
         if (!binding?.observed || binding.valueContract !== observer.values[1]) {
           observer.values = null;
-          if (observer.v === 5) observer.valueState[2] = binding?.observed ? 11 : 10;
+          if ([5, 6].includes(observer.v)) observer.valueState[2] = binding?.observed ? 11 : 10;
         }
       }
       essential.push(observer);
@@ -2130,7 +2130,7 @@ const qwenValueOriginals = [
 ].map(text => Buffer.from(text));
 const qwenValueHash = bytes => createHash("sha256").update(bytes).digest("hex");
 
-test("Qwen isolated config preserves provider setup, aliases, pool and reporter plugin", () => {
+test("Qwen config preserves provider isolation, setup, aliases, pool and reporter plugin", () => {
   const plugin = { name: "bound-value-observer" };
   const setupFiles = ["test/setup.extensions.ts", "test/setup-openclaw-runtime.ts"];
   const alias = { "@openclaw/ai": "/fixture/sdk/packages/ai/src/index.ts" };
@@ -2142,11 +2142,9 @@ test("Qwen isolated config preserves provider setup, aliases, pool and reporter 
   const expression = text.split("export default ")[1];
   assert.ok(expression, "actual emitted config export is present");
   const evaluate = new Function("base", "plugin", "return " + expression);
-  for (const input of [base, { ...base, plugins: undefined }]) {
+  for (const input of [base, { ...base, test: { ...base.test, isolate: true, runner: undefined }, plugins: undefined }]) {
     const actual = evaluate(input, plugin);
-    assert.equal(actual.test.isolate, true);
-    assert.equal(actual.test.runner, undefined, "D8 non-isolated runner must not survive isolation");
-    assert.deepEqual(actual.test, { ...input.test, isolate: true, runner: undefined });
+    assert.equal(actual.test, input.test, "inherit the pinned provider runner without an isolation override");
     assert.equal(actual.test.setupFiles, setupFiles);
     assert.equal(actual.resolve, base.resolve);
     assert.deepEqual(actual.plugins, [...(input.plugins ?? []), plugin]);
@@ -2170,7 +2168,7 @@ test("Qwen loader binds exact originals, overlay inputs, cache nonce and native 
   assert.notEqual(second.plan.contract, bundle.plan.contract); assert.notEqual(second.configSHA, bundle.configSHA);
   assert.notEqual(second.plan.virtualSHA, bundle.plan.virtualSHA);
   assert.ok(bundle.config.includes('import base from "../test/vitest/vitest.extension-providers.config.ts"'));
-  assert.ok(bundle.config.includes('export default { ...base, test: { ...base.test, isolate: true, runner: undefined }, plugins: [...(base.plugins ?? []), plugin] }'));
+  assert.ok(bundle.config.includes('export default { ...base, plugins: [...(base.plugins ?? []), plugin] }'));
   assert.equal(bundle.config, qwenValueConfigText(bundle.plan));
   const directory = "/fixture/sdk/.clawrouter-runner-report-control";
   const reporters = ["--reporter=default", "--reporter=" + directory + "/reporter.mjs", "--outputFile=" + directory + "/report.jsonl"];
@@ -2257,7 +2255,7 @@ test("Qwen private input custody and falsey read/close faults are independent", 
 test("Qwen value claims travel only with the original first failed observer and matching runner", async () => {
   const bundle = makeQwenValuePlan({ nonce: "a".repeat(64), helperSHA: qwenValueObserverSha256,
     fixtureSHA: qwenRunnerFixtureSha256, originals: qwenValueOriginals });
-  for (const version of [4, 5]) for (const match of [true, false, null]) {
+  for (const version of [4, 5, 6]) for (const match of [true, false, null]) {
     const h = entryHarness(); h.witness.moduleEvaluated(); h.register();
     if (match !== null) h.relay.runnerReport(qwenRunnerPacket("complete", records => {
       records[0].binding.callsite = { ...bundle.plan, configSHA: bundle.configSHA };
@@ -2269,12 +2267,14 @@ test("Qwen value claims travel only with the original first failed observer and 
       site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
       failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
       values: [1, match ? bundle.plan.contract : "b".repeat(64), 1, 1, 11, 1, 9, 2, 3, 3, 0],
-      ...(version === 5 ? { valueState: [1, 1, 0] } : {}) };
+      ...(version >= 5 ? { valueState: [1, 1, 0] } : {}),
+      ...(version === 6 ? { valueSites: [1, 11, 1, 1, 3, 1] } : {}) };
     h.relay.text("QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n"); witness.complete(counts);
     for (const row of rows.slice(1)) h.relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
     const packet = h.relay.output("failed"), projected = packet.find(row => row.kind === "observer_failure");
     assert.deepEqual(projected.values, match ? record.values : null);
-    if (version === 5) assert.deepEqual(projected.valueState, [1, 1, match ? 0 : match === null ? 10 : 11]);
+    if (version >= 5) assert.deepEqual(projected.valueState, [1, 1, match ? 0 : match === null ? 10 : 11]);
+    if (version === 6) assert.deepEqual(projected.valueSites, record.valueSites);
     assert.equal(packet.length, 10); assert.equal(h.relay.complete(), false);
     const commands = packet.map(qwenBoundaryAnnotation);
     assert.ok(commands.every(line => Buffer.byteLength(line) <= 768));
@@ -2295,7 +2295,8 @@ test("Qwen value disposition reads retained state once without current-context c
     for (const site of sites) sink.activate(site, contract);
     const claim = sink.claim(contract, 1, () => { reads++; return invocation; }); claim.bind(invocation);
     const before = reads, result = claim.snapshot(invocation, true);
-    assert.deepEqual(result, { values: null, valueState: expected });
+    assert.deepEqual(result, { values: null, valueState: expected,
+      valueSites: expected[2] === 8 ? [0,0,0,0,0,0] : null });
     assert.equal(reads, before); assert.deepEqual(claim.close(), []);
     assert.deepEqual(claim.snapshot(invocation, true), result);
   }
@@ -2343,5 +2344,72 @@ test("Qwen v5 value disposition is closed, opaque and within existing annotation
   assert.equal(reads, 0);
   const { valueState, ...old } = value;
   old.v = 4; assert.deepEqual(qwenObserverRecord(old), old);
+});
+
+test("Qwen retained site state distinguishes absent, partial, open and complete evaluations", () => {
+  const base = { v: 6, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1] };
+  for (const site of [1, 2]) for (const bits of site === 1 ? [0,1,3,7,11,15] : [0,1,3]) {
+    let reads = 0; const invocation = {}, sink = createQwenValueSink("a".repeat(64));
+    sink.activate(1, "a".repeat(64)); sink.activate(2, "a".repeat(64));
+    const claim = sink.claim("a".repeat(64), 1, () => { reads++; return invocation; }); claim.bind(invocation);
+    const absent = claim.snapshot(invocation, true);
+    assert.deepEqual(absent.valueSites, [0,0,0,0,0,0]);
+    assert.deepEqual(qwenObserverRecord({ ...base, ...absent }).valueSites, absent.valueSites);
+    const token = sink.begin(site), value = () => {};
+    if (site === 1) {
+      if (bits >= 1) sink.host(token, {});
+      if (bits >= 3) sink.build(token, bits === 7 || bits === 15 ? null : value);
+      if (bits === 7 || bits === 15) sink.fallback(token, value);
+      if (bits === 11 || bits === 15) sink.selected(token, value);
+    } else {
+      if (bits >= 1) sink.argument(token, {});
+      if (bits === 3) sink.result(token, value);
+    }
+    const before = reads, open = claim.snapshot(invocation, true);
+    const expected = site === 1 ? [1,bits,0,0,0,0] : [0,0,0,1,bits,0];
+    assert.deepEqual(open.valueSites, expected); assert.equal(open.valueState[2], 7);
+    assert.deepEqual(qwenObserverRecord({ ...base, ...open }).valueSites, expected);
+    assert.equal(reads, before, "snapshot never reads the current invocation");
+    sink.finish(token); expected[site === 1 ? 2 : 5] = 1;
+    const closed = claim.snapshot(invocation, true), complete = site === 1 ? [11,15].includes(bits) : bits === 3;
+    assert.deepEqual(closed.valueSites, expected); assert.equal(closed.valueState[2], complete ? 0 : 8);
+    assert.equal(closed.values !== null, complete);
+    const checked = qwenObserverRecord({ ...base, ...closed });
+    assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(checked)) <= 768);
+    assert.deepEqual(claim.close(), []); assert.deepEqual(claim.snapshot(invocation, true), closed);
+    assert.equal(open.valueSites[site === 1 ? 2 : 5], 0, "earlier observation is not rewritten by closure");
+  }
+});
+
+test("Qwen v6 site tuples reject malformed, contradictory and reflective inputs within quotas", () => {
+  const base = { v: 6, kind: "observer_failure", case: rows[0].id, parent: 1, observer: 2,
+    site: 4, seen: 1, truthy: 1, receipt: false, acquisition: false, parentState: "fulfilled",
+    failurePresent: true, reasonDefined: true, route: [1,0,0,0,0,0,0,0,0], callable: [1,0,0,0,0,0,1],
+    values: null, valueState: [1,1,8], valueSites: [0,0,0,0,0,0] };
+  for (const valueSites of [null, [0,0,0], [0,0,0,0,0,0,0], Object.assign(new Array(7), base.valueSites),
+    [true,0,0,0,0,0], [2,0,0,0,0,0], [0,1,0,0,0,0], [0,0,1,0,0,0], [1,2,1,0,0,0],
+    [1,1,0,0,0,0], [0,0,0,1,7,1], [0,0,0,0,1,0], [0,0,0,0,0,1], [1,11,1,0,0,0]]) {
+    assert.throws(() => qwenObserverRecord({ ...base, valueSites }));
+  }
+  let reads = 0;
+  const accessor = [...base.valueSites]; Object.defineProperty(accessor, "0", { get() { reads++; throw undefined; } });
+  const proxy = new Proxy([...base.valueSites], { ownKeys() { reads++; throw undefined; } });
+  for (const valueSites of [accessor, proxy]) assert.throws(() => qwenObserverRecord({ ...base, valueSites }));
+  assert.equal(reads, 0);
+  const unobserved = { ...base, valueState: [1,1,2], valueSites: null };
+  assert.deepEqual(qwenObserverRecord(unobserved), unobserved);
+  assert.throws(() => qwenObserverRecord({ ...unobserved, valueSites: base.valueSites }));
+  const complete = { ...base, values: [1,"a".repeat(64),206,7,15,2,9,8,3,3,0],
+    valueState: [1,1,0], valueSites: [1,15,1,1,3,1] };
+  assert.deepEqual(qwenObserverRecord(complete), complete);
+  assert.throws(() => qwenObserverRecord({ ...complete, valueSites: [1,11,1,1,3,1] }));
+  assert.throws(() => qwenObserverRecord({ ...complete, valueSites: [1,15,1,0,0,0] }));
+  const wide = { ...complete, case: rows.reduce((a,b) => a.id.length > b.id.length ? a : b).id,
+    parent: 65534, observer: 65535, route: [1,65535,65535,65535,0,0,3,3,2] };
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(qwenObserverRecord(wide))) <= 768);
+  const { valueSites, ...legacy } = complete; legacy.v = 5;
+  assert.deepEqual(qwenObserverRecord(legacy), legacy);
 });
 // END Qwen value disposition controls.

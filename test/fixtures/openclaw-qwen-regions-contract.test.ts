@@ -201,7 +201,7 @@ function createQwenLedger() {
       ...facts, failurePresent: true, reasonDefined: first.reason !== undefined, route: route ?? null };
     const checked = qwenObserverRecord(callable === undefined ? prior : { ...prior, v: 3, callable });
     return valueSnapshot === undefined ? checked
-      : qwenObserverRecord({ ...checked, v: 5, ...valueSnapshot() });
+      : qwenObserverRecord({ ...checked, v: 6, ...valueSnapshot() });
   }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
     captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
@@ -482,6 +482,35 @@ function qwenObserverRecord(input: unknown): Record<string, any> {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
     Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (value.v === 6) {
+    if (Object.keys(value).at(-1) !== "valueSites") invalid();
+    const { valueSites, ...prior } = value, checked = qwenObserverRecord({ ...prior, v: 5 });
+    const reason = checked.valueState[2];
+    if (valueSites === null) {
+      if ([0, 7, 8, 10, 11].includes(reason)) invalid();
+      return { ...checked, v: 6, valueSites: null };
+    }
+    if (![0, 7, 8, 10, 11].includes(reason) || utilTypes.isProxy(valueSites) || !Array.isArray(valueSites)
+      || Reflect.ownKeys(valueSites).join() !== "0,1,2,3,4,5,length") invalid();
+    const fields = Object.getOwnPropertyDescriptors(valueSites);
+    if (fields.length.value !== 6 || Object.values(fields).some(d => !Object.hasOwn(d, "value"))) invalid();
+    const s = Array.from({ length: 6 }, (_, i) => fields[String(i)].value);
+    if (!s.every(Number.isSafeInteger) || ![0, 1].includes(s[0]) || ![0, 1].includes(s[2])
+      || ![0, 1].includes(s[3]) || ![0, 1].includes(s[5])
+      || ![0, 1, 3, 7, 11, 15].includes(s[1]) || ![0, 1, 3].includes(s[4])
+      || s[0] === 0 && (s[1] !== 0 || s[2] !== 0)
+      || s[3] === 0 && (s[4] !== 0 || s[5] !== 0)) invalid();
+    const client = s[0] === 1 && s[2] === 1 && [11, 15].includes(s[1]);
+    const guard = s[3] === 1 && s[5] === 1 && s[4] === 3;
+    if (reason === 8 && (client || guard)
+      || [0, 10, 11].includes(reason) && !(client || guard)
+      || reason !== 7 && (s[0] === 1 && s[2] === 0 || s[3] === 1 && s[5] === 0)) invalid();
+    if (checked.values !== null && ((checked.values[3] !== 0) !== client
+      || (checked.values[7] !== 0) !== guard
+      || checked.values[4] !== (client ? s[1] : 0)
+      || checked.values[8] !== (guard ? s[4] : 0))) invalid();
+    return { ...checked, v: 6, valueSites: s };
   }
   if (value.v === 5) {
     if (Object.keys(value).at(-1) !== "valueState") invalid();
