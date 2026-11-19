@@ -181,20 +181,25 @@ const server=createServer(async(r,s)=>{
 });
 server.on('connection',socket=>{peakConnections=Math.max(peakConnections,++connections);socket.on('close',()=>connections--);});
 await new Promise(ok=>server.listen(0,'127.0.0.1',ok));
-const local='http://127.0.0.1:'+server.address().port,preload=join(out,'redirect.mjs');
-await writeFile(preload,`const original=fetch;globalThis.fetch=(input,init)=>{const r=new Request(input,init),u=new URL(r.url);if(!['https://api.cloudflare.com',${JSON.stringify(origin)},${JSON.stringify(local)}].includes(u.origin))throw Error('External egress refused');return original(${JSON.stringify(local)}+u.pathname+u.search,{method:r.method,headers:r.headers,body:r.body,duplex:'half',redirect:'error',signal:r.signal});};`);
+const local='http://127.0.0.1:'+server.address().port;
+const preload=new URL('../test/helpers/deploy-release-fetch.mjs',import.meta.url).href;
+// The saved-client path deliberately strips the environment. Non-secret proof
+// targets live beside the wrappers so they can restore only the local adapter.
+await writeFile(join(out,'proof-targets.json'),JSON.stringify({origin,local,binary,preload}),{mode:0o600,flag:'wx'});
 await mkdir(join(out,'bin'));
 await writeFile(join(out,'bin','pnpm'),`#!${process.execPath}
 import{spawn}from'node:child_process';import{readFileSync}from'node:fs';
-const a=process.argv.slice(2);if(a[0]==='exec'&&a[1]==='node'){const p=spawn(process.execPath,a.slice(2),{stdio:'inherit',env:{...process.env,NODE_OPTIONS:${JSON.stringify('--import='+preload)}}});p.on('close',c=>process.exit(c??1));}else{
-if(a[0]!=='exec'||a[1]!=='wrangler')throw Error('Unexpected proof CLI');const r=await fetch(${JSON.stringify(local+'/proof/upload')},{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({config:a[a.indexOf('--config')+1],tag:a[a.indexOf('--tag')+1],message:a.includes('--message')?a[a.indexOf('--message')+1]:undefined,bootstrap:a[2]==='deploy'})});if(!r.ok)throw Error('Controlled upload failed');console.log(JSON.stringify(await r.json()));}` ,{mode:0o700});
+const {origin,local,preload}=JSON.parse(readFileSync(new URL('../proof-targets.json',import.meta.url),'utf8'));
+const a=process.argv.slice(2);if(a[0]==='exec'&&a[1]==='node'){const p=spawn(process.execPath,a.slice(2),{stdio:'inherit',env:{...process.env,NODE_OPTIONS:'--import='+preload,CLAWROUTER_RELEASE_PROOF_TARGETS:JSON.stringify({origin,local})}});p.on('close',c=>process.exit(c??1));}else{
+if(a[0]!=='exec'||a[1]!=='wrangler')throw Error('Unexpected proof CLI');const r=await fetch(local+'/proof/upload',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({config:a[a.indexOf('--config')+1],tag:a[a.indexOf('--tag')+1],message:a.includes('--message')?a[a.indexOf('--message')+1]:undefined,bootstrap:a[2]==='deploy'})});if(!r.ok)throw Error('Controlled upload failed');console.log(JSON.stringify(await r.json()));}` ,{mode:0o700});
 const wrapper=join(out,'bin','codex');
 await writeFile(wrapper,`#!${process.execPath}
 import{spawnSync,spawn}from'node:child_process';import{readFileSync,writeFileSync,existsSync}from'node:fs';
-const config=process.env.CODEX_HOME+'/config.toml';if(existsSync(config)){const t=readFileSync(config,'utf8');writeFileSync(config,t.replace(${JSON.stringify(origin)},${JSON.stringify(local)}));}
-const a=process.argv.slice(2);if(a[0]!=='app-server'){const r=spawnSync(${JSON.stringify(binary)},a,{stdio:'inherit'});process.exit(r.status??1);}const p=spawn(${JSON.stringify(binary)},a,{stdio:'inherit'});for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>p.kill(signal));p.on('close',c=>process.exit(c??1));`,{mode:0o700});
+const {origin,local,binary}=JSON.parse(readFileSync(new URL('../proof-targets.json',import.meta.url),'utf8'));
+const config=process.env.CODEX_HOME+'/config.toml';if(existsSync(config)){const t=readFileSync(config,'utf8');writeFileSync(config,t.replace(origin,local));}
+const a=process.argv.slice(2);if(a[0]!=='app-server'){const r=spawnSync(binary,a,{stdio:'inherit'});process.exit(r.status??1);}const p=spawn(binary,a,{stdio:'inherit'});for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>p.kill(signal));p.on('close',c=>process.exit(c??1));`,{mode:0o700});
 try{
- const output=await child(['scripts/deploy-release-qualification.mjs'],{...env,PATH:join(out,'bin')+':'+env.PATH,NODE_OPTIONS:'--import='+preload,QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper});
+ const output=await child(['scripts/deploy-release-qualification.mjs'],{...env,PATH:join(out,'bin')+':'+env.PATH,NODE_OPTIONS:'--import='+preload,CLAWROUTER_RELEASE_PROOF_TARGETS:JSON.stringify({origin,local,binary}),QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper});
  await writeFile(join(out,'entrypoint.log'),output);
  const receipt=JSON.parse(await readFile(join(env.TRAIN_EVIDENCE_DIRECTORY,'public/qualification-release.json'),'utf8'));
  assert.equal(receipt.qualified,true);assert.equal(receipt.controlSha256,nativeControlDigest());
