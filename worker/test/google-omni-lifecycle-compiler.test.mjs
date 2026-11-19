@@ -9,8 +9,16 @@ const { googleOmniApiBase, googleOmniVideos, prepareGoogleOmniFileControl, readG
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/google-omni/video.json", import.meta.url), "utf8"));
 const bundled = parse(readFileSync(new URL("../../providers/google-gemini.provider.yaml", import.meta.url), "utf8"));
 const compile = manifest => compileProviderSnapshot([manifest]);
-function fixture() {
+function fixture(isolated = false) {
   const manifest = structuredClone(bundled);
+  if (isolated) {
+    // Provider-wide negative cases must exercise the Omni guard itself.
+    const unrelatedCapabilities = ["llm.embeddings", "image.generate", "audio.generate", "audio.speech"];
+    const unrelatedEndpoints = new Set(manifest.capabilities.filter(row => unrelatedCapabilities.includes(row.id)).map(row => row.endpoint));
+    for (const id of unrelatedEndpoints) delete manifest.endpoints[id];
+    manifest.capabilities = manifest.capabilities.filter(row => !unrelatedEndpoints.has(row.endpoint));
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => unrelatedCapabilities.includes(id)));
+  }
   manifest.capabilities.push({ id: "media.predict", endpoint: "video", methods: ["POST"] });
   Object.assign(manifest.endpoints, {
     video: { path: "/v1beta/interactions", requestFormat: "google.omni_video_create", responseFormat: "google.omni_video",
@@ -30,7 +38,7 @@ test("Omni endpoint links preserve Google's existing origin and require explicit
   assert.deepEqual(snapshot.model_index, compile(bundled).model_index);
   for (const original of compile(bundled).providers[0].endpoints) assert.deepEqual(endpoint(original.id), original);
   assert.equal(snapshot.capability_index["media.predict"].length, 1);
-  assert.deepEqual(Object.keys(snapshot.capability_index).sort(), ["llm.generate", "llm.stream", "media.predict"]);
+  assert.deepEqual(Object.keys(snapshot.capability_index).sort(), [...Object.keys(compile(bundled).capability_index), "media.predict"].sort());
   assert.ok(adapter.requestFormats.includes(endpoint("video").request_format));
   assert.equal(adapter.supportsResult, false); assert.equal(adapter.supportsCancel, true);
   const prepared = adapter.prepare(wire.requests[2], new Headers(), {}, new URLSearchParams());
@@ -47,6 +55,7 @@ test("Omni endpoint links preserve Google's existing origin and require explicit
 });
 
 test("Omni declarations reject orphan controls, widened paths, file query injection and credential overrides", () => {
+  assert.doesNotThrow(() => compile(fixture(true)));
   const changes = [
     m => { m.id = "other"; }, m => { m.endpoints.video.lifecycle.protocol = "google.interactions"; },
     m => { delete m.endpoints.video.lifecycle; }, m => { delete m.endpoints.video.lifecycle.files; },
@@ -73,7 +82,7 @@ test("Omni declarations reject orphan controls, widened paths, file query inject
     if (id !== "video") changes.push(m => { m.capabilities.push({ id: "media.file", endpoint: id, methods: ["GET"] }); });
   }
   for (const change of changes) {
-    const manifest = fixture(); change(manifest);
+    const manifest = fixture(true); change(manifest);
     assert.throws(() => compile(manifest), /lifecycle|invalid manifest/, String(change));
   }
 });

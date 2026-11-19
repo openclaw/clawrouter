@@ -1,0 +1,25 @@
+# Isolated synthetic producer; no vendor credentials or production bindings.
+name = "clawrouter-upstream-proof"
+account_id = "@@ACCOUNT@@"
+main = "@@MAIN@@"
+no_bundle = true
+compatibility_date = "2026-06-05"
+compatibility_flags = ["enable_request_signal"]
+workers_dev = true
+preview_urls = false
+keep_vars = false
+
+[observability]
+enabled = false
+
+[[durable_objects.bindings]]
+name = "UPSTREAM_RECORDS"
+class_name = "UpstreamRecords"
+[[migrations]]
+tag = "upstream-proof-v1"
+new_sqlite_classes = ["UpstreamRecords"]
+
+[vars]
+EDGE_PROOF_RUN = "@@RUN@@"
+EDGE_PROOF_EXPIRES = "@@EXPIRES@@"
+EDGE_PROOF_ORIGIN = "@@UPSTREAM@@"

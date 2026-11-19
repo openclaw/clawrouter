@@ -41,12 +41,15 @@ endpoints:
 models:
   entries:
     - id: stepfun-plan/step-3.7-flash
+      displayName: "Step 3.7 Flash"
       upstream: step-3.7-flash
       capabilities: [llm.chat]
     - id: stepfun-plan/step-3.5-flash
+      displayName: "Step 3.5 Flash"
       upstream: step-3.5-flash
       capabilities: [llm.chat]
     - id: stepfun-plan/step-3.5-flash-2603
+      displayName: "Step 3.5 Flash (2603)"
       upstream: step-3.5-flash-2603
       capabilities: [llm.chat]
 billing:

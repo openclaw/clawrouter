@@ -82,11 +82,50 @@ consumes `providers/_fixtures/google/speech.json` through the actual frozen
 speech provider and keeps its PCM/WAV output contract. Native request replay,
 retention and credential fallback cannot be introduced by the bridge.
 
-This PR changes only focused codec/test/fixture files and this contract. No
-provider declaration, shared controller, snapshot, deployment or live call is
-performed. Actual Worker/client delivery and accounting remain activation gates.
+The focused codec and response wrapper do not change provider declarations,
+shared controllers or snapshots. Actual Worker/client delivery and accounting
+remain activation gates; no deployment or live call is performed.
 Realtime/Live, voice design/replication and newer speech models are outside this
 bounded slice.
+
+## Complete-response wrapper
+
+`worker/native-google-speech.ts` exports
+`prepareNativeGoogleSpeech(selection): NativeResponse | undefined`. It consumes
+the existing JSON `ProxySelection.body`; the published format names above serve
+as matching request and response formats for each transport. Selection must use
+provider `google-gemini`, capability `audio.speech`, the exact frozen upstream
+model and its native POST path. GenerateContent requires the selected model path
+parameter; Interactions requires no path parameters and an identical body model.
+There is no query, alias, passthrough, streaming or retained-state option. The
+destination is exactly `https://generativelanguage.googleapis.com`.
+
+The wrapper preserves validated request JSON and invokes the codec's trusted
+preview cutoff before egress. The existing 32 MiB response lease charges 64 MiB
+of shared capacity before dispatch. Its tighter output policy requires complete
+HTTP 200 UTF-8 JSON at EOF, at most 8 MiB JSON and 32 audio blocks totaling at
+most 4 MiB decoded bytes. Every block must have explicit supported MIME and
+canonical padded base64. Missing MIME is rejected even where the pure codec
+supports a compatibility default. Raw PCM must be aligned mono PCM16 24 kHz;
+explicit WAV must have matching RIFF framing and the codec's qualified PCM
+fields. WAV bytes cannot masquerade as headerless PCM. Container/alignment
+checks do not establish intelligibility or an invoice duration.
+
+Interactions must report `completed` and the selected model. Native REST
+`model_output` steps and unambiguous direct audio envelopes are supported;
+all final blocks are validated before any output. Thought content is removed,
+while final native fields and usage remain unchanged. GenerateContent requires
+every candidate to stop normally. No remote file or returned URL is fetched.
+Malformed lengths, ranges, redirects, encoded bodies, overflow, interruption
+and cancellation cannot produce partial HTTP 200 output or a replay instruction.
+
+Normalized usage is `{ tokens: null, outcome: "success" }` only after complete
+validation. Native usage metadata is not an upstream cost receipt. Source1 owns
+original credentials, capability/model-aware shared-path selection, admission,
+deadlines, bypass closure and conservative dispatched settlement. Source3 owns
+declarations and qualified pricing. Source2 owns actual speech consumption;
+Source6 owns composed Worker/client proof. Twelve wrapper cases cover these
+leaf boundaries; they do not certify activation of a declaration.
 
 ## Evidence
 

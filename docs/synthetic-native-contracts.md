@@ -18,12 +18,16 @@ foreign provider grant or subscription interchange is implied.
 | `/v1/messages` | `/anthropic/v1/messages` |
 | `/models` | `/openai/v1/models` |
 
-The required manifest endpoint `upstreamPath` contract is pending with source3;
-compiled `upstream_path`, same-origin assembly and selected-grant behavior remain
-source1-owned. Public route paths must stay stable. No traversal, absolute URL,
+The manifest consumes endpoint `upstreamPath`; source3 owns its schema/compiler
+publication. `CompiledEndpoint.upstreamPath?: string`, same-origin assembly and
+selected-grant behavior remain source1-owned. Public route paths remain the caller route and authorization identity. The first
+slice accepts only literal canonical paths, rejects a conflicting grant-transport
+path, and keeps the original origin/key fixed. No path parameters, templates,
+encoded traversal, query, fragment, absolute URL,
 credential-bearing redirect or alternate-service fallback can substitute for
-that shared implementation. The source4 Synthetic manifest/real Worker fixtures
-will consume this contract in this separate source slice, not PR397.
+that shared implementation. The source4 Synthetic manifest and 29 real Worker
+fixtures consume this contract in a separate source slice, not PR397. They must
+not activate before both common owners' implementation and proof are available.
 
 The [Messages reference](https://dev.synthetic.new/docs/anthropic/messages)
 qualifies user/assistant messages, text/image parts, `tool_use`/`tool_result`,
@@ -56,7 +60,7 @@ availability does not prove a selected account's entitlement.
 The [native list API](https://dev.synthetic.new/docs/openai/models) and frozen
 projection use rich row metadata. `worker/synthetic-model-catalog.ts` exports
 `filterSyntheticModels(payload, allows): { data: SyntheticModelRow[] }` for the
-proposed explicit `synthetic.models` format. It does not relax `openai.models`.
+published explicit `synthetic.models` format. It does not relax `openai.models`.
 
 The codec checks the data array, 4,096-row limit and bounded identities; invalid
 envelopes/IDs and duplicate visible identities fail. It excludes deprecated,
@@ -74,14 +78,25 @@ fallback. Source3 retains common fact and qualified tariff projection.
 
 ## Remaining integration
 
-Source1 must add the explicit discovery format to metadata classification and
-dispatch this codec using `id => discoveryAllows(originalPolicy, provider, id)`.
-Preserve existing response byte/deadline/cancellation, original-grant revocation,
-zero inference charge for discovery and unsupported-query guards. The codec
-does not perform HTTP or choose credentials. Keep the OpenAI envelope strict.
+The path/schema foundation is published by [PR582](https://github.com/openclaw/clawrouter/pull/582)
+and [PR583](https://github.com/openclaw/clawrouter/pull/583). The separately required
+native format is published by [PR599](https://github.com/openclaw/clawrouter/pull/599)
+and [PR605](https://github.com/openclaw/clawrouter/pull/605), the latter landed as
+`4565513da770cc128809a7741e8877f8036403fe`. The provider slice is based on that
+actual runtime implementation. It dispatches the landed codec under the original
+policy/grant, complete bounded JSON, revocation, deadline/cancellation, zero
+inference charge and unsupported-query guards. The strict OpenAI decoder remains
+unchanged. The codec itself does not perform HTTP or choose credentials.
 
-The common path mapping, Synthetic manifest/native Worker tests, actual source2
-client and source6 serialized snapshot/consumer proof are required continuations.
-Codec fixtures alone do not complete native Messages or provider parity. No
-inference, login, provisioning, deployment or snapshot regeneration occurs in
-this codec commit.
+The provider declaration retains the Chat alias and adds the two currently
+qualified frozen concrete identities to Chat and Messages. Its model facts use
+current native observations, not copied frozen prices or output limits. The 29
+Worker fixtures cover both route forms, every declared identity, thinking/tool
+replay, fragmented SSE, original credentials, cancellation, usage and dispatch
+path isolation. Discovery uses its actual native envelope and policy filtering.
+
+The newly executable provider Worker tests, actual source2 client and source6
+serialized snapshot/consumer proof remain activation gates. Published common
+code alone is not final-head provider proof. Codec fixtures alone do not complete native Messages or
+provider parity. No inference, login, provisioning, deployment or snapshot
+regeneration occurs in this source slice.

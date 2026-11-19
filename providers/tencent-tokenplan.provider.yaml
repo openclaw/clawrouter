@@ -41,9 +41,11 @@ endpoints:
 models:
   entries:
     - id: tencent-tokenplan/hy3
+      displayName: "HY3"
       upstream: hy3
       capabilities: [llm.chat]
     - id: tencent-tokenplan/hy4-preview
+      displayName: "HY4 Preview"
       upstream: hy4-preview
       capabilities: [llm.chat]
 billing:

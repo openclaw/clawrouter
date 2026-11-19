@@ -68,3 +68,27 @@ test("aborting response delivery cancels a stalled stream without claiming remot
   await waiting; signal.abort(); await assert.rejects(response); assert.equal(canceled, true);
   assert.equal(fixtures.groq.transport.automaticPostReplay, false);
 });
+
+// The delayed read completion and cancellation acknowledgement are independent.
+for (const first of ["read", "cancel"]) test(`retirement joins both read and first cancel, ${first} settles first`, { timeout: 5000 }, async t => {
+  const reading = Promise.withResolvers(), readAck = Promise.withResolvers(), cancelAck = Promise.withResolvers();
+  const cancelEntered = Promise.withResolvers(), abort = new AbortController();
+  let cancels = 0, complete = false;
+  const source = new ReadableStream({ pull() { reading.resolve(); },
+    cancel() { cancels++; cancelEntered.resolve(); return cancelAck.promise; },
+  }, { highWaterMark: 0 });
+  const getReader = source.getReader.bind(source);
+  source.getReader = (...args) => {
+    const reader = getReader(...args), read = reader.read.bind(reader);
+    reader.read = async () => { const result = await read(); await readAck.promise; return result; };
+    return reader;
+  };
+  t.after(() => { readAck.resolve(); cancelAck.resolve(); });
+  const result = readGroqMistralAudio(new Response(source, { headers: { "content-type": "application/json" } }), "groq", abort.signal).finally(() => { complete = true; });
+  const rejection = assert.rejects(result);
+  await reading.promise; abort.abort(); await cancelEntered.promise;
+  (first === "read" ? readAck : cancelAck).resolve(); await new Promise(setImmediate);
+  assert.equal(complete, false); assert.equal(source.locked, true); assert.equal(cancels, 1);
+  (first === "read" ? cancelAck : readAck).resolve(); await rejection;
+  assert.equal(source.locked, false); assert.equal(cancels, 1);
+});

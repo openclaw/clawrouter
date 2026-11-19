@@ -1,3 +1,4 @@
+import { pixVerseInputFixedCost } from "./pixverse-input-policy.ts";
 import type { RequestTariffEndpoint } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
@@ -5,7 +6,7 @@ import { validateBudgetReservation, type EstimatedCost } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
-import type { AuthorizedIdentity, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
 import { REALTIME } from "./realtime-protocol";
 import { softBudgetPolicy } from "./soft-budget.ts";
 import { HttpError } from "./utils";
@@ -16,7 +17,7 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint & Pick<CompiledEndpoint, "inputProfile">, observation?: BudgetObservation, body: ProxyRequestBody = {}, providerId?: string): OperationAffordability {
   if (model) model = modelForEndpoint(model, endpoint.id);
   // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
@@ -38,7 +39,9 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   let cost: EstimatedCost;
   const soft = softBudgetPolicy(auth.policy);
   try {
-    cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
+    cost = endpoint.inputProfile === "clawrouter.pixverse-image-input.v1"
+      ? { reserveMicros: pixVerseInputFixedCost(auth.policy), basis: "policy_fixed", inputTokens: null, outputTokens: null }
+      : realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint, undefined, undefined, providerId);
     if (soft && !isModelDiscovery(endpoint)) {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };
     } else if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
@@ -49,7 +52,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   if (auth.policy.budgetScope === "principal" && !auth.principalId && !auth.credentialId)
     return { status: "exact-blocked", reasonCode: "principal_required" };
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
-  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || isModelDiscovery(endpoint) ? cost.reserveMicros : !endpoint.requestPricing && bounds?.zero ? 0 : null;
+  const exact = endpoint.request_format === "openai.moderations" ? 0 : realtime ? cost.reserveMicros : cost.basis === "policy_fixed" || cost.requestTariff?.kind === "deepseek_search" || isModelDiscovery(endpoint) ? cost.reserveMicros : !endpoint.requestPricing && bounds?.zero ? 0 : null;
   const minimum = exact ?? (endpoint.requestPricing ? 0 : bounds?.minimumMicros ?? 0);
   if (exact === 0 && (!soft || isModelDiscovery(endpoint))) return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };

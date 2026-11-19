@@ -1,4 +1,4 @@
-import { cloudflareClient, cloudflareError } from "./cloudflare-diagnostics.mjs";
+import { cloudflareClient, cloudflareError, probeCloudflareKvWrite } from "./cloudflare-diagnostics.mjs";
 import { spawnSync } from "node:child_process";
 
 import {
@@ -228,26 +228,10 @@ async function checkCloudflareKvPermission() {
   if (!(await checkCloudflareKvIdentity(token, accountId, namespaceId))) return;
   const key = `__clawrouter_doctor_${Date.now()}`;
   const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`;
-  const put = await cloudflareRequest(token, path, {
-    method: "PUT",
-    headers: { "content-type": "text/plain" },
-    body: "ok",
-  });
-  if (put.status === 0) {
-    return;
-  }
-  if (!put.ok || put.body.success === false) {
-    errors.push(`CLOUDFLARE_API_TOKEN cannot write POLICY_KV: ${cloudflareError(put)}`);
-    return;
-  }
-  const deleted = await cloudflareRequest(token, path, { method: "DELETE" });
-  if (deleted.status === 0) {
-    return;
-  }
-  if (!deleted.ok || deleted.body.success === false) {
-    errors.push(
-      `CLOUDFLARE_API_TOKEN wrote POLICY_KV but could not delete probe key: ${cloudflareError(deleted)}`,
-    );
+  const failed = await probeCloudflareKvWrite(cloudflareRequest, token, path);
+  if (failed) {
+    if (failed.status === 0) return;
+    errors.push(failed.error);
     return;
   }
   console.log("cloudflare kv token: can write POLICY_KV");

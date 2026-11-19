@@ -68,3 +68,50 @@ Checked 2026-11-03 using current unlocalized pages:
 - [Music generation](https://ai.google.dev/gemini-api/docs/music-generation)
 - [Lyria deprecation schedules](https://ai.google.dev/gemini-api/docs/deprecations)
 - [Native GenerateContent API](https://ai.google.dev/api/generate-content)
+
+## Qualified unary response wrapper
+
+`prepareNativeGoogleMusic(selection)` in `worker/native-google-music.ts` uses
+the existing JSON `ProxySelection.body` and `NativeResponse`. It calls the actual
+`prepareGoogleMusic` and `observeGoogleMusic` exports. Only the two frozen models,
+their matching model path selector, canonical Google origin, `audio.generate`
+and `google.music_generate` to `google.music` qualify. Queries, alternate paths,
+streaming, model passthrough and request tariffs are rejected. Original selected
+credentials and `x-goog-api-key` remain runtime-owned.
+
+The first wrapper caps request and response JSON at 8 MiB and the one final track
+at 4 MiB decoded. Its existing response lease charges 64 MiB before dispatch,
+alongside the original request lease. Inline image inputs require canonical
+base64, explicit PNG/JPEG/WebP MIME and matching bounded container signatures;
+HEIC/HEIF remain codec-only. No URL/file references, asset authority or prompt,
+lyrics, instrumental or output-format rewrite is introduced.
+
+Audio needs an explicit MIME, canonical bytes and complete container framing.
+Both models accept `audio/mpeg` with complete MPEG Layer III frames and bounded
+optional ID3 tags. Pro additionally accepts explicit `audio/wav` only for a
+consistent RIFF/WAVE PCM16 container with one nonempty aligned data chunk.
+This validates framing, not decoded samples, duration or a promised native
+output format. Missing MIME never inherits the codec's MP3 compatibility default.
+The current music guide's newer-model WAV examples are not proof of what the
+frozen Pro endpoint will return; the wrapper does not request or force WAV.
+
+Complete HTTP200 UTF-8 EOF, matching lengths, no redirect/range/non-identity
+encoding, one STOP candidate and exactly one valid final track are required
+before delivery. Thought parts are removed; native final lyrics, audio bytes and
+`usageMetadata` are preserved. Tokens remain null, with no tariff, invoice or
+duration conversion. Partial, lost, timed-out, aborted or text-only output cannot
+authorize replay, partial success, upstream cancellation or refunds. A canceled
+local reader does not establish stopped generation.
+
+Source1 owns common selection, original grants, dispatch and capability-aware
+resolution of the shared GenerateContent path, including generic/stream bypass
+closure. Source3 owns the native declaration and music-cost guard; text pricing
+cannot establish an image-conditioned/audio/thinking bill. Hard upstream-dollar
+budgets remain closed independently of explicit policy_fixed. Source2 owns the
+actual client, including removal of its automatic text-only retry, and source6
+owns composed Worker/consumer proof. This module alone does not activate a route.
+
+Focused wrapper tests use real offline MP3 frames and synthetic valid PCM16 WAV
+containers instead of the original encoding-only sample. They verify the actual
+capacity lease, explicit MIME, original model/destination, input ownership
+boundaries, whole-result validation, byte limits and interrupted delivery.

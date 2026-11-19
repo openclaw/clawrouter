@@ -5,6 +5,8 @@ import { pathToFileURL } from "node:url";
 export function affectsOpenClawContract(path) {
   return (path.startsWith("worker/") && !/^worker\/test\/[^/]+\.test\.mjs$/.test(path))
     || path.startsWith("shared/")
+    || path.startsWith("packages/provider-plugin-contract/src/")
+    || path === "packages/provider-plugin-contract/tsconfig.json"
     || path.startsWith("providers/")
     || /^test\/openclaw-[^/]*\.test\.mjs$/.test(path)
     || /^test\/fixtures\/openclaw-[^/]*-contract\.test\.ts$/.test(path)

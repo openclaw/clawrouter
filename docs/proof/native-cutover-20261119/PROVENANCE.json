@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "originalSealedFilesVerified": 934,
+  "originalArtifactsUnchanged": true,
+  "attempts": [
+    {
+      "directory": "attempt-01-cutover",
+      "verifiedSealedFiles": 152,
+      "sealSha256": "9838d8861763fa9299bc30a72defbb2524b9a1e52ce3c87cc5458c6fa65af3d4",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "be4282abe20c267c98b8791a7196a78c705709d106b3e8bfe0d3296be85a7b87",
+        "client/evidence.json": "41b1e2f14cd63a143d6bb41b471e81a59537ab69a6fc8af21d940ec5fb362ddd",
+        "FULL-FIXTURE-SNAPSHOT.json": "83a867cfd1c71908a784f4ee9250c8c257be54df067aa47cdb5034de51f0d4aa",
+        "INDEPENDENT-CLEANUP.json": "7ea1ea51c96cb16587e313d1d719ec89fb35175163c68e3d8a4bb2f4321aa33a",
+        "ACTIONS-CONTROLLER-PROOF.json": "7889c30ad8cff69a4eb4b4f75dcd9837eeac80c732bacc72236bd3bab6a4253d"
+      }
+    },
+    {
+      "directory": "attempt-02-fail-smoke",
+      "verifiedSealedFiles": 148,
+      "sealSha256": "cdfeecfb1d6aa1d062648f1c1e01f61f5c22a88926b36eab6d1cbab8d177398a",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "4406c60b6d7322e43af6de881decf022471ec650ec02b6929e2fd96f467e52f9",
+        "client/evidence.json": "b8d2e8474e54b27eb4b37b93df9bdd9cb189450593e515fb88dd8de692583faa",
+        "FULL-FIXTURE-SNAPSHOT.json": "eadd70da065c793c1fab50dde595660525c72d903f8e195a708011310fa1ff10",
+        "INDEPENDENT-CLEANUP.json": "40b862b64e2837a308ddc4c6be2a60e5af287cbf7dd1a69cf8b50fbb43a7701c",
+        "ACTIONS-CONTROLLER-PROOF.json": "94312e8668603f07cf9b0f9c2a9dc06f45d7249c17425c4106bf2515fca902f6"
+      }
+    },
+    {
+      "directory": "attempt-03-interrupt-green",
+      "verifiedSealedFiles": 143,
+      "sealSha256": "a61827f0b6e8ee938dadd4450ae7e77815af1ca657dd34482a2963a189224e99",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "851428169b7424389f5a23ebbf1e6f4b797ac5f5708ffaa48d45f342a0d4682b",
+        "client/evidence.json": "c73750b872a9f780e9ee3a0b06362379a3c76dc174d70b5b356c13d5c2760a75",
+        "FULL-FIXTURE-SNAPSHOT.json": "605d0c896811aaf04a744ca533281b11413c1404f0bc2054a5d7e67e74bebd0e",
+        "INDEPENDENT-CLEANUP.json": "d052cc11422d765c8225141a94705777b8a29c0de43cd429025c0edf990c9440"
+      }
+    },
+    {
+      "directory": "attempt-04-interrupt-green",
+      "verifiedSealedFiles": 169,
+      "sealSha256": "adb26bb3bb7057bd288015dfe447c062ef205ba27ec09d99c298db0668682277",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "f42a49fc2c141ffd4f12b964d703aa6045d5450bc9f0e60df91dcdffd2ca61b6",
+        "client/evidence.json": "7fa6d97f7c598e7d3d2363eb431da0da276356c51b89cce9cce5144087735b38",
+        "FULL-FIXTURE-SNAPSHOT.json": "c2100892b7026f5f5c633f5b989a8f901dbf7c6c48e57102a97aec511979aff4",
+        "INDEPENDENT-CLEANUP.json": "dcb0fb7db29dd26fdea36f09eb7735d6bd8cb65007e51c91581c87b0ad42d0d6",
+        "ACTIONS-CONTROLLER-PROOF.json": "0a3e7488b5890b851487fdeef4f88c5d2702830347ece7d1ba10dcb1ea9629b5"
+      }
+    },
+    {
+      "directory": "targeted-preparation/prepared-drain",
+      "verifiedSealedFiles": 161,
+      "sealSha256": "d518b19599afdeccbd7bc4d7e1c9f18c4f8e7320398e76b31156d85ad0041cb0",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "48fc6ac4eb1f83a707801883e337a3519a3642af7dacfa7c8f5ea6683054b7c4",
+        "client/evidence.json": "ff16bb003cf58e290a272d5f9ade8ee43c17fbc0e4c02c0bcc5a3441bd4c5034",
+        "FULL-FIXTURE-SNAPSHOT.json": "9fe7e56c96f4fb5e018db60048df6d332a52261cef366723de1e01f2928f9727",
+        "INDEPENDENT-CLEANUP.json": "75f4f0a62003e8455d1f82e264eddeb1c21b4262b6b5d764c1592e6948a15036",
+        "ACTIONS-CONTROLLER-PROOF.json": "f81339df9122f49a89ee030dec06d832a4f9ca8e651d57a1382e20955616f3bd"
+      }
+    },
+    {
+      "directory": "targeted-preparation/prepared-loss",
+      "verifiedSealedFiles": 161,
+      "sealSha256": "16bad18bdcf21f8d73091952157e3bc01ce54456531a12afd624425c77c784e3",
+      "originalSha256": {
+        "ATTEMPT-RESULT.json": "5a9befacc4ac67fcf317b701342a8d22e89f0cf85894fdba800f9f6ac288291b",
+        "client/evidence.json": "cf09fd8389c2f8960b9a0af1450ad7786e803896f753475a0a0973debb93336e",
+        "FULL-FIXTURE-SNAPSHOT.json": "3dd6de934df54fcbc0db1e7cf1d9c42c10e0311e30de82461969c5a9b6c1cde3",
+        "INDEPENDENT-CLEANUP.json": "80ae6a145748d02fed2c6417ab692181da3073f32e80da9b3c324fb95926a604",
+        "ACTIONS-CONTROLLER-PROOF.json": "52afceb159498d8fc3ac5a99bd9e907abbbb69c5987a9c2b22a3d702ad019b10"
+      }
+    }
+  ],
+  "portableSha256": {
+    "HOSTED-PROJECTION.json": "c4385bfbbef12c890f7ec4186b453b96d869464bec7c6d2a083c330b891f775e",
+    "LOSS-RESPONSE.json": "cf494eef7e9f1a77b3b33ca193e22fa6d3510311cdd7939ea97bd889a918ed9f",
+    "SDK-CLIENT-PROOF.json": "fc1d30c0bad64ff9586338c247d3bfbfd841479bb2af1ea8498215652949f64c"
+  },
+  "scope": "Content-free selected fields, not complete original receipts or a signed attestation. Full source files and seals retained locally. Pools kept for workload quarantine, but large controller receipts/pool transitions, fixture case setup and repeated snapshots omitted. Original false verdicts and historical source/control identities preserved. No credentials, prompts, completions or private Codex state exported."
+}

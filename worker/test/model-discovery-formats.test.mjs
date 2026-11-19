@@ -11,10 +11,12 @@ const { authorityCall } = await import("../authority.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { sha256Hex } = await import("../utils.ts");
 const row = id => ({ id });
+const syntheticRow = id => ({ id, name: id, context_length: 128, input_modalities: ["text"], output_modalities: ["text"], pricing: { prompt: "$0.000001" } });
 const page = (ids, has_more = false) => ({ data: ids.map(row), first_id: ids[0] ?? null, last_id: ids.at(-1) ?? null, has_more });
 
 async function fixture(t, format, { restricted = true, timeoutMs = 30000 } = {}) {
-  const anthropic = format === "anthropic.models", id = anthropic ? "compatible-anthropic" : "compatible-openai";
+  const anthropic = format === "anthropic.models", synthetic = format === "synthetic.models";
+  const id = anthropic ? "compatible-anthropic" : synthetic ? "compatible-synthetic" : "compatible-openai";
   const provider = structuredClone(snapshot.providers.find(p => p.id === (anthropic ? "anthropic" : "openai")));
   Object.assign(provider, { id, config_keys: ["DISCOVERY_FIXTURE_API_KEY"], optional_config_keys: [],
     base_urls: { default: `https://${id}.example` }, native_prefixes: [id],
@@ -22,11 +24,12 @@ async function fixture(t, format, { restricted = true, timeoutMs = 30000 } = {})
     auth: { schemes: [{ type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key" }], grantTransports: {} },
     models: [{ id: `${id}/allowed`, upstream: "allowed", capabilities: [], pricing: null, pricing_ref: null }],
     capabilities: provider.capabilities.filter(c => c.id.startsWith("models.")),
-    endpoints: provider.endpoints.filter(e => e.id.startsWith("models_")).map(e => ({ ...e, timeout_ms: timeoutMs })),
+    endpoints: provider.endpoints.filter(e => synthetic ? e.id === "models_list" : e.id.startsWith("models_")).map(e => ({ ...e, timeout_ms: timeoutMs,
+      ...(synthetic ? { request_format: format, response_format: format, upstreamPath: "/openai/v1/models" } : {}) })),
   });
   provider.adapter.injectHeaders = {}; provider.adapter.passthroughHeaders = [];
   snapshot.providers.push(provider); t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(provider), 1));
-  const values = new Map(), pending = [], sent = [], events = [];
+  const values = new Map(), pending = [], sent = [], events = [], responses = [];
   const env = { DISCOVERY_FIXTURE_API_KEY: "synthetic-environment-fallback", POLICY_KV: {
     async get(key) { return Array.isArray(key) ? new Map(key.map(k => [k, values.get(k) ?? null])) : values.get(key) ?? null; },
     async put(key, value) { values.set(key, JSON.parse(value)); },
@@ -42,16 +45,79 @@ async function fixture(t, format, { restricted = true, timeoutMs = 30000 } = {})
   const grantKey = `oauth/fixture/${id}`;
   await putGrantCredentials(env, grantKey, { provider: id, kind: "api_key", enabled: true, credential: "synthetic-original-key" });
   const f = { id, env, sent, events, grantKey,
-    reply: () => Response.json(anthropic ? page(["allowed"]) : { object: "list", data: [row("allowed")] }),
-    call(suffix = "", manifest = false) {
-      return worker.fetch(new Request(`https://router.example${manifest ? `/v1/proxy/${id}/models_list` : `/v1/native/${id}/v1/models`}${suffix}`,
+    reply: () => Response.json(anthropic ? page(["allowed"]) : synthetic ? { data: [syntheticRow("allowed")] } : { object: "list", data: [row("allowed")] }),
+    async call(suffix = "", manifest = false) {
+      const response = await worker.fetch(new Request(`https://router.example${manifest ? `/v1/proxy/${id}/models_list` : `/v1/native/${id}/v1/models`}${suffix}`,
         { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } }), env, { waitUntil: promise => pending.push(promise) });
+      responses.push(response); return response;
     }, async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
   };
   t.mock.method(globalThis, "fetch", async (url, init) => { const request = new Request(url, init); sent.push(request); return f.reply(request, sent.length); });
-  t.after(f.drain);
+  t.after(async () => {
+    for (const response of responses) if (!response.bodyUsed) await response.body?.cancel();
+    await f.drain();
+  }, { timeout: 10000 });
   return f;
 }
+
+for (const restricted of [true, false]) test(`Synthetic data-only native/manifest discovery preserves its ${restricted ? "restricted" : "unrestricted"} caller and original grant`, { timeout: 10000 }, async t => {
+  const f = await fixture(t, "synthetic.models", { restricted });
+  f.reply = () => Response.json({ data: [syntheticRow("allowed"), syntheticRow("hidden")] }, { headers: { etag: "private-upstream-tag", location: "/private-upstream" } });
+  for (const manifest of [false, true]) {
+    const response = await f.call("", manifest), body = await response.json(); assert.equal(response.status, 200);
+    assert.deepEqual(body, { data: (restricted ? ["allowed"] : ["allowed", "hidden"]).map(syntheticRow) });
+    assert.equal("object" in body, false); assert.match(response.headers.get("cache-control"), /private, no-store/);
+    assert.equal(response.headers.get("etag"), null); assert.equal(response.headers.get("location"), null);
+  }
+  await f.drain(); assert.equal(f.sent.length, 2);
+  for (const request of f.sent) {
+    assert.equal(request.url, `https://${f.id}.example/openai/v1/models`); assert.equal(request.method, "GET"); assert.equal(request.body, null);
+    assert.equal(request.headers.get("authorization"), "Bearer synthetic-original-key"); assert.equal(request.redirect, "manual");
+  }
+  const events = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(events.length, 2);
+  assert.ok(events.every(e => e.actual_cost_micros === 0 && e.reserved_cost_micros === 0));
+});
+
+test("Synthetic discovery rejects query remapping and cannot use a revoked grant's environment fallback", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "synthetic.models");
+  for (const manifest of [false, true]) for (const query of ["?url=https://other.example", "?limit=1", "?model=hidden", "?api_key=fixture"]) {
+    const response = await f.call(query, manifest), body = await response.text(); assert.equal(response.status, 400, body);
+  }
+  assert.equal(f.sent.length, 0); await revokeGrantCredentials(f.env, f.grantKey);
+  const response = await f.call(), body = await response.text(); assert.equal(response.status, 503, body); assert.equal(f.sent.length, 0);
+});
+
+test("Synthetic native metadata requires complete bounded HTTP-200 JSON without relaxing OpenAI lists", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "synthetic.models", { restricted: false }), body = JSON.stringify({ data: [syntheticRow("allowed")] });
+  for (const reply of [
+    () => new Response(body, { status: 206, headers: { "content-type": "application/json" } }),
+    () => new Response(body, { headers: { "content-type": "text/plain" } }),
+    () => new Response(body, { headers: { "content-type": "application/json", "content-range": "bytes 0-10/20" } }),
+    () => new Response(body, { headers: { "content-type": "application/json", "content-length": String(body.length + 1) } }),
+    () => new Response(new Uint8Array([255]), { headers: { "content-type": "application/json" } }),
+    () => new Response(body.slice(0, -1), { headers: { "content-type": "application/json" } }),
+    () => Response.json({ data: [], padding: "x".repeat(2 * 1024 * 1024) }),
+    () => Response.json({ data: [syntheticRow("allowed"), syntheticRow("allowed")] }),
+    () => Response.json({ object: "foreign", data: [] }),
+  ]) {
+    f.reply = reply; const response = await f.call(), error = await response.json();
+    assert.equal(response.status, 502); assert.equal(error.error.code, "invalid_model_discovery_response");
+  }
+  const openai = await fixture(t, "openai.models"); openai.reply = () => Response.json({ data: [{ id: "allowed" }] });
+  const response = await openai.call(), error = await response.json(); assert.equal(response.status, 502); assert.equal(error.error.code, "invalid_model_discovery_response");
+});
+
+test("Synthetic empty native inventory stays empty and never revives a static seed", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "synthetic.models"); f.reply = () => Response.json({ data: [] });
+  const response = await f.call(), body = await response.json(); assert.equal(response.status, 200); assert.deepEqual(body, { data: [] });
+});
+
+test("Synthetic discovery deadline cancels a body that has JSON but no EOF", { timeout: 10000 }, async t => {
+  const f = await fixture(t, "synthetic.models", { timeoutMs: 30 }); let canceled = false;
+  f.reply = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ data: [syntheticRow("allowed")] }))); }, cancel() { canceled = true; } }), { headers: { "content-type": "application/json" } });
+  const response = await f.call(), body = await response.json(); assert.equal(response.status, 502); assert.equal(body.error.code, "invalid_model_discovery_response");
+  assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+});
 
 for (const format of ["openai.models", "anthropic.models"]) {
   test(`${format} alternate provider uses strict native and manifest envelopes with scoped grants`, async t => {

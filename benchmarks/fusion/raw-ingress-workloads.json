@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "bounded-credential-ingress",
+      "split": "development",
+      "base": "e1232355c8b0612444822817b77718742a6cd1c5",
+      "oracle": "4333686cf27ff5ab99c09aa7dcb0634038232e8f",
+      "editPaths": [
+        "worker/proxy-auth.ts",
+        "worker/discovery.ts",
+        "worker/pool.ts"
+      ],
+      "visibleTests": [
+        "worker/test/identity-admission.test.mjs",
+        "worker/test/discovery.test.mjs",
+        "worker/test/subscription-pool.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/raw-credential-ingress.test.mjs"
+      ],
+      "instruction": "Bound raw proxy-key ingress before parsing, marker inspection, Bearer removal, secret encoding, hashing, admission or provider dispatch. Examine authorization, x-api-key, x-goog-api-key and api-key sequentially in that order. Each examined Headers.get value may contain at most 4096 UTF-16 units; an examined oversized value is a terminal identityFailure('limit'), yielding the existing HTTP 503 identity_admission_unavailable disposition. Count authorization's Bearer spelling and whitespace in that raw limit. Stop reading lower headers at the first syntactically valid key, and never try another key after authentication of that selected key fails. Preserve the current modern and legacy key grammar and ordinary HTTP 401 behavior for missing or malformed bounded values. Bound the selected ASCII secret to 4096 bytes before encoding or hashing. Apply the same bounded sequential selection to discovery and pool intent detection: a malformed value containing a proxy marker still selects proxy authentication rather than Access fallback, while ordinary bounded non-proxy headers preserve Access/session precedence. Inspection must select once, then authenticate that same selected key through a private helper rather than rereading headers. Preserve existing cancellation, response formatting and owner precedence. Do not cache raw headers or secrets or change the general key parser and hash helper."
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import type { ManagedFileAdapter, ManagedFileAction, ManagedFileDescriptor, ManagedFileState } from "./managed-lifecycle-types.ts";
+import { openRouterVideoFiles } from "./managed-openrouter-video-files.ts";
 import { exactMediaParams } from "./managed-media-json.ts";
 import { googleOmniVideoModel } from "./managed-google-omni.ts";
 import { googleOmniApiBase, googleOmniEnvelopeBytes, googleOmniFileName, googleOmniVideos,
@@ -119,6 +120,6 @@ const omniFiles: ManagedFileAdapter = {
 // Discovery is not activation. Runtime must attach the factory result through
 // its published lifecycle.files field and qualify original-job endpoint links.
 export function managedFileAdapter(protocol: string): ManagedFileAdapter | undefined {
-  return protocol === omniFiles.protocol ? omniFiles : undefined;
+  return protocol === omniFiles.protocol ? omniFiles : protocol === openRouterVideoFiles.protocol ? openRouterVideoFiles : undefined;
 }
 

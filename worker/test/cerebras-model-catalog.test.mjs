@@ -1,5 +1,6 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 const { cerebrasPublicCatalogRequest, parseCerebrasPublicCatalog, readCerebrasPublicCatalog } = await import("../cerebras-model-catalog.ts");
 
@@ -18,7 +19,7 @@ test("Cerebras public request has no inference credentials and refuses redirects
     assert.equal(r.url, "https://api.cerebras.ai/public/v1/models");
     assert.equal(r.method, "GET"); assert.equal(r.body, null);
     assert.deepEqual([...r.headers], [["accept", "application/json"]]);
-    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
   }
 });
 
@@ -106,4 +107,9 @@ test("Cerebras reader cancellation closes the upstream stream", async () => {
     { headers: { "content-type": "application/json" } });
   const reading = readCerebrasPublicCatalog(response, controller.signal, allowed);
   controller.abort(); await assert.rejects(reading, invalid); assert.equal(canceled, true);
+});
+
+test("Cerebras catalog loads without the test-only TypeScript resolver", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", 'await import("./worker/cerebras-model-catalog.ts"); process.stdout.write("loaded")'], { encoding: "utf8" });
+  assert.equal(output, "loaded");
 });

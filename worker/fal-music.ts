@@ -1,3 +1,4 @@
+import { assertFalRunDispatch } from "./fal-dispatch.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import { readNativeJson } from "./native-json.ts";
 
@@ -32,12 +33,7 @@ export function prepareFalMusic(model: string, value: unknown): FalMusicRequest 
 }
 
 export function assertFalMusicDispatch(request: Request, prepared: FalMusicRequest): void {
-  const url = new URL(request.url);
-  if (request.method !== "POST" || url.origin !== "https://fal.run" || url.pathname !== prepared.path
-    || !(falMusicModels as readonly string[]).includes(prepared.model) || prepared.path !== "/" + prepared.model
-    || url.username || url.password || url.search || url.hash
-    || !/^Key [\x21-\x7e]{1,4096}$/.test(request.headers.get("authorization") ?? "")
-    || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") fail("dispatch");
+  assertFalRunDispatch(request, prepared, falMusicModels, fail);
 }
 
 export interface FalMusicObservation {
@@ -55,7 +51,8 @@ export function observeFalMusic(value: unknown, prepared: FalMusicRequest): FalM
     || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(url.hostname) || /^[\d.]+$/.test(url.hostname)
     || /(?:^|\.)(?:localhost|local|internal|test|invalid)$/.test(url.hostname)) fail("audio_url");
   const mime = audio.content_type ?? null, size = audio.file_size ?? null;
-  if (mime !== null && !(prepared.format === "mp3" ? ["audio/mpeg", "audio/mp3"] : ["audio/wav", "audio/x-wav", "audio/wave"]).includes(String(mime))) fail("mime");
+  if (mime !== null && (typeof mime !== "string"
+    || !(prepared.format === "mp3" ? ["audio/mpeg", "audio/mp3"] : ["audio/wav", "audio/x-wav", "audio/wave"]).includes(mime))) fail("mime");
   if (size !== null && (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0 || size > maxAudio)) fail("size");
   if (value.lyrics !== undefined) text(value.lyrics, 0, 32768);
   if (value.tags !== undefined) text(value.tags, 0, 8192);

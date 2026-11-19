@@ -46,7 +46,8 @@ endpoints:
     timeoutMs: 600000
   messages:
     modelPassthrough: {}
-    path: /messages
+    path: /v1/messages
+    upstreamPath: /messages
     requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages
     responseFormat: anthropic.messages
@@ -60,6 +61,7 @@ endpoints:
 models:
   entries:
     - id: vercel-ai-gateway/anthropic/claude-sonnet-4.6
+      displayName: "Claude Sonnet 4.6"
       upstream: anthropic/claude-sonnet-4.6
       capabilities: [llm.chat, llm.messages]
 billing:

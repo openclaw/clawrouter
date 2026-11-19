@@ -66,3 +66,24 @@ does not implement shared path dispatch, change a provider YAML, or regenerate
 the snapshot. Shared types/runtime and real route tests must land before the
 provider owner activates these declarations. Static compiler tests do not prove
 native Chat/Messages/discovery parity or qualify unknown inference prices.
+
+## Responses create continuation
+
+The compiler also qualifies `openai.responses` on both sides of literal
+`POST /v1/responses`. It preserves the existing request body, SSE setting,
+selected model and original credential. GET retrieval, cancellation, WebSocket
+Responses, endpoint queries, lifecycle links, templates, path parameters and
+request/tool tariffs remain outside this mapping contract.
+
+The frozen OpenCode product paths supplied by the provider owner are
+`/inference/go/openai/v1/responses` for Go and
+`/inference/openai/v1/responses` for Console, under `https://opencode.ai`.
+The declaration uses the same camelCase `upstreamPath`; the caller route stays
+`/v1/responses`. This does not grant access across the two account products,
+alter their selected credentials, rewrite model identities or admit a custom
+origin. A grant-transport path must still agree exactly with the declared path.
+
+The common runtime's `worker/endpoint-path.ts` must independently qualify the
+same finite Responses contract before provider activation. Compiler publication
+alone cannot open a dispatch path rejected by that guard. Provider YAML belongs
+to source4; this continuation does not change it or generated snapshots.

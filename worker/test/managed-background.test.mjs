@@ -151,7 +151,8 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
   const bad = [input => { input.facts.fixed = null; input.facts.cost = { ...cost, basis: "flat_fallback", reserveMicros: 1 }; },
     input => { input.managed.idempotencyKey = "raw-caller-key"; }, input => { input.managed.input = "private-input"; },
     input => { input.managed.requestedVersion = "x".repeat(257); }, input => { input.plan.reservedMicros = 1; }];
-  for (const mutate of bad) { const input = f.admission(); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
+  // Corrupt a synthetic wire payload, never the admitted immutable facts.
+  for (const mutate of bad) { const input = JSON.parse(JSON.stringify(f.admission())); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM responses_background").get().n, 0);
   assert.deepEqual(f.reserveCalls, []);
   for (const id of ["", "../escape", "a".repeat(129), "query?x=1"]) assert.throws(() => managedPredictionKey(id));
@@ -159,7 +160,7 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
 
 test("managed protocols and configured providers keep distinct keys, bindings and compacted routes", async t => {
   const f = fixture(t), rows = [];
-  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs"]) for (const providerId of ["first", "second"]) {
+  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs", "openrouter.video"]) for (const providerId of ["first", "second"]) {
     const input = f.admission(); input.owner = { ...input.owner, providerId };
     input.managed = { ...input.managed, protocol, providerId };
     input.route.pathParams = protocol === "fal.queue" ? { owner: "fal-ai", app: "flux", variant: "schnell" } : {};
@@ -171,7 +172,7 @@ test("managed protocols and configured providers keep distinct keys, bindings an
     f.store.acknowledge(input.id, frozen.eventId, "usage", "stored");
     rows.push(input);
   }
-  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, 6);
+  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, rows.length);
   for (const input of rows) {
     const retry = f.store.managedRetry(input.managed, "g1");
     assert.equal(retry.id, input.id); assert.equal(retry.phase, "complete");

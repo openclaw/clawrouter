@@ -19,7 +19,7 @@ export function falQueuePaths(endpointId: string, requestId?: string): {
   // Pinned model identity, not an arbitrary URL or a path from the upstream body.
   const parts = endpointId.split("/");
   if (endpointId.length > 256 || parts.length < 2 || parts.length > 8
-    || parts.some((part) => !/^[a-zA-Z0-9_-]{1,64}$/.test(part))) {
+    || parts.some((part) => part.length > 64 || !/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(part))) {
     throw new Error("invalid_fal_endpoint_id");
   }
   const root = requestId === undefined ? null

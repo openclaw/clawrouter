@@ -13,6 +13,8 @@ const contracts = [
 ];
 function fixture() {
   const manifest = structuredClone(existing);
+  manifest.capabilities = manifest.capabilities.filter(value => value.id !== "llm.embeddings");
+  manifest.models.entries = manifest.models.entries.filter(value => !value.capabilities.includes("llm.embeddings"));
   for (const [id, format, method] of contracts) {
     manifest.endpoints[id] = { path: `/v1beta/models/\${model}:${method}`, pathParams: ["model"], requestFormat: format, responseFormat: format };
     manifest.capabilities.push({ id: "llm.embeddings", endpoint: id, methods: ["POST"] });
@@ -40,8 +42,8 @@ test("Google embedding format handshake preserves the actual unary/batch paths, 
 
 test("Google embedding declarations preserve existing generation routes and leave unknown costs unpriced", () => {
   const original = compile(existing), snapshot = compile(fixture());
-  for (const endpoint of original.providers[0].endpoints) assert.deepEqual(snapshot.providers[0].endpoints.find(value => value.id === endpoint.id), endpoint);
-  for (const [id, model] of Object.entries(original.model_index)) assert.deepEqual(snapshot.model_index[id], model);
+  for (const endpoint of original.providers[0].endpoints.filter(value => !contracts.some(([id]) => id === value.id))) assert.deepEqual(snapshot.providers[0].endpoints.find(value => value.id === endpoint.id), endpoint);
+  for (const [id, model] of Object.entries(original.model_index).filter(([, value]) => !value.capabilities.includes("llm.embeddings"))) assert.deepEqual(snapshot.model_index[id], model);
   for (const capability of ["llm.generate", "llm.stream"]) assert.deepEqual(snapshot.capability_index[capability], original.capability_index[capability]);
   const manifest = fixture(), model = manifest.models.entries.at(-1);
   model.pricing = structuredClone(manifest.models.entries[0].pricing);

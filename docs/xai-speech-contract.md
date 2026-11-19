@@ -51,7 +51,7 @@ or interrupted-request debit. Upstream cost remains unknown; upstream-dollar
 hard budgets stay closed until the shared admission/settlement contract is
 qualified. Policy-fixed charges remain separate from vendor cost.
 
-Proposed synthesis format `xai.tts` to `binary`, capability `audio.speech`;
+Native synthesis format `xai.tts` to `audio.binary`, capability `audio.speech`;
 voice-list request/response format `xai.tts_voices` is an accompanying native
 control. Source 11.3 owns existing xAI YAML/schema/prices and the exact catalog
 link without a fake model row. Source 11.1 owns binary dispatch, admission and

@@ -1,5 +1,5 @@
-import { readNativeJson } from "./native-json";
-import { HttpError } from "./utils";
+import { readNativeJson } from "./native-json.ts";
+import { HttpError } from "./utils.ts";
 
 const PUBLIC_MODELS_URL = "https://api.cerebras.ai/public/v1/models";
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
@@ -49,7 +49,7 @@ export function cerebrasPublicCatalogRequest(inferenceBaseUrl: string, signal: A
     throw new HttpError(503, "provider_catalog_not_supported", "Cerebras public catalog requires the canonical inference service");
   }
   return new Request(PUBLIC_MODELS_URL, {
-    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "error", signal,
+    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "manual", signal,
   });
 }
 

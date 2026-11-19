@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: kilocode/anthropic/claude-sonnet-4.6
+      displayName: "Claude Sonnet 4.6"
       upstream: anthropic/claude-sonnet-4.6
       capabilities: [llm.chat]
 billing:

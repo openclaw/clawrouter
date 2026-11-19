@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "alternate-preparation-settlement",
+      "split": "development",
+      "base": "2beb4ec85c9cbbbc82f15e93376411599ad1f8ff",
+      "oracle": "242576921d1cdfec5f05f59cac6bc8062078b145",
+      "editPaths": [
+        "worker/proxy.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/proxy-routing.test.mjs"
+      ],
+      "instruction": "When an eligible rejected upstream request starts preparing its one alternate grant, caller cancellation or the existing deadline must not let the public proxy operation finish before that preparation settles. Capture the single original preparation promise, immediately observe both fulfillment and rejection without retaining the prepared result, and join its settlement even when the wait fails. Recheck the original operation signal after the final join, including when preparation rejects and no alternate exists. Preserve the existing eligibility, excluded grant, connection, one-alternate ceiling, cancellation before alternate dispatch, ordinary preparation-failure behavior, original usage/reservation ownership, and paid-dispatch accounting. Do not add another preparation call, timer, retry, signal or compensation. This is a logical promise-settlement guarantee, not a claim that all inner physical resources have retired."
+    },
+    {
+      "id": "openrouter-full-music-delivery",
+      "split": "development",
+      "base": "fd190034f567615feab03e3951819cd6ecf1867e",
+      "oracle": "e47ecdedd4da93bb665431b81f698668468dc8ea",
+      "editPaths": [
+        "worker/native-openrouter-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/openrouter-music.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/native-openrouter-music.test.mjs"
+      ],
+      "sourceContext": [
+        {
+          "path": "worker/openrouter-music.ts",
+          "query": "export function createOpenRouterMusicInspector"
+        }
+      ],
+      "instruction": "Restore the full bounded native OpenRouter music response contract: validate and replay original MP3/WAV SSE bytes up to the existing 16 MiB decoded-audio boundary and exactly 32 MiB wire ceiling, rather than imposing the smaller partial-response limit or decoding an aggregate audio copy. Use the existing scalar music inspector to validate model identity, request audio format, base64, usage, transcript and terminal semantics. Quarantine until a valid DONE; preserve original SSE bytes and diagnostic usage without inventing prices. Read only byte streams with separate returned BYOB windows bounded to 64 KiB; DONE must not wait for EOF or buffer fill. Bound reads, events, frame bytes, line count, wire bytes and inspector limits; reject malformed UTF-8, unsupported/multiline framing, error keys/events, filtered output, post-terminal content, wrong MIME/status/range/encoding/redirect, non-byte streams and truncated completion. Respect caller cancellation and memory lease ownership. Preserve exact destination, request validation and output headers. Never reconnect, generate a second response, decode a payload-sized audio copy, or expose partial SSE before validation."
+    }
+  ]
+}

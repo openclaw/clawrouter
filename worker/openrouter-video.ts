@@ -130,26 +130,28 @@ export function rewriteOpenRouterVideo(observation: OpenRouterVideoObservation, 
   return { ...body, id: observation.id, polling_url: retrieve,
     ...(observation.contentAvailable ? { unsigned_urls: [result] } : {}) };
 }
-export async function readOpenRouterVideoContent(response: Response, signal: AbortSignal): Promise<{ video: Uint8Array; mimeType: string; upstreamCostMicros: null }> {
+export async function readOpenRouterVideoContent(response: Response, signal: AbortSignal, maxBytes = maxVideo): Promise<{ video: Uint8Array; mimeType: string; upstreamCostMicros: null }> {
   const mime = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase(), length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > maxVideo
+    || response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
     || !mime || !["video/mp4", "video/webm"].includes(mime)
-    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxVideo)) {
+    || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxBytes)) {
     void response.body?.cancel().catch(() => undefined); fail("content_http");
   }
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  const reader = response.body.getReader();
   const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true });
   let size = 0;
   try {
     signal.throwIfAborted();
+    // One bounded allocation also bounds overhead from tiny transport chunks.
+    const video = new Uint8Array(maxBytes);
     for (;;) {
       const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
-      size += chunk.value.byteLength; if (size > maxVideo) fail("content_limit"); chunks.push(chunk.value.slice());
+      if (size + chunk.value.byteLength > maxBytes) fail("content_limit");
+      video.set(chunk.value, size); size += chunk.value.byteLength;
     }
     if (!size || !response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("content_incomplete");
-    const video = new Uint8Array(size); let offset = 0;
-    for (const chunk of chunks) { video.set(chunk, offset); offset += chunk.length; }
-    return { video, mimeType: mime, upstreamCostMicros: null };
+    return { video: video.subarray(0, size), mimeType: mime, upstreamCostMicros: null };
   } catch { void reader.cancel().catch(() => undefined); throw new Error("invalid_openrouter_video_content"); }
   finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
 }

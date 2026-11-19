@@ -62,6 +62,48 @@ acceptance remain owner integrations. Current primary examples emphasize
 Interactions; frozen GenerateContent compatibility requires actual consumer
 qualification. No deployment, live request or future-model expansion occurred.
 
+## Complete-response wrapper
+
+`worker/native-google-media-understanding.ts` exports
+`prepareNativeGoogleMediaUnderstanding(selection): NativeResponse | undefined`.
+It uses the existing JSON body ABI, provider `google-gemini`, the exact frozen
+upstream model and model path. Request formats remain
+`google.audio_understanding` and `google.video_understanding`; response format
+is `google.generate_content`. The leaf binds capabilities `audio.transcription`
+and `video.understanding`, respectively, for the declaration owner's integration.
+No query, passthrough, alias, stream, tool or request tariff is accepted.
+
+The first wrapper qualification is intentionally narrower than the pure codec's
+MIME allowlist: explicit `audio/wav` PCM16, mono/stereo at 8–96 kHz, and explicit
+`video/mp4` with bounded MP4 boxes, a video track and nonempty media data. These
+are container checks, not a complete media decoder or duration/billing proof.
+Other MIME families remain codec-only until their byte contract is qualified.
+Missing MIME, mislabeled bytes, unbounded/extended MP4 boxes, raw file IDs and
+URI references are rejected before dispatch. The native prompt, snake-case body
+and canonical media bytes remain unchanged.
+
+Requests are bounded to 8 MiB JSON and 4 MiB decoded inline media. The 16 MiB
+response lease charges 32 MiB before dispatch; an 8 MiB input reservation plus
+that lease charges 48 MiB of the existing 96 MiB pool. Responses require complete
+HTTP 200 UTF-8 JSON through EOF under 1 MiB, with exact lengths and no redirect,
+range or encoded body. Every final part must be valid text and the candidate
+must STOP before output. Thought parts are removed; native final text and usage
+remain unchanged. No returned URL is fetched or upload authority created.
+
+Normalized usage remains `{ tokens: null, outcome: "success" }` with no tariff
+or invoice receipt. Invalid, missing or canceled output cannot prove free work,
+publish a partial result or authorize POST replay. Source1 owns original grants,
+model/capability-aware shared-path selection, request capacity, auth, admission,
+dispatch and settlement. Source3 owns declaration/pricing, Source2 actual native
+consumption and Source6 composed proof. Unknown upstream-dollar budgets remain
+closed independently of `policy_fixed` charging.
+
+Ten wrapper cases use an offline decoder-qualified H.264 MP4 and PCM16 WAV,
+including malformed containers, exact bounds, native usage, thought exclusion,
+capacity and canceled/incomplete delivery. The older four-byte codec samples
+remain unchanged and are never treated as playable-media evidence. No live
+provider call or route activation is claimed.
+
 ## Primary evidence
 
 Checked 2026-11-03 using current unlocalized documentation:

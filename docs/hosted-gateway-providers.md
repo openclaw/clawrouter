@@ -58,7 +58,7 @@ OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 `anthropic-messages` with a refreshable catalog and no static model list.
 The existing Chat seed is retained; no newer vendor model generation is added.
 
-`POST /v1/native/vercel-ai-gateway/messages` and
+`POST /v1/native/vercel-ai-gateway/v1/messages` and
 `POST /v1/proxy/vercel-ai-gateway/messages` dispatch to
 `https://ai-gateway.vercel.sh/v1/messages` with the selected gateway key.
 Native names retain their provider prefix. Messages, signed and redacted
@@ -66,12 +66,18 @@ thinking, tool use/results, system cache controls and the caller's Anthropic
 version/beta headers pass through unchanged. Caller API-key headers cannot
 replace the selected gateway credential.
 
-An Anthropic SDK appends `/v1/messages` to its base URL. That SDK path still
-requires the bounded schema/runtime `upstreamPath` contract: preserve the public
-Chat path while mapping a public `/v1/messages` endpoint to upstream `/messages`
-under the existing `/v1` base. Until that dependency and actual-client proof
-land, these routes prove native Messages payload transport, not drop-in SDK
-base-URL compatibility.
+An Anthropic SDK appends `/v1/messages` to its base URL. The landed compiler and
+runtime `upstreamPath` contract now preserve that public route while dispatching
+literal `/messages` under the existing `https://ai-gateway.vercel.sh/v1` base.
+The private catalog exposes an eligible native Messages offer under the original
+policy, without a global Messages preference or a router model alias. Chat keeps
+its existing public path. The old unversioned Messages path is not an alias.
+
+The actual OpenClaw SDK candidate is
+[PR192060](https://github.com/openclaw/openclaw/pull/192060), source head
+`ac63756d3c99230836a8b671f937d086b162188d`. Source2 owns that client; source6 must
+qualify the exact pair after serialized snapshot integration. A client candidate
+or these Worker fixtures alone do not prove actual SDK end-to-end acceptance.
 
 The new real Worker/SQLite fixtures cover JSON and fragmented SSE on both
 routes, fixed-price reservation/settlement, error events, cancellation and

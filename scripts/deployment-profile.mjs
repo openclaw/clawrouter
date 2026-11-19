@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { edgeTarget } from "./edge-proof-profile.mjs";
 
 const fakeco = JSON.parse(
   readFileSync(new URL("../config/deployments/fakeco.json", import.meta.url), "utf8"),
@@ -23,6 +24,7 @@ const fakecoLockedEnv = {
 
 export function deploymentTarget(env = process.env) {
   const environment = env.CLAWROUTER_DEPLOY_ENV?.trim() || "production";
+  if (environment === "edge-proof") return edgeTarget(env);
   if (environment === "fakeco") {
     assertLockedEnvironment(env);
     return structuredClone(fakeco);
@@ -66,6 +68,7 @@ export function deploymentTarget(env = process.env) {
 }
 
 export function assertDeploymentMutation(target, env = process.env) {
+  if (target.environment === "edge-proof") throw new Error("edge-proof: production provisioning is forbidden; use the reviewed dedicated resource plan");
   if (
     target.environment === "fakeco" &&
     env.CLAWROUTER_DEPLOY_CONFIRM?.trim() !== target.environment

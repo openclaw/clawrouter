@@ -1,10 +1,11 @@
 # Specialist hosted Chat APIs
 
-These experimental manifests expose Chat Completions and SSE. Primary contracts
+These experimental manifests expose Chat Completions and SSE; Synthetic also
+declares [native Messages and discovery](synthetic-native-contracts.md). Primary contracts
 were checked on 2026-11-03. Live inference, account entitlement and monetary
 settlement have not been qualified.
 
-| Provider | Key binding | Base URL | Catalog model → upstream request model |
+| Provider | Key binding | Chat API base URL | Catalog model → upstream request model |
 | --- | --- | --- | --- |
 | `abliteration` | `ABLITERATION_API_KEY` | `https://api.abliteration.ai/v1` | `abliteration/abliterated-model-large-v2` → `abliterated-model-large-v2` |
 | `meta` | `MODEL_API_KEY` | `https://api.meta.ai/v1` | `meta/muse-spark-1.3` → `muse-spark-1.3` |
@@ -19,9 +20,13 @@ provider-scoped; another provider's key is never a fallback.
 
 ## Product boundaries
 
-- Abliteration's quickstart calls its environment variable `ABLIT_KEY`. Configure
-  that credential explicitly as `ABLITERATION_API_KEY` for this router manifest.
-  The manifest does not read a second binding or select a subscription plan.
+- Abliteration accepts canonical `ABLIT_KEY` or legacy `ABLITERATION_API_KEY` as
+  alternative server bindings for the same credential. Either satisfies
+  readiness; when both are present, the canonical value wins. A malformed
+  canonical value fails closed rather than falling back to the legacy value.
+  The original selected grant remains authoritative over both server bindings;
+  a missing or invalid selected grant credential never borrows either value.
+  These aliases do not select a subscription plan or authorize another provider.
   Large v2 is a distinct model from the deprecated Large model. Responses,
   Messages, provider policies and server search are separate contracts.
 - Meta uses the Model API key, not a third-party Llama hosting key. Its Chat
@@ -30,9 +35,10 @@ provider-scoped; another provider's key is never a fallback.
   encrypted reasoning, Messages, built-in tools and audio/video need separate
   qualification.
 - Synthetic's `syn:large:text` is a provider-managed moving alias. It is not a
-  fixed model version or price. This manifest uses the documented OpenAI base;
-  Anthropic endpoints, subscription quota APIs, search and embeddings are not
-  advertised by this Chat route.
+  fixed model version or price. One service origin and original grant serve
+  distinct OpenAI Chat/model-list and Anthropic Messages dispatch paths. Native
+  Messages preserves its own wire format; subscription quota APIs, search and
+  embeddings are separate contracts.
 - Particle's catalog and responses name `particle-ai/particle-1`; its request
   documentation says to send `particle-1`. The bundled row maps those IDs
   explicitly. Native callers must supply the documented request ID themselves.

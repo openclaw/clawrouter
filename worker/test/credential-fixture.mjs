@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
@@ -16,8 +17,7 @@ export function credential(principalId = session.email) {
 }
 
 export async function fixture(t, entries = [], { held = true, legacy = false } = {}) {
-  const { db, sql } = sqliteFixture(t);
-  const owner = new PolicyBindingIndexObject({ storage: { sql } });
+  const { db, sql, transactionSync } = sqliteFixture(t);
   const store = new Map();
   const call = async (path, body) => {
     const response = await owner.fetch(new Request(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) }));
@@ -38,11 +38,14 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
         state.beforeMutation = null;
         await action?.(JSON.parse(init.body));
       }
-      return owner.fetch(new Request(url, init));
+      if (!new Headers(init?.headers).has("x-clawrouter-identity-admission")) return owner.fetch(new Request(url, init));
+      const response = await owner.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
+      return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });
     } }) },
     POLICY_KV: {
       async list({ prefix }) { return { list_complete: true, keys: [...store.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })) }; },
-      async get(key) { return structuredClone(Array.isArray(key) ? new Map(key.map((item) => [item, store.get(item) ?? null])) : store.get(key) ?? null); },
+      async get(key, type) { const value = structuredClone(Array.isArray(key) ? new Map(key.map((item) => [item, store.get(item) ?? null])) : store.get(key) ?? null);
+        return type === "stream" && value !== null ? accessBytesResponse(JSON.stringify(value), "").body : value; },
       async put(key, value) { store.set(key, JSON.parse(value)); },
       async delete(key) { store.delete(key); },
     },
@@ -58,6 +61,7 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
       return worker.fetch(new Request(`https://clawrouter.example${path}`, { method, headers: { ...authHeaders, origin: "https://clawrouter.example", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), state, { waitUntil() {} });
     },
   };
+  const owner = new PolicyBindingIndexObject({ storage: { sql, transactionSync } }, state);
   if (legacy) {
     for (const [id, value] of entries) store.set(`credentials/${id}`, value);
     store.set("policies/maintainer_access", policy);
