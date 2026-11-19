@@ -124,6 +124,12 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       policy = await refreshPolicy();
       return metadataResponse(filterRequestyModels(metadata, id => discoveryAllows(policy, provider, id)), response);
     }
+    // Private catalogs never publish an upstream error payload, even when the
+    // caller is unrestricted and an original-owner refresh is available.
+    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
+      await discardMetadata(response, registerInput);
+      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
+    }
     if (refreshPolicy && response.status !== 200) {
       if (response.status < 400) {
         await discardMetadata(response, registerInput);
@@ -136,10 +142,6 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       if (!restricted) return metadataResponse(metadata, response);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
-    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
-      await discardMetadata(response, registerInput);
-      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
-    }
     if (!response.ok) {
       if (response.status >= 300 && response.status < 400) {
         await discardMetadata(response, registerInput);
@@ -150,8 +152,13 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     if (isKeyedModelDiscovery(endpoint.request_format)) {
+      if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
       const metadata = await readKeyedModelDiscovery(endpoint.request_format, response, operation.signal, id => discoveryAllows(policy, provider, id));
-      return metadataResponse(metadata, response);
+      // The native reader has completed EOF and retirement before authority.
+      // Join the original refresh, not merely an abort race with that task.
+      policy = await refreshPolicy();
+      operation.signal.throwIfAborted();
+      return metadataResponse({ ...metadata, data: metadata.data.filter(model => discoveryAllows(policy, provider, model.id)) }, response);
     }
     if (endpoint.request_format === "synthetic.models") {
       const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,

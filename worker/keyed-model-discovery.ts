@@ -3,7 +3,9 @@ import { arceeCatalogRequest, readArceeModels } from "./arcee-model-catalog.ts";
 import { novitaCatalogRequest, readNovitaModels } from "./novita-model-catalog.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
-import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
+import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { policyAllowsModel } from "../shared/policy-models.ts";
+import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 const catalogs = {
@@ -23,7 +25,9 @@ export function readKeyedModelDiscovery(format: keyof typeof catalogs, response:
 // Only these native keyed catalogs use this boundary. Public metadata has a
 // separate request contract and must never inherit these credential headers.
 export async function prepareKeyedModelDiscovery(request: Request, env: Env, auth: AuthorizedIdentity,
-  selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers): Promise<(signal: AbortSignal) => Promise<void>> {
+  selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers): Promise<(signal: AbortSignal) => Promise<AccessPolicy>> {
+  // Capture admission before any asynchronous preparation or authority read.
+  const admittedModels = auth.policy.models == null ? null : [...auth.policy.models];
   const { provider, endpoint } = selection, format = endpoint.request_format;
   if (!isKeyedModelDiscovery(format)) unavailable();
   const contract = catalogs[format], grant = upstream.grant, key = upstream.grantKey;
@@ -43,7 +47,7 @@ export async function prepareKeyedModelDiscovery(request: Request, env: Env, aut
   // cannot turn discovery into another account or add forwarded credentials.
   for (const name of [...headers.keys()]) headers.delete(name);
   native.headers.forEach((value, name) => headers.set(name, value));
-  const original = ownerIdentity(grant);
+  const original = ownerIdentity(grant), destination = native.url;
   const owner = { providerId: provider.id, endpointId: endpoint.id, grantKey: key, lineage: grant.credentialLineage!,
     routeSha256: await sha256Hex(JSON.stringify([format, native.url])), policyGeneration: auth.policy.generation };
   const { publicControlAuthorization, authorizeResponseControl, assertControlCallerLive } = await import("./response-control-authorization.ts");
@@ -52,10 +56,16 @@ export async function prepareKeyedModelDiscovery(request: Request, env: Env, aut
   return async signal => {
     // Reuse canonical caller/policy authorization, then inspect the already
     // selected owner without admission/credential caches or materialization.
-    await authorizeResponseControl(env, caller, owner, signal);
+    const policy = await authorizeResponseControl(env, caller, owner, signal);
     const current = await inspectGrantCredentials(env, key, signal);
     signal.throwIfAborted(); assertControlCallerLive(caller);
-    if (!qualifiedGrant(current, provider.id) || ownerIdentity(current) !== original) unavailable();
+    if (!policy || !qualifiedGrant(current, provider.id) || ownerIdentity(current) !== original || url.href !== destination
+      || !filterGrantCandidates(provider.id, [{ key, grant: current, runtimeState: null }], new Set(),
+        grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length) unavailable();
+    // Use the canonical permission semantics; a later policy cannot broaden
+    // the model set admitted for this original owner and request.
+    return { ...policy, models: admittedModels === null ? policy.models == null ? null : [...policy.models]
+      : admittedModels.filter(id => policyAllowsModel(policy, provider.id, id)) };
   };
 }
 

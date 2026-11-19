@@ -1,5 +1,5 @@
 import { clampThinkingLevel, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createEmptyPluginRegistry, registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildLiveModelProviderConfig, clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import { fetchWithSsrFGuard } from "../../src/infra/net/fetch-guard.js";
@@ -10,6 +10,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 import { types as nodeTypes } from "node:util";
@@ -635,10 +636,12 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   const messages = await withOpenClawTestState({ label: "qianfan-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: "qianfan", modelId, modelApi: model.api, model, runtimeHandle: { provider: "qianfan", plugin: provider } });
     expect(policy.dropReasoningFromHistory).toBe([models[1], models[3]].includes(modelId));
-    return sanitizeSessionHistory({ provider: "qianfan", modelId, modelApi: model.api, model, policy, config, env: {},
+    const replayRegistry = createEmptyPluginRegistry();
+    replayRegistry.providers.push({ pluginId: "qianfan", provider, source: "test" });
+    return withPluginRuntimeGenerationRegistryScope(replayRegistry, () => sanitizeSessionHistory({ provider: "qianfan", modelId, modelApi: model.api, model, policy, config, env: {},
       workspaceDir: state.workspaceDir, sessionId: `qianfan-${id}`,
       sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "qianfan", modelApi: model.api, modelId })]),
-      messages: history });
+      messages: history }));
   });
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
     tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };

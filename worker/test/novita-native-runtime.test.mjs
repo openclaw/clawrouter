@@ -79,7 +79,7 @@ test("Novita declaration preserves the seed and seven frozen identities with qua
     assert.deepEqual(native?.input, vision.has(m.upstream) ? ["text", "image"] : ["text"]);
     assert.equal(native.contextWindow, facts[index][0]); assert.equal(native.maxOutputTokens, facts[index][1]);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions", "models_list"]);
   const opaque = providerModel(provider, "novita/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { ANTHROPIC_API_KEY: "synthetic-unselected-anthropic", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");

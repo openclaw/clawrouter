@@ -44,6 +44,18 @@ jobs:
           - consumer: qianfan
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-qianfan.test.mjs
+          - consumer: private-catalogs
+            ref: e2a8b8d4ec290cd6c035f3568a14e4d7c6433635
+            test: test/openclaw-private-catalogs.test.mjs
+          - consumer: bifrost
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-bifrost.test.mjs
+          - consumer: qwen-regions
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-qwen-regions.test.mjs
+          - consumer: litellm
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-litellm.test.mjs
           - consumer: abliteration
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-abliteration.test.mjs

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { types as nodeTypes } from "node:util";
@@ -1166,3 +1167,53 @@ export default { async fetch(request) {
     return new Response(new ReadableStream(originalSource, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
   } };`;
 }
+
+test("Qianfan actual replay callback scopes the captured provider and preserves asynchronous outcomes", async () => {
+  const code = stripTypeScriptTypes(sdkText);
+  const anchor = 'withOpenClawTestState({ label: "qianfan-worker" }, async state => {';
+  const begin = code.indexOf(anchor), end = code.indexOf('\n  });\n  const context', begin);
+  assert.ok(begin >= 0 && end > begin);
+  const factory = new Function("resolveTranscriptPolicy", "expect", "createEmptyPluginRegistry", "withPluginRuntimeGenerationRegistryScope",
+    "sanitizeSessionHistory", "makeInMemorySessionManager", "makeModelSnapshotEntry", "models", "modelId", "model", "provider", "config", "id", "history",
+    "return async state => {" + code.slice(begin + anchor.length, end) + "};");
+  // Inert sanitizer and scope boundary: this verifies the actual fixture callback,
+  // not SDK/native behavior. Native ALS exercises concurrent suspension/restoration.
+  const storage = new AsyncLocalStorage(), registries = [], foreign = { id: "qianfan" };
+  const outer = { providers: [{ pluginId: "qianfan", provider: foreign, source: "test" }] };
+  for (const fail of [false, true]) for (const reason of [undefined, false, new Error("synthetic")]) {
+    await storage.run(outer, async () => {
+      await Promise.all([0, 1].map(async index => {
+        const selected = { id: "qianfan" }, modelId = models[index], model = { provider: "qianfan", api: "openai-completions" };
+        const config = {}, history = [], policy = { dropReasoningFromHistory: index === 1 }, result = [];
+        const state = { workspaceDir: "/fixture/workspace" }; let registry, pending, calls = 0, scopedResult;
+        const invoke = factory(params => {
+          assert.equal(params.runtimeHandle.plugin, selected); assert.equal(params.model, model); return policy;
+        }, value => ({ toBe: expected => assert.equal(value, expected) }), () => {
+          registry = { providers: [] }; registries.push(registry); return registry;
+        }, (owned, run) => {
+          assert.equal(owned, registry); scopedResult = storage.run(owned, run); assert.equal(scopedResult, pending); return scopedResult;
+        }, params => {
+          calls++; assert.equal(storage.getStore(), registry);
+          assert.deepEqual(registry.providers, [{ pluginId: "qianfan", provider: selected, source: "test" }]);
+          assert.notEqual(registry.providers[0].provider, foreign);
+          assert.equal(params.model, model); assert.equal(params.policy, policy); assert.equal(params.config, config);
+          assert.equal(params.messages, history); assert.equal(params.workspaceDir, state.workspaceDir);
+          assert.equal(params.sessionId, "qianfan-case" + index);
+          pending = Promise.resolve().then(async () => {
+            assert.equal(storage.getStore(), registry);
+            await storage.run({ providers: [] }, async () => { assert.deepEqual(storage.getStore().providers, []); });
+            assert.equal(storage.getStore(), registry);
+            if (fail) throw reason;
+            return result;
+          }); return pending;
+        }, entries => ({ entries }), value => value, models, modelId, model, selected, config, "case" + index, history);
+        let failed = false, value;
+        try { value = await invoke(state); } catch (error) { failed = true; value = error; }
+        assert.equal(failed, fail); assert.equal(value, fail ? reason : result); assert.equal(calls, 1);
+        assert.equal(storage.getStore(), outer);
+      }));
+      assert.equal(storage.getStore(), outer);
+    });
+  }
+  assert.equal(new Set(registries).size, registries.length); assert.equal(storage.getStore(), undefined);
+});

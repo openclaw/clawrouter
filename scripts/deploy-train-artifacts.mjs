@@ -40,8 +40,9 @@ export async function prepareNativeUpload({ state, blue, configPath = '.wrangler
   if (manifest.schema !== 1 || !/^[a-f0-9]{64}$/.test(runtimeSha ?? '') ||
       manifest.runtime.assetPath !== `__large_http/artifact/${runtimeSha}.mjs`) throw new Error('Invalid native runtime manifest');
   const changed = runtimeSha !== receipt.runtimeSha;
-  if (changed && mode !== 'native-cutover') throw new Error('Different native runtime fingerprint; use a separately rehearsed cutover');
+  if (changed && !['native-cutover','native-control'].includes(mode)) throw new Error('Different native runtime fingerprint; use a separately rehearsed cutover');
   if (mode === 'native-cutover' && (!changed || state.unsafe || state.migration)) throw new Error('Native cutover requires a different, rollback-compatible payload');
+  if (mode === 'native-control' && (state.unsafe || state.migration)) throw new Error('Native control adoption requires a rollback-compatible release');
   const native = await readFile(resolve(assets, manifest.runtime.assetPath)), edge = await readFile(worker);
   if (hash(native) !== runtimeSha || native.length !== manifest.runtime.bytes || hash(edge) !== manifest.worker?.sha256 || edge.length !== manifest.worker.bytes)
     throw new Error('Native build artifact drift');
@@ -51,9 +52,17 @@ export async function prepareNativeUpload({ state, blue, configPath = '.wrangler
   }
   if (blue.id !== state.blue) throw new Error('Native release source differs from train');
   state.native = { schema: 1, runtimeSha };
-  if (changed) {
-    state.cutover = { schema: 1, blueRuntimeSha: receipt.runtimeSha, nativeSource: nativeSource(blue), phase: 'prepared' };
-    await prepareRecovery({ state, configPath, directory: directory + '-recovery' });
+  if (changed || mode === 'native-control') {
+    state.cutover = { schema: 1, ...(mode === 'native-control' ? { kind: 'control' } : {}), blueRuntimeSha: receipt.runtimeSha, nativeSource: nativeSource(blue), phase: 'prepared' };
+    const recovery = await prepareRecovery({ state, configPath, directory: directory + '-recovery' });
+    if (mode === 'native-control') {
+      // Both distinct uploads use current control and the EXACT reproduced blue
+      // native bytes. Never label the newly built payload as the deployed one.
+      state.native = receipt;
+      state.releaseManifest = recovery.path;
+      state.releaseManifestSha256 = recovery.sha256;
+      return recovery;
+    }
   }
   const release = await prepareLargeHttpRelease({ configPath, directory });
   if (release.sha !== state.sha) throw new Error('Native release source differs from train');
