@@ -104,7 +104,7 @@ export class LargeHttpSlot extends DurableObject<Env>{
   if(p.startsWith('/control/')&&r.method==='POST'){
    const v=await readJson<any>(r,undefined,4096),op=p.slice('/control/'.length);
    if(op==='authorize'){
-    const s=await slot.state();return Response.json({authorized:s.generation===v.generation&&s.token===v.token&&['starting','ready','failed'].includes(s.phase),generation:s.generation,phase:s.phase,boot:s.boot});
+    const s=await slot.state();return Response.json({authorized:s.generation===v.generation&&s.token===v.token&&['starting','ready','failed'].includes(s.phase),generation:s.generation,phase:s.phase,boot:s.boot,runtimeSha:s.runtimeSha??null});
    }
    if(op==='health'){const s=await slot.state();if(s.phase!=='ready')return new Response(null,{status:503});return this.ctx.container!.getTcpPort(8080).fetch('http://guest/health',{headers:{'x-container-token':s.token},signal:AbortSignal.timeout(2000)});}
    if(op==='state'){const {token:_,...state}=await slot.state(),c=await this.config;return Response.json({...state,control:{schema:1,slot:this.index,fingerprint:c.fingerprint,runtimeSha:c.runtimeSha}});}

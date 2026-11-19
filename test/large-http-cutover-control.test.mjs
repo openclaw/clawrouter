@@ -99,6 +99,24 @@ async function fixture(t,{poolSha=hash(10),slotSha=poolSha}={}){
 }
 const managed=(accepting,expectedRevision,operationId)=>({accepting,expectedRevision,operationId});
 
+test('runtime authorization retains the exact start intent across slot code changes',async t=>{
+ const f=await fixture(t);await f.warm();const slot=f.slots[0],intent=slot.storage.value.get('native');
+ const authorize=async(generation=intent.generation,token=intent.token)=>{
+  const r=await slot.actor.fetch(new Request('https://slot/control/authorize',{method:'POST',headers:{'x-container-token':f.env.LARGE_HTTP_TOKEN},body:JSON.stringify({generation,token})}));
+  assert.equal(r.status,200);return r.json();
+ };
+ assert.equal((await authorize()).runtimeSha,intent.runtimeSha);
+ assert.equal((await authorize(intent.generation+1)).authorized,false);
+ assert.equal((await authorize(intent.generation,hash(98))).authorized,false);
+ slot.env={...slot.env,LARGE_HTTP_RUNTIME_SHA:hash(11)};
+ slot.actor=new LargeHttpSlot(slot.ctx,slot.env);
+ const after=await authorize();assert.equal(after.authorized,true);assert.equal(after.runtimeSha,intent.runtimeSha);
+ assert.notEqual(after.runtimeSha,(await runtimeConfig(slot.env)).runtimeSha);
+ // Legacy journals cannot borrow a newly executing slot's configured digest.
+ const legacy=slot.storage.value.get('native');delete legacy.runtimeSha;slot.storage.seed('native',legacy);
+ assert.equal((await authorize()).runtimeSha,null);
+});
+
 test('authenticated snapshots add safe identities; unauthenticated inspection has no slot effects',async t=>{
  const f=await fixture(t);
  assert.equal((await f.pool.fetch(f.request('snapshot',{},'wrong'))).status,403);

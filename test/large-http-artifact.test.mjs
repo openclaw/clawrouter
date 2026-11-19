@@ -31,13 +31,18 @@ test('native artifact uses versioned assets without changing main runtime flags 
  assert.doesNotMatch(worker,/native-runtime\.txt/);
  assert.ok(!worker.includes(JSON.stringify(native.toString())), 'native source must not be a JavaScript literal');
  const entry=join(dir,'service.mjs');
- await build({stdin:{contents:`import h from ${JSON.stringify(resolve('worker/index.ts'))};export default {fetch(r,e,c){return h.fetch(r,{...e,LARGE_HTTP_TOKEN:'fixture',LARGE_HTTP_POOL:{},LARGE_HTTP_SLOTS:{getByName(){return {fetch(){return Response.json({authorized:r.headers.get('x-fixture-authorized')==='1'});}}}}},c);}};`,resolveDir:process.cwd(),loader:'ts'},bundle:true,format:'esm',platform:'browser',external:['cloudflare:workers'],define:{__LARGE_HTTP_RUNTIME_SHA__:JSON.stringify(manifest.runtime.sha256)},outfile:entry,logLevel:'silent'});
+ await build({stdin:{contents:`import h from ${JSON.stringify(resolve('worker/index.ts'))};export default {fetch(r,e,c){return h.fetch(r,{...e,LARGE_HTTP_TOKEN:'fixture',LARGE_HTTP_POOL:{},LARGE_HTTP_SLOTS:{getByName(){return {fetch(){return Response.json({authorized:r.headers.get('x-fixture-authorized')==='1',runtimeSha:JSON.parse(r.headers.get('x-fixture-runtime-sha')??${JSON.stringify(JSON.stringify(manifest.runtime.sha256))})});}}}}},c);}};`,resolveDir:process.cwd(),loader:'ts'},bundle:true,format:'esm',platform:'browser',external:['cloudflare:workers'],define:{__LARGE_HTTP_RUNTIME_SHA__:JSON.stringify('f'.repeat(64))},outfile:entry,logLevel:'silent'});
  const run=async(assets,fn)=>{const mf=new Miniflare(convertV4MiniflareOptions({workers:[{name:'artifact-proof',modulesRoot:dir,modules:[{type:'ESModule',path:entry}],compatibilityDate:runtimeConfig.compatibility_date,compatibilityFlags:runtimeConfig.compatibility_flags,...(assets?{assets:{directory:assets,binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true,invoke_user_worker_ahead_of_assets:true}}}:{})}]}));try{await fn(mf);}finally{await mf.dispose();}};
  const headers={'x-large-http-slot':'0','x-large-http-generation':'1','x-large-http-token':'a'.repeat(64),'x-fixture-authorized':'1'};
  await run(join(dir,'assets'),async mf=>{
   const response=await mf.dispatchFetch('https://fixture/__large_http/runtime',{headers});
   assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()),native);
+  // Authenticated journal identity wins even when the edge's compiled identity
+  // differs. A missing/malformed journal is not permission to use edge code.
+  const runtimeStatus=async runtimeSha=>{const r=await mf.dispatchFetch('https://fixture/__large_http/runtime',{headers:{...headers,'x-fixture-runtime-sha':JSON.stringify(runtimeSha)}});await r.body?.cancel();return r.status;};
+  for(const runtimeSha of [null, '', 'invalid', '../'+manifest.runtime.sha256])assert.equal(await runtimeStatus(runtimeSha),503);
+  assert.equal(await runtimeStatus('e'.repeat(64)),503,'an unavailable authorized artifact must not fall back to the edge runtime');
   for(const refused of [{...headers,'x-fixture-authorized':'0'},{...headers,'x-large-http-token':'invalid'}])assert.equal((await mf.dispatchFetch('https://fixture/__large_http/runtime',{headers:refused})).status,403);
   assert.equal((await mf.dispatchFetch('https://fixture/'+manifest.runtime.assetPath)).status,403,'Worker-first routing must guard the artifact itself');
   assert.equal((await mf.dispatchFetch('https://fixture/'+manifest.runtime.assetPath,{headers})).status,405,'only the authorized runtime operation serves the artifact');
