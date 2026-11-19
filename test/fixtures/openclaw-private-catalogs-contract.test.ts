@@ -418,41 +418,99 @@ export function privateClonedBodyRetired(w:any,t:any,body:any):boolean {
    ops.some((p:any)=>(p.kind==="read"&&p.value?.done===true||p.kind==="cancel")&&p.settle<r.unlockAt);
  });
 }
-export function privateStoredErrorVector(w:any):any[]|undefined {
- const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;
+export function privateStoredErrorVector(w:any,observe?:(site:number)=>void):any[]|undefined {
+ const reject=(site:number,read:()=>any)=>{const value=read();if(value&&observe)try{observe(site);}catch(error){w.observerFailures.push(error);}return value;};
+ const ts=w.transports.filter((t:any)=>t.method==="POST");if(reject(1,()=>(ts.length!==1)))return;
  const t=ts[0],a=t.acquisition,c=t.caller;
- if(!c||c!==privateControlCaller(w)||!privateInvocationBound(w,t)||c.owner!==w.owner||t.owner!==w.owner||!a||a.owner!==w.owner||a.transport!==t||a.response!==t.response||
-   !privateGuardIdentity(w,a)||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
-   !t.guardObserved||!t.response||t.bodies.length!==1||t.readers.length!==1||t.fetch.state!=="fulfilled")return;
- const r=t.readers[0];if(r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||r.owner!==w.owner)return;
+ if(reject(2,()=>(!c))||
+   reject(3,()=>(c!==privateControlCaller(w)))||
+   reject(4,()=>(!privateInvocationBound(w,t)))||
+   reject(5,()=>(c.owner!==w.owner))||
+   reject(6,()=>(t.owner!==w.owner))||
+   reject(7,()=>(!a))||
+   reject(8,()=>(a.owner!==w.owner))||
+   reject(9,()=>(a.transport!==t))||
+   reject(10,()=>(a.response!==t.response))||
+   reject(11,()=>(!privateGuardIdentity(w,a)))||
+   reject(12,()=>(!a.input))||
+   reject(13,()=>(a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal))||
+   reject(14,()=>(!t.guardObserved))||
+   reject(15,()=>(!t.response))||
+   reject(16,()=>(t.bodies.length!==1))||
+   reject(17,()=>(t.readers.length!==1))||
+   reject(18,()=>(t.fetch.state!=="fulfilled")))return;
+ const r=t.readers[0];if(reject(19,()=>(r.transport!==t))||
+   reject(20,()=>(r.body!==t.response.body))||
+   reject(21,()=>(r.body!==t.bodies[0]))||
+   reject(22,()=>(r.owner!==w.owner)))return;
  const reads=w.originals.filter((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="rejected"),read=reads[0];
  const closes=w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r),closed=closes[0];
  const cancels=w.originals.filter((o:any)=>o.kind==="cancel"&&o.reader===r),cancel=cancels[0];
  const prefix=w.originals.find((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="fulfilled"&&o.value?.done===false&&o.value.value?.byteLength>0);
- if(reads.length!==1||closes.length!==1||cancels.length!==1||!prefix||!read||!closed||!cancel||
-   read.reason===undefined||closed.state!=="rejected"||cancel.state!=="rejected"||closed.reason!==read.reason||cancel.reason!==read.reason||
-   ![read,closed,cancel,prefix].every(o=>o.owner===w.owner&&o.receiver===r.original)||
-   closed.pending!==r.closed||privateCancelOperand(read,cancel,c)==="invalid"||
-   !c.abortCalled||!c.abortedAfter||!c.noEarlierFailure||c.pending.length!==1||c.pending[0]!==read||
-   read.callerAbortedAtInvoke!==false||read.callerAbortedAtSettle!==true||read.effectiveAbortedAtSettle!==true||
-   c.signal!==read.callerSignal||t.signal!==read.effectiveSignal||!c.delivered||c.result!=="aborted")return;
+ if(reject(23,()=>(reads.length!==1))||
+   reject(24,()=>(closes.length!==1))||
+   reject(25,()=>(cancels.length!==1))||
+   reject(26,()=>(!prefix))||
+   reject(27,()=>(!read))||
+   reject(28,()=>(!closed))||
+   reject(29,()=>(!cancel))||
+   reject(30,()=>(read.reason===undefined))||
+   reject(31,()=>(closed.state!=="rejected"))||
+   reject(32,()=>(cancel.state!=="rejected"))||
+   reject(33,()=>(closed.reason!==read.reason))||
+   reject(34,()=>(cancel.reason!==read.reason))||
+   reject(35,()=>(![read,closed,cancel,prefix].every(o=>o.owner===w.owner&&o.receiver===r.original)))||
+   reject(36,()=>(closed.pending!==r.closed))||
+   reject(37,()=>(privateCancelOperand(read,cancel,c)==="invalid"))||
+   reject(38,()=>(!c.abortCalled))||
+   reject(39,()=>(!c.abortedAfter))||
+   reject(40,()=>(!c.noEarlierFailure))||
+   reject(41,()=>(c.pending.length!==1))||
+   reject(42,()=>(c.pending[0]!==read))||
+   reject(43,()=>(read.callerAbortedAtInvoke!==false))||
+   reject(44,()=>(read.callerAbortedAtSettle!==true))||
+   reject(45,()=>(read.effectiveAbortedAtSettle!==true))||
+   reject(46,()=>(c.signal!==read.callerSignal))||
+   reject(47,()=>(t.signal!==read.effectiveSignal))||
+   reject(48,()=>(!c.delivered))||
+   reject(49,()=>(c.result!=="aborted")))return;
  const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,read.settle,closed.settle,cancel.invoke,cancel.returnAt,cancel.settle,r.unlockAt];
- if(!order.every(n=>Number.isSafeInteger(n)&&n>0)||!(r.acquired<closed.invoke&&closed.invoke<prefix.settle&&
-   prefix.settle<read.invoke&&read.invoke<c.abortInvoke&&c.delivered<c.abortInvoke&&c.abortInvoke<=c.abortObserved&&
-   c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(read.settle,closed.settle)<cancel.invoke&&cancel.invoke<cancel.settle&&
-   Math.max(read.settle,closed.settle,cancel.returnAt)<r.unlockAt&&cancel.invoke<cancel.returnAt&&cancel.returnAt<cancel.settle))return;
+ if(reject(50,()=>(!order.every(n=>Number.isSafeInteger(n)&&n>0)))||
+   reject(51,()=>(!(r.acquired<closed.invoke)))||
+   reject(52,()=>(!(closed.invoke<prefix.settle)))||
+   reject(53,()=>(!(prefix.settle<read.invoke)))||
+   reject(54,()=>(!(read.invoke<c.abortInvoke)))||
+   reject(55,()=>(!(c.delivered<c.abortInvoke)))||
+   reject(56,()=>(!(c.abortInvoke<=c.abortObserved)))||
+   reject(57,()=>(!(c.abortObserved<read.settle)))||
+   reject(58,()=>(!(c.abortObserved<closed.settle)))||
+   reject(59,()=>(!(Math.max(read.settle,closed.settle)<cancel.invoke)))||
+   reject(60,()=>(!(cancel.invoke<cancel.settle)))||
+   reject(61,()=>(!(Math.max(read.settle,closed.settle,cancel.returnAt)<r.unlockAt)))||
+   reject(62,()=>(!(cancel.invoke<cancel.returnAt)))||
+   reject(63,()=>(!(cancel.returnAt<cancel.settle))))return;
  // E2 releases the reader before awaiting cancellation. The original promise
  // must still settle and join before this final assessment; it is not rewritten.
- if(cancel.pending===undefined||cancel.returned!==cancel.pending)return;
- if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
-   t.release?.state!=="fulfilled"||t.release.acquisition!==a||typeof a.releaseOriginal!=="function"||t.release.fn!==a.releaseOriginal||
-   !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;
+ if(reject(64,()=>(cancel.pending===undefined))||
+   reject(65,()=>(cancel.returned!==cancel.pending)))return;
+ if(reject(66,()=>(r.unlocks!==1))||
+   reject(67,()=>(r.unlockReceiver!==r.original))||
+   reject(68,()=>(r.body.locked))||
+   reject(69,()=>(r.unlockFailed))||
+   reject(70,()=>(t.releases!==1))||
+   reject(71,()=>(!t.releaseDone))||
+   reject(72,()=>(t.release?.state!=="fulfilled"))||
+   reject(73,()=>(t.release.acquisition!==a))||
+   reject(74,()=>(typeof a.releaseOriginal!=="function"))||
+   reject(75,()=>(t.release.fn!==a.releaseOriginal))||
+   reject(76,()=>(!(t.release.returnAt>t.release.invoke)))||
+   reject(77,()=>(!(t.release.settle>t.release.returnAt))))return;
  const vector=[read,closed,cancel];
- if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
+ if(reject(78,()=>(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))))return;
  return vector;
 }
 export function evaluatePrivateNativeControl(w:any):any {
- const c=privateControlCaller(w),vector=privateStoredErrorVector(w),providerVector=privateProviderErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
+ let stop=0;const c=privateControlCaller(w),vector=privateStoredErrorVector(w,site=>{stop=site;}),providerVector=privateProviderErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
   !w.restored||w.sourceExpired!==0||w.originals.some((o:any)=>o.state==="pending"||o.state==="threw")||
   w.transports.some((t:any)=>!privateInvocationBound(w,t)||!t.guardObserved||t.owner!==w.owner||t.acquisition?.owner!==w.owner||t.acquisition?.response!==t.response||
    t.acquisition?.transport!==t||!privateGuardIdentity(w,t.acquisition)||t.readers.length!==1||t.bodies.length!==1||
@@ -465,7 +523,7 @@ export function evaluatePrivateNativeControl(w:any):any {
  const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.coldZeroDispatch&&w.preabortPostDelta===0&&c?.abortCalled===true&&c?.signal.aborted===true&&c?.result==="error"&&c?.emptyContent===true&&posts===0:
   (role==="eof"||role==="provider_error")&&(strict||role==="provider_error"&&!!providerVector)&&posts===1&&c?.abortCalled===false&&c?.signal.aborted===false&&
    c?.result===(role==="eof"?"stop":"error");
- return {qualified:!hard&&matched===true,vector:vector?"stored_error":providerVector?"provider_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],c):null,
+ return {qualified:!hard&&matched===true,stop:role==="partial"?stop:0,vector:vector?"stored_error":providerVector?"provider_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],c):null,
   vectorObserved:!!vector,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
 }
 export function privateQualification(reports:any[],identity:any,provider:string,api:string):any {
@@ -483,7 +541,7 @@ export function privateProductExpected(w:any,q:any):any[] {
  return raw.qualified&&raw.operand===q.operand?privateStoredErrorVector(w)??[]:[];
 }
 function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
- const record={v:1,pin,p:row.provider,a:row.api,r:row.control,q:result.qualified,vect:result.vectorObserved,worker,restore:w.restored,
+ const record={v:2,pin,p:row.provider,a:row.api,r:row.control,stop:result.stop,q:result.qualified,vect:result.vectorObserved,worker,restore:w.restored,
   rejects:w.originals.filter((o:Original)=>o.state==="rejected").length,pending:w.originals.filter((o:Original)=>o.state==="pending").length};
  const line="PRIVATE_NATIVE_CONTROL "+JSON.stringify(record);
  if(diagnosticCount>=24||Buffer.byteLength(line)>300||diagnosticBytes+Buffer.byteLength(line)+1>8000)throw Error("native diagnostic quota exceeded");

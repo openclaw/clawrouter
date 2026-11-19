@@ -1,5 +1,7 @@
 # Changelog
 
+- Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
+
 - Match Private fixture cancellation retirement to the pinned SDK's cancel-return, reader-unlock and joined-settlement order. Keep original rejected states and independent ownership failures strict. Disable inference environment fallback only in the grant-revocation scenario, preserving its zero-egress and zero-charge assertions.
 
 - Qualify Private catalog error cleanup against the actual cloned response branches and the controlled SDK error, returned output and owned abort signal. Preserve rejected originals, source retirement and accounting checks. Use valid endpoint variants for cache and revocation probes, and deliver the existing bounded native control records outside intercepted console output.

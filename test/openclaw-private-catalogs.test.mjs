@@ -72,8 +72,10 @@ function privateChildDiagnosticRecords(error,prefix,decode,{maxRecords=9,maxByte
 }
 export function privateNativeDiagnosticRecords(error){
  return privateChildDiagnosticRecords(error,"PRIVATE_NATIVE_CONTROL ",record=>{
-  assert.deepEqual(Object.keys(record).sort(),["v","pin","p","a","r","q","vect","worker","restore","rejects","pending"].sort());
-  assert.equal(record.v,1);assert.equal(record.pin,privateCatalogPin);assert.ok(privateProviders.includes(record.p));assert.ok(["stream","simple"].includes(record.a));assert.ok(["eof","preabort","partial","provider_error"].includes(record.r));
+  assert.ok(record.v===1||record.v===2);
+  assert.deepEqual(Object.keys(record).sort(),["v","pin","p","a","r","q","vect","worker","restore","rejects","pending",...(record.v===2?["stop"]:[])].sort());
+  assert.equal(record.pin,privateCatalogPin);assert.ok(privateProviders.includes(record.p));assert.ok(["stream","simple"].includes(record.a));assert.ok(["eof","preabort","partial","provider_error"].includes(record.r));
+  if(record.v===2){assert.ok(Number.isSafeInteger(record.stop)&&record.stop>=0&&record.stop<=78);if(record.r!=="partial"||record.q)assert.equal(record.stop,0);}
   for(const k of ["q","vect","worker","restore"])assert.equal(typeof record[k],"boolean");
   for(const k of ["rejects","pending"])assert.ok(Number.isSafeInteger(record[k])&&record[k]>=0&&record[k]<=1024);
   return record.p+":"+record.a+":"+record.r;
@@ -2333,6 +2335,20 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
   cancel.settle=0;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
  });
+ test('Private partial predicate observation preserves short circuit, original throws and independent faults',()=>{
+  const good=nativeEvidence(),sites=[];assert.equal(evaluator.privateStoredErrorVector(good,site=>sites.push(site)).length,3);assert.deepEqual(sites,[]);
+  const w=nativeEvidence();w.caller.abortCalled=false;let later=0;
+  Object.defineProperty(w.caller,'abortedAfter',{get(){later++;throw undefined;}});
+  assert.equal(evaluator.privateStoredErrorVector(w,site=>sites.push(site)),undefined);assert.deepEqual(sites,[38]);assert.equal(later,0);
+  const thrown=nativeEvidence();Object.defineProperty(thrown.originals[1],'reason',{get(){throw undefined;}});
+  assert.throws(()=>evaluator.privateStoredErrorVector(thrown,()=>assert.fail('unreached predicate')),e=>e===undefined);
+  const fault=nativeEvidence();fault.caller.abortCalled=false;
+  assert.equal(evaluator.privateStoredErrorVector(fault,()=>{throw undefined;}),undefined);assert.deepEqual(fault.observerFailures,[undefined]);
+  assert.equal(evaluator.evaluatePrivateNativeControl(fault).qualified,false);
+  for(const [change,expected]of [[w=>{w.caller.pending=[];},41],[w=>{w.originals[3].returnAt=16;},61],[w=>{w.transports[0].release.fn=()=>{};},75]]){
+   const w=nativeEvidence();change(w);const r=evaluator.evaluatePrivateNativeControl(w);assert.equal(r.qualified,false);assert.equal(r.stop,expected);
+  }
+ });
  test('Private detached release retains the original callable, receiver, arguments and outcome',async()=>{
   for(const receiver of [undefined,{},null]){const w=nativeEvidence();w.transports[0].release.receiver=receiver;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);}
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
@@ -2392,11 +2408,14 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const text=source.slice(source.indexOf('function emitNativeControl('),source.indexOf('// Closed diagnostics only.'));
   const writes=[],context={Buffer,pin:privateCatalogPin,process:{stdout:{write:line=>writes.push(line)}},console:{log(){throw Error('intercepted console must not carry control records');}}};
   const emit=runInNewContext('let diagnosticCount=0,diagnosticBytes=0;'+stripTypeScriptTypes(text,{mode:'strip'})+';emitNativeControl',context);
-  for(const row of privateNativeControls)emit(row,{restored:true,originals:[{state:'rejected'}]},{qualified:false,vectorObserved:false},true);
+  for(const row of privateNativeControls)emit(row,{restored:true,originals:[{state:'rejected'}]},{qualified:false,vectorObserved:false,stop:row.control==='partial'?41:0},true);
   assert.equal(writes.length,24);assert.equal(privateNativeDiagnosticRecords({stdout:writes.join('')}).length,24);assert.ok(Buffer.byteLength(writes.join(''))<=8000);
-  assert.throws(()=>emit(privateNativeControls[0],{restored:true,originals:[]},{qualified:true,vectorObserved:false},true));assert.equal(writes.length,24);
+  const actual=privateNativeDiagnosticRecords({stdout:writes.join('')});assert.equal(actual.filter(r=>r.stop===41).length,6);
+  const record=actual.find(r=>r.r==='partial');
+  for(const change of [{stop:-1},{stop:79},{stop:1.5},{stop:'41'},{q:true},{r:'eof'},{extra:0}])assert.throws(()=>privateNativeDiagnosticRecords({stdout:'PRIVATE_NATIVE_CONTROL '+JSON.stringify({...record,...change})}));
+  assert.throws(()=>emit(privateNativeControls[0],{restored:true,originals:[]},{qualified:true,vectorObserved:false,stop:0},true));assert.equal(writes.length,24);
   const broken=runInNewContext('let diagnosticCount=0,diagnosticBytes=0;'+stripTypeScriptTypes(text,{mode:'strip'})+';emitNativeControl',{...context,process:{stdout:{write(){throw undefined;}}}});
-  assert.throws(()=>broken(privateNativeControls[0],{restored:true,originals:[]},{qualified:true,vectorObserved:false},true),e=>e===undefined);
+  assert.throws(()=>broken(privateNativeControls[0],{restored:true,originals:[]},{qualified:true,vectorObserved:false,stop:0},true),e=>e===undefined);
  });
  test('Private cloned 400 body requires both actual branches retired without unlocking the internal tee',async()=>{
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
