@@ -49,11 +49,8 @@ export async function teardownFakeco({
   const token = requiredValue(env, "CLOUDFLARE_API_TOKEN");
   await verifyPolicyKvNamespaceTarget(target, env, fetchImpl);
 
-  const apps = await listAccessApplications({
-    accountId,
-    token,
-    fetchImpl,
-  });
+  const api = { accountId, token, fetchImpl };
+  const apps = await listInventory(api, "/access/apps", "Access app");
   const namedApps = apps.filter((app) => app.name === target.accessAppName);
   if (namedApps.length > 1) {
     throw new Error(
@@ -66,12 +63,11 @@ export async function teardownFakeco({
   } else {
     log(`FakeCo Access app already absent: ${target.accessAppName}`);
   }
-  const queues = await listQueues({ accountId, token, fetchImpl });
+  const queues = await listInventory(api, "/queues", "queue");
   const managedQueues = [target.queueName, target.queueDlqName].map((name) => ({
     name,
     queue: exactQueue(queues, name),
   }));
-  const api = { accountId, token, fetchImpl };
   // Preflight both queues and every consumer before the first mutation. A
   // nonempty DLQ must not be discovered after disconnecting the usage consumer.
   const consumers = [];
@@ -246,46 +242,23 @@ async function cloudflareEnvelopeRequest({
   return body;
 }
 
-async function listAccessApplications({ accountId, token, fetchImpl }) {
-  const apps = [];
+async function listInventory(api, path, label) {
+  const items = [];
   for (let page = 1; page <= 100; page += 1) {
     const body = await cloudflareEnvelopeRequest({
-      accountId,
-      token,
-      path: `/access/apps?per_page=100&page=${page}`,
-      fetchImpl,
+      ...api,
+      path: `${path}?per_page=100&page=${page}`,
     });
-    const pageApps = requiredArray(body.result, "Access app inventory");
-    apps.push(...pageApps);
+    const pageItems = requiredArray(body.result, `${label} inventory`);
+    items.push(...pageItems);
     const totalPages = Number(body.result_info?.total_pages);
     if (Number.isInteger(totalPages) && totalPages > 0) {
-      if (page >= totalPages) return apps;
-    } else if (pageApps.length < 100) {
-      return apps;
+      if (page >= totalPages) return items;
+    } else if (pageItems.length < 100) {
+      return items;
     }
   }
-  throw new Error("FakeCo teardown refused: Access app pagination exceeded 100 pages");
-}
-
-async function listQueues({ accountId, token, fetchImpl }) {
-  const queues = [];
-  for (let page = 1; page <= 100; page += 1) {
-    const body = await cloudflareEnvelopeRequest({
-      accountId,
-      token,
-      path: `/queues?per_page=100&page=${page}`,
-      fetchImpl,
-    });
-    const pageQueues = requiredArray(body.result, "queue inventory");
-    queues.push(...pageQueues);
-    const totalPages = Number(body.result_info?.total_pages);
-    if (Number.isInteger(totalPages) && totalPages > 0) {
-      if (page >= totalPages) return queues;
-    } else if (pageQueues.length < 100) {
-      return queues;
-    }
-  }
-  throw new Error("FakeCo teardown refused: queue pagination exceeded 100 pages");
+  throw new Error(`FakeCo teardown refused: ${label} pagination exceeded 100 pages`);
 }
 
 function exactQueue(queues, name) {

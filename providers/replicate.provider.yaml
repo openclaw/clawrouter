@@ -35,12 +35,23 @@ endpoints:
     path: /v1/predictions
     requestFormat: replicate.prediction_create
     responseFormat: replicate.prediction
+    lifecycle:
+      protocol: replicate.predictions
+      retrieve: prediction
+      cancel: prediction_cancel
     timeoutMs: 120000
   prediction:
     path: /v1/predictions/${prediction_id}
     method: GET
     pathParams: [prediction_id]
     requestFormat: replicate.prediction_get
+    responseFormat: replicate.prediction
+    timeoutMs: 120000
+  prediction_cancel:
+    path: /v1/predictions/${prediction_id}/cancel
+    method: POST
+    pathParams: [prediction_id]
+    requestFormat: replicate.prediction_cancel
     responseFormat: replicate.prediction
     timeoutMs: 120000
 models:

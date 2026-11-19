@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 test("legacy grants migrate to the credential owner before KV secrets are scrubbed", async () => {
   const key = "oauth/policy/openai";
@@ -59,24 +60,29 @@ test("materialization rejects changed provider and transport metadata before dis
   await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "upstream_grant_changed");
 });
 
-test("concurrent rotating refreshes collapse to one provider exchange", async (context) => {
+test("concurrent rotating refreshes collapse to one provider exchange", { timeout: 5_000 }, async (context) => {
   const key = "oauth/policy/openai";
   const values = new Map([[key, legacyGrant({ expiresAt: "2020-01-01T00:00:00.000Z" })]]);
   const env = credentialEnv(values);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
   let refreshes = 0;
   context.mock.method(globalThis, "fetch", async (_url, init) => {
     refreshes += 1;
     assert.equal(new URLSearchParams(init.body).get("refresh_token"), "refresh-old");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    entered.resolve();
+    await release.promise;
     return Response.json({ access_token: "access-new", refresh_token: "refresh-new", expires_in: 3600 });
   });
 
   const legacy = values.get(key);
-  const results = await Promise.all([
+  const pending = Promise.all([
     materializeGrantCredentials(env, key, legacy, "openai", refreshConfig(), true),
     materializeGrantCredentials(env, key, legacy, "openai", refreshConfig(), true),
   ]);
-
+  await entered.promise;
+  assert.equal(refreshes, 1, "provider response remains held while both materializations are pending");
+  release.resolve();
+  const results = await pending;
   assert.equal(refreshes, 1);
   assert.deepEqual(results.map((grant) => grant.accessToken), ["access-new", "access-new"]);
   assert.deepEqual(results.map((grant) => grant.refreshToken), ["refresh-new", "refresh-new"]);
@@ -535,6 +541,7 @@ function credentialEnv(values) {
     POLICY_KV: {
       async get(key, type) {
         const value = values.get(key) ?? null;
+        if (!Array.isArray(key) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
         return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },

@@ -2,16 +2,28 @@ import type { CompiledEndpoint, CompiledProvider, ProxyRequestBody } from "./typ
 import { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
-export type ResponsesControlAction = "retrieve" | "cancel";
+export type ResponsesControlAction = "retrieve" | "cancel" | "result";
 
 // Control ownership is declared once on the create endpoint. It never creates
 // a second model capability or a fresh inference/catalog offer.
-export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): { create: CompiledEndpoint; action: ResponsesControlAction } | null {
+export interface ResponsesControlMatch { create: CompiledEndpoint; action: ResponsesControlAction; protocol?: import("./managed-lifecycle-types.ts").ManagedProtocol }
+export function responsesControls(provider: CompiledProvider, endpoint: CompiledEndpoint): ResponsesControlMatch[] {
+  const matches: ResponsesControlMatch[] = [];
   for (const create of provider.endpoints) {
-    if (create.responsesLifecycle?.retrieve === endpoint.id) return { create, action: "retrieve" };
-    if (create.responsesLifecycle?.cancel === endpoint.id) return { create, action: "cancel" };
+    for (const action of ["retrieve", "result", "cancel"] as const) {
+      if (create.lifecycle?.[action] === endpoint.id) matches.push({ create, action, protocol: create.lifecycle.protocol });
+      if (action !== "result" && create.responsesLifecycle?.[action] === endpoint.id) matches.push({ create, action });
+    }
   }
-  return null;
+  return matches;
+}
+export function responsesFileControls(provider: CompiledProvider, endpoint: CompiledEndpoint): Array<{ create: CompiledEndpoint; action: "metadata" | "download" }> {
+  return provider.endpoints.flatMap(create => (["metadata", "download"] as const).flatMap(action =>
+    create.lifecycle?.files?.[action] === endpoint.id ? [{ create, action }] : []));
+}
+
+export function responsesControl(provider: CompiledProvider, endpoint: CompiledEndpoint): ResponsesControlMatch | null {
+  return responsesControls(provider, endpoint)[0] ?? null;
 }
 
 export function backgroundResponse(endpoint: CompiledEndpoint, body: ProxyRequestBody): boolean {
@@ -41,6 +53,7 @@ export async function requireEmptyResponseControlBody(request: Request): Promise
 // Retrieval has a finite bodyless contract. Keep include[] multiplicity; the
 // ordinary manifest query-to-record conversion intentionally is not used here.
 export function responsesControlQuery(action: ResponsesControlAction, input: URLSearchParams | Record<string, unknown>): URLSearchParams {
+  if (action === "result") throw new HttpError(400, "invalid_response_query", "Responses has no result control");
   const pairs: Array<[string, unknown]> = input instanceof URLSearchParams ? [...input] : Object.entries(input);
   const query = new URLSearchParams();
   const invalid = () => new HttpError(400, "invalid_response_query", "response controls accept bounded include[], stream, include_obfuscation and starting_after query values");

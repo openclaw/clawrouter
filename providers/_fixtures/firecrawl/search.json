@@ -1,0 +1,100 @@
+{
+  "schema": "clawrouter.firecrawl-search-fixtures.v1",
+  "provenance": {
+    "synthetic": true,
+    "checkedAt": "2026-11-03",
+    "sources": [
+      "https://docs.firecrawl.dev/api-reference/endpoint/search",
+      "https://docs.firecrawl.dev/features/search"
+    ]
+  },
+  "transport": {
+    "origin": "https://api.firecrawl.dev",
+    "path": "/v2/search",
+    "method": "POST",
+    "requestFormat": "firecrawl.search",
+    "responseFormat": "firecrawl.search",
+    "capability": "web.search",
+    "credential": "FIRECRAWL_API_KEY"
+  },
+  "request": {
+    "query": "synthetic router documentation",
+    "limit": 2,
+    "sources": [
+      "web",
+      "news"
+    ],
+    "includeDomains": [
+      "example.com"
+    ],
+    "country": "US",
+    "scrapeOptions": {
+      "formats": [
+        "markdown"
+      ],
+      "parsers": []
+    }
+  },
+  "response": {
+    "success": true,
+    "id": "search_fixture",
+    "data": {
+      "web": [
+        {
+          "title": "Synthetic router",
+          "url": "https://example.com/router",
+          "description": "Synthetic public search result.",
+          "markdown": "# Synthetic router\nFixture content only.",
+          "position": 1
+        }
+      ],
+      "news": [
+        {
+          "title": "Synthetic update",
+          "url": "https://example.com/update",
+          "description": "Synthetic update.",
+          "date": "2026-10-20",
+          "position": 1
+        }
+      ],
+      "images": []
+    },
+    "creditsUsed": 4
+  },
+  "emptyResponse": {
+    "success": true,
+    "id": "search_empty_fixture",
+    "data": {
+      "web": []
+    },
+    "creditsUsed": 0
+  },
+  "failure": {
+    "success": false,
+    "code": "UNKNOWN_ERROR",
+    "error": "Synthetic upstream failure."
+  },
+  "billing": {
+    "upstreamDollarCostMicros": null,
+    "policyFixedMicros": 37,
+    "reportedCredits": 4,
+    "searchCreditsPerTenResults": 2,
+    "zdrSearchCreditsPerTenResults": 10,
+    "searchCreditsAreNotDollarMicros": true,
+    "scrapeAndPdfPageChargesAdditional": true
+  },
+  "consumer": {
+    "openclawRevision": "b3aa84d0d79e3bfe7f2ef697fec3f5bf15b634fd",
+    "source": "extensions/firecrawl/src/firecrawl-client.ts",
+    "externalContentWrappingRequired": true,
+    "sourceOrder": [
+      "web",
+      "news",
+      "images"
+    ],
+    "resultUrls": [
+      "https://example.com/router",
+      "https://example.com/update"
+    ]
+  }
+}

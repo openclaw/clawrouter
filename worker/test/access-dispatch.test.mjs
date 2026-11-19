@@ -4,6 +4,7 @@ import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
@@ -55,7 +56,9 @@ async function accessFixture(t) {
     CLAWROUTER_LOCAL_AUTH: "enabled", CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(token),
     POLICY_KV: {
       async get(key, type) {
-        const read = (name) => values.has(name) ? type === "json" ? JSON.parse(values.get(name)) : values.get(name) : null;
+        const read = (name) => values.has(name)
+          ? type === "stream" ? accessBytesResponse(values.get(name), "").body
+          : type === "json" ? JSON.parse(values.get(name)) : values.get(name) : null;
         return Array.isArray(key) ? new Map(key.map((name) => [name, read(name)])) : read(key);
       },
       async put(key, value) { values.set(key, value); },

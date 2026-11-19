@@ -24,6 +24,7 @@ const routerScript = `
     async fetch(request) {
       const path = new URL(request.url).pathname;
       if (path === "/fixture/state") return Response.json({ record: await this.fixtureStorage.get("credential"), alarm: await this.fixtureStorage.getAlarm() });
+      if (path === "/fixture/alarm") { await super.alarm(); return new Response("maintained"); }
       if (path === "/fixture/keep-warm") {
         const record = await this.fixtureStorage.get("credential");
         record.nextQuotaProbeAt = new Date(Date.now() + 3600000).toISOString();
@@ -103,9 +104,10 @@ async function noReplay(f, expectedCalls = 1) {
 
 for (const requestFormat of ["form", "json"]) test(`workerd ${requestFormat} refresh redirects stay transient, preserve credentials and defer retry`, { timeout: 60_000 }, async t => {
   const f = await fixture(t);
-  for (const config of redirects) await t.test(JSON.stringify(config), async () => {
+  for (const config of [...redirects, { status: 307, crossOrigin: true, alarmFirst: true }]) await t.test(JSON.stringify(config), async () => {
     await f.configure(config);
     const g = await f.grant("openai", { expiresAt: new Date(Date.now() + 60000).toISOString(), refresh: { tokenUrl: "https://token.example/refresh/token", clientSecretConfig: "FIXTURE_CLIENT_SECRET", requestFormat } });
+    if (config.alarmFirst) assert.equal((await f.post(g.owner, "/fixture/alarm", {})).status, 200);
     const input = { key: g.key, grant: g.projection, providerId: "openai", force: false };
     const response = await f.post(g.owner, "/materialize", input);
     const calls = await noReplay(f);
@@ -114,7 +116,12 @@ for (const requestFormat of ["form", "json"]) test(`workerd ${requestFormat} ref
     assert.equal(response.status, 502); assert.equal(response.headers.get("location"), null);
     const error = (await response.json()).error;
     assert.equal(error.code, "grant_refresh_failed");
-    assert.equal(error.message, `provider openai rejected the refresh request (HTTP ${config.status} redirect)`);
+    const redirectMessage = `provider openai rejected the refresh request (HTTP ${config.status} redirect)`;
+    const deferredMessage = "provider openai refresh is waiting for its retry window";
+    // The real scheduled alarm can own the first refresh before materialize.
+    // Both paths must retain the exact redirect diagnosis and single egress below.
+    if (config.alarmFirst) assert.equal(error.message, deferredMessage);
+    else assert.ok(error.message === redirectMessage || error.message === deferredMessage);
     const { record, alarm } = await g.state();
     assert.equal(record.status, "active"); assert.equal(record.enabled, true); assert.equal(record.revokedAt, null);
     assert.equal(record.refreshDiagnosis.failure.failureClass, "transient"); assert.equal(record.refreshDiagnosis.failure.httpStatus, config.status);

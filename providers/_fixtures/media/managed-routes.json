@@ -1,0 +1,88 @@
+{
+  "schema": "clawrouter.managed-media-route-fixtures.v1",
+  "synthetic": true,
+  "contract": {
+    "module": "worker/managed-lifecycle-types.ts",
+    "revision": "2cf7d05b40aff1e931a8d0e0805cbfca09397893"
+  },
+  "protocols": [
+    {
+      "protocol": "replicate.predictions",
+      "fixture": "replicate/prediction-lifecycle.json",
+      "requestFormat": "replicate.prediction_create",
+      "pathParams": {},
+      "retrieve": {
+        "method": "GET",
+        "path": "/v1/predictions/${prediction_id}"
+      },
+      "cancel": {
+        "method": "POST",
+        "path": "/v1/predictions/${prediction_id}/cancel"
+      }
+    },
+    {
+      "protocol": "fal.queue",
+      "fixture": "fal/queue-lifecycle.json",
+      "requestFormat": "fal.queue_submit",
+      "pathParams": {
+        "owner": "fal-ai",
+        "app": "flux",
+        "variant": "schnell"
+      },
+      "retrieve": {
+        "method": "GET",
+        "path": "/${owner}/${app}/requests/${request_id}/status"
+      },
+      "result": {
+        "method": "GET",
+        "path": "/${owner}/${app}/requests/${request_id}"
+      },
+      "cancel": {
+        "method": "PUT",
+        "path": "/${owner}/${app}/requests/${request_id}/cancel"
+      }
+    },
+    {
+      "protocol": "kie.jobs",
+      "fixture": "kie/jobs.json",
+      "requestFormat": "kie.job_create",
+      "pathParams": {},
+      "retrieve": {
+        "method": "GET",
+        "path": "/api/v1/jobs/recordInfo"
+      },
+      "identityQuery": "taskId",
+      "cancel": null
+    },
+    {
+      "protocol": "vydra.jobs",
+      "fixture": "vydra/jobs.json",
+      "requestFormat": "vydra.job_create",
+      "pathParams": {},
+      "retrieve": {
+        "method": "GET",
+        "path": "/api/v1/jobs/${job_id}"
+      },
+      "cancel": {
+        "method": "DELETE",
+        "path": "/api/v1/jobs/${job_id}"
+      }
+    }
+  ],
+  "accounting": {
+    "basis": "policy_fixed",
+    "actualUpstreamCostMicros": null,
+    "firstTerminalImmutable": true,
+    "uncertainCreateReplay": false
+  },
+  "requiredRuntimeGates": [
+    "scoped protocol/provider/caller identity",
+    "original credential lineage",
+    "incoming fal owner/app matches stored route",
+    "bounded retrieve/result follow-up only",
+    "no replay after uncertain create",
+    "persistent collection after disconnect/restart",
+    "conservative expiry",
+    "one frozen terminal settlement with independent outbox acknowledgements"
+  ]
+}

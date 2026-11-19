@@ -1,0 +1,22 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/image-generation-provider.ts",
+  "request": {
+    "model": "gemini-3.1-flash-image",
+    "path": "/v1beta/models/gemini-3.1-flash-image:generateContent",
+    "body": {
+      "contents": [{ "role": "user", "parts": [{ "text": "A synthetic blue square." }] }],
+      "generationConfig": { "responseModalities": ["TEXT", "IMAGE"], "imageConfig": { "aspectRatio": "1:1", "imageSize": "1K" } }
+    }
+  },
+  "response": {
+    "candidates": [{ "finishReason": "STOP", "content": { "role": "model", "parts": [
+      { "text": "Synthetic image fixture." },
+      { "inlineData": { "mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGnoAAAAASUVORK5CYII=" } }
+    ] } }],
+    "usageMetadata": { "promptTokenCount": 3, "candidatesTokenCount": 1120, "thoughtsTokenCount": 128, "totalTokenCount": 1251, "candidatesTokensDetails": [{ "modality": "IMAGE", "tokenCount": 1120 }] }
+  },
+  "billing": { "actualProviderCostMicrousd": null, "byteCountIsTokenCount": false, "policyFixedIsSeparate": true },
+  "delivery": { "responseMustReachEof": true, "partialAssetsPublished": false, "remotePostReplay": false, "nativeOutputUrlsFetched": false }
+}

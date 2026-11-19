@@ -1,3 +1,4 @@
+import { validateLiquidImages, validateTypeSafeImages, type LiquidImage, type TypeSafeImage } from "./provider-decision-images.ts";
 import { decisionBody, decisionEntry, decisionKeys, decisionProbability, decisionRecord, decisionUsage, requireDecision, sameDecisionJson, type DecisionEntry } from "./provider-decision-wire.ts";
 import type { UsageInspection } from "./token-usage.ts";
 
@@ -6,7 +7,7 @@ export type SystemOneQuestion =
   | { type: "noul"; instructions?: DecisionEntry; criteria?: { true?: DecisionEntry; false?: DecisionEntry } | null }
   | { type: "choice"; instructions?: DecisionEntry; criteria: Record<string, DecisionEntry> }
   | { type: "score"; instructions?: DecisionEntry; criteria: DecisionEntry[] };
-export interface SystemOneRequest { model: string; state: Exclude<DecisionEntry, null>; questions: Record<string, SystemOneQuestion> }
+export interface SystemOneRequest { model: string; state: Exclude<DecisionEntry, null>; questions: Record<string, SystemOneQuestion>; images?: LiquidImage[]; assets?: Record<string, TypeSafeImage> }
 export type SystemOneAnswer =
   | { type: "noul"; noul: number }
   | { type: "choice"; choice: string; confidence: number; probabilities: Record<string, number> }
@@ -15,7 +16,7 @@ export interface SystemOneResponse { model: string; answers: Record<string, Syst
 
 export function prepareSystemOneRequest(value: unknown, upstreamModel: string, product: SystemOneProduct): SystemOneRequest {
   const body = decisionBody(value, product === "liquid-ai" ? 4_500_000 : 4 * 1024 * 1024);
-  requireDecision(Object.keys(body).every(key => ["model", "state", "questions"].includes(key)), "systemone_fields");
+  requireDecision(Object.keys(body).every(key => ["model", "state", "questions", product === "liquid-ai" ? "images" : "assets"].includes(key)), "systemone_fields");
   requireDecision(upstreamModel.trim() && body.state !== null && decisionEntry(body.state), "systemone_state");
   const questions = decisionRecord(body.questions);
   requireDecision(questions && Object.keys(questions).length, "systemone_questions");
@@ -34,10 +35,17 @@ export function prepareSystemOneRequest(value: unknown, upstreamModel: string, p
       requireDecision(Array.isArray(question.criteria) && question.criteria.length >= 2 && question.criteria.length <= 10 && question.criteria.every(decisionEntry), "score_criteria");
     } else requireDecision(false, "systemone_question_type");
   }
+  if (body.images !== undefined) validateLiquidImages(body.images);
+  if (body.assets !== undefined) validateTypeSafeImages(body.assets, body.state, body.questions);
   // Revalidate the encoded size because the selected model can exceed the alias.
   const selected = { ...body, model: upstreamModel };
   decisionBody(selected, product === "liquid-ai" ? 4_500_000 : 4 * 1024 * 1024);
   return selected as unknown as SystemOneRequest;
+}
+
+// The runtime must inject this only after preparing the selected native body.
+export function systemOneRequestHeaders(request: SystemOneRequest, product: SystemOneProduct): Record<string, string> {
+  return product === "typesafe" && request.assets ? { "TypeSafe-Danger-Zone-Images": "true" } : {};
 }
 
 function distribution(value: unknown, keys: string[]): boolean {

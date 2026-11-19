@@ -2,6 +2,20 @@ import type { ProviderUsageSummary, UsageAuditEvent, UsageDailySummary, UsageSna
 
 export const usageDayMs = 86_400_000;
 
+type UsageCounters = Omit<UsageDailySummary, "dayStartMs">;
+
+export function addUsageCounters<T extends UsageCounters>(current: T, point: UsageCounters): T {
+  return {
+    ...current,
+    requestCount: current.requestCount + point.requestCount,
+    successCount: current.successCount + point.successCount,
+    errorCount: current.errorCount + point.errorCount,
+    totalTokens: current.totalTokens + point.totalTokens,
+    actualCostMicros: current.actualCostMicros + point.actualCostMicros,
+    unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (point.unpricedRequestCount ?? 0),
+  };
+}
+
 export interface UsageEventGroup {
   id: string;
   compound: boolean;
@@ -18,32 +32,46 @@ export interface UsageEventGroup {
 
 export function usageEventGroups(events: UsageAuditEvent[]): UsageEventGroup[] {
   const grouped = new Map<string, UsageAuditEvent[]>();
-  const order: string[] = [];
   for (const event of events) {
     const key = event.compound_request_id ? `compound:${event.compound_request_id}` : `event:${event.id}`;
-    if (!grouped.has(key)) order.push(key);
-    grouped.set(key, [...(grouped.get(key) ?? []), event]);
+    const group = grouped.get(key);
+    if (group) group.push(event);
+    else grouped.set(key, [event]);
   }
-  return order.map((key) => summarizeUsageEvents(key, grouped.get(key) ?? []));
+  return Array.from(grouped, ([key, group]) => summarizeUsageEvents(key, group));
 }
 
 function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEventGroup {
   const primary = events.find((event) => event.compound_request_stage === "fusion_synthesizer") ?? events[0];
   if (!primary) throw new Error("usage event group cannot be empty");
-  const startedAt = Math.min(...events.map((event) => event.compound_request_started_at_ms ?? event.occurred_at_ms - Math.max(0, event.duration_ms ?? 0)));
-  const occurredAtMs = Math.max(...events.map((event) => event.occurred_at_ms));
+  let startedAt = Infinity;
+  let occurredAtMs = -Infinity;
+  let hasDuration = false;
+  let actualCostMicros = 0;
+  let unpricedRequestCount = 0;
+  let successCount = 0;
+  let expectedCallCount = -Infinity;
+  for (const event of events) {
+    startedAt = Math.min(startedAt, event.compound_request_started_at_ms ?? event.occurred_at_ms - Math.max(0, event.duration_ms ?? 0));
+    occurredAtMs = Math.max(occurredAtMs, event.occurred_at_ms);
+    if (event.duration_ms != null) hasDuration = true;
+    actualCostMicros += event.actual_cost_micros;
+    if (event.cost_basis === "unpriced_usage") unpricedRequestCount += 1;
+    if (event.status === "success") successCount += 1;
+    expectedCallCount = Math.max(expectedCallCount, event.compound_request_size ?? events.length);
+  }
   return {
     id: key,
     compound: Boolean(primary.compound_request_id),
     events: [...events].sort((left, right) => (left.compound_request_index ?? Number.MAX_SAFE_INTEGER) - (right.compound_request_index ?? Number.MAX_SAFE_INTEGER)),
     primary,
     occurredAtMs,
-    durationMs: events.some((event) => event.duration_ms != null) ? occurredAtMs - startedAt : null,
-    actualCostMicros: events.reduce((total, event) => total + event.actual_cost_micros, 0),
-    unpricedRequestCount: events.filter((event) => event.cost_basis === "unpriced_usage").length,
-    successCount: events.filter((event) => event.status === "success").length,
-    expectedCallCount: Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
-    complete: !primary.compound_request_id || events.length >= Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
+    durationMs: hasDuration ? occurredAtMs - startedAt : null,
+    actualCostMicros,
+    unpricedRequestCount,
+    successCount,
+    expectedCallCount,
+    complete: !primary.compound_request_id || events.length >= expectedCallCount,
   };
 }
 
@@ -57,15 +85,7 @@ export function usageTimeline(snapshot: UsageSnapshot, days = 30, now = Date.now
     const dayStartMs = Math.floor(point.dayStartMs / usageDayMs) * usageDayMs;
     if (dayStartMs < firstDay || dayStartMs > today) continue;
     const current = buckets.get(dayStartMs) ?? emptyUsageDay(dayStartMs);
-    buckets.set(dayStartMs, {
-      dayStartMs,
-      requestCount: current.requestCount + point.requestCount,
-      successCount: current.successCount + point.successCount,
-      errorCount: current.errorCount + point.errorCount,
-      totalTokens: current.totalTokens + point.totalTokens,
-      actualCostMicros: current.actualCostMicros + point.actualCostMicros,
-      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (point.unpricedRequestCount ?? 0),
-    });
+    buckets.set(dayStartMs, addUsageCounters(current, point));
   }
 
   return Array.from({ length: days }, (_, index) => {
@@ -121,14 +141,6 @@ function emptyUsageDay(dayStartMs: number): UsageDailySummary {
 export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
   if (providers.length <= limit) return providers;
   const visibleCount = Math.max(1, limit - 1);
-  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>((total, provider) => ({
-    provider: "other-providers",
-    requestCount: total.requestCount + provider.requestCount,
-    successCount: total.successCount + provider.successCount,
-    errorCount: total.errorCount + provider.errorCount,
-    totalTokens: total.totalTokens + provider.totalTokens,
-    actualCostMicros: total.actualCostMicros + provider.actualCostMicros,
-    unpricedRequestCount: (total.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
-  }), { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>(addUsageCounters, { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
   return [...providers.slice(0, visibleCount), remainder];
 }

@@ -1,49 +1,75 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from '@playwright/test';
+import {cursorUsageFixture} from '../test/helpers/personal-usage-cursor.mjs';
+import {fixtureResponses} from './fixtures/personal-usage';
 
-const summary = (requestCount: number, totalTokens: number) => ({ requestCount, successCount: requestCount, errorCount: 0, inputTokens: totalTokens, outputTokens: 0, totalTokens, actualCostMicros: 0, unpricedRequestCount: 0 });
-const shared = { ledger: "fixture", summary: summary(120, 9_000), providers: [], daily: [], events: [] };
-const personal = { ...shared, personal: { summary: summary(7, 300), providers: [], daily: [] } };
-const admin = {
-  ...shared,
-  principals: [
-    { principalId: "bob@example.test", credentialId: null, summary: summary(113, 8_700) },
-    { principalId: "alice@example.test", credentialId: null, summary: summary(6, 250) },
-    { principalId: null, credentialId: "svc_123", summary: summary(1, 50) },
-  ],
-};
-
-// Serves one signed-in session with the given role and fixed usage responses.
-async function serve(page: Page, role: "admin" | "user") {
-  await page.route("**/v1/**", async (route) => {
-    const bodies: Record<string, unknown> = {
-      "/v1/providers": { providers: [] },
-      "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "cloudflare_access", role, email: "alice@example.test", entitlements: { providers: [] } },
-      "/v1/session/credentials": { credentials: [] },
-      "/v1/session/usage": { policies: [], usage: personal },
-      "/v1/admin/usage": { policies: [], usage: admin },
-      "/v1/admin/bootstrap": { policies: [], credentials: [], users: [], bindings: [], grants: [], rules: [], providers: [], connections: [], fusion: { enabled: false, adviserModels: [], aggregatorModel: "" }, overview: null, tenants: [] },
-    };
-    const path = new URL(route.request().url()).pathname;
-    await route.fulfill({ status: path in bodies ? 200 : 404, json: bodies[path] ?? {} });
-  });
+async function serve(page:Page,role:'admin'|'user'){
+ const f=await cursorUsageFixture({audience:role==='admin'?'admin':'personal',rows:6});
+ for(let i=0;i<113;i++)await f.ingest('bob-'+i,{principal_id:'bob@example.test',credential_id:'removed-key'});
+ await f.ingest('unattributed',{principal_id:null,credential_id:'svc_123'});
+ const queries:URL[]=[];await page.clock.setFixedTime(new Date(f.now));
+ await page.route('**/v1/**',async route=>{
+  const url=new URL(route.request().url());queries.push(url);
+  if(url.pathname==='/v1/session/avatar'){await route.fulfill({status:204});return;}
+  if(url.pathname.startsWith('/v1/'+(role==='admin'?'admin':'session')+'/usage/')){const body=await f.read(url.href,f.now,route.request().method());await route.fulfill({json:body});return;}
+  const bodies:Record<string,unknown>={...fixtureResponses,
+   '/v1/session':{...(fixtureResponses['/v1/session'] as object),role},
+   '/v1/admin/usage':{policies:[],usage:{ledger:'ready',summary:{requestCount:999999,totalTokens:999999,actualCostMicros:999999000000},providers:[],daily:[],events:[]}},
+   '/v1/admin/bootstrap':{policies:[],credentials:[],users:[],bindings:[],grants:[],rules:[],providers:[],connections:[],fusion:{enabled:false,adviserModels:[],aggregatorModel:''},overview:null,tenants:[]},
+  };
+  await route.fulfill({status:url.pathname in bodies?200:404,json:bodies[url.pathname]??{}});
+ });return {...f,queries};
 }
-
-test("members see their own request count next to the shared policy total", async ({ page }) => {
-  await serve(page, "user");
-  await page.goto("/");
-  const stat = page.locator(".dashboardStats > div").filter({ has: page.getByText("your requests", { exact: true }) });
-  await expect(stat.locator("strong")).toHaveText("7");
-  await expect(stat.locator("small")).toContainText("120 across your policy pools");
+async function expectAccountingBoundary(page:Page,amount:string,calls:number,scope:string){
+ const metric=page.locator('.personalUsageSummary .personalGlance > div').filter({has:page.getByText('Recorded accounting amount',{exact:true})});
+ const value=metric.locator('dd > strong'),coverage=metric.locator('dd > small');
+ await expect(value).toHaveText(amount);await expect(coverage).toHaveText(calls+'/'+calls+' rows with a valid recorded accounting field');
+ await expect(value).toBeVisible();await expect(coverage).toBeVisible();
+ const valueBox=await value.boundingBox(),coverageBox=await coverage.boundingBox(),metricBox=await metric.boundingBox();
+ if(!valueBox||!coverageBox||!metricBox)throw Error('Accounting metric has no rendered bounds');
+ expect.soft(coverageBox.y-(valueBox.y+valueBox.height),scope+': coverage must start below the complete monetary amount with visible spacing').toBeGreaterThanOrEqual(4);
+ for(const box of [valueBox,coverageBox]){
+  expect.soft(box.x,scope+': accounting text must stay inside its metric').toBeGreaterThanOrEqual(metricBox.x);
+  expect.soft(box.x+box.width,scope+': accounting text must not clip horizontally').toBeLessThanOrEqual(metricBox.x+metricBox.width);
+ }
+}
+test('members see only current own calls, never shared policy totals in analytics',async({page})=>{
+ const f=await serve(page,'user');try{
+  await page.goto('/dashboard/home');const region=page.getByRole('region',{name:'Your personal usage',exact:true});await expect(region.locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('6');await expect(region).toContainText('For your current access');await expect(region).not.toContainText('999,999');await expect(page.locator('.dashboardAnalyticsGrid')).toHaveCount(0);
+ }finally{f.close();}
+});
+test('admins refine retained user to deleted key, page events, and export the same selected scope',async({page})=>{
+ const f=await serve(page,'admin');try{
+  await page.goto('/dashboard/usage');await expect(page.getByRole('heading',{name:'Usage in discovered locations',exact:true})).toBeVisible();
+  await expect(page.getByRole('region',{name:'Retained usage ranking',exact:true})).toContainText('bob@example.test');
+  await expectAccountingBoundary(page,'$0.00084',120,'all users');
+  await page.getByRole('button',{name:'bob@example.test',exact:true}).click();await expect(page.getByRole('heading',{name:'Exact ranking by key',exact:true})).toBeVisible();
+  await expectAccountingBoundary(page,'$0.000791',113,'selected user');
+  await page.getByRole('button',{name:'bob@example.test · removed-key',exact:true}).click();const events=page.getByRole('region',{name:'Retained events',exact:true});await expect(events.locator('tbody > tr')).toHaveCount(100);await expect(events).not.toContainText('member@example.com');
+  await expectAccountingBoundary(page,'$0.000791',113,'selected key');
+  await page.getByRole('button',{name:'Next page',exact:true}).click();await expect(events.locator('tbody > tr')).toHaveCount(13);
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export refreshed snapshot JSON',exact:true}).click();const stream=await(await download).createReadStream();let text='';for await(const chunk of stream!)text+=chunk.toString();const file=JSON.parse(text);
+  expect(file.events).toHaveLength(113);expect(file.events.every((e:{user:string;keyId:string})=>e.user==='bob@example.test'&&e.keyId==='removed-key')).toBe(true);expect(file.metadata.filters.user).toBe('bob@example.test');expect(file.metadata.totals.metrics.calls).toBe(113);
+  await expect(page.getByRole('region',{name:'Retained usage ranking',exact:true})).not.toContainText('999,999');expect(f.queries.some((u:URL)=>u.pathname==='/v1/session/usage/report')).toBe(false);
+ }finally{f.close();}
 });
 
-test("admins see thirty-day usage broken down by user", async ({ page }) => {
-  await serve(page, "admin");
-  await page.goto("/dashboard/usage");
-  const table = page.locator(".usageTablePanel").filter({ hasText: "Usage by user" });
-  await expect(table).toContainText("3 identities · last 30 days");
-  const rows = table.locator(".tableRow");
-  await expect(rows.filter({ hasText: "bob@example.test" })).toContainText("113");
-  await expect(rows.filter({ hasText: "alice@example.test" })).toContainText("6");
-  await expect(rows.filter({ hasText: "service key svc_123" })).toContainText("no principal");
+test('unbound retained owners stay unavailable and service keys cannot imply an owner',async({page})=>{
+ const f=await serve(page,'admin');try{
+  await page.goto('/dashboard/usage');
+  const ranking=page.getByRole('region',{name:'Retained usage ranking',exact:true});
+  await expect(page.getByRole('heading',{name:'Exact ranking by user',exact:true})).toBeVisible();
+  const unavailableUser=ranking.getByRole('row').filter({has:page.getByRole('button',{name:'Unavailable identity',exact:true})});
+  await expect(unavailableUser).toHaveCount(1);
+  await expect(unavailableUser.getByRole('button',{name:'Unavailable identity',exact:true})).toBeDisabled();
+  await expect(unavailableUser.locator('td').first()).toHaveText('1');
+  await page.getByRole('combobox',{name:'Group by',exact:true}).selectOption('key');
+  await expect(page.getByRole('heading',{name:'Exact ranking by key',exact:true})).toBeVisible();
+  const unboundKey=ranking.getByRole('row').filter({has:page.getByRole('button',{name:'Unavailable owner · svc_123',exact:true})});
+  await expect(unboundKey).toHaveCount(1);
+  await expect(unboundKey.getByRole('button',{name:'Unavailable owner · svc_123',exact:true})).toBeDisabled();
+  await expect(unboundKey.locator('td').first()).toHaveText('1');
+  await expect(unboundKey.getByRole('link')).toHaveCount(0);
+  const query=f.queries.filter((url:URL)=>url.pathname==='/v1/admin/usage/report').at(-1)!.searchParams;
+  expect(query.get('groupBy')).toBe('key');expect(query.has('user')).toBe(false);expect(query.has('key')).toBe(false);
+ }finally{f.close();}
 });

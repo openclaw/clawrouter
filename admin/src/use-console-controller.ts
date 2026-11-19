@@ -1,3 +1,5 @@
+import { useAdminUsage } from "./hooks/use-admin-usage";
+import { usePersonalUsage } from "./hooks/use-personal-usage";
 import { useSubscriptions } from "./hooks/use-subscriptions";
 import { useCallback, useEffect, useRef } from "react";
 import { effectiveAccess, errorMessage, policyCoversProvider, policyUsageFallback } from "./domain";
@@ -14,7 +16,7 @@ import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
 import { demoClientCatalog } from "./demo-data";
 import { oauthCallbackStatus, settled, usagePolicyId } from "./ui-helpers";
-import { syntheticUsageTimeline } from "./usage-analytics";
+import { addUsageCounters, syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
   AdminBootstrapResponse,
@@ -37,6 +39,10 @@ export function useConsoleController({ session, credentialOwner, request, scope,
 }) {
   const catalog = useCatalog(session.demoMode);
   const usage = useUsage(session.demoMode, request);
+  const personalUsage = usePersonalUsage({ request, scope, active: session.view === "my-usage" || (session.view === "home" && session.value.role !== "admin"), full: session.view === "my-usage" });
+  const adminUsage = useAdminUsage({request,scope,active: session.view === "usage" && session.value.role === "admin",full:true});
+  const memberQuotaRead = useRef<{ generation: number; controller?: AbortController }>({ generation: 0 });
+  useEffect(() => () => memberQuotaRead.current.controller?.abort(), []);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
   const catalogLoadedRef = useRef(false);
@@ -212,7 +218,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     let warnings = initialWarnings;
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
-      settled(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
+      settled(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage?budgets_only=true")),
       settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
     ]);
     access.hydrateAdmin({
@@ -248,18 +254,26 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     access.hydrateUser(user);
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
-    const [result, credentialResult] = await Promise.all([
-      settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage")),
-      settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
-    ]);
-    if (result.ok) {
-      usage.hydrate(result.value.policies, result.value.usage);
-      if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, result.value.policies.filter((policy) => policy.enabled).map(usagePolicyId));
-      else warnings = [...warnings, `personal credentials unavailable: ${credentialResult.error}`];
-    } else {
-      usage.fail(`Quota status unavailable: ${result.error}`);
-    }
-    return { warnings, complete: !warnings.length && result.ok };
+    // Budget-only metadata explicitly skips legacy usage snapshot scans. It cannot
+    // gate personal reports, navigation, credential metadata or member refresh completion.
+    memberQuotaRead.current.controller?.abort();
+    const controller = new AbortController();
+    const generation = memberQuotaRead.current.generation + 1;
+    memberQuotaRead.current = { generation, controller };
+    const ownsQuota = () => scope.isCurrent() && memberQuotaRead.current.generation === generation;
+    const quotaRead = settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage?budgets_only=true", { signal: controller.signal }));
+    const credentialResult = await settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials"));
+    if (!scope.isCurrent()) return { warnings, complete: false };
+    if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, (sessionData.entitlements?.policies ?? []).map(policy => policy.policyId));
+    else warnings = [...warnings, "personal credentials unavailable: " + credentialResult.error];
+    void quotaRead.then(result => {
+      if (!ownsQuota()) return;
+      if (result.ok) {
+        usage.hydrate(result.value.policies, result.value.usage);
+        if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, result.value.policies.filter(policy => policy.enabled).map(usagePolicyId));
+      } else usage.fail("Quota status unavailable: " + result.error);
+    });
+    return { warnings, complete: !warnings.length };
   }
 
   function loadAdminDemo() {
@@ -282,15 +296,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
     const providerIds = new Set(effective.services.map((service) => service.provider));
     const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
-    const summary = providerUsage.reduce<UsageSummary>((current, provider) => ({
-      ...current,
-      requestCount: current.requestCount + provider.requestCount,
-      successCount: current.successCount + provider.successCount,
-      errorCount: current.errorCount + provider.errorCount,
-      totalTokens: current.totalTokens + provider.totalTokens,
-      actualCostMicros: current.actualCostMicros + provider.actualCostMicros,
-      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
-    }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
+    const summary = providerUsage.reduce<UsageSummary>(addUsageCounters, { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
     const contentRetention = {
       enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
       retentionDays: 30,
@@ -326,7 +332,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;

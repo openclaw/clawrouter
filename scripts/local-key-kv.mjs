@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,5 +59,34 @@ export function writeKeyJson(value, name) {
   const path = join(dir, name);
   writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
   return path;
+}
+
+export function putLocalKeyRecords(records, { binding, config, stdio = "pipe" }) {
+  try {
+    for (const [key, path] of records) {
+      const result = spawnSync("pnpm", [
+        "exec",
+        "wrangler",
+        "kv",
+        "key",
+        "put",
+        key,
+        "--path",
+        path,
+        "--binding",
+        binding,
+        "--config",
+        config,
+        "--preview",
+        "false",
+      ], { encoding: "utf8", stdio });
+      if (result.status !== 0) throw new Error(result.stderr || "pnpm failed");
+    }
+  } finally {
+    for (const [, path] of records) {
+      rmSync(path, { force: true });
+      rmSync(join(path, ".."), { force: true, recursive: true });
+    }
+  }
 }
 

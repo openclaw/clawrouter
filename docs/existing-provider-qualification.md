@@ -42,8 +42,26 @@ are source-check dates, not claims about when providers changed their tariffs.
 | perplexity | [Sonar migration](https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview), [pricing](https://docs.perplexity.ai/docs/getting-started/pricing) | Sonar support ended September 27; synchronous/streaming calls are being reformulated as Agent API requests. Old Sonar token/request tariffs cannot certify current cost. Keep the request-fee gap; implement Search and Agent APIs under their separate tool/usage contracts. |
 | replicate | [Billing](https://replicate.com/docs/topics/billing), [prediction lifecycle](https://replicate.com/docs/topics/predictions/lifecycle) | Async create/read does not settle a completed prediction. The bounded managed-prediction slice uses typed create/retrieve/cancel links from [#400](https://github.com/openclaw/clawrouter/pull/400), scoped persistent ownership, terminal polling and conservative accounting. Its first implementation rejects webhooks. Requested model versions, tariff/bounds, uncertain-create recovery and idempotent attribution still require integrated proof. Do not turn an async 200/201 into a metered success. |
 | tavily | [Credits](https://docs.tavily.com/documentation/api-credits) | Search/extract/crawl need operation credits plus an account-specific credit-to-money basis. Map is a separate endpoint. Request counters alone cannot attest consumed credits or a complete dollar bound. |
-| together | [Available models and rates](https://docs.together.ai/docs/serverless/models) | Existing GLM 5.2 base rates match. GLM 5.3/Flash and other current rows remain candidates. US-only inference has a separate premium; image per-request estimates are not universal fixed tariffs. Embedding/image/video need their own endpoint contracts. |
+| together | [Available models and rates](https://docs.together.ai/docs/serverless/models), [removal history](https://docs.together.ai/docs/deprecations) | Existing GLM 5.2 card is retained. Frozen Llama 3.3 70B Turbo is stopped for this serverless product; see the disposition below. US-only inference has a separate premium. Native video has a separate lifecycle contract; embedding/image remain outside this frozen continuation. |
 | xai | [Grok 4.7](https://docs.x.ai/developers/models/grok-4.7), [pricing](https://docs.x.ai/developers/pricing), [replay](https://docs.x.ai/developers/model-capabilities/text/best-practices) | [#383](https://github.com/openclaw/clawrouter/pull/383) adds Responses/Grok 4.7 with the request-fee gap retained. Prove encrypted reasoning and tool replay. Priority, long context, regional processing, search and media are separate billing dimensions. |
+
+## Together frozen Llama disposition
+
+Checked 2026-11-03: the exact frozen identity
+`meta-llama/Llama-3.3-70B-Instruct-Turbo` was removed from Together serverless
+inference on 2026-10-22, according to the
+[primary removal history](https://docs.together.ai/docs/deprecations).
+The [model page](https://www.together.ai/models/llama-3-3-70b) also marks it
+unavailable on the Serverless API. Its displayed historical token rates do not
+qualify a current executable offer.
+
+The manifest retains the exact selected identity as `stopped`, with no
+capabilities, native facts or tariff. The availability runtime excludes it from
+live catalogs and denies unified, native and manifest requests before egress,
+including unknown-model passthrough. The existing GLM 5.2 default is unchanged.
+The removal notice separately lists dedicated deployment support; it does not
+establish an existing deployment, entitlement, replacement ID or serverless
+alias. No dedicated endpoint or live inference is provisioned by this change.
 
 ## Request and credit costs before hard-budget certification
 

@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { waitForChildExit } from "./smoke-process.mjs";
 
 // Signal Wrangler directly; a package-manager launcher may leave its child alive.
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
@@ -104,7 +105,7 @@ const upstreamServer = createHttpServer(async (request, response) => {
     ? "local proposal"
     : JSON.stringify(body.messages).includes("local proposal") ? "fused answer" : "proposal missing";
   response.writeHead(200, { "content-type": "application/json", ...(authorization === "Bearer healthy" ? { "x-clawrouter-grant-failover": "1", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "80", "x-ratelimit-reset-requests": "120" } : {}) });
-  response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
+  response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
 
@@ -218,7 +219,10 @@ try {
     assert.equal(invalidFusion.status, 400);
     assert.equal((await invalidFusion.json()).error.code, "fusion_config_invalid");
   }
-  for (const model of ["cohere/command-a-plus-05-2026", "cloudflare-ai-gateway/auto"]) {
+  const compatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: ["cohere/command-a-plus-05-2026"] }) });
+  assert.equal(compatibleFusion.status, 200, "Cohere compatibility Chat is a qualified Fusion adviser");
+  assert.deepEqual((await compatibleFusion.json()).adviserModels, ["cohere/command-a-plus-05-2026"]);
+  for (const model of ["cohere/embed-v4.0", "cloudflare-ai-gateway/auto"]) {
     const incompatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: [model] }) });
     assert.equal(incompatibleFusion.status, 400);
     assert.equal((await incompatibleFusion.json()).error.code, "fusion_model_incompatible");
@@ -364,9 +368,14 @@ try {
   const wrongNativeMethod = await fetch(`${base}/v1/native/firecrawl/v2/scrape`, { method: "DELETE", headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(wrongNativeMethod.status, 405);
   assert.equal((await wrongNativeMethod.json()).error.code, "method_not_allowed");
-  const directManifestGet = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
-  assert.equal(directManifestGet.status, 503);
-  assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
+  const unownedPrediction = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(unownedPrediction.status, 409);
+  assert.equal((await unownedPrediction.json()).error.code, "response_owner_unavailable", "unowned managed IDs fail before provider credential lookup");
+  // Keep direct-GET parameter parsing independent of managed job ownership.
+  // This key cannot use OpenAI; a parsed model_id reaches that policy verdict.
+  const directManifestGet = await fetch(`${base}/v1/proxy/openai/models_retrieve?model_id=gpt-6-luna`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(directManifestGet.status, 403);
+  assert.equal((await directManifestGet.json()).error.code, "provider_not_allowed", "GET manifest routes parse path params without a JSON envelope");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
   const configuredCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
@@ -392,9 +401,9 @@ try {
   const unknownProviderGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/unknown_provider`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "missing-provider", kind: "api_key", credential: "local" }) });
   assert.equal(unknownProviderGrant.status, 400, "upstream grants require a catalog provider");
   assert.equal((await unknownProviderGrant.json()).error.code, "unknown_provider");
-  const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  const missingPathParam = await fetch(`${base}/v1/proxy/openai/models_retrieve`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
-  assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
+  assert.equal((await missingPathParam.json()).error.code, "invalid_model_id", "non-managed GET path params fail parsing before provider policy");
   const usageAfterInvalidRequest = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidRequest.status, 200);
   assert.equal((await usageAfterInvalidRequest.json()).budget.spentMicros, 0, "invalid manifest requests must not reserve budget");
@@ -777,7 +786,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: reportedFormat, ...attributedMetadata } = attributedEvent;
+  assert.equal(reportedFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(attributedMetadata), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
   const invalidTrace = await fetch(`${base}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -815,7 +826,9 @@ try {
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(invalidTraceEvent), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const { request_format: invalidTraceFormat, ...invalidTraceMetadata } = invalidTraceEvent;
+  assert.equal(invalidTraceFormat, "openai.chat_completions");
+  assert.doesNotMatch(JSON.stringify(invalidTraceMetadata), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
   for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200);
@@ -887,8 +900,9 @@ try {
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`, { cause: error });
 } finally {
+  const exited = waitForChildExit(child);
   child.kill("SIGTERM");
-  await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  await exited;
   upstreamServer.closeAllConnections();
   await new Promise((resolve) => upstreamServer.close(resolve));
   rmSync(config, { force: true });

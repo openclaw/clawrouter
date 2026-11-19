@@ -7,7 +7,7 @@ import { HttpError } from "./utils.ts";
 // Count resolved pool members, not currently available candidates:
 // cooldown and expiry must not silently qualify a multi-account pool. Detached
 // inactive grants cannot route; a later activation is checked on the next request.
-export async function assertSingleOpenAiAccount(auth: AuthorizedIdentity, env: Env, upstream: Pick<UpstreamAuth, "transport" | "grantKey" | "grant">, operation: "compact" | "search" = "compact"): Promise<void> {
+export async function assertSingleOpenAiAccount(auth: AuthorizedIdentity, env: Env, upstream: Pick<UpstreamAuth, "transport" | "grantKey" | "grant">, operation: "compact" | "search" | "catalog" = "compact"): Promise<void> {
   const defaultKeys = [`oauth/${auth.policyId}/openai`, `oauth/tenants/${auth.policy.tenantId ?? "default"}/openai`];
   const records = await env.POLICY_KV.get<UpstreamGrant>(defaultKeys, "json");
   const attachments = await Promise.all(defaultKeys.map(key => authorityCall<{ attached: boolean; pending: boolean }>(env, "/grant-pools/attachment", { key })));

@@ -1,0 +1,12 @@
+{
+  "sources": ["https://docs.x.ai/developers/model-capabilities/audio/speech-to-text", "https://docs.x.ai/developers/models"],
+  "checkedAt": "2026-11-03",
+  "frozenSource": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7:extensions/xai/stt.ts",
+  "request": {"path": "/v1/stt", "fields": {"language": "pt-BR"}, "filename": "synthetic.wav", "mime": "audio/wav", "fieldOrder": ["language", "file"], "modelField": false},
+  "audioBytes": [82, 73, 70, 70, 0, 1, 2, 3],
+  "audioQualification": "synthetic byte-identity fixture, not playable audio or live proof",
+  "result": {"text": "  Synthetic transcript.  ", "language": "en", "duration": 0.62, "words": [{"text": "Synthetic", "start": 0, "end": 0.4}, {"text": "transcript.", "start": 0.4, "end": 0.623}]},
+  "silence": {"text": "", "language": "en", "duration": 0.62, "words": []},
+  "billing": {"publicBatchUsdPerHour": 0.1, "publicStreamingUsdPerHour": 0.2, "rateActivated": false, "upstreamCostMicros": null, "roundingAndInterruptDebit": "unqualified"},
+  "modelDisposition": {"documentedServiceDefault": "grok-voice-transcribe-2.0", "insertModelAlias": false}
+}

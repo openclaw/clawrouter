@@ -8,6 +8,7 @@
 @import "./styles/usage.css";
 @import "./styles/analytics.css";
 @import "./styles/fusion.css";
+@import "./styles/personal-usage.css";
 
 /* Subscription quota uses the same semantic surfaces in both themes. */
 .subscriptionsScreen { display: grid; gap: 20px; }
