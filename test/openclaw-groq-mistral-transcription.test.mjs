@@ -13,6 +13,7 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
+import { audioShippingEvidence } from "../scripts/worker-test-failure-reporter.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
@@ -1268,18 +1269,24 @@ function assertShippingJoin({ row, status, result }) {
 }
 
 async function runShippingRows(selected, t) {
+  const evidence = audioShippingEvidence();
+  const mark = (step, row) => evidence.stage(step, row ? cases.indexOf(row) + 1 : 0);
   if (selected.length === 1 && selected[0].id === "groq_abort") nodePhases = livePhaseWriter("node", line => process.stdout.write(line + "\n"));
   const temporary = await phaseStart(nodePhases, "temporary", () => mkdtemp(join(tmpdir(), "clawrouter-native-transcription-"))); let mf; const failures = [];
   let origin; const typed = []; const joined = new Set(), joinReceipts = [];
   try {
+    mark("setup");
     ({ mf, origin } = await phaseStart(nodePhases, "setup", () => setup(temporary)));
     for (const row of selected) {
+      mark("catalog", row);
       if (["success", "stale"].includes(row.scenario)) assertCatalog(await json(await fetch(`${origin}/v1/catalog`, { headers: { authorization: `Bearer ${token(row)}` } })), row);
       if (row.scenario === "rotation") {
-        await control(origin, "rotate", row.id);
+        mark("rotate", row); await control(origin, "rotate", row.id);
+        mark("revoked_catalog", row);
         const refused = await fetch(`${origin}/v1/catalog`, { headers: { authorization: `Bearer ${token(row)}` } });
         assert.equal(refused.status, 401); await refused.arrayBuffer();
       }
+      mark("upload", row);
       const pending = phaseFetch("upload", origin + row.route, { method: "POST", headers: { authorization: `Bearer ${token(row, row.scenario === "rotation")}` }, body: form(row) });
       if (row.scenario === "abort") {
         const failures = []; let held = false;
@@ -1291,27 +1298,33 @@ async function runShippingRows(selected, t) {
             await new Promise(resolve => setTimeout(resolve, 10));
           }
           assert.equal(held, true);
-        } catch (error) { failures.push(error); }
+        } catch (error) { evidence.failed(error); failures.push(error); }
         await finishOwned(failures, [() => control(origin, "abort", row.id), async () => { await pending; }]);
       }
       const response = await pending; nodePhases?.emit("handler", "fulfill", { status: response.status });
+      mark("upload_body", row);
       const value = await phaseStart(nodePhases, "upload_body", () => response.json());
       const status = ["success", "rotation"].includes(row.scenario) ? 200 : row.scenario === "stale" || row.scenario === "denied" ? 403 : row.scenario === "unpriced" ? 400 : row.scenario === "abort" ? 499 : 502;
-      assert.equal(response.status, status, `${row.id}: ${value.error?.code}`);
+      mark("status", row); assert.equal(response.status, status, `${row.id}: ${value.error?.code}`);
+      mark("text", row);
       if (status === 200) assert.equal(value.text, "café 東京 🦊");
+      mark("stale_code", row);
       if (row.scenario === "stale") assert.equal(value.error.code, "proxy_key_revoked");
+      mark("unpriced_code", row);
       if (row.scenario === "unpriced") assert.equal(value.error.code, "pricing_required");
       joined.add(row.id);
+      mark("join", row);
       const responseJoin = await phaseFetch("join", `${origin}/fixture/join/${row.id}`, { method: "POST", headers: { "x-fixture-control": "transcription" } });
+      mark("join_body", row);
       const resultJoin = await phaseStart(nodePhases, "join_body", () => responseJoin.json());
       if (row.scenario === "abort") typed.push(...validateHeldRecords(resultJoin.typed));
       joinReceipts.push({ row, status: responseJoin.status, result: resultJoin });
     }
-  } catch (error) { failures.push(error); }
+  } catch (error) { evidence.failed(error); failures.push(error); }
   const heldRow = selected.length === 1 && selected[0].scenario === "abort" ? selected[0] : null;
   const facts = heldRow ? { v: 1, test: "held_original", case: heldRow.id, scenario: "abort" } : null;
   let disposed = false, removed = false;
-  const attempt = async start => { try { await start(); } catch (error) { failures.push(error); } };
+  const attempt = async start => { try { await start(); } catch (error) { evidence.failed(error); failures.push(error); } };
   if (heldRow && origin) {
     await attempt(async () => {
       if (joined.has(heldRow.id)) return;
@@ -1341,17 +1354,22 @@ async function runShippingRows(selected, t) {
   }
   // A router candidate is provisional. Independent wire/producer/SQLite checks
   // run even when its join failed; each failure survives through later cleanup.
-  if (origin) await attempt(() => phaseStart(nodePhases, "verify", () => verify(origin, selected)));
-  for (const receipt of joinReceipts) await attempt(() => assertShippingJoin(receipt));
+  if (origin) await attempt(() => {
+    mark("verify");
+    return phaseStart(nodePhases, "verify", () => verify(origin, selected, (step, id, calls, events, expected) =>
+      evidence.stage(step, id ? cases.findIndex(row => row.id === id) + 1 : 0, calls ?? null, events ?? null, expected ?? null)));
+  });
+  for (const receipt of joinReceipts) await attempt(() => { mark("join_assert", receipt.row); assertShippingJoin(receipt); });
   if (heldRow && joinReceipts.length !== 1) failures.push(new Error("missing held join receipt"));
   if (nodePhases?.incomplete) failures.push(new Error("node observation quota incomplete"));
-  await attempt(async () => { await phaseStart(nodePhases, "dispose", () => mf?.dispose()); disposed = true; });
-  await attempt(async () => { await phaseStart(nodePhases, "rm", () => rm(temporary, { recursive: true, force: true })); removed = true; });
+  await attempt(async () => { mark("dispose"); await phaseStart(nodePhases, "dispose", () => mf?.dispose()); disposed = true; });
+  await attempt(async () => { mark("remove"); await phaseStart(nodePhases, "rm", () => rm(temporary, { recursive: true, force: true })); removed = true; });
   if (facts) {
     typed.push({ ...facts, kind: "cleanup", state: disposed && removed ? "fulfilled" : "rejected", disposed, removed, failures: failures.length });
     await attempt(() => { t.diagnostic("AUDIO813_TYPED " + JSON.stringify(validateHeldRecords(typed))); });
   }
   if (nodePhases?.incomplete) failures.push(new Error("node final observation incomplete"));
+  await attempt(() => evidence.report(t));
   nodePhases = undefined;
   await finishOwned(failures, []);
 }

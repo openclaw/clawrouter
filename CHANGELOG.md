@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the first Audio shipping-test failure as a bounded case, stage and count record while preserving original failures, cleanup and runner verdicts.
+
 - Run the pinned Audio SDK profile-write cases in a real Vitest fork for host-broker ownership, and request identity encoding for its complete-JSON transcription contract. Keep the original broker, response validation, credentials and accounting assertions. Document the explicit identity-encoding client configuration and leave default compressed-route compatibility unqualified.
 
 - Retain and join Audio transcription fixture source pull and cancellation callbacks in the original Worker request context. Preserve the bounded expiry, controlled owner-local cancellation boundary, original rejection evidence and accounting checks.
