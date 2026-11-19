@@ -273,6 +273,7 @@ import { HttpOperation } from "./worker/http-operation.ts";
 import { zaiOutcome } from "zai-outcome-witness";
 const regional = ${JSON.stringify(regionalRows)};
 ${originalLifetime.toString()}
+${allFailures.toString()}
 ${reservationObserver.toString()}
 ${createWorkerOutcomeWitness.toString()}
 ${workerReadDisposition.toString()}
@@ -308,22 +309,30 @@ export default { ...handler, async fetch(request, env, context) {
     const id = new URL(request.url).searchParams.get("id"), owner = controlOwners[id];
     if (!owner) return new Response(null, { status: 400 });
     let router, upstream, failed = false;
-    const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/control?id=" + id]);
-    upstream = await response.json(); failed ||= response.status !== 200;
-    if (!failed && upstream.source) sources.set(id, upstream.source);
-    try { router = await owner.retire(); } catch { router = owner.summary(); failed = true; }
-    return Response.json({ router, upstream: upstream.proof, calls: upstream.calls, expired: upstream.expired, ingress: ingress[id] ?? 0 }, { status: failed ? 503 : 200 });
+    sources.delete(id);
+    try { await allFailures(async () => {
+      const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/control?id=" + id]);
+      upstream = await response.json();
+      if (response.status !== 200) throw new Error("Upstream control retirement failed");
+      if (upstream.source) sources.set(id, upstream.source);
+    }, [async () => { router = await owner.retire(); }]); }
+    catch (error) { ownership.failure(error); router = owner.summary(); failed = true; }
+    return Response.json({ router, upstream: upstream?.proof ?? null, calls: upstream?.calls ?? null, expired: upstream?.expired ?? null, ingress: ingress[id] ?? 0 }, { status: failed ? 503 : 200 });
   }
   if (new URL(request.url).pathname === "/fixture/reservations") return Response.json(reservations);
   if (new URL(request.url).pathname === "/fixture/retire") {
-    try {
+    let router;
+    sources.clear();
+    try { await allFailures(async () => {
       const retired = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/retire"]);
       if (retired.status !== 200) throw new Error("Upstream source retirement failed");
       const calls = await (await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"])).json();
-      for (const call of calls) sources.set(call.id, sourceProof(call, calls));
-      return Response.json(await retireOwners([ownership, ...Object.values(controlOwners)]));
+      const captured = calls.map(call => [call.id, sourceProof(call, calls)]);
+      for (const [id, proof] of captured) sources.set(id, proof);
+    }, [async () => { router = await retireOwners([ownership, ...Object.values(controlOwners)]); }]);
+      return Response.json(router);
     }
-    catch { return Response.json({ pending: null, rejected: null }, { status: 503 }); }
+    catch (error) { ownership.failure(error); return Response.json({ pending: null, rejected: null }, { status: 503 }); }
   }
   if (new URL(request.url).pathname === "/fixture/rotate") {
     const id = await request.text();
@@ -937,4 +946,31 @@ test("actual ZAI Worker cancellation joins source and preserves its rejected rea
     await verifyRegional(origin, nativeControlCases().find(row => row.id === id), calls);
     const retired = await fetch(origin + "/fixture/retire", { signal: AbortSignal.timeout(15_000) }); assert.equal(retired.status, 200);
   }, [async () => { await mf?.dispose(); }, () => rm(temporary, { recursive: true, force: true })]);
+});
+
+test("ZAI source failure independently retires and restores every router owner", async () => {
+  const script = routerFixture();
+  const start = script.indexOf('  if (new URL(request.url).pathname === "/fixture/control")');
+  const end = script.indexOf('  if (new URL(request.url).pathname === "/fixture/rotate")');
+  assert.ok(start >= 0 && end > start);
+  const route = new Function("request", "controlOwners", "ownership", "sources", "originalFetch", "allFailures", "retireOwners", "ingress", "sourceProof",
+    "return (async () => {" + script.slice(start, end) + "})()");
+  for (const path of ["/fixture/control?id=control_cancel", "/fixture/retire"]) for (const mode of ["fetch_undefined", "fetch_false", "json_undefined", "status503"]) {
+    const faults = [], attempts = [], sources = new Map([["control_cancel", { stale: true }]]);
+    const makeOwner = name => ({ summary: () => ({ operations: 0, pending: 0, rejected: 0, qualifiedReadRejections: 0 }), failure: error => faults.push(error), async retire() {
+      attempts.push(name); assert.equal(sources.size, 0, "failed source must never admit a read"); attempts.push(name + "-restore"); throw undefined;
+    } });
+    const ownership = makeOwner("global"), owner = makeOwner("control"), controlOwners = { control_cancel: owner };
+    const originalFetch = async url => {
+      if (mode === "fetch_undefined") throw undefined;
+      if (mode === "fetch_false") throw false;
+      return { status: mode === "status503" ? 503 : 200, async json() { if (mode === "json_undefined") throw undefined; return { proof: {}, calls: 1, source: {} }; } };
+    };
+    const response = await route(new Request("https://fixture.example" + path), controlOwners, ownership, sources, originalFetch, allFailures, retireOwners, {}, () => { throw new Error("failed source cannot be projected"); });
+    assert.equal(response.status, 503, mode); assert.equal(faults.length, 1, mode);
+    const error = faults[0]; assert.ok(error instanceof AggregateError); assert.equal(error.errors.length, 2, mode);
+    if (mode === "status503") assert.ok(error.errors[0] instanceof Error); else assert.equal(error.errors[0], mode === "fetch_false" ? false : undefined);
+    if (path.startsWith("/fixture/control")) { assert.deepEqual(attempts, ["control", "control-restore"]); assert.equal(error.errors[1], undefined); }
+    else { assert.deepEqual(attempts, ["global", "global-restore", "control", "control-restore"]); assert.ok(error.errors[1] instanceof AggregateError); assert.deepEqual(error.errors[1].errors, [undefined, undefined]); }
+  }
 });
