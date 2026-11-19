@@ -153,13 +153,23 @@ provider call for overflow. The lost attempt must remain charged/quarantined;
 rejection must refund. Upstream scanning permits 1 MiB transform overhead beyond
 the native ingress limit (e.g. inserted store:false); client limits do not change.
 
-The deliberate loss can return a complete HTTP 424 before response delivery, or
-HTTP 200 followed by a body transport failure after headers were forwarded.
-A complete HTTP 200 body, timeout, wrong version, or unrelated failure does not
-satisfy the loss case. Both accepted outcomes still require one matching fixture
-attempt, its exact quarantined grant/generation and finish callback, seven
-unaffected members, one charged usage event, and matching policy/provider totals.
-No uncertain request is replayed.
+The original executable loss assertion accepts a complete HTTP 424 before response
+delivery, or HTTP 200 followed by a body transport failure after headers were
+forwarded. The reviewed [revision 2 disposition](proof/native-cutover-20261119/QUALIFICATION-ACCEPTANCE.md)
+also accepts this deliberate non-streaming JSON case's completely captured exact
+invalid prefix when a representative supported client rejects it without
+resending the uncertain operation. A clean HTTP EOF does not prove valid JSON.
+The frozen helper still enforces the original rule: its targeted HTTP 200 / six-byte
+clean-EOF response assertion remains failed. Do not relabel it as passing.
+The [consolidated evidence](proof/native-cutover-20261119/README.md) records the
+policy change and actual official-SDK check, separately from the original result.
+
+All accepted outcomes still require one matching fixture attempt, its exact
+quarantined grant/generation and unclean finish callback, seven unaffected
+members, one charged usage event, and matching policy/provider totals. Timeout,
+wrong version, capture-limit exhaustion, an unrelated malformed response or a
+valid complete success cannot satisfy this deliberate loss case. Normal successful
+responses must remain valid. No uncertain request is replayed.
 
 Each workload persists its case intent before dispatch and a separate
 `workload-<mode>-diagnostic.json` with bounded stages, response status/version,
