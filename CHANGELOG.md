@@ -1,7 +1,16 @@
 # Changelog
 
+- Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
+
+- Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
+
+- Match Private fixture cancellation retirement to the pinned SDK's cancel-return, reader-unlock and joined-settlement order. Keep original rejected states and independent ownership failures strict. Disable inference environment fallback only in the grant-revocation scenario, preserving its zero-egress and zero-charge assertions.
+
+- Qualify Private catalog error cleanup against the actual cloned response branches and the controlled SDK error, returned output and owned abort signal. Preserve rejected originals, source retirement and accounting checks. Use valid endpoint variants for cache and revocation probes, and deliver the existing bounded native control records outside intercepted console output.
+
 - Run OpenClaw compatibility checks when portable provider contract sources or their build configuration change, including changes that remove or move those sources.
 
+- Report Private catalog fixture capture-entry failure sites separately from native fetch outcomes, preserving original errors and strict retirement/accounting assertions.
 - Join Xiaomi fixture source pull and cancellation callbacks in their original Worker request before reporting retirement. Retain independent source failures and require settled work, successful cancellation return, and the existing expiry guard; verify early and pending-read cancellation with the real local Workerd topology.
 - Keep the Xiaomi cancellation producer responsive with bounded SSE heartbeats while joining its original deadline and source callbacks. Qualify only the owned Worker read outcome after source retirement and caller-cancellation accounting; bind SDK provider-error cleanup to the controlled SSE error, original output, acquisition signal and reader. Preserve rejected states and all independent failures; hosted qualification remains required.
 - Export the compiled provider snapshot contract from the standalone provider plugin package, preserving existing shared imports and the registry wire shape.
@@ -25,6 +34,47 @@
 
 ## Unreleased
 
+- Bind Private fixture release qualification to the captured original release function and acquisition, preserving detached callback receivers, arguments and outcomes. Keep once-only successful release and complete retirement requirements.
+
+- Keep Private catalog fixture producers responsive with bounded yielding pulls and join their original source callbacks in the request lifetime. Qualify only an exactly owned pending read and its forwarding observer after successful cancellation, source retirement and request-bound cancellation accounting; retain rejected states, expiry guards and all independent failures.
+
+- Observe the Private SDK guard actually called by the pinned dispatcher, including native module instances outside the defining test spy. Require matching invocation-bound guard entry, original result attachment, release and complete retirement; no guard-entry observation alone qualifies an acquisition.
+
+- Bind Private catalog failure observations to the actual selected SDK callable and executing transport host/guard references. Keep unknown module identities explicit and restore pinned diagnostic overlays after the native child; ownership, retirement and accounting gates remain unchanged.
+
+- Preserve Private reader ownership across stream pulls outside ingress async context, requiring the original request, generation, transport, response, body, reader and callable while rejecting present foreign contexts.
+
+- Require Private catalog usage events to match each actual ingress response and dispatch, retaining zero-cost denial telemetry separately and rejecting missing, duplicate, foreign or undercharged receipts.
+
+- Use direct Worker router ingress for the Private catalog SDK fixture’s cancellation checks; dispose acquired runtimes and remove temporary state on setup failure while preserving original errors and strict retirement/accounting assertions.
+
+- Distinguish global-fetch and Undici-fetch observer construction sites in the Private fixture’s first capture-failure diagnostic. Preserve original errors, ownership guards and retirement/accounting assertions; the tag does not establish cause or ownership.
+
+- Distinguish Private diagnostic callback entry, original guard association and defining-export descriptor custody without changing transport ownership, error handling or test acceptance. Unobserved callbacks remain unknown.
+
+- Support the pinned Vitest configurable getter exports in the two Private diagnostic module spies, preserving original callables and exact descriptor restoration without changing transport ownership or test acceptance.
+
+- Observe the Private E2 defining host and OpenAI fetch-selection seams without replacing the selected fetch or hook closure. Keep ambiguous chains unknown and preserve original ownership, retirement and accounting failures.
+
+- Distinguish recorded same-invocation guard acquisitions and retained context relations in Private transport-failure diagnostics, without changing ownership checks or inferring a runtime cause.
+
+- Identify the first original Private transport ownership condition or operand throw in the existing bounded failure capsule, preserving short-circuit evaluation, original errors and strict ownership gates.
+
+- Classify exact pinned-source wording from the already observed Private EOF result in a bounded diagnostic enum, without retaining message text or treating a wording match as error origin, cause or retirement proof.
+
+- Observe the first Private Baseten EOF result labels and original response status with bounded, case-owned diagnostics; preserve original SDK errors and independent observer failures.
+
+- Preserve the first Private EOF body source span and original call/await outcomes in the existing bounded failure capsule, without changing SDK operations or retirement/accounting acceptance.
+
+- Register the Private E2 consumer suite with Vitest 5 explicit serial options instead of the removed sequential chain, preserving all original cases and strict retirement/accounting assertions.
+
+- Preserve the original default OpenClaw consumer launch block alongside the Private-only runner observer, keeping the existing command/options/diagnostic compatibility assertion intact.
+
+- Deliver Private SDK callback and first-failure evidence before teardown, and observe the original E2 runner outcome after verifying the exclusively copied fixture; retain independent reporting and removal failures without changing test acceptance.
+
+- Preserve the first observed Private SDK failure boundary and exact receipt-assertion evidence with bounded producer/accounting availability, without changing original rejection or financial acceptance.
+
+- Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.
 - Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
 
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
@@ -992,6 +1042,7 @@
 - Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
 - Providers: qualify eight frozen GMI Chat identities and credential-bound model discovery, with real Worker grant, replay, usage and cancellation fixtures.
 - Verify the registered GMI client, strict keyed discovery and both reasoning wrappers through Worker/SQLite, preserving optional organization binding and ordinary Bearer credentials.
+- Activate bodyless Baseten, Arcee and Novita catalogs with post-read caller and original-owner authorization, admitted/current model filtering, sanitized upstream errors and real Worker/SQLite coverage; preserve inference cards and unknown facts.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
