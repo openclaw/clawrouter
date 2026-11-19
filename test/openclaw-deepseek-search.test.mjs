@@ -21,7 +21,7 @@ const scenarios = [...successful, ...uncertain, ...denied];
 const query = "site:example.com synthetic search";
 
 // Decode only the fixture's closed, source-owned records. Ordinary runner output stays private.
-const fixtureSha256 = "83214f47b280b563f350306bf8e9654c34fd0a25559a788777a27926adae9f5b", reporterSha256 = "71189036a0b33a2b9e709254d36ab71919e63e928b5f8e4f5b8717eee503637d";
+const fixtureSha256 = "83214f47b280b563f350306bf8e9654c34fd0a25559a788777a27926adae9f5b", reporterSha256 = "cff81a9039bc554192cc4e4ec5c3f7dad75ece004795260d702a129127dfcfa7";
 const sdkText = readFileSync(new URL("./fixtures/openclaw-deepseek-search-contract.test.ts", import.meta.url), "utf8");
 const protocolStart = sdkText.indexOf("// BEGIN DeepSeek failure capsule."), protocolEnd = sdkText.indexOf("// END DeepSeek failure capsule.");
 assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
@@ -124,6 +124,8 @@ async function abortBarrier() {
       state.requests++;
       response.once("close", () => { state.responseClosed = true; closed.resolve(); });
       request.socket.once("close", () => { state.socketClosed = true; socketClosed.resolve(); });
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.write("held source body");
       seen.resolve();
     } else if (request.url === "/seen") {
       await seen.promise; response.end("seen");
@@ -184,7 +186,8 @@ test("DeepSeek held upstream joins original cancellation before teardown", { tim
     phase = "acquired";
     assert.equal(await bounded(fetch(barrier.origin + "/seen").then(response => response.text())), "seen");
     assert.deepEqual(barrier.state(), { requests: 1, responseClosed: false, socketClosed: false, teardown: false });
-    caller.abort(reason);
+    // Cancel the actual body before aborting the fetch signal in cleanup.
+    // Canceling an already errored body would only reproduce its abort reason.
     phase = "cancel";
     beginCancellation();
     await bounded(cancelCompletion);
@@ -305,8 +308,7 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
         assert.equal(receipt.budget.spentMicros, cost);
         assert.equal(event.grant_key, `oauth/${id}/deepseek`);
       } else {
-        assert.ok(receipt.usage.events.every(event => event.actual_cost_micros === 0), name);
-        assert.equal(receipt.budget.spentMicros, 0, name);
+        assertDeepSeekDenialReceipt(name, joined, receipt);
       }
       assert.doesNotMatch(JSON.stringify(receipt.usage.events), /fixture-secret|managed-ds_|must-not-fallback|synthetic search|Synthetic summary/);
     }
@@ -320,6 +322,49 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
   try { failures.push(...diagnostics.finish()); } catch (error) { failures.push(error); }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "DeepSeek contract or owned cleanup failed");
+});
+
+function assertDeepSeekDenialReceipt(name, joined, receipt) {
+  const nativePath = "/v1/native/deepseek/v1/tools/search";
+  const expectedPaths = ["zero", "eleven", "fraction"].includes(name) ? []
+    : name === "revoked" ? ["/v1/catalog", nativePath] : ["/v1/catalog"];
+  assert.deepEqual(joined.paths, expectedPaths, name);
+  assert.deepEqual(joined.ingress.map(row => row.path), expectedPaths, name);
+  // Only revocation occurs after the SDK admitted a live catalog offer. The
+  // other denials stop at catalog/input validation, before a billed POST.
+  const expected = name === "revoked" ? joined.ingress.filter(row => row.path === nativePath) : [];
+  assert.equal(receipt.usage.events.length, expected.length, name);
+  for (const [index, request] of expected.entries()) {
+    const event = receipt.usage.events[index];
+    assert.equal(typeof request.requestId, "string"); assert.ok(request.requestId.length > 0);
+    assert.ok(Number.isInteger(request.status) && request.status >= 400 && request.status <= 599);
+    assert.equal(event.request_id, request.requestId);
+    assert.equal(event.status_code, request.status);
+    assert.equal(event.status, request.status === 403 ? "denied" : request.status < 500 ? "client_error" : "provider_error");
+    assert.equal(event.credential_id, `ds_${name}`); assert.equal(event.policy_id, `ds_${name}`);
+    assert.equal(event.provider, "deepseek"); assert.equal(event.model, null); assert.equal(event.capability, "search.web");
+    assert.equal(event.actual_cost_micros, 0);
+  }
+  assert.equal(receipt.budget.spentMicros, 0, name);
+}
+
+test("DeepSeek denial receipts bind authenticated revocation while SDK-only denials stay event-free", () => {
+  const ingress = [{ path: "/v1/catalog", status: 200, requestId: "catalog" },
+    { path: "/v1/native/deepseek/v1/tools/search", status: 503, requestId: "revoked-post" }];
+  const joined = { paths: ingress.map(row => row.path), ingress };
+  const receipt = { usage: { events: [{ request_id: "revoked-post", status_code: 503, status: "provider_error",
+    credential_id: "ds_revoked", policy_id: "ds_revoked", provider: "deepseek", model: null, capability: "search.web", actual_cost_micros: 0 }] }, budget: { spentMicros: 0 } };
+  assertDeepSeekDenialReceipt("revoked", joined, receipt);
+  for (const mutate of [r => r.usage.events.pop(), r => r.usage.events.push(r.usage.events[0]),
+    r => r.usage.events[0].request_id = "foreign", r => r.usage.events[0].credential_id = "ds_grant",
+    r => r.usage.events[0].status_code = 200, r => r.usage.events[0].actual_cost_micros = 1, r => r.budget.spentMicros = 1]) {
+    const bad = structuredClone(receipt); mutate(bad); assert.throws(() => assertDeepSeekDenialReceipt("revoked", joined, bad));
+  }
+  for (const name of denied.filter(name => name !== "revoked")) {
+    const rows = ["zero", "eleven", "fraction"].includes(name) ? [] : ingress.slice(0, 1);
+    assertDeepSeekDenialReceipt(name, { paths: rows.map(row => row.path), ingress: rows }, { usage: { events: [] }, budget: { spentMicros: 0 } });
+    assert.throws(() => assertDeepSeekDenialReceipt(name, { paths: rows.map(row => row.path), ingress: rows }, receipt));
+  }
 });
 
 function routerFixture(ids) {
@@ -476,7 +521,8 @@ function join(id) {
     }
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, "DeepSeek original work or observation failed");
-    return { paths: (state.fields.get(state).get("requests") ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
+    return { paths: (state.fields.get(state).get("requests") ?? []).map(row => row.path),
+      ingress: (state.fields.get(state).get("requests") ?? []).map(row => ({ path: row.path, status: row.status, requestId: row.requestId })), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
       activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
       sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
       readCalls: p.readCalls, readResults: p.reads.map(original => state.entries.get(original).outcome.status),
@@ -508,7 +554,7 @@ export default {
         await revokeGrantCredentials(env, "oauth/" + id + "/deepseek"); return Response.json({ revoked: true });
       }
       if (action === "usage") {
-        await join(id); if (inputs.has(id)) await ingested.get(id).promise;
+        await join(id); if (inputs.has(id) || id === "ds_revoked" && requests.get(id)?.some(row => row.path === "/v1/native/deepseek/v1/tools/search")) await ingested.get(id).promise;
         const response = await worker.fetch(new Request(new URL("/v1/usage", request.url), { headers: { authorization: "Bearer clawrouter-live-" + id + "-fixture-secret" } }), env, context);
         return response;
       }
@@ -524,8 +570,11 @@ export default {
       record.pending.push(promise);
       try { context.waitUntil(promise); } catch (error) { record.failures.push(error); throw error; }
     } };
-    try { return await worker.fetch(request, { ...env, DEEPSEEK_API_KEY: "must-not-fallback-deepseek" }, ctx); }
-    finally { record.returned.resolve(); }
+    try {
+      const response = await worker.fetch(request, { ...env, DEEPSEEK_API_KEY: "must-not-fallback-deepseek" }, ctx);
+      record.status = response.status; record.requestId = response.headers.get("x-clawrouter-request-id");
+      return response;
+    } finally { record.returned.resolve(); }
   },
   async queue(batch, env) {
     await worker.queue(batch, env);
@@ -535,13 +584,93 @@ export default {
 `.replace("IDS", JSON.stringify(ids));
 }
 
+// The source request owns its nested fetch and every original callback. The
+// control route observes this join; it cannot cancel or resolve the producer.
+function deepSeekHeldSource(request, context, call, control, wait = ms => scheduler.wait(ms)) {
+  const owner = new AbortController(), originals = [], faults = [];
+  const trace = call.abort = { pulls: 0, activePulls: 0, requestAbort: 0, sourceCancel: 0,
+    cancelReturns: 0, fetchStarted: 0, fetchSettled: 0, bodyCancelCalls: 0, bodyCancelSettled: 0, expired: 0 };
+  let timer, pulling, ready, finish, fail;
+  const completion = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+  const retain = (kind, original) => {
+    const row = { kind, original }; originals.push(row);
+    try { row.joined = original.then(value => { row.outcome = { status: "fulfilled", value }; },
+      reason => { row.outcome = { status: "rejected", reason }; }).then(undefined, error => { faults.push(error); }); }
+    catch (error) { faults.push(error); }
+    return original;
+  };
+  retain("completion", completion);
+  const onAbort = () => { trace.requestAbort++; };
+  request.signal.addEventListener("abort", onAbort, { once: true });
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"results":['));
+      timer = setTimeout(() => {
+        trace.expired++; const error = new Error("DeepSeek source expired"); fail(error);
+        try { owner.abort(error); controller.error(error); } catch (failure) { faults.push(failure); }
+      }, 10000);
+      trace.fetchStarted++;
+      ready = retain("ready", (async () => {
+        const response = await retain("fetch", fetch(control + "/hold", { signal: owner.signal }));
+        trace.fetchSettled++; const body = response.body;
+        if (!body) throw new Error("missing held DeepSeek body");
+        return body;
+      })());
+    },
+    pull(controller) {
+      trace.pulls++; trace.activePulls++;
+      const original = (async () => {
+        try { await wait(20); if (!trace.sourceCancel && !trace.expired) controller.enqueue(new TextEncoder().encode(" ")); }
+        finally { trace.activePulls--; }
+      })();
+      pulling = original; return retain("pull", original);
+    },
+    cancel(reason) {
+      trace.sourceCancel++;
+      const original = (async () => {
+        try {
+          if (trace.sourceCancel !== 1) throw new Error("repeated DeepSeek source cancel");
+          const body = await ready;
+          trace.bodyCancelCalls++;
+          await retain("body_cancel", body.cancel(reason)); trace.bodyCancelSettled++;
+          if (pulling) await pulling;
+          trace.cancelReturns++; finish();
+        } catch (error) { fail(error); throw error; }
+        finally { clearTimeout(timer); }
+      })();
+      return retain("cancel", original);
+    },
+  }, { highWaterMark: 0 });
+  const joined = (async () => {
+    let at = 0;
+    while (at < originals.length) {
+      const batch = originals.slice(at); at = originals.length;
+      await Promise.all(batch.map(row => row.joined));
+    }
+    request.signal.removeEventListener("abort", onAbort);
+    for (const row of originals) {
+      if (!row.outcome) faults.push(new Error("missing source settlement"));
+      else if (row.outcome.status === "rejected") faults.push(row.outcome.reason);
+    }
+    if (trace.sourceCancel !== 1 || trace.cancelReturns !== 1 || trace.activePulls || trace.expired
+      || trace.fetchStarted !== 1 || trace.fetchSettled !== 1 || trace.bodyCancelCalls !== 1 || trace.bodyCancelSettled !== 1)
+      faults.push(new Error("DeepSeek source retirement incomplete"));
+    if (faults.length === 1) throw faults[0];
+    if (faults.length) throw new AggregateError(faults, "DeepSeek source originals or observers failed");
+    call.finished = true;
+  })();
+  try { context.waitUntil(joined); } catch (error) { faults.push(error); throw error; }
+  return { stream, joined };
+}
+
 function upstreamFixture(control) {
   return String.raw`
-const calls = [];
+${deepSeekHeldSource.toString()}
+const calls = [], joins = new Map();
 const result = { title: "Synthetic result", url: "https://example.com/result", summary: "Synthetic summary", snippet: "Lower-priority snippet",
   date: "2026-11-01T00:00:00Z", site_name: "Example" };
-export default { async fetch(request) {
-  if (request.url === "https://fixture.example/state") return Response.json(calls);
+export default { async fetch(request, env, context) {
+  if (request.url === "https://fixture.example/state") { await Promise.all(joins.values()); return Response.json(calls); }
   const id = /^Bearer managed-(ds_[a-z_]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
   const noCredentialOverride = !["x-api-key", "x-deepseek-api-key", "api-key"].some(name => request.headers.has(name));
   const call = { id, request: { url: request.url, method: request.method, originalBearer: !!id, noCredentialOverride, body: await request.json() }, finished: false };
@@ -549,23 +678,9 @@ export default { async fetch(request) {
   if (!id || request.url !== "https://api.deepseek.com/v1/tools/search" || request.method !== "POST" || !noCredentialOverride) return new Response(null, { status: 400 });
   const scenario = id.slice(3), headers = { "content-type": "application/json" };
   if (scenario === "abort") {
-    const trace = call.abort = { pulls: 0, requestAbort: 0, sourceCancel: 0, fetchStarted: 0, fetchSettled: 0, bodyCancelSettled: 0 };
-    const onAbort = () => { trace.requestAbort++; };
-    request.signal.addEventListener("abort", onAbort, { once: true });
-    let started = false;
-    return new Response(new ReadableStream({ async pull(controller) {
-      trace.pulls++;
-      if (started) return; started = true; controller.enqueue(new TextEncoder().encode('{"results":['));
-      try {
-        trace.fetchStarted++;
-        const held = await fetch(CONTROL + "/hold", { signal: request.signal });
-        trace.fetchSettled++;
-        await held.body?.cancel(); trace.bodyCancelSettled++; throw new Error("held response ended without original cancellation");
-      } catch (error) { controller.error(error); }
-      finally { trace.fetchSettled ||= 1; call.finished = true; request.signal.removeEventListener("abort", onAbort); }
-    }, cancel() {
-      trace.sourceCancel++;
-    } }, { highWaterMark: 0 }), { headers });
+    const held = deepSeekHeldSource(request, context, call, CONTROL);
+    joins.set(call, held.joined);
+    return new Response(held.stream, { headers });
   }
   call.finished = true;
   if (scenario === "truncated") return new Response('{"results":[', { headers });

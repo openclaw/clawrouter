@@ -69,9 +69,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "e6a5f7c22b611da265da9ede8f89428ec3fcd62b",
-    "sha256": "b30e29b6467f1be7946c1accbfb38ced67fd9fd31ea298efcd37820805b38d4e",
-    "bytes": 1768
+    "blob": "2432e2b5874b971faddd3a3312daf0ecea17266f",
+    "sha256": "aa57b2f45d7ad5ce9a096601bb43da6a9e314e43e26cdacafa4665759e5f7a6a",
+    "bytes": 3929
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
@@ -80,22 +80,70 @@ export const currentInputInventory = Object.freeze(
     "bytes": 583
   },
   {
+    "path": "packages/provider-plugin-contract/src/auth.ts",
+    "blob": "a4a6b2f19dcde32cd4962a1c82a5f3ed1aff21ab",
+    "sha256": "5cb7ccb7d9024604ba443d7e1a68b97cb62f7864c1ef1bc0c535bde1874dbd6f",
+    "bytes": 1927
+  },
+  {
     "path": "packages/provider-plugin-contract/src/conformance.ts",
     "blob": "08024dbc187f17c9f18ddabec79d56be67ba5cf0",
     "sha256": "09ce95daf99ecc6f31ef01d08c94b6921131954ab9c057937ecf3aa96b2cb864",
     "bytes": 7719
   },
   {
+    "path": "packages/provider-plugin-contract/src/endpoints.ts",
+    "blob": "2102a8a85714c7bcbfc8005dfb9be09dd29ed193",
+    "sha256": "d95280cd067bdc30bd5bedb738c50ec87bd83639361c7ea035a30e7a500c3825",
+    "bytes": 1761
+  },
+  {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "9448f9f2436e4ddd25076a76bea6f8286a44a362",
-    "sha256": "c6d01cee6b06c52a429f35ed5f597ade60ad2c22269601490e342d698ba47e07",
-    "bytes": 5646
+    "blob": "9509556a94dffb19299290844a6b88fb24e59f2d",
+    "sha256": "5acb7a001793867ff018b42d629c9eb98d3f9c970963ad07a3e4bf48e63d4eaa",
+    "bytes": 7104
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-availability.ts",
+    "blob": "5525659c1be1c6506bcdc84db80b801ff2f9e0a0",
+    "sha256": "5525e683152c9c40859055ec1b424f31e88987084b9ca600888b3302b93be9cf",
+    "bytes": 309
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/model-request-parameters.ts",
+    "blob": "352762ccb542da4493336d6a937105eb04305acc",
+    "sha256": "44ce4b2380156ced3ef3ff5d50e469b12c7454c2e64269067e4dec8cae76103a",
+    "bytes": 457
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/models.ts",
+    "blob": "b97d9b44d929281b4fed23290de1460cb5a46efa",
+    "sha256": "03df7f231c46345e2121d66e71dafdc38d92d8156911232f6854b5bc42ee0c63",
+    "bytes": 850
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/native-capabilities.ts",
+    "blob": "ea796c0011ad29f5b86f687727b8351829094ab2",
+    "sha256": "537886d04e5a1cc79bd733fbc13fb1017fe9158430ad2a61e0c93c211e6b6027",
+    "bytes": 5169
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/observations.ts",
+    "blob": "4b58eaab06b268954182fda822e6db94f1a1862b",
+    "sha256": "138f7801c7205c35fb4bc4132eb630c2d16de27da5eab2372a6fad26de1721e5",
+    "bytes": 416
   },
   {
     "path": "packages/provider-plugin-contract/src/package-index.ts",
     "blob": "454f53a1a801441b2c9c6e6259fb1ba23e0ed0ef",
     "sha256": "46a21483fae6f5723d1b04387f4e593479b9755b8ba24a66ded2958edb52f986",
     "bytes": 735
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/pricing.ts",
+    "blob": "99b0fe0ead76afcb3fe5caa7123a50ffa9edbc17",
+    "sha256": "080646fa1303dd05083eae5ac38558ccbd943bc616c0c304f801189ab121c64c",
+    "bytes": 4034
   },
   {
     "path": "packages/provider-plugin-contract/src/product-metadata.ts",
@@ -108,6 +156,18 @@ export const currentInputInventory = Object.freeze(
     "blob": "82e30671358be91baa5720d624170821aca1dfd3",
     "sha256": "23533b59fb4c71a13649f707ec564a2d6ffb6d7fe7366b07a8aec6dd342b0ada",
     "bytes": 1374
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/quota.ts",
+    "blob": "ecdc2303d869657da4973c1a944dc37a7ed60d57",
+    "sha256": "f45d6251dc221c4f9806fee7a846306612db4a42e2b98a55a3382f58324f769c",
+    "bytes": 1526
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/snapshot.ts",
+    "blob": "6803fe6c74f70b17c067b7c1eff89a3c5c647081",
+    "sha256": "44185dde47be881fb020dbdb96f9a4742366d5d4df8c6a0e7e33c185a1aed11c",
+    "bytes": 2110
   },
   {
     "path": "packages/provider-plugin-contract/tsconfig.json",

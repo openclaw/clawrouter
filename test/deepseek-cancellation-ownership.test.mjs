@@ -395,7 +395,7 @@ test("DeepSeek Worker rejects removed ownership while still draining captured or
 test("DeepSeek Worker records original waitUntil registration failure before joining", async () => {
   const f = workerJoinFixture(), pending = countedPromise();
   const start = source.indexOf("const ctx = { waitUntil(promise)");
-  const end = source.indexOf("\n    try { return await worker.fetch", start);
+  const end = source.indexOf("\n    try {\n      const response = await worker.fetch", start);
   const context = { waitUntil(promise) { assert.equal(promise, pending.promise); throw undefined; } };
   const ctx = new Function("record", "context", source.slice(start, end) + ";return ctx;")(f.record, context);
   let threw = false;
@@ -443,4 +443,74 @@ test("DeepSeek Worker retains exact read/cancel callback promises without changi
   cancel.resolve(); await cancellation;
   await Promise.all(proof.observers);
   assert.equal(reads, 1); assert.equal(cancels, 1); assert.equal(unlocks, 1);
+});
+
+// Run the actual source callbacks with inert I/O, retaining original promises.
+function sourceOwner(options = {}) {
+  const pending = deferred(), waits = [], context = [], call = {}, request = new Request("https://fixture.example");
+  if (!options.holdFetch) pending.resolve({ body: { cancel() { return has(options, "bodyCancelFailure") ? Promise.reject(options.bodyCancelFailure) : Promise.resolve(); } } });
+  let callbacks, expire, output, captured;
+  const controller = { enqueue() {}, error(reason) { captured = { reason }; } };
+  const code = source.slice(source.indexOf("function deepSeekHeldSource("), source.indexOf("function upstreamFixture("));
+  const make = new Function("AbortController", "ReadableStream", "TextEncoder", "fetch", "setTimeout", "clearTimeout", code + ";return deepSeekHeldSource;")(
+    AbortController, class { constructor(value) { callbacks = value; value.start(controller); } }, TextEncoder,
+    (url, init) => { assert.equal(url, "https://control.example/hold"); init.signal.addEventListener("abort", () => pending.reject(init.signal.reason), { once: true }); return pending.promise; },
+    (fn, ms) => { assert.equal(ms, 10000); expire = fn; return 1; }, () => {});
+  let thrown;
+  try { output = make(request, { waitUntil(promise) { context.push(promise); if (has(options, "contextFailure")) throw options.contextFailure; } }, call, "https://control.example", () => {
+    if (has(options, "pullFailure")) return Promise.reject(options.pullFailure);
+    const wait = deferred(); waits.push(wait); return wait.promise;
+  }); } catch (error) { thrown = { error }; }
+  const result = outcome(context[0]);
+  return { call, callbacks, pending, waits, expire: () => expire(), output, thrown, result, captured: () => captured };
+}
+test("DS source cancellation joins retained nested fetch and callback return before retirement", async () => {
+  for (const duringPull of [false, true]) {
+    const h = sourceOwner(), reason = {};
+    const pull = duringPull ? h.callbacks.pull({ enqueue() {} }) : undefined;
+    const cancel = h.callbacks.cancel(reason); let finished = false; h.result.then(() => { finished = true; });
+    if (duringPull) { await Promise.resolve(); assert.equal(finished, false); assert.equal(h.call.finished, undefined); h.waits[0].resolve(); }
+    await Promise.all([pull, cancel]); assert.deepEqual(await h.result, { failed: false, value: undefined });
+    assert.equal(h.call.finished, true); assert.equal(h.call.abort.sourceCancel, 1); assert.equal(h.call.abort.cancelReturns, 1);
+    assert.equal(h.call.abort.bodyCancelCalls, 1); assert.equal(h.call.abort.bodyCancelSettled, 1); assert.equal(h.call.abort.activePulls, 0); assert.equal(h.call.abort.expired, 0);
+  }
+});
+test("DS source control cannot resolve held work or turn expiry into retirement", async () => {
+  const h = sourceOwner(); let done = false; h.result.then(() => { done = true; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(done, false); assert.equal(h.call.finished, undefined);
+  h.expire(); const result = await h.result; assert.equal(result.failed, true); assert.equal(h.call.finished, undefined);
+  assert.equal(h.call.abort.sourceCancel, 0); assert.equal(h.call.abort.expired, 1);
+});
+test("DS source keeps independent undefined fetch, pull and registration failures fatal", async () => {
+  const fetch = sourceOwner({ holdFetch: true }); fetch.pending.reject(undefined); await Promise.resolve(); await Promise.resolve();
+  await outcome(fetch.callbacks.cancel({})); const failed = await fetch.result; assert.equal(failed.failed, true);
+  assert.ok(failed.reason === undefined || failed.reason.errors?.includes(undefined)); assert.equal(fetch.call.finished, undefined);
+  const pull = sourceOwner({ pullFailure: undefined }); const original = pull.callbacks.pull({ enqueue() {} });
+  const originalOutcome = outcome(original); const cancellation = outcome(pull.callbacks.cancel({}));
+  assert.equal((await originalOutcome).failed, true); assert.equal((await cancellation).failed, true);
+  const pulled = await pull.result; assert.equal(pulled.failed, true); assert.ok(pulled.reason.errors.includes(undefined));
+  const registration = sourceOwner({ contextFailure: undefined }); assert.equal(registration.thrown.error, undefined);
+  await registration.callbacks.cancel({}); assert.deepEqual(await registration.result, { failed: true, reason: undefined });
+  assert.equal(registration.call.finished, undefined);
+});
+
+test("DS independent fetch rejection cannot borrow a later owned cancellation", async () => {
+  for (const reason of [undefined, {}]) {
+    const h = sourceOwner({ holdFetch: true }); h.pending.reject(reason);
+    // No reaction turn before the genuine cancellation sets its private witness.
+    const cancellation = await outcome(h.callbacks.cancel({}));
+    const result = await h.result;
+    assert.equal(h.call.abort.sourceCancel, 1); assert.equal(h.call.abort.cancelReturns, 0); assert.equal(cancellation.failed, true);
+    assert.equal(result.failed, true); assert.equal(h.call.finished, undefined);
+    assert.ok(result.reason === reason || result.reason?.errors?.includes(reason));
+  }
+});
+
+test("DS original held-body cancellation rejection remains fatal even when undefined", async () => {
+  for (const reason of [undefined, {}]) {
+    const h = sourceOwner({ bodyCancelFailure: reason });
+    assert.deepEqual(await outcome(h.callbacks.cancel({})), { failed: true, reason });
+    const result = await h.result; assert.equal(result.failed, true); assert.ok(result.reason.errors.includes(reason));
+    assert.equal(h.call.finished, undefined); assert.equal(h.call.abort.bodyCancelSettled, 0);
+  }
 });

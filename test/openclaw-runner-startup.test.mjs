@@ -33,9 +33,9 @@ function harness(overrides = {}) {
     readSync(fd, buffer, offset, length, position) { return fds.get(fd).bytes.copy(buffer, offset, position, position + length); },
     writeSync(fd, bytes, offset) { const f = fds.get(fd), chunk = bytes.subarray(offset); f.bytes = Buffer.concat([f.bytes, chunk]); return chunk.length; },
   };
-  const api = extract(reporterSource, ["NativeRunnerReporter", "runnerProfile", "runnerContract", "parseRunnerReport", "readPrivateFile", "reportByteLimit", "sha256", "validateBinding", "runnerStartupRecord", "runnerStartupCommand"], scope);
+  const api = extract(reporterSource, ["NativeRunnerReporter", "runnerProfile", "runnerPlan", "runnerContract", "parseRunnerReport", "readPrivateFile", "reportByteLimit", "sha256", "validateBinding", "runnerStartupRecord", "runnerStartupCommand"], scope);
   const helper = extract(helperSource, ["runOpenClawConsumer", "withNativeRunnerReport", "validateRunnerRequest", "settleRunnerReport"], { ...scope, ...api,
-    process: { version: "v24.22.1", env: { CI: "true", PATH: "/inert", HOME: "/inert", TMPDIR: "/inert" } }, performance: { now: () => 0 }, promisify: fn => fn,
+    process: { version: "v24.22.1", getuid: () => 1000, env: { CI: "true", PATH: "/inert", HOME: "/inert", TMPDIR: "/inert" } }, performance: { now: () => 0 }, promisify: fn => fn,
     execFileSync(command, args) { events.push(args.join(" ")); return args[0] === "rev-parse" ? pin : ""; },
     async execFile(command, args, options) {
       calls.push({ command, args, options }); events.push("child");
@@ -56,6 +56,7 @@ function harness(overrides = {}) {
     randomBytes: n => Buffer.alloc(n, 7),
     async readFile(path) { return files.get(path).bytes; },
     async copyFile(from, to) { assert.equal(files.has(to), false); files.set(to, { ...files.get(from) }); },
+    async lstat(path) { const f = files.get(path); assert.ok(f); return { isFile: () => true, mode: f.mode, ino: f.ino, dev: 1, uid: 1000, nlink: 1, size: f.bytes.length }; },
     async mkdtemp(prefix) { events.push("acquire"); return prefix + "inert"; }, async chmod() {},
     async writeFile(path, bytes, options) { assert.equal(files.has(path), false); files.set(path, { bytes: Buffer.from(bytes), mode: options.mode, ino: next++ }); },
     async rm(path) { events.push("remove"); for (const key of files.keys()) if (key === path || key.startsWith(path + "/")) files.delete(key); },
@@ -75,7 +76,8 @@ test("committed fixture and reporter digests bind before any child", async () =>
 test("own exact profile and historical D8 are allowed; cross tuples and planning overrides are not", () => {
   const h = harness(); assert.equal(h.runnerProfile(pin, target).project, "agents-tools");
   assert.equal(h.runnerProfile(h.runnerContract.pin, h.runnerContract.target).project, "extension-providers");
-  for (const [p, t] of [[pin, h.runnerContract.target], [h.runnerContract.pin, target], ["0".repeat(40), target]]) assert.throws(() => h.runnerProfile(p, t));
+  assert.equal(h.runnerProfile(h.runnerContract.pin, "extensions/xiaomi/worker-contract.test.ts").project, "extension-media");
+  for (const [p, t] of [[pin, "extensions/xiaomi/worker-contract.test.ts"], [pin, h.runnerContract.target], [h.runnerContract.pin, target], ["0".repeat(40), target]]) assert.throws(() => h.runnerProfile(p, t));
   for (const key of ["NODE_OPTIONS", "VITEST_POOL_ID", "OPENCLAW_VITEST_INCLUDE_FILE", "CI"]) assert.throws(() => h.validateRunnerRequest({ ...h.options, env: { [key]: "inert" } }));
 });
 test("actual opt-in command and hooks produce one bound invocation; default fingerprint unchanged", async () => {

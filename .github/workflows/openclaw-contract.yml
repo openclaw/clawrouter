@@ -41,9 +41,18 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: private-catalogs
+            ref: e2a8b8d4ec290cd6c035f3568a14e4d7c6433635
+            test: test/openclaw-private-catalogs.test.mjs
           - consumer: deepseek-search
             ref: 82dd065e23b678e61ad497f9d57fbb4c3da10eae
             test: test/openclaw-deepseek-search.test.mjs
+          - consumer: bifrost
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-bifrost.test.mjs
+          - consumer: qwen-regions
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-qwen-regions.test.mjs
           - consumer: litellm
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-litellm.test.mjs

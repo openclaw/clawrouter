@@ -129,9 +129,17 @@ for (const bound of ["caller", "provider"]) test("bundled Search rejects a 749-m
   const catalog = await (await f.call("/v1/catalog", null)).json();
   const offers = catalog.providers.find(provider => provider.id === "deepseek").offers.filter(offer => offer.endpoint === "search");
   assert.ok(offers.length > 0); assert.ok(offers.every(offer => !offer.eligible));
-  for (const manifest of [false, true]) { const response = await f.search(wire.request.body, manifest); await response.text(); assert.equal(response.status, 402); }
+  const requestIds = [];
+  for (const manifest of [false, true]) {
+    const response = await f.search(wire.request.body, manifest); await response.text(); assert.equal(response.status, 402);
+    requestIds.push(response.headers.get("x-request-id"));
+  }
   await f.drain(); assert.equal(f.sent.length, 0);
-  assert.ok((await f.events()).every(event => event.actual_cost_micros === 0));
+  assert.ok(requestIds.every(id => typeof id === "string" && id.length > 0)); assert.equal(new Set(requestIds).size, 2);
+  const events = await f.events(); assert.equal(events.length, 2);
+  assert.deepEqual(events.map(event => event.request_id).sort(), requestIds.sort());
+  assert.ok(events.every(event => event.actual_cost_micros === 0 && event.status_code === 402 && event.status === "denied"
+    && event.provider === "deepseek" && event.model === null && event.capability === "search.web"));
 });
 
 test("bundled Search retains the native fee for incomplete delivery without replay or a free failure", async t => {

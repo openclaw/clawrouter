@@ -718,8 +718,9 @@ test("Desktop failed catalog refresh and root commit retain the last usable gene
 const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
 const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
 const nativeVersion = nativeBinary ? (await promisify(execFile)(nativeBinary, ["--version"], { env: { PATH: process.env.PATH }, timeout: 20_000, maxBuffer: 1024 })).stdout.trim() : null;
-// Keep both pinned account/read shapes exact, including the new nullable field.
-const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0"].includes(nativeVersion);
+// Keep versioned account/read shapes exact, including nullable routing and user ID.
+const hasWorkspaceRouting = ["codex-cli 0.156.1", "codex-cli 0.164.0", "codex-cli 0.169.0"].includes(nativeVersion);
+const hasUserId = nativeVersion === "codex-cli 0.169.0";
 for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle preserves auth and clears GUI tier (${shape})`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
   const f = await desktopFixture(t), origin = f.connect[2], requests = [];
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
@@ -757,7 +758,7 @@ for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle pre
       assert.equal(resolve(f.home, config.model_catalog_json), resolve(f.home, (await f.read()).model_catalog_json));
       assert.equal(config.service_tier, "priority", "setup must preserve the preexisting tier preference");
       assert.ok((await client.rpc("model/list", {})).data.some((entry) => entry.model === "gpt-6-astra"));
-      assert.deepEqual(await client.rpc("account/read", { refreshToken: false }), { account: null, requiresOpenaiAuth: false, ...(hasWorkspaceRouting ? { workspaceRouting: null } : {}) });
+      assert.deepEqual(await client.rpc("account/read", { refreshToken: false }), { account: null, requiresOpenaiAuth: false, ...(hasWorkspaceRouting ? { workspaceRouting: null } : {}), ...(hasUserId ? { userId: null } : {}) });
       const auth = await client.rpc("getAuthStatus", { includeToken: false, refreshToken: false });
       assert.equal(auth.authMethod, null);
       assert.equal(auth.requiresOpenaiAuth, false);
@@ -904,4 +905,129 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   for (const request of f.state.requests.filter((request) => request.url === pluginList)) assert.equal(request.authorization, undefined, "router key must not reach the control plane");
   const unexpected = f.state.requests.filter((request) => !((request.method === "GET" && ["/v1/catalog", pluginList].includes(request.url)) || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))));
   assert.deepEqual(unexpected.map(({ method, url }) => ({ method, url })), [], "native proof must use only the isolated catalog, control, and synthetic inference routes");
+});
+
+async function remoteFixture(t, options) {
+  const f = await fixture(t, options);
+  await writeFile(f.binary, (await readFile(f.binary, "utf8")).replace("0.155.0", "0.169.0").replace('process.stdout.write(fs.readFileSync(process.env.FIXTURE_BUNDLE))', 'process.exit(9)'));
+  const provider = f.state.catalog.providers[0];
+  provider.id = "openai"; provider.nativeBaseUrl = "/v1/native/openai";
+  provider.models.forEach(model => { model.id = model.id.replace("fixture/", "openai/"); });
+  provider.offers.forEach(offer => { offer.modelId = offer.modelId?.replace("fixture/", "openai/"); offer.route = offer.route.replace("native/fixture", "native/openai"); });
+  f.state.remote = { models: [{ ...descriptor, available_access_programs: { cyber: ["standard", "daybreak_blue"] } }] };
+  f.state.respond = async (request, response) => {
+    if (!request.url.startsWith("/v1/codex/models?")) return false;
+    response.writeHead(f.state.remoteStatus ?? 200, { "content-type": "application/json" });
+    response.end(JSON.stringify(f.state.remote));
+    return true;
+  };
+  f.connect[f.connect.indexOf("--provider") + 1] = "openai";
+  f.connect.push("--catalog-mode", "remote");
+  return f;
+}
+
+test("remote setup opts into authenticated catalog URL, keeps snapshots off the active config, and preserves lifecycle ownership", async t => {
+  const f = await remoteFixture(t);
+  const baseBytes = await readFile(join(f.home, "config.toml"), "utf8");
+  await manageCodex(f.connect, f.env);
+  const config = await f.read();
+  assert.equal(config.model_catalog_json, undefined);
+  assert.equal(config.model_providers.clawrouter_clawrouter.model_catalog_url, `${f.connect[2]}/v1/codex/models`);
+  assert.equal(config.model_providers.clawrouter_clawrouter.base_url, `${f.connect[2]}/v1/native/openai/v1`);
+  assert.ok(f.state.requests.some(request => request.url === "/v1/codex/models?client_version=0.169.0"));
+  assert.ok(f.state.requests.every(request => request.authorization === `Bearer ${secret}`));
+  assert.ok(!(await readFile(f.profile, "utf8")).includes(secret));
+  f.state.remote.models[0].available_access_programs.cyber.push("future_program");
+  assert.equal((await f.run("verify")).status, "verified", "metadata refresh does not require a config update");
+  await f.run("update");
+  const receipt = JSON.parse((await readFile(f.profile, "utf8")).split("\n")[0].slice("# clawrouter-connect-v1 ".length));
+  assert.equal(receipt.catalogMode, "remote");
+  const audit = JSON.parse(await readFile(join(f.home, `clawrouter.${receipt.catalogSha256}.models.json`), "utf8"));
+  assert.deepEqual(audit.models[0].available_access_programs.cyber, ["standard", "daybreak_blue", "future_program"]);
+  await f.run("remove");
+  assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), baseBytes);
+  assert.deepEqual((await readdir(f.home)).sort(), ["auth.json", "config.toml"]);
+});
+
+test("remote setup rejects inherited static catalogs and disabled API-key discovery before writing anything", async t => {
+  for (const setting of ['model_catalog_json = "legacy.json"\n', 'features.api_key_model_discovery = false\n']) {
+    const f = await remoteFixture(t);
+    await writeFile(join(f.home, "config.toml"), setting + base);
+    await assert.rejects(manageCodex(f.connect, f.env), /before remote setup/);
+    assert.equal(f.state.requests.length, 0);
+    assert.deepEqual((await readdir(f.home)).sort(), ["auth.json", "config.toml"]);
+  }
+});
+
+test("remote setup failures retain the last usable config and audit snapshot", async t => {
+  const f = await remoteFixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+  f.state.remoteStatus = 503;
+  await assert.rejects(f.run("update"), /remote Codex catalog request failed/);
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  assert.deepEqual(await readdir(f.home), files);
+  f.state.remoteStatus = 200;
+  f.state.remote.models[0].slug = "unregistered";
+  await assert.rejects(f.run("verify"), /no authorized Responses model/);
+});
+
+test("remote desktop lifecycle restores root defaults without installing a static catalog pointer", async t => {
+  const f = await remoteFixture(t);
+  const original = await readFile(join(f.home, "config.toml"), "utf8");
+  const args = f.connect.filter((value, index, all) => value !== "--service-tier" && all[index - 1] !== "--service-tier");
+  await manageCodex([...args, "--target", "desktop"], f.env);
+  const config = getStaticTOMLValue(parseTOML(await readFile(join(f.home, "config.toml"), "utf8")));
+  assert.equal(config.model_catalog_json, undefined);
+  assert.equal(config.model_providers["clawrouter.desktop"].model_catalog_url, `${f.connect[2]}/v1/codex/models`);
+  await manageCodex(["remove", "--target", "desktop", ...f.common], f.env);
+  const restored = await readFile(join(f.home, "config.toml"), "utf8");
+  assert.ok(restored.includes(original));
+  assert.deepEqual(getStaticTOMLValue(parseTOML(restored)), getStaticTOMLValue(parseTOML(original)));
+});
+
+const remoteNativeBinary = process.env.CLAWROUTER_CODEX_REMOTE_BINARY;
+test("native remote catalog loads current model metadata through the generated desktop configuration", { skip: !remoteNativeBinary, timeout: 60_000 }, async t => {
+  const f = await remoteFixture(t);
+  const origin = f.connect[2];
+  const bundle = JSON.parse((await promisify(execFile)(remoteNativeBinary, ["debug", "models", "--bundled"], {
+    env: { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home }, timeout: 20_000, maxBuffer: 16 * 1024 * 1024,
+  })).stdout);
+  const model = bundle.models.find(model => model.slug === "gpt-6-sol");
+  assert.ok(model);
+  model.display_name = "Remote synthetic Sol";
+  model.available_access_programs = { cyber: ["standard", "daybreak_blue"] };
+  f.state.remote = { models: [model] };
+  const provider = f.state.catalog.providers[0];
+  provider.models = [{ id: "openai/gpt-6-sol", upstream: "gpt-6-sol", capabilities: ["llm.responses"], pricing: { serviceTiers: [] } }];
+  provider.offers = [{ ...provider.offers[0], modelId: "openai/gpt-6-sol" }];
+  await writeFile(join(f.home, "config.toml"), `cli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n`);
+  await rm(join(f.home, "auth.json"));
+  await manageCodex(["connect", "--target", "desktop", "--router-url", origin, "--provider", "openai", "--model", "gpt-6-sol", "--catalog-mode", "remote", "--codex-home", f.home, "--codex", remoteNativeBinary], f.env);
+  f.state.requests.length = 0;
+  const client = nativeCodexClient(t, remoteNativeBinary, f.home, { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, CLAWROUTER_API_KEY: secret, RUST_LOG: "warn" });
+  try {
+    await client.rpc("initialize", { clientInfo: { name: "clawrouter_remote_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+    const models = await client.rpc("model/list", {});
+    const discovered = models.data.find(entry => entry.model === "gpt-6-sol");
+    assert.equal(discovered?.displayName, "Remote synthetic Sol");
+    assert.deepEqual(discovered.availableAccessPrograms, { cyber: ["standard", "daybreakBlue"] });
+    const requests = f.state.requests.filter(request => request.url.startsWith("/v1/codex/models?"));
+    assert.ok(requests.length > 0, "native client did not fetch the remote catalog");
+    for (const request of requests) {
+      assert.equal(request.authorization, `Bearer ${secret}`);
+      assert.match(request.url, /client_version=0\.169\.0/);
+    }
+  } finally { await client.close(); }
+});
+
+test("remote setup accepts an authorized alias after the server has mapped its descriptor to the inference slug", async t => {
+  const f = await remoteFixture(t);
+  // Only the alias is authorized. Its bundled source name is intentionally
+  // absent from the already-filtered server response.
+  f.state.catalog.providers[0].models[0].codexModel = "fixture-source-sol";
+  await manageCodex(f.connect, f.env);
+  assert.equal((await f.read()).model, "fixture-model");
+  assert.equal((await f.run("verify")).status, "verified");
+  await f.run("remove");
 });
