@@ -54,7 +54,7 @@ const state={sha,run:env.GITHUB_RUN_ID,blue:blueId,deployedSha:baseline,deployme
 await prepareNativeUpload({state,blue:production,directory:join(out,'release'),mode:'auto'});
 assert.equal(state.mode,'native-cutover');
 const plan=join(out,'plan.json');await writeFile(plan,JSON.stringify(state));
-let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,staleDeployment=0,previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash,queueConsumer=false;
+let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,deploymentReads=[],previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash,queueConsumer=false;
 const queues=[],requests=[],deployments=[],accounting={events:[],policySpentMicros:0,providerSpentMicros:0},cases=[],callbacks=[],starts=[],seen={},grants=[];
 let lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0,usageDrainReads=0;
 const boot=randomUUID(),fingerprint='d'.repeat(64);
@@ -128,11 +128,11 @@ const server=createServer(async(r,s)=>{
    if(p===w+'/deployments'){
     if(r.method==='POST'){
       priorDeployment=deployment;previousVersion=selected();deployment={id:randomUUID(),versions:body.versions,annotations:body.annotations};
-      deployments.push(structuredClone(deployment));staleDeployment=1;
+      deployments.push(structuredClone(deployment));deploymentReads=[priorDeployment,deployment,priorDeployment,deployment];
       if(previousVersion!==selected()){staleControl=1;for(const k of Object.keys(seen))delete seen[k];grants.length=0;}
       if(lossDeploy){lossDeploy=false;r.socket.destroy();return;}return ok(deployment);
     }
-    return ok({deployments:[staleDeployment-->0?priorDeployment:deployment]});
+    return ok({deployments:[deploymentReads.shift()??deployment]});
    }
    throw Error('Unexpected Cloudflare proof operation '+p);
   }
@@ -208,7 +208,7 @@ try{
  assert.equal(kv,null);assert.equal(bucket,null);assert.equal(worker,null);assert.equal(app,null);assert.equal(queues.length,0);
  await assert.rejects(access(join(env.TRAIN_EVIDENCE_DIRECTORY,'private/release/client/session.json')));
  assert.equal(deployments.length,6);
- const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
+ const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,nonmonotonicDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }finally{
  await writeFile(join(out,'requests.json'),JSON.stringify(requests,null,2));

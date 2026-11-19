@@ -72,9 +72,24 @@ export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep, 
   }
   const github = (path, options) => request('github', `/repos/${repository}${path}`, env.GH_TOKEN || env.GITHUB_TOKEN, options);
   const cloudflare = (path, options) => request('cloudflare', path, env.CLOUDFLARE_API_TOKEN, options);
+  let acceptedDeploymentId;
+  const priorDeploymentIds = new Set();
+  const readLatest = async () => (await cloudflare(`${workerPath}/deployments`)).deployments[0];
+  async function latest() {
+    let actual = await readLatest();
+    // A successful readback does not make later list reads monotonic. Observe
+    // known predecessors again, never substitute cached state for a live read.
+    // Unknown deployments remain visible immediately to the caller's ownership
+    // guard, including while an accepted mutation is being reconciled.
+    for (let attempt = 1; attempt <= READBACK_ATTEMPTS && actual?.id !== acceptedDeploymentId && priorDeploymentIds.has(actual?.id); attempt++) {
+      await wait(READBACK_STEP_MS * attempt);
+      actual = await readLatest();
+    }
+    if (actual?.id !== acceptedDeploymentId && priorDeploymentIds.has(actual?.id)) throw new Error('Deployment readback remains at a known previous deployment');
+    return actual;
+  }
   return {
-    github, cloudflare, workerPath,
-    latest: async () => (await cloudflare(`${workerPath}/deployments`)).deployments[0],
+    github, cloudflare, workerPath, latest,
     versions: async () => (await cloudflare(`${workerPath}/versions?per_page=100`)).items,
     version: (id) => cloudflare(`${workerPath}/versions/${id}`),
     async deploy(versions, message, expectedId, { immediate = false } = {}) {
@@ -97,6 +112,9 @@ export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep, 
         actual = await this.latest();
       }
       if (!matches(actual)) throw error || new Error('Deployment readback differs from requested split');
+      priorDeploymentIds.add(before.id);
+      acceptedDeploymentId = actual.id;
+      priorDeploymentIds.delete(actual.id);
       console.log(`deployment ${actual.id}: ${versions.map((v) => `${v.version_id}=${v.percentage}%`).join(' ')}`);
       return actual;
     },

@@ -18,13 +18,13 @@ import { native, nativeVersion } from './helpers/deploy-native-fixture.mjs';
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
-function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0, scriptSettings } = {}) {
+function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0, deploymentReads = [], scriptSettings } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
   let versions = [nativeVersion(blue, oldSha)];
   let time = 1_000_000, smokes = 0, uploads = 0;
   const calls = [], receipts = [], smokeObservations = [];
   const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration, native };
-  let stale = 0, previous;
+  let stale = 0, previous, reads = [];
   const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, wait: async (ms) => { time += ms; }, fetchImpl: async (url, init) => {
     calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body), time });
     const path = new URL(url).pathname;
@@ -32,11 +32,14 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
     if (path.endsWith('/deployments')) {
       if (init.method === 'POST') {
         const body = JSON.parse(init.body);
-        previous = deployment; stale = deploymentLag;
+        previous = deployment; stale = deploymentLag; reads = [...deploymentReads];
         deployment = { id: `d${calls.length}`, versions: body.versions, annotations: body.annotations };
         result = deployment;
         if (lostPost) { lostPost = false; throw new Error('Lost response after mutation'); }
-      } else result = { deployments: [stale-- > 0 && previous ? previous : deployment] }; // deploymentLag: list trails the POST
+      } else {
+        const next = reads.shift();
+        result = { deployments: [next === 'previous' ? previous : next === 'foreign' ? { id: 'foreign' } : stale-- > 0 && previous ? previous : deployment] };
+      } // deploymentLag: list trails the POST
     } else if (path.endsWith('/versions')) {
       // listLag: the uploaded candidate stays hidden for that many history reads.
       result = { items: uploads && listLag-- > 0 ? versions.filter((version) => version.id !== green) : versions };
@@ -138,6 +141,31 @@ test('a deployments list that trails an accepted split is re-read without repeat
   assert.deepEqual(posts(lagging).map((p) => p.versions.map((v) => v.percentage)), [[0, 100], [10, 90], [50, 50], [100, 0], [100, 0]], 'each split is posted exactly once');
   const stuck = fixture({ deploymentLag: 99 });
   await assert.rejects(runTrain(stuck.options), /readback differs/);
+});
+
+test('later previous-deployment reads are observed without replaying the accepted write', async () => {
+  const f = fixture({ deploymentReads: ['previous', 'current', 'previous', 'current'] });
+  const accepted = await f.api.deploy([{ version_id: green, percentage: 100 }], 'owned', 'd0');
+  assert.equal((await f.api.latest()).id, accepted.id);
+  assert.equal(posts(f).length, 1);
+});
+
+test('persistent previous-deployment reads stop after bounded observation with no write replay', async () => {
+  const f = fixture({ deploymentReads: ['current', ...Array(20).fill('previous')] });
+  await f.api.deploy([{ version_id: green, percentage: 100 }], 'owned', 'd0');
+  const before = f.calls.length;
+  await assert.rejects(f.api.latest(), /known previous deployment/);
+  assert.equal(f.calls.length - before, 6);
+  assert.equal(posts(f).length, 1);
+});
+
+test('a foreign deployment after a stale read is returned immediately for ownership rejection', async () => {
+  const f = fixture({ deploymentReads: ['current', 'previous', 'foreign', 'current'] });
+  const accepted = await f.api.deploy([{ version_id: green, percentage: 100 }], 'owned', 'd0');
+  const before = f.calls.length;
+  await assert.rejects(f.api.deploy([{ version_id: blue, percentage: 100 }], 'next', accepted.id), /changed outside this train/);
+  assert.equal(f.calls.length - before, 2, 'do not poll through foreign ownership to a later owned read');
+  assert.equal(posts(f).length, 1);
 });
 
 test('zero-only success removes candidate and leaves exactly blue100', async () => {
