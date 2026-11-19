@@ -84,8 +84,9 @@ test('interrupted turn may fail or retry; only a successful distinct context ans
   assert.equal(assertContextAnswer(client,{turn:{id:'new'}},'expected').answerSha256,'expected');
 });
 
-function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0}={}){
-  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null;
+function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0,foreignConsumer=false,nonemptyDlq=false}={}){
+  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null,consumer=false;
+  const consumerValue=q=>({consumer_id:'fixture-consumer',type:'worker',script:foreignConsumer?'foreign-worker':identity.worker,dead_letter_queue:identity.dlq,...(q?{queue_id:q.queue_id,queue_name:q.queue_name}: {})});
   const response=value=>Response.json({success:true,result:value});
   const fetchImpl=async(url,init)=>{
     const u=new URL(url),p=u.pathname.split('/accounts/'+identity.account)[1],body=init.body&&JSON.parse(init.body);calls.push({path:p,method:init.method});
@@ -103,11 +104,24 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
       if(init.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:String(queues.length+1)});return response(queues.at(-1));}
       return response(queues);
     }
-    if(p.startsWith('/queues/')&&init.method==='DELETE'){const at=queues.findIndex(x=>p.endsWith('/'+x.queue_id));queues.splice(at,1);return response(null);}
+    const item=queues.find(q=>p==='/queues/'+q.queue_id||p.startsWith('/queues/'+q.queue_id+'/'));
+    if(item){
+      const path='/queues/'+item.queue_id,usage=item.queue_name===identity.usage;
+      if(p===path+'/metrics')return response({backlog_count:!usage&&nonemptyDlq?1:0,backlog_bytes:!usage&&nonemptyDlq?1:0});
+      if(p===path+'/consumers/fixture-consumer'){
+        if(!usage||!consumer)return new Response('',{status:404});
+        if(init.method==='DELETE'){consumer=false;return response(null);}
+        return response(consumerValue(item));
+      }
+      if(p===path){
+        if(init.method==='DELETE'){if(consumer||usage&&worker)return new Response('',{status:400});queues.splice(queues.indexOf(item),1);return response(null);}
+        return response({...item,producers:usage&&worker?[{type:'worker',script:identity.worker}]:[],consumers:usage&&consumer?[consumerValue()]:[]});
+      }
+    }
     if(p==='/r2/buckets'&&init.method==='POST'){bucket={name:body.name};return response(bucket);}
     if(p==='/r2/buckets/'+identity.bucket){if(init.method==='DELETE'){bucket=null;return response(null);}return bucket?response(bucket):new Response('',{status:404});}
     if(p==='/workers/scripts/'+identity.worker+'/settings')return worker?response(worker):new Response('',{status:404});
-    if(p==='/workers/scripts/'+identity.worker&&init.method==='DELETE'){worker=null;return response(null);}
+    if(p==='/workers/scripts/'+identity.worker&&init.method==='DELETE'){if(consumer)return new Response('',{status:400});worker=null;return response(null);}
     if(p==='/containers/applications'){
       if(containerResponse!==undefined)return Response.json(containerResponse);
       const items=app?[app]:[];
@@ -118,7 +132,7 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
     throw Error('Unexpected test resource path '+p);
   };
   const create=()=>createIsolatedResources({env:actionEnv,identity,fetchImpl,now:()=>time,wait:async ms=>{time+=ms;},save:async operation=>operations.push(operation)});
-  return {identity,calls,operations,create,get kv(){return kv;},addWorker(){worker={bindings:[]};app={id:'owned-app',name:identity.container};}};
+  return {identity,calls,operations,create,get kv(){return kv;},addWorker(){worker={bindings:[]};app={id:'owned-app',name:identity.container};consumer=true;}};
 }
 test('isolated resource writes reconcile lost acknowledgments without retry; fresh-runner cleanup proves ownership',async()=>{
   const f=resourceFixture({loseCreate:true}),resources=f.create();assert.equal((await resources.target()).isolated,true);
@@ -126,6 +140,16 @@ test('isolated resource writes reconcile lost acknowledgments without retry; fre
   assert.equal(f.calls.filter(x=>x.path==='/storage/kv/namespaces'&&x.method==='POST').length,1);
   assert.equal(f.operations.find(x=>x.operation==='create-policy'&&x.state==='observed').acknowledgementLost,true);
   assert(f.calls.every(x=>!x.path.includes('clawrouter-edge')));assert.equal(f.kv,null);
+  const deleted=f.calls.filter(x=>x.method==='DELETE').map(x=>x.path);
+  assert(deleted.findIndex(x=>x.includes('/consumers/'))<deleted.indexOf('/workers/scripts/'+f.identity.worker));
+});
+test('foreign queue consumers or pending DLQ work stop cleanup before any deletion',async()=>{
+  for(const options of [{foreignConsumer:true},{nonemptyDlq:true}]){
+    const f=resourceFixture(options);await f.create().provision();f.addWorker();
+    assert.equal((await f.create().cleanup()).complete,false);
+    assert.equal(f.calls.filter(x=>x.method==='DELETE').length,0);
+    assert(f.kv);
+  }
 });
 test('container inventory requires a successful envelope and array before any write',async()=>{
   for(const containerResponse of [[],null,{success:false,result:[]},{success:true},{success:true,result:{}}]){

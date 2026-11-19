@@ -54,7 +54,7 @@ const state={sha,run:env.GITHUB_RUN_ID,blue:blueId,deployedSha:baseline,deployme
 await prepareNativeUpload({state,blue:production,directory:join(out,'release'),mode:'auto'});
 assert.equal(state.mode,'native-cutover');
 const plan=join(out,'plan.json');await writeFile(plan,JSON.stringify(state));
-let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,staleDeployment=0,previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash;
+let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,staleDeployment=0,previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash,queueConsumer=false;
 const queues=[],requests=[],deployments=[],accounting={events:[],policySpentMicros:0,providerSpentMicros:0},cases=[],callbacks=[],starts=[],seen={},grants=[];
 let lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0;
 const boot=randomUUID(),fingerprint='d'.repeat(64);
@@ -84,7 +84,7 @@ const server=createServer(async(r,s)=>{
     if(worker?.bindings.some(b=>b.name==='LARGE_HTTP_TOKEN'))bindings.push({type:'secret_text',name:'LARGE_HTTP_TOKEN'});
     const v={id,annotations:{'workers/tag':body.tag,...(body.message?{'workers/message':body.message}:{})},resources:{bindings}};
     versions.unshift(v);worker={bindings};app={name:identity.container,id:'app'};
-    if(body.bootstrap)deployment={id:randomUUID(),versions:[{version_id:id,percentage:100}]};
+    if(body.bootstrap){queueConsumer=true;deployment={id:randomUUID(),versions:[{version_id:id,percentage:100}]};}
     return json(s,{id});
   }
   if(path.startsWith('/client/v4/accounts/')){
@@ -95,13 +95,27 @@ const server=createServer(async(r,s)=>{
    if(p.endsWith('/values/release-owner')){if(r.method==='PUT'){owner=JSON.stringify(body);return ok(null);}if(!owner)return json(s,{},404);s.end(owner);return;}
    if(p==='/storage/kv/namespaces/'+'c'.repeat(32)&&r.method==='DELETE'){kv=null;return ok(null);}
    if(p==='/queues'){if(r.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:randomUUID()});if(lossQueue){lossQueue=false;r.socket.destroy();return;}}return ok(r.method==='POST'?queues.at(-1):queues);}
-   if(p.startsWith('/queues/')&&r.method==='DELETE'){queues.splice(queues.findIndex(x=>p.endsWith(x.queue_id)),1);return ok(null);}
+   const queue=queues.find(q=>p==='/queues/'+q.queue_id||p.startsWith('/queues/'+q.queue_id+'/'));
+   if(queue){
+    const qp='/queues/'+queue.queue_id,usage=queue.queue_name===identity.usage;
+    const consumer={consumer_id:'proof-consumer',type:'worker',script:identity.worker,dead_letter_queue:identity.dlq};
+    if(p===qp+'/metrics')return ok({backlog_count:0,backlog_bytes:0});
+    if(p===qp+'/consumers/proof-consumer'){
+     if(!usage||!queueConsumer)return json(s,{},404);
+     if(r.method==='DELETE'){queueConsumer=false;return ok(null);}
+     return ok({...consumer,queue_id:queue.queue_id,queue_name:queue.queue_name});
+    }
+    if(p===qp){
+     if(r.method==='DELETE'){if(queueConsumer||usage&&worker)return json(s,{},400);queues.splice(queues.indexOf(queue),1);return ok(null);}
+     return ok({...queue,producers:usage&&worker?[{type:'worker',script:identity.worker}]:[],consumers:usage&&queueConsumer?[consumer]:[]});
+    }
+   }
    if(p==='/r2/buckets'&&r.method==='POST'){bucket={name:body.name};return ok(bucket);}
    if(p==='/r2/buckets/'+identity.bucket){if(r.method==='DELETE'){bucket=null;return ok(null);}return bucket?ok(bucket):json(s,{},404);}
    if(p==='/containers/applications')return ok(app?[app]:[]);
    if(p==='/containers/applications/app'&&r.method==='DELETE'){app=null;return ok({message:'Application deletion started'});}
    const w='/workers/scripts/'+identity.worker;
-   if(p===w&&r.method==='DELETE'){worker=null;return ok(null);}
+   if(p===w&&r.method==='DELETE'){if(queueConsumer)return json(s,{},400);worker=null;return ok(null);}
    if(p===w+'/settings')return worker?ok(worker):json(s,{},404);
    if(p===w+'/secrets'&&r.method==='PUT'){
     assert.equal(body.name,'LARGE_HTTP_TOKEN');worker.bindings.push({type:'secret_text',name:body.name});
@@ -153,7 +167,7 @@ const server=createServer(async(r,s)=>{
   accounting.events.push({idHash:hash(trace),actualCostMicros:cost,reservedCostMicros:7,contentRetained:false,status:x.mode==='lost'?'provider_error':x.mode==='reject'?'client_error':'success'});accounting.policySpentMicros+=cost;accounting.providerSpentMicros+=cost;
   callbacks.push({op:'finish',idHash:hash(trace),slot:0,generation:1,runtimeSha:x.runtimeSha,status:200,clean:x.mode!=='lost',at:Date.now()});
   seen[trace]=x.mode==='lost'?'quarantined':'complete';if(x.mode!=='lost')grants.splice(grants.findIndex(g=>g.id===trace),1);
-  if(x.mode==='lost')return json(s,{},424);
+  if(x.mode==='lost'){s.writeHead(200,{'content-type':'application/json'});s.end('{"id":');return;}
   if(x.mode==='reject')return json(s,{},400);
   // Exercise the accepted session-continuity requirement with an actually
   // FAILED interrupted Codex turn, followed by a distinct saved-thread answer.
@@ -185,12 +199,15 @@ try{
  const receipt=JSON.parse(await readFile(join(env.TRAIN_EVIDENCE_DIRECTORY,'public/qualification-release.json'),'utf8'));
  assert.equal(receipt.qualified,true);assert.equal(receipt.controlSha256,nativeControlDigest());
  assert.equal(receipt.actual.providerAttempts,8);assert.equal(receipt.actual.replays,0);
+ const lost=receipt.clientDiagnostics.find(x=>x.name==='workload-lost-diagnostic.json');
+ assert.equal(lost.response.status,200);assert.equal(lost.response.bodyComplete,true);assert.equal(lost.response.jsonValid,false);assert.equal(lost.outcome,'completed');
+ assert.equal(receipt.finalObservation.accountingEvents,8);
  assert.equal(receipt.cases.continuity.interruptedStatus,'failed');
  assert.equal(new Set(receipt.functionalEvidence.steps.filter(x=>x.threadId).map(x=>x.threadId)).size,1);
  assert.equal(kv,null);assert.equal(bucket,null);assert.equal(worker,null);assert.equal(app,null);assert.equal(queues.length,0);
  await assert.rejects(access(join(env.TRAIN_EVIDENCE_DIRECTORY,'private/release/client/session.json')));
  assert.equal(deployments.length,6);
- const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
+ const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }finally{
  await writeFile(join(out,'requests.json'),JSON.stringify(requests,null,2));

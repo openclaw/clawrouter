@@ -217,11 +217,20 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
     // A body error after headers cannot become a new HTTP 424. Only the
     // deliberate lost case may accept this bounded transport failure, and
     // only after independent ownership/fixture/accounting verification below.
-    try{await r.arrayBuffer();receipt.response.bodyComplete=true;}
+    try{
+     const bytes=await r.arrayBuffer();receipt.response.bodyComplete=true;
+     if(mode==='lost'&&status===200){
+      // HTTP intermediaries can end a truncated JSON body without a socket
+      // error. Record protocol validity only, never body content. The fixture,
+      // quarantine and exact accounting checks below remain mandatory.
+      try{JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));receipt.response.jsonValid=true;}
+      catch{receipt.response.jsonValid=false;}
+     }
+    }
     catch(error){receipt.response.failure=clientFailure(error);if(mode!=='lost'||status!==200||receipt.response.failure.kind!=='transport')throw error;}
     await persist();
     assert.equal(selected,version,'workload response selected version');
-    if(mode==='lost')assert.ok(status===424&&receipt.response.bodyComplete||status===200&&!receipt.response.bodyComplete,'lost response must be 424 or a truncated 200');
+    if(mode==='lost')assert.ok(status===424&&receipt.response.bodyComplete||status===200&&(!receipt.response.bodyComplete||receipt.response.jsonValid===false),'lost response must be 424 or an incomplete 200 response');
     else assert.equal(status,mode==='reject'?400:mode==='overflow'?413:200);
     receipt.stage='pool_settlement';await persist();
     const pool=await until(async()=>{const s=await control.snapshot(version);return (mode==='overflow'?s.pool.seen[trace]===undefined:s.pool.seen[trace]===(mode==='lost'?'quarantined':'complete'))&&s;});

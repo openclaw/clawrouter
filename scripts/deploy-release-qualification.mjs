@@ -2,7 +2,7 @@
 // the caller validates the complete release-bound result, including cleanup.
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -161,7 +161,12 @@ export async function qualifyRelease({ state, stage = 'release', env = process.e
     });
     const evidence=JSON.parse(await readFile(join(clientDirectory,'evidence.json'),'utf8'));
     receipt.functionalEvidence=evidence;
-    const final=await preparation.runClientCommand('inspect');
+    const final=await until(async()=>{
+      const value=await preparation.runClientCommand('inspect'),snapshot=value.snapshot;
+      return snapshot.cases.every(x=>x.outcome!=='active')&&snapshot.accounting.events.length>=snapshot.cases.length&&value;
+    });
+    receipt.finalObservation={providerAttempts:final.snapshot.requests,providerCases:final.snapshot.cases.length,nativeStarts:final.snapshot.starts.length,replays:final.snapshot.replays,
+      accountingEvents:final.snapshot.accounting.events.length,policySpentMicros:final.snapshot.accounting.policySpentMicros,providerSpentMicros:final.snapshot.accounting.providerSpentMicros};await save();
     assert.equal(final.snapshot.replays,0);
     assert.equal(final.snapshot.requests,final.snapshot.cases.length);
     assert.ok(final.snapshot.requests<=receipt.planned.maximumProviderAttempts,'synthetic provider attempt ceiling');
@@ -177,6 +182,11 @@ export async function qualifyRelease({ state, stage = 'release', env = process.e
     // Preserve content-free evidence even after a client failure. Never upload
     // private state, credentials, config, Codex home, transcripts or raw logs.
     if(clientDirectory)try{receipt.functionalEvidence=JSON.parse(await readFile(join(clientDirectory,'evidence.json'),'utf8'));}catch{}
+    if(clientDirectory)try{
+      receipt.clientDiagnostics=[];
+      for(const name of await readdir(clientDirectory))if(/^(?:workload-(?:success|reject|max|overflow|lost)|seed|overlap-(?:forward|recovery)|followup-(?:forward|recovery))-diagnostic[.]json$/.test(name))
+        receipt.clientDiagnostics.push({name,...JSON.parse(await readFile(join(clientDirectory,name),'utf8'))});
+    }catch{}
     try{await outcome('cleanup',async()=>{
       const result=await resources.cleanup();if(!result.complete)throw new Error('Isolated resource cleanup incomplete');return result;
     });}catch(error){failure??=error;}

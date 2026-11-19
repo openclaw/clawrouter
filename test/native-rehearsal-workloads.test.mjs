@@ -52,6 +52,7 @@ async function fixture(t,mode){
   if(lost){
    if(mode==='pre-header'){s.statusCode=424;return s.end('{}');}
    if(mode==='complete-200')return s.end('{}');
+   if(mode==='json-truncated')return s.end('{"id":');
    if(mode==='unexpected-status'){s.statusCode=500;return s.end('{}');}
    if(mode==='timeout'){s.setHeader('x-fixture-body-fault','timeout');return s.end('{}');}
    s.writeHead(200);s.flushHeaders();s.write('{"id":');setTimeout(()=>s.destroy(),100);return;
@@ -71,8 +72,8 @@ async function fixture(t,mode){
  return {directory,client,calls,controls,state,run};
 }
 
-for(const mode of ['pre-header','partial','complete-200','unexpected-status','wrong-version','wrong-generation','wrong-finish','other-quarantine','wrong-accounting','timeout'])test('actual workload CLI: '+mode,{timeout:30000},async t=>{
- const f=await fixture(t,mode),result=await f.run('workloads'),passed=['pre-header','partial'].includes(mode),failedCase=mode==='wrong-version'?'success':'lost';
+for(const mode of ['pre-header','partial','json-truncated','complete-200','unexpected-status','wrong-version','wrong-generation','wrong-finish','other-quarantine','wrong-accounting','timeout'])test('actual workload CLI: '+mode,{timeout:30000},async t=>{
+ const f=await fixture(t,mode),result=await f.run('workloads'),passed=['pre-header','partial','json-truncated'].includes(mode),failedCase=mode==='wrong-version'?'success':'lost';
  assert.equal(result.code,passed?0:1,result.stderr);
  const modes=mode==='wrong-version'?['success']:['success','reject','max','overflow','lost'];assert.deepEqual(f.calls.map(x=>x.mode),modes);
  if(mode!=='wrong-version'){assert.equal(f.calls[2].bytes,64*1024**2);assert.equal(f.calls[3].bytes,64*1024**2+1);}
@@ -85,8 +86,9 @@ for(const mode of ['pre-header','partial','complete-200','unexpected-status','wr
  }
  if(passed){
   assert.equal(local.pending,null);assert.deepEqual(evidence.steps.filter(s=>s.kind==='workload-case').map(s=>s.mode),modes);assert.equal(evidence.steps.at(-1).kind,'workloads');
-  const lost=JSON.parse(original.at(-1));assert.equal(lost.response.status,mode==='partial'?200:424);assert.equal(lost.response.bodyComplete,mode!=='partial');
+  const lost=JSON.parse(original.at(-1));assert.equal(lost.response.status,mode==='pre-header'?424:200);assert.equal(lost.response.bodyComplete,mode!=='partial');
   if(mode==='partial')assert.equal(lost.response.failure.kind,'transport');
+  if(mode==='json-truncated')assert.equal(lost.response.jsonValid,false);
  }else{
   assert.equal(local.workloadPending.workloadMode,failedCase);assert.equal(evidence.steps.filter(s=>s.kind==='workloads').length,0);assert.equal(evidence.steps.filter(s=>s.kind==='workload-case').length,modes.length-1);
   const diagnostic=JSON.parse(original.at(-1));if(mode==='timeout')assert.deepEqual(diagnostic.failure,{kind:'timeout'});

@@ -125,6 +125,42 @@ export function createIsolatedResources({ env = process.env, identity = qualific
       }else if(await worker()||await application()||await queue(identity.usage)||await queue(identity.dlq)||await bucket()){
         return {worker:identity.worker,complete:false,outcomes:[{resource:'ownership',outcome:'unresolved'}]};
       }
+      // A Worker consumer prevents Worker deletion; its producer and dead-letter
+      // references then prevent queue deletion. Verify every dependency before
+      // disconnecting any of them, as in the existing FakeCo teardown.
+      try {
+        const consumers=[];
+        const ownedConsumer=(value,item)=>{
+          const scripts=[value?.script,value?.script_name].filter(x=>x!==undefined);
+          if(value?.type!=='worker'||!scripts.length||scripts.some(x=>x!==identity.worker)||
+             typeof value.consumer_id!=='string'||!value.consumer_id.trim()||value.dead_letter_queue!==identity.dlq||
+             value.queue_id!==undefined&&value.queue_id!==item.queue_id||value.queue_name!==undefined&&value.queue_name!==item.queue_name)
+            throw new Error('Foreign isolated queue consumer');
+        };
+        for(const name of [identity.usage,identity.dlq]){
+          const item=await queue(name);if(!item)continue;
+          const path='/queues/'+encodeURIComponent(item.queue_id),detail=await request(path);
+          if(detail?.queue_id!==item.queue_id||detail.queue_name!==name||
+             !Array.isArray(detail.producers)||!Array.isArray(detail.consumers)||
+             detail.producers_total_count!==undefined&&detail.producers_total_count!==detail.producers.length||
+             detail.consumers_total_count!==undefined&&detail.consumers_total_count!==detail.consumers.length||
+             detail.producers.length>1||detail.producers.some(x=>x.type!=='worker'||x.script!==identity.worker)||
+             detail.consumers.length>1||name===identity.dlq&&(detail.producers.length||detail.consumers.length))
+            throw new Error('Foreign or incomplete isolated queue dependencies');
+          for(const value of detail.consumers){
+            ownedConsumer(value,item);
+            const consumerPath=path+'/consumers/'+encodeURIComponent(value.consumer_id);
+            const direct=await request(consumerPath);ownedConsumer(direct,item);
+            if(direct.consumer_id!==value.consumer_id)throw new Error('Isolated consumer identity changed');
+            consumers.push(consumerPath);
+          }
+          const metrics=await request(path+'/metrics');
+          if(metrics?.backlog_count!==0||metrics.backlog_bytes!==0)throw new Error('Isolated queue is not empty');
+        }
+        for(const path of consumers)await mutation('delete-usage-consumer',()=>request(path,{method:'DELETE'}),async()=>!await request(path,{absent:true}));
+      }catch{
+        return {worker:identity.worker,complete:false,outcomes:[{resource:'queue-dependencies',outcome:'unresolved'}]};
+      }
       // Delete the owned application first: its synthetic-only native processes
       // must not survive Worker removal. This is cleanup, not a continuity pass.
       for (const [label, read, path] of [
