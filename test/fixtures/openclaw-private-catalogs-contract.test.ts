@@ -74,6 +74,28 @@ export function createPrivateExecutionWitness(contract:string,current:Function,e
  };
 }
 
+// The pinned dispatcher supplies the original callee/input. Admission additionally
+// requires entry into the pinned guard body in that very acquisition context.
+// A successful entry is never a completed result, release or retirement receipt.
+export function createPrivateExecutedGuard(current:Function,spy:Function,invoke:Function,faults:unknown[]){
+ const calls=new WeakSet<object>(),entries=new WeakMap<object,any>();let active=true;
+ return {
+  call(module:object,fn:Function,input:any){
+   if(!active||!module||typeof module!=="object"||typeof fn!=="function")throw Error("invalid Private executed guard call");
+   if(fn===spy())return Reflect.apply(fn,undefined,[input]); // Existing defining spy owns this same call.
+   const proof=Object.freeze({module,fn,input});calls.add(proof);
+   return invoke(fn,undefined,[input],proof);
+  },
+  entry(module:object,fn:Function,input:any){try{
+   const context=current(),a=context?.acquisition,proof=a?.guardSource;if(!proof||!calls.has(proof))return;
+   if(!active||!module||typeof module!=="object"||entries.has(a)||proof.fn!==fn||proof.input!==input||a.guard!==fn||a.input!==input||a.context!==context||a.invocation!==context.invocation)throw Error("foreign Private executed guard entry");
+   entries.set(a,Object.freeze({proof,module,fn,input,context}));
+  }catch(error){faults.push(error);}},
+  bound(a:any){const e=entries.get(a);return !!e&&calls.has(e.proof)&&a.guardSource===e.proof&&a.guard===e.fn&&a.input===e.input&&a.context===e.context&&a.invocation===e.context.invocation;},
+  close(){if(!active)throw Error("duplicate Private executed guard closure");active=false;},
+ };
+}
+
 // Only these two pinned defining namespaces may use Vitest's configurable
 // getter exports. Resolve once, then let spyOn read a temporary data descriptor;
 // returned-host buildModelFetch admission remains own-data-only.
@@ -243,7 +265,7 @@ export function createPrivateInvocationOwnership(storage:any,evidence?:any) {
    if(own(evidence.ledger,"owner")!==owner||own(evidence.ledger,"acquisitions")!==evidence.acquisitions||own(evidence.ledger,"originals")!==evidence.originals||own(invocation,"owner")!==owner||new Set(rows).size!==rows.length||new Set(ops).size!==ops.length)throw bad;
    let count=0,context=0,phase=0,other=0;
    for(const a of rows){const i=own(a,"invocation"),c=own(a,"context"),o=own(a,"operation"),state=own(o,"state"),ret=own(o,"returnAt"),settle=own(o,"settle");
-    if(own(i,"owner")!==owner||own(a,"owner")!==owner||own(c,"invocation")!==i||own(c,"acquisition")!==a||!Object.isFrozen(i)||!Object.isFrozen(c)||own(a,"guard")!==evidence.guard||
+    if(own(i,"owner")!==owner||own(a,"owner")!==owner||own(c,"invocation")!==i||own(c,"acquisition")!==a||!Object.isFrozen(i)||!Object.isFrozen(c)||(evidence.guardBound?!evidence.guardBound(a):own(a,"guard")!==evidence.guard)||
      !ops.includes(o)||own(o,"owner")!==owner||own(o,"kind")!=="guard"||own(o,"acquisition")!==a||list(own(o,"args"))[0]!==own(a,"input")||
      !Number.isSafeInteger(own(a,"invoke"))||own(a,"invoke")<1||!Number.isSafeInteger(own(o,"invoke"))||own(o,"invoke")<=own(a,"invoke")||
      !Number.isSafeInteger(ret)||ret<0||!Number.isSafeInteger(settle)||settle<0||!["pending","fulfilled","rejected","threw"].includes(state))throw bad;
@@ -328,11 +350,12 @@ export function privateCancelOperand(read:any,cancel:any,caller:any):string {
 }
 // Pure, predefined vector over the original graph. It does not consult a
 // product verdict, learn an allowlist, compare error names or infer C1's cause.
+export function privateGuardIdentity(w:any,a:any){return !!a&&(a.guard===w.identity.guard||w.executedGuard?.bound(a)===true);}
 export function privateStoredErrorVector(w:any):any[]|undefined {
  const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;
  const t=ts[0],a=t.acquisition,c=t.caller;
  if(!c||c!==privateControlCaller(w)||!privateInvocationBound(w,t)||c.owner!==w.owner||t.owner!==w.owner||!a||a.owner!==w.owner||a.transport!==t||a.response!==t.response||
-   a.guard!==w.identity.guard||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
+   !privateGuardIdentity(w,a)||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
    !t.guardObserved||!t.response||t.bodies.length!==1||t.readers.length!==1||t.fetch.state!=="fulfilled")return;
  const r=t.readers[0];if(r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||r.owner!==w.owner)return;
  const reads=w.originals.filter((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="rejected"),read=reads[0];
@@ -362,7 +385,7 @@ export function evaluatePrivateNativeControl(w:any):any {
  const c=privateControlCaller(w),vector=privateStoredErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
   !w.restored||w.sourceExpired!==0||w.originals.some((o:any)=>o.state==="pending"||o.state==="threw")||
   w.transports.some((t:any)=>!privateInvocationBound(w,t)||!t.guardObserved||t.owner!==w.owner||t.acquisition?.owner!==w.owner||t.acquisition?.response!==t.response||
-   t.acquisition?.transport!==t||t.acquisition?.guard!==w.identity.guard||t.readers.length!==1||t.bodies.length!==1||
+   t.acquisition?.transport!==t||!privateGuardIdentity(w,t.acquisition)||t.readers.length!==1||t.bodies.length!==1||
    t.releases!==1||!t.releaseDone||t.release?.state!=="fulfilled"||t.readers.some((r:any)=>r.owner!==w.owner||r.transport!==t||r.body!==t.response?.body||
     r.body!==t.bodies[0]||r.unlocks!==1||r.unlockFailed||r.body.locked||r.unlockReceiver!==r.original||
     w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r&&o.pending===r.closed&&o.invoke<r.unlockAt).length!==1));
@@ -714,7 +737,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const selection=caseIndex===0?createPrivateSelectionWitness(w.owner,isProxy,w.observerFailures,globalThis):undefined;
  const storage=new AsyncLocalStorage();
  const execution=caseIndex===0?createPrivateExecutionWitness(process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT!,()=>storage.getStore(),{guard:originalGuard},w.observerFailures):undefined;
- const ownership=createPrivateInvocationOwnership(storage,caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy,selection,callbacks,execution}:undefined);
+ const ownership=createPrivateInvocationOwnership(storage,caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,guardBound:(a:any)=>privateGuardIdentity(w,a),isProxy,selection,callbacks,execution}:undefined);
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
   if(signal){const observed=()=>{history.abort=++w.sequence;history.reason=signal.reason;};if(signal.aborted)observed();else{signal.addEventListener("abort",observed,{once:true});restores.push(()=>signal.removeEventListener("abort",observed));}}return history;};
@@ -787,26 +810,12 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let bodyEntered=false;
- let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false;
- try{
-  expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
-  for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
-  if(execution){const key=Symbol.for("clawrouter.private.execution."+process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT);
-   expect(Object.hasOwn(globalThis,key)).toBe(false);patch(globalThis,key,execution.channel);restores.push(()=>execution.close());}
-  const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch,1));selection?.globalDescriptor(globalFetchDescriptor);
-  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,2)});
-  if(selection){
-   for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
-    installPrivateDefiningSpy(module,name,observe,restores,callbacks,name==="getAiTransportHost"?execution?.host:undefined);
-   }
-   restores.push(()=>selection.restore());
-  }
-  spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
+ const observeGuard=(originalGuard:typeof guard.fetchWithSsrFGuard,receiver:unknown,args:Parameters<typeof originalGuard>,guardSource?:object)=>{
    const callbackEntry=callbacks?.enter(2);
    try{
-   const input=args[0],a:any={guard:originalGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.callbackEntry=callbackEntry;a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
-   const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;
-   try{pending=returned(o,ownership.guard(originalGuard,this,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
+   const input=args[0],a:any={guard:originalGuard,guardSource,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.callbackEntry=callbackEntry;a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
+   const o=record("guard",{acquisition:a,receiver,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;
+   try{pending=returned(o,ownership.guard(originalGuard,receiver,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
    observer(pending.then((result:any)=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
     expect(new URL(input.url).pathname).toBe(t.path);expect(input.init?.method??"GET").toBe(t.method);expect(new Headers(input.init?.headers).get("authorization")).toBe(t.credential);
     ownership.attach(a,result);
@@ -815,7 +824,26 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
      observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
    },()=>{}));callbacks?.returned(callbackEntry);return pending;
    }catch(reason){callbacks?.threw(callbackEntry,reason);throw reason;}
-  } as typeof originalGuard);spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
+ };
+ w.executedGuard=createPrivateExecutedGuard(()=>storage.getStore(),()=>spy,observeGuard,w.observerFailures);
+ let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false;
+ try{
+  expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
+  for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
+  const contract=process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT!;expect(contract).toMatch(/^[a-f0-9]{64}$/);
+  const executionKey=Symbol.for("clawrouter.private.execution."+contract);expect(Object.hasOwn(globalThis,executionKey)).toBe(false);
+  patch(globalThis,executionKey,Object.freeze({guardCall:w.executedGuard.call,fault:(error:unknown)=>w.observerFailures.push(error),
+   observe(index:number,module:object,site:number,values:any[]){if(index===3&&site===5)w.executedGuard.entry(module,values[0],values[1]);execution?.channel.observe(index,module,site,values);}}));
+  restores.push(()=>{w.executedGuard.close();execution?.close();});
+  const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch,1));selection?.globalDescriptor(globalFetchDescriptor);
+  patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,2)});
+  if(selection){
+   for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
+    installPrivateDefiningSpy(module,name,observe,restores,callbacks,name==="getAiTransportHost"?execution?.host:undefined);
+   }
+   restores.push(()=>selection.restore());
+  }
+  spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){return observeGuard(originalGuard,this,args);} as typeof originalGuard);spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
   const f=await session(row,state,track,transports,{begin,finish,abort,partial,partialNow,caller,invoke:ownership.invoke,preabortProof:(cold:boolean,delta:number)=>{w.coldZeroDispatch=cold;w.preabortPostDelta=delta;}});bodyEntered=true;await checkpoints.observe(caseIndex,"body",body,undefined,[f]);
  }catch(e){if(!bodyEntered)checkpoints.mark(caseIndex,"case_setup","rejected",e);failures.push(e);}
  checkpoints.mark(caseIndex,"original_join","enter");

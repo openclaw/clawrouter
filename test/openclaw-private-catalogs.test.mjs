@@ -39,7 +39,7 @@ export const privateNativeControls=privateProviders.flatMap(provider=>["stream",
 // No SDK imports, module initialization, plugin loading or native client runs.
 export function privateNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
- const names=["createPrivateFetchObserver","createPrivateInvocationOwnership","newPrivateInvocationCaller","privateControlCaller","privateInvocationBound","samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
+ const names=["createPrivateFetchObserver","createPrivateInvocationOwnership","newPrivateInvocationCaller","privateControlCaller","privateInvocationBound","samePrivateDescriptor","privateCancelOperand","privateGuardIdentity","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
  const start="export function createPrivateFetchObserver(",end="function emitNativeControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
@@ -635,7 +635,7 @@ test('Private execution overlays preserve actual E2 call operands, receiver, ord
   const traces=[];
   for(const source of [privateExecutionOriginals[4].toString(),out[4]]){
    const trace=[],pool={},promise=Promise.resolve(),options={get url(){trace.push('url');return 'synthetic';}};
-   const fn=privateOverlayFunction(source,'export function fetchWithProviderHttpGuard(', '/** Returns the current process-lifecycle', ['fetchWithSsrFGuard','getProviderTransportDispatcherPool','__privateE2Observe'],[function(value){trace.push(['guard',this===undefined,value.url,value.dispatcherPool===pool]);if(failure)throw undefined;return promise;},()=>{trace.push('pool');return pool;},()=>{}]);
+   const fn=privateOverlayFunction(source,'export function fetchWithProviderHttpGuard(', '/** Returns the current process-lifecycle', ['fetchWithSsrFGuard','getProviderTransportDispatcherPool','__privateE2Observe','__privateE2InvokeGuard'],[function(value){trace.push(['guard',this===undefined,value.url,value.dispatcherPool===pool]);if(failure)throw undefined;return promise;},()=>{trace.push('pool');return pool;},()=>{},(fn,input)=>Reflect.apply(fn,undefined,[input])]);
    if(failure)assert.throws(()=>fn(options),e=>e===undefined);else assert.equal(fn(options),promise);traces.push(trace);
   }assert.deepEqual(traces[1],traces[0]);
  }
@@ -704,6 +704,48 @@ test('Private E2 overlay rejects bad pins before writes and preserves foreign mo
  const changed=privateOverlayFS(),path='/sdk/'+privateExecutionSources[0].path;
  await assert.rejects(withPrivateExecutionOverlay('/sdk','a'.repeat(64),()=>{changed.files.get(path).bytes=Buffer.from('foreign');},changed.io),/overlay changed/);
  assert.equal(changed.files.get(path).bytes.toString(),'foreign');for(const r of changed.files.values())assert.equal(r.closes,1);
+});
+function privateExecutedGuardFactory(){
+ const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+ const start=source.indexOf('export function createPrivateExecutedGuard('),end=source.indexOf('// Only these two pinned defining namespaces',start);assert.ok(start>0&&end>start);
+ return new Function(stripTypeScriptTypes(source.slice(start,end).replace(/^export /gm,''),{mode:'strip'})+';return createPrivateExecutedGuard;')();
+}
+test('Private source-bound guard call preserves exact promise, receiver, arguments and undefined failures',()=>{
+ for(const fail of [false,true]){
+  const faults=[],invocation={owner:{}},input={},promise=Promise.resolve({}),dispatcher={},module={};let context,a,calls=0,binding;
+  const fn=function(...args){assert.equal(this,undefined);assert.deepEqual(args,[input]);calls++;binding.entry(module,fn,input);if(fail)throw undefined;return promise;};
+  binding=privateExecutedGuardFactory()(()=>context,()=>undefined,(original,receiver,args,proof)=>{
+   a={guard:original,input:args[0],guardSource:proof,invocation};a.context=context={invocation,acquisition:a};return Reflect.apply(original,receiver,args);
+  },faults);
+  if(fail)assert.throws(()=>binding.call(dispatcher,fn,input),e=>e===undefined);else assert.equal(binding.call(dispatcher,fn,input),promise);
+  assert.equal(calls,1);assert.equal(binding.bound(a),true);assert.equal(a.result,undefined);assert.equal(a.guardObserved,undefined);assert.deepEqual(faults,[]);
+  binding.close();assert.equal(binding.bound(a),true);assert.throws(()=>binding.call(dispatcher,fn,input));
+ }
+});
+test('Private source-bound guard rejects foreign entry context, callee, input, duplicate and absent entry',()=>{
+ for(const mode of ['absent','context','callee','input','duplicate','observer']){
+  const faults=[],invocation={owner:{}},input={},promise=Promise.resolve({});let a,context,binding;
+  const fn=()=>{if(mode!=='absent')binding.entry({},mode==='callee'?()=>{}:fn,mode==='input'?{}:input);if(mode==='duplicate')binding.entry({},fn,input);return promise;};
+  binding=privateExecutedGuardFactory()(()=>{if(mode==='observer')throw undefined;return mode==='context'?{invocation,acquisition:a}:context;},()=>undefined,(original,receiver,args,proof)=>{
+   a={guard:original,input:args[0],guardSource:proof,invocation};a.context=context={invocation,acquisition:a};return Reflect.apply(original,receiver,args);
+  },faults);
+  assert.equal(binding.call({},fn,input),promise);assert.equal(binding.bound(a),mode==='duplicate');assert.equal(faults.length,mode==='absent'?0:1);if(mode==='observer')assert.equal(faults[0],undefined);
+  for(const key of ['guard','input','guardSource','context','invocation']){const original=a[key];a[key]={};assert.equal(binding.bound(a),false);a[key]=original;}
+ }
+ let calls=0,observed=0;const result={},spy=function(input){calls++;assert.equal(this,undefined);return result;};
+ const bound=privateExecutedGuardFactory()(()=>{throw Error('no context read');},()=>spy,()=>{observed++;},[]);
+ assert.equal(bound.call({},spy,{}),result);assert.equal(calls,1);assert.equal(observed,0);
+});
+test('Private actual dispatcher overlay invokes the installed call observer once and preserves fallback',()=>{
+ const contract='b'.repeat(64),source=overlayPrivateExecutionSource(4,privateExecutionOriginals[4],contract).toString(),prefix=source.slice(0,source.indexOf('import '));
+ for(const installed of [false,true])for(const fail of [false,true]){
+  const global={},input={},promise=Promise.resolve({});let calls=0,observations=0;
+  const fn=function(value){calls++;assert.equal(this,undefined);assert.equal(value,input);if(fail)throw undefined;return promise;};
+  if(installed)Object.defineProperty(global,Symbol.for('clawrouter.private.execution.'+contract),{value:Object.freeze({guardCall(module,original,value){assert.ok(module);assert.equal(original,fn);assert.equal(value,input);observations++;return Reflect.apply(original,undefined,[value]);}})});
+  const invoke=new Function('globalThis',stripTypeScriptTypes(prefix,{mode:'strip'})+';return __privateE2InvokeGuard;')(global);
+  if(fail)assert.throws(()=>invoke(fn,input),e=>e===undefined);else assert.equal(invoke(fn,input),promise);
+  assert.equal(calls,1);assert.equal(observations,installed?1:0);
+ }
 });
 test('Private execution V13 preserves the original capsule, binds delivery and rejects malformed tuples',async()=>{
  const contract='e'.repeat(64),h=privateCaptureHarness(),tuple=[contract,1,1,0,2,2,2,1,1,0,0];
@@ -1172,8 +1214,8 @@ test('Private execution V13 preserves the original capsule, binds delivery and r
  });
  test("Private callback V11 original guard entry precedes all input reads and preserves undefined",()=>{
   const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
-  const a=source.indexOf('function(this:unknown,...args:Parameters<typeof originalGuard>){'),b=source.indexOf(' as typeof originalGuard);spyDescriptor=',a);assert.ok(a>0&&b>a);
-  const code=stripTypeScriptTypes('const callback='+source.slice(a,b)+';',{mode:"strip"});
+  const a=source.indexOf(' const observeGuard='),b=source.indexOf(' w.executedGuard=',a);assert.ok(a>0&&b>a);
+  const code=stripTypeScriptTypes(source.slice(a,b)+';const callback=function(...args){return observeGuard(originalGuard,this,args);};',{mode:"strip"});
   for(const reason of [undefined,{}]){
    const h=privateCallbackHarness();h.bind();let reads=0,originalCalls=0;const w={sequence:0,acquisitions:[]};
    const deps={callbacks:h.w,originalGuard(){originalCalls++;},w,signalHistory(){throw Error("unreached history");},record(){throw Error("unreached record");},returned(){},ownership:{},checkpoints:{},caseIndex:0,row:{},observer(){},transports:[],expect(){},patch(){}};
@@ -2032,6 +2074,16 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    a.invocation=t.invocation=invocation;a.context=t.context=Object.freeze({invocation,acquisition:a});t.caller=undefined;t.catalogInitiator=c;w.coldZeroDispatch=true;w.preabortPostDelta=0;}
   return w;
  }
+ test('Private executed guard identity still requires exact result, lease release and complete retirement',()=>{
+  const changes={pending:w=>{w.transports[0].acquisition.operation.state='pending';},foreignPromise:w=>{w.transports[0].acquisition.pending=Promise.resolve();},missingResult:w=>{delete w.transports[0].acquisition.result;},foreignResult:w=>{w.transports[0].acquisition.result={response:{}};},unattached:w=>{w.transports[0].guardObserved=false;},release:w=>{w.transports[0].releaseDone=false;},count:w=>{w.transports[0].releases=0;},unlock:w=>{w.transports[0].readers[0].unlocks=0;},observer:w=>{w.observerFailures.push(undefined);},restore:w=>{w.restored=false;},expiry:w=>{w.sourceExpired=1;}};
+  for(const change of [undefined,...Object.values(changes)]){
+   const w=controlEvidence('eof',{guard(){}}),a=w.transports[0].acquisition,fn=()=>{binding.entry({},fn,a.input);return a.pending;};a.guard=fn;
+   const binding=privateExecutedGuardFactory()(()=>a.context,()=>undefined,(original,receiver,args,proof)=>{a.guardSource=proof;return Reflect.apply(original,receiver,args);},w.observerFailures);w.executedGuard=binding;
+   assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
+   assert.equal(binding.call({},fn,a.input),a.pending);assert.equal(binding.bound(a),true);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
+   if(change){change(w);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);}
+  }
+ });
  function controls(identity){return ["eof","preabort","partial","provider_error"].map(role=>evaluator.evaluatePrivateNativeControl(controlEvidence(role,identity)));}
  function invocationHarness(){const storage=new AsyncLocalStorage();return {storage,ownership:evaluator.createPrivateInvocationOwnership(storage)};}
  async function runInvocation(h,caller,wait=Promise.resolve()){

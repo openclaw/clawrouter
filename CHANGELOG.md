@@ -24,6 +24,8 @@
 
 ## Unreleased
 
+- Observe the Private SDK guard actually called by the pinned dispatcher, including native module instances outside the defining test spy. Require matching invocation-bound guard entry, original result attachment, release and complete retirement; no guard-entry observation alone qualifies an acquisition.
+
 - Bind Private catalog failure observations to the actual selected SDK callable and executing transport host/guard references. Keep unknown module identities explicit and restore pinned diagnostic overlays after the native child; ownership, retirement and accounting gates remain unchanged.
 
 - Preserve Private reader ownership across stream pulls outside ingress async context, requiring the original request, generation, transport, response, body, reader and callable while rejecting present foreign contexts.

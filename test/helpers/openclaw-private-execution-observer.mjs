@@ -42,11 +42,18 @@ export function overlayPrivateExecutionSource(index, bytes, contract) {
   if (index === 3) replace("export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {",
     "export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {\n  __privateE2Observe(5, [fetchWithSsrFGuard, params]);");
   if (index === 4) replace("  return fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  });",
-    "  const __privateE2Guard = fetchWithSsrFGuard;\n  const __privateE2Input = {\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  };\n  __privateE2Observe(6, [__privateE2Guard, __privateE2Input]);\n  return __privateE2Guard(__privateE2Input);");
-  // The channel is installed by the copied fixture for one case. Observer
+    "  const __privateE2Guard = fetchWithSsrFGuard;\n  const __privateE2Input = {\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  };\n  __privateE2Observe(6, [__privateE2Guard, __privateE2Input]);\n  return __privateE2InvokeGuard(__privateE2Guard, __privateE2Input);");
+  // The channel is installed for one owned case at a time. Observer
   // exceptions are independent faults, never replacements for SDK outcomes.
   return Buffer.from(`const __privateE2Module = {};
-function __privateE2Observe(site: number, values: unknown[]) {
+${index === 4 ? `function __privateE2InvokeGuard(fn: Function, input: unknown) {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("clawrouter.private.execution.${contract}"));
+  const channel = descriptor && "value" in descriptor ? descriptor.value : undefined;
+  const call = channel && Object.getOwnPropertyDescriptor(channel, "guardCall");
+  if (call && "value" in call && typeof call.value === "function") return Reflect.apply(call.value, undefined, [__privateE2Module, fn, input]);
+  return Reflect.apply(fn, undefined, [input]);
+}
+` : ""}function __privateE2Observe(site: number, values: unknown[]) {
   let channel;
   try {
     const descriptor = Object.getOwnPropertyDescriptor(globalThis, Symbol.for("clawrouter.private.execution.${contract}"));
