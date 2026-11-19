@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync, rmSync } from 'nod
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { resolve, dirname } from 'node:path';
-import { runNativeCutover, recoverNativeCutover, createNativeControl } from '../scripts/deploy-native-cutover.mjs';
+import { runNativeCutover, recoverNativeCutover, createNativeControl, nativeReadinessSummary, nativeWarm } from '../scripts/deploy-native-cutover.mjs';
 import { deploymentMessage, deploymentState } from '../scripts/deploy-train-policy.mjs';
 import { nativeVersion } from './helpers/deploy-native-fixture.mjs';
 import { createApi } from '../scripts/deploy-train-api.mjs';
@@ -12,6 +12,7 @@ import { runTrain } from '../scripts/deploy-train.mjs';
 import { recoverRemote } from '../scripts/deploy-train-recover.mjs';
 import { assertNativeQualification, nativeControlDigest, nativeControlFiles } from '../scripts/deploy-native-qualification.mjs';
 import { uploadMessage, assertSecretLineage } from '../scripts/deploy-train-secrets.mjs';
+import { assertCutoverReceipt, nativeSource } from '../scripts/deploy-train-runtime.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111', green = '22222222-2222-2222-2222-222222222222';
 const recovery = '33333333-3333-3333-3333-333333333333';
@@ -23,7 +24,7 @@ function snapshot(accepting = true, ready = true) {
 }
 function attested(s,version=blue,revision=0) {
   const runtimeSha=version===green?runtime:oldRuntime;
-  return {...s,control:{schema:1,revision,runtimeSha,fingerprint:s.slots[0].fingerprint},inspection:s.slots.map((m,i)=>({slot:i,qualified:m.phase==='ready',protocol:1,phase:m.phase,generation:m.generation,boot:s.pool.members[i]?.boot??'',fingerprint:m.fingerprint,runtimeSha,config:{runtimeSha,fingerprint:m.fingerprint}}))};
+  return {...s,control:{schema:1,artifactProtocol:1,revision,runtimeSha,fingerprint:s.slots[0].fingerprint},inspection:s.slots.map((m,i)=>({slot:i,qualified:m.phase==='ready',protocol:1,artifactProtocol:1,phase:m.phase,generation:m.generation,boot:s.pool.members[i]?.boot??'',fingerprint:m.fingerprint,runtimeSha,config:{runtimeSha,fingerprint:m.fingerprint}}))};
 }
 function fixture() {
   const state = {run:'123',sha:'c'.repeat(40),blue,green,status:'rolling',unsafe:false,exposed:false,deploymentId:'initial',
@@ -51,6 +52,45 @@ test('cross-digest replacement closes admission, proves absence, selects only gr
   assert.deepEqual(f.events.map(e=>e[0]),['deploy','admission','deploy','admission','smoke','deploy']);
   assert.equal(f.events[0][1],blue);assert.equal(f.events[2][1],green);
   assert.equal(deploymentState(f.latest).status,'done');
+});
+test('control adoption requires equal bytes, preserves native source and survives remote recovery',async()=>{
+  const f=fixture();f.state.cutover.kind='control';f.state.native.runtimeSha=oldRuntime;
+  const greenVersion=await f.api.version(green);greenVersion.annotations['workers/message']=uploadMessage(f.state);
+  assert.equal(nativeSource(greenVersion),f.state.cutover.nativeSource);
+  const snapshot=f.control.snapshot;
+  f.control.snapshot=async version=>snapshot(version===green?blue:version);
+  await runTrain({...f,mode:'native-control',upload:async()=>green,uploadRecovery:async()=>recovery});
+  assert.equal(deploymentState(f.latest).cutover.kind,'control');assert.equal(f.state.status,'done');
+  f.state.status='rolling';await f.api.deploy([{version_id:green,percentage:100}],deploymentMessage(f.state),f.latest.id);
+  assert.equal(await recoverRemote(f.api,'123',{control:f.control,now:f.now,wait:f.wait}),'recovery: compatible native payload restored with fenced control at 100%');
+  assert.equal(deploymentState(f.latest).cutover.kind,'control');assert.equal(f.latest.versions[0].version_id,recovery);
+  delete f.state.cutover.kind;assert.throws(()=>assertCutoverReceipt(f.state),/receipt/);
+  f.state.cutover.kind='control';f.state.native.runtimeSha=runtime;assert.throws(()=>assertCutoverReceipt(f.state),/receipt/);
+});
+test('pool or one old slot capability cannot authorize reopen; pending evidence is sanitized',async()=>{
+  const legacy=attested(snapshot());delete legacy.control.artifactProtocol;for(const o of legacy.inspection)delete o.artifactProtocol;
+  assert.equal(nativeWarm(legacy,oldRuntime),true,'pre-adoption clients still attest actual old runtime');
+  assert.equal(nativeWarm(legacy,oldRuntime,{requireArtifactControl:true}),false);
+  for(const missing of ['pool','slot']){
+    const f=fixture(),snapshot=f.control.snapshot;
+    f.control.snapshot=async version=>{const s=await snapshot(version);if(version===green){
+      if(missing==='pool')delete s.control.artifactProtocol;else delete s.inspection[3].artifactProtocol;
+    }return s;};
+    await assert.rejects(runNativeCutover({...f,timeoutMs:10}),/control.*deadline/);
+    assert.deepEqual(f.events.filter(e=>e[0]==='admission'),[['admission',false]]);
+  }
+  const s=attested(snapshot());s.secret='must not leak';s.slots[0].ids=['sensitive-id'];s.inspection[0].token='must not leak';
+  const summary=nativeReadinessSummary(s);
+  assert.equal(summary.slots[0].owners,1);assert.doesNotMatch(JSON.stringify(summary),/must not leak|sensitive-id/);
+});
+test('delayed actual slot adoption is observed before the single reopen mutation',async()=>{
+  const f=fixture(),snapshot=f.control.snapshot;let pending=0;
+  f.control.snapshot=async version=>{const s=await snapshot(version);if(version===green&&pending++<2){
+    assert.equal(s.accepting,false);delete s.inspection[3].artifactProtocol;
+  }return s;};
+  await runNativeCutover({...f,timeoutMs:10_000});
+  assert.equal(f.state.status,'done');assert.ok(pending>=3);
+  assert.deepEqual(f.events.filter(e=>e[0]==='admission'),[['admission',false],['admission',true]]);
 });
 test('fresh-runner recovery drains first and restores the compatible recovery version with warm readback',async()=>{
   const f=fixture();await runNativeCutover(f);
@@ -144,9 +184,13 @@ test('qualification requires reviewed exact bytes and a real tested ancestor; of
   writeFileSync(resolve(cwd,'registry.json'),'{}');git('add','.');git('commit','-qm','record qualification');f.state.sha=git('rev-parse','HEAD');
   const row={blueRuntimeSha:oldRuntime,greenRuntimeSha:runtime,evidence:'https://github.com/openclaw/clawrouter/actions/runs/123',source,controlSha256:nativeControlDigest()};
   assert.deepEqual(assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),row);
+  const controlState={...f.state,native:{schema:1,runtimeSha:oldRuntime},cutover:{...f.state.cutover,kind:'control'}};
+  const controlRow={...row,kind:'control',greenRuntimeSha:oldRuntime};
+  assert.deepEqual(assertNativeQualification(controlState,{schema:1,qualified:[row,controlRow]},{cwd}),controlRow);
+  assert.throws(()=>assertNativeQualification(controlState,{schema:1,qualified:[{...controlRow,kind:undefined}]},{cwd}),/lacks reviewed hosted/);
   assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:'1'.repeat(40)}]},{cwd}),/tested ancestor/);
   const unchangedCandidate=f.state.sha;
-  for(const file of ['scripts/deploy-native-cutover.mjs','worker/native-rehearsal/bootstrap.ts','worker/native-rehearsal/egress.ts']) {
+  for(const file of ['scripts/deploy-native-cutover.mjs','worker/large-http/service.ts','worker/native-rehearsal/bootstrap.ts','worker/native-rehearsal/egress.ts']) {
     git('checkout','--detach','-q',unchangedCandidate);
     writeFileSync(resolve(cwd,file),'changed control');git('add','.');git('commit','-qm','drift');
     const drift=git('rev-parse','HEAD');f.state.sha=drift;
@@ -200,6 +244,8 @@ test('actual HTTP reconciles write-only strategy and lost acknowledgement, but r
 });
 test('cutover recovery journal fits the deployment annotation byte limit',()=>{
   const f=fixture();f.state.run='99999999999999999999';f.state.cutover.phase='recover-draining-recovery';
+  assert.ok(Buffer.byteLength(deploymentMessage(f.state))<=1000);
+  f.state.cutover.kind='control';f.state.native.runtimeSha=oldRuntime;
   assert.ok(Buffer.byteLength(deploymentMessage(f.state))<=1000);
 });
 

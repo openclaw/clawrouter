@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { fullSha, rollbackUnsafe } from './deploy-train-policy.mjs';
 import { observabilityReconciliation } from './deploy-train-observability.mjs';
 
-export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCutover = false }) {
+export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCutover = false, nativeControl = false }) {
   const require = createRequire(`${cwd}/package.json`);
   const { getStaticTOMLValue, parseTOML } = require('toml-eslint-parser');
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 }).trim();
@@ -24,7 +24,8 @@ export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCu
     // Changes to persistent owners or fingerprint construction need a reviewed
     // compatibility release, not an implicit protocol-version assertion.
     const owners = ['config', 'provider-config', 'continuous', 'epoch', 'pool-state', 'native-slot', 'lifecycle', 'lifecycle-client', 'service'];
-    const checked = nativeCutover ? owners.filter(name => !['continuous','lifecycle','native-slot'].includes(name)) : owners;
+    const allowed = nativeControl ? ['lifecycle','service'] : nativeCutover ? ['continuous','lifecycle','native-slot'] : [];
+    const checked = owners.filter(name => !allowed.includes(name));
     if (git('diff', '--name-only', `${blueSha}..${greenSha}`, '--', ...checked.map(name => `worker/large-http/${name}.ts`)))
       throw new Error('Native owner or fingerprint protocol changed; use a separately rehearsed compatible release');
   }

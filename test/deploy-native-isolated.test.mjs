@@ -32,8 +32,8 @@ function fixture() {
     return {schema:2,accepting,phase:accepting?'serving':'closed',
       slots:Array.from({length:8},()=>({generation:1,phase:accepting?'ready':'idle',fingerprint,ids:[]})),
       pool:{grants:[],issued:0,seen:{},members:Array.from({length:8},()=>accepting?{boot:blue,quarantined:false}:null)},
-      control:{schema:1,revision,runtimeSha,fingerprint},
-      inspection:Array.from({length:8},(_,slot)=>({slot,qualified:accepting,protocol:1,generation:1,phase:accepting?'ready':'idle',boot:blue,fingerprint,runtimeSha,config:{fingerprint,runtimeSha}}))};
+      control:{schema:1,artifactProtocol:1,revision,runtimeSha,fingerprint},
+      inspection:Array.from({length:8},(_,slot)=>({slot,qualified:accepting,protocol:1,artifactProtocol:1,generation:1,phase:accepting?'ready':'idle',boot:blue,fingerprint,runtimeSha,config:{fingerprint,runtimeSha}}))};
   };
   const production = nativeVersion('99999999-9999-9999-9999-999999999999','b'.repeat(40));
   const api = {version:async id=>versions[id],versions:async()=>[versions[green],versions[recovery],versions[blue]],latest:async()=>structuredClone(latest),
@@ -102,6 +102,18 @@ test('both interruption boundaries recover using a new invocation and remote jou
     assert.equal((await f.api.latest()).versions[0].version_id,recovery);
     assert.ok(second.observations.some(o=>o.phase==='recovered'&&o.inspection.every(x=>x.runtimeSha===old)));
   }
+});
+test('control qualification is purpose-bound, recovers equal payloads and bounds observation retention',async()=>{
+  const f=fixture();
+  f.versions[green].annotations['workers/message']=uploadMessage({run:'123',sha,blue,native:{schema:1,runtimeSha:old},cutover:{kind:'control',nativeSource:'b'.repeat(40)}});
+  const snapshot=f.control.snapshot,admission=f.control.admission;
+  f.control.snapshot=async version=>snapshot(version===green?blue:version);
+  f.control.admission=async(...args)=>{for(let i=0;i<70;i++)await args[2].observe();await admission(...args);};
+  const receipt=await qualifyNativeCutover({...f,kind:'control',mode:'fail-smoke'});
+  assert.equal(receipt.result,'failure-recovered');assert.equal(receipt.kind,'control');assert.equal(receipt.greenRuntimeSha,old);
+  assert.equal(receipt.observations.length,64);assert.ok(receipt.observationCount>280);
+  assert.equal(receipt.observations.at(-1).phase,'recovered');assert.ok(receipt.observations.at(-1).inspection.every(o=>o.artifactProtocol===1));
+  await assert.rejects(qualifyNativeCutover({...f,mode:'recover'}),/receipt/);
 });
 test('deliberate smoke failure exercises ordered recovery, foreign ownership cannot be overwritten',async()=>{
   const f=fixture();assert.equal((await qualifyNativeCutover({...f,mode:'fail-smoke'})).result,'failure-recovered');

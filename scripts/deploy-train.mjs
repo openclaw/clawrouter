@@ -81,9 +81,10 @@ export async function recoverTrain({ api, state, save = () => {}, control, now, 
 }
 const UPLOAD_VISIBILITY_ATTEMPTS = 5, UPLOAD_VISIBILITY_STEP_MS = 1_000;
 export async function runTrain({ state, api, upload, uploadRecovery, smoke, save = () => {}, now = Date.now, wait = sleep, analytics = observeAnalytics, mode = 'rollout', control, negativeSmoke = async () => { throw new Error('Deliberate 0% smoke failure'); } }) {
-  if (!['rollout', 'zero-smoke', 'zero-failure', 'native-cutover'].includes(mode)) throw new Error('Invalid train mode');
-  if (Boolean(state.cutover) !== (mode === 'native-cutover')) throw new Error('Native cutover cannot enter a percentage rollout');
-  if (mode === 'native-cutover' && !control) throw new Error('Native cutover control missing');
+  if (!['rollout', 'zero-smoke', 'zero-failure', 'native-cutover', 'native-control'].includes(mode)) throw new Error('Invalid train mode');
+  if (Boolean(state.cutover) !== ['native-cutover','native-control'].includes(mode) ||
+      state.cutover && (state.cutover.kind === 'control') !== (mode === 'native-control')) throw new Error('Native cutover cannot enter a percentage rollout or a different purpose');
+  if (state.cutover && !control) throw new Error('Native cutover control missing');
   if (mode !== 'rollout' && (state.migration || state.unsafe)) throw new Error('No-impact rehearsals cannot include lifecycle or rollback-unsafe changes');
   state.status = 'rolling'; state.startedAt = now(); state.exposed = false; save(state);
   try {
@@ -186,7 +187,7 @@ export async function main(env = process.env) {
   const state = JSON.parse(readFileSync(env.TRAIN_PLAN_PATH, 'utf8'));
   if (state.noop) return;
   assertNoDeploymentHold(state.sha);
-  Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha, nativeCutover: env.TRAIN_MODE === 'native-cutover' }));
+  Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha, nativeCutover: env.TRAIN_MODE === 'native-cutover', nativeControl: env.TRAIN_MODE === 'native-control' }));
   assertAssetBootstrap(state.deployedSha);
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);
   const api = createApi({ env });
@@ -195,7 +196,7 @@ export async function main(env = process.env) {
   // immutable config. This precedes even console publication and queue tails.
   await command(['exec', 'node', 'scripts/build-default-worker.mjs'], { env });
   const mode = env.TRAIN_MODE || 'rollout';
-  if (mode === 'native-cutover' && env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('Native cutover requires explicit manual dispatch');
+  if (['native-cutover','native-control'].includes(mode) && env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('Native cutover requires explicit manual dispatch');
   await prepareNativeUpload({ state, blue: await api.version(state.blue), directory: `.wrangler/train-release-${state.run}`, mode });
   if (state.cutover) assertNativeQualification(state);
   const control = state.cutover ? createNativeControl({ env }) : undefined;
