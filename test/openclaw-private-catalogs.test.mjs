@@ -211,6 +211,34 @@ export async function privateControlResponse(response,consume,decode,record=(_ki
   if(!consumed)try{const body=response.body;if(body)await record('control_cancel',body.cancel,body,[]);}catch(cleanup){failures.push(cleanup);}}
  if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,'private control response and cleanup');return value;
 }
+export function privateWorkerReadDisposition(s,source,usage){
+ if(!['stream_abort','simple_abort'].includes(s.row?.scenario)||s.ledger.faults.length||!s.ownership.intact()||
+  s.ledger.operations.some(o=>o.state==='pending'||o.state==='threw')||!source||source.joined!==true||
+  source.pending!==0||source.faults!==0||source.expired!==0||source.held!==0||source.canceled!==1||source.settled!==1)return [];
+ const bad=s.ledger.operations.filter(o=>o.errorPresent),read=bad.find(o=>o.kind==='read'),observer=bad.find(o=>o.kind==='read_observer');
+ if(bad.length!==2||!read||!observer||read.state!=='rejected'||observer.state!=='rejected'||read.callbackEntered!==false||
+  observer.originalRecord!==read||observer.originalRead!==read.pending||observer.pending===read.pending||!Object.is(observer.error,read.error))return [];
+ const r=read.binding,t=r?.transport,request=s.ownership.requests.find(v=>v.token===r?.token);
+ if(!s.readers.includes(r)||observer.binding!==r||!request||request.id!==s.calls[t?.id]?.request||
+  s.ownership.transports[t?.id]!==t||t.method!=='POST'||r.token!==t.token||r.request!==request.request||
+  r.token.owner!==s||r.token.generation!==s.generation||r.response!==t.response||r.body!==t.body||
+  read.owner!==s||observer.owner!==s||read.fn!==r.originals.read||read.receiver!==r.reader||
+  r.cancels!==1||r.unlocks!==1||r.locked!==false||r.pendingAtUnlock!==0)return [];
+ const cancels=s.ledger.operations.filter(o=>o.kind==='cancel'&&o.binding===r),closed=r.closedRecord;
+ if(cancels.length!==1)return [];const cancel=cancels[0];
+ if(cancel.state!=='fulfilled'||cancel.fn!==r.originals.cancel||cancel.receiver!==r.reader||cancel.owner!==s||
+  !s.ledger.operations.includes(closed)||closed.kind!=='closed'||closed.binding!==r||closed.pending!==r.closed||closed.state!=='fulfilled'||
+  !(read.invocation<cancel.invocation&&cancel.invocation<read.settlement&&Math.max(read.settlement,observer.settlement,cancel.settlement,closed.settlement)<r.unlockEntry&&r.unlockEntry<r.unlockReturn))return [];
+ const path=new URL(t.url).pathname,indices=source.calls?.flatMap((c,i)=>c.method==='POST'&&c.path===path&&c.originalKey===true?[i]:[])??[];
+ if(indices.length!==1||source.requests!==source.calls.length||source.requests!==s.calls.length||source.census?.length!==source.requests)return [];
+ const producer=source.census[indices[0]];
+ if(producer?.index!==indices[0]||producer.producer!==true||producer.finished!==true||producer.cancels!==1||
+  producer.cancelReturns!==1||producer.active!==0||producer.explicitRelease!==false)return [];
+ const events=usage?.events?.filter(e=>e.request_id===request.requestId)??[];if(events.length!==1)return [];const event=events[0];
+ if(request.status!==200||event.status_code!==200||event.status!=='client_error'||event.provider!==s.row.provider||event.policy_id!==s.id||
+  event.key_id!==s.id+'_'+request.credential||event.capability!=='llm.chat'||event.reserved_cost_micros!==7||event.actual_cost_micros!==7||event.cost_basis!=='policy_fixed')return [];
+ return [read,observer];
+}
 export async function retirePrivateWorkerOwner(s,proof,accounting,locked){
  const stageFailures=[];let source,usage;
  const producerStatus=[0,false,null],accountingStatus=[0,false,null];
@@ -220,7 +248,7 @@ export async function retirePrivateWorkerOwner(s,proof,accounting,locked){
  const controlJoin=await attempt(()=>s.ledger.drain());
  const census=source&&source.joined===true&&source.pending===0&&source.faults===0&&source.expired===0&&source.held===0&&
   source.requests===source.calls?.length&&source.requests===s.calls.length&&Array.isArray(source.census)&&source.census.length===source.requests&&
-  source.census.every((r,i)=>r.index===i&&r.originals>0&&r.cancels<=1&&(!r.producer||r.finished))&&
+  source.census.every((r,i)=>r.index===i&&r.originals>0&&r.cancels<=1&&(!r.producer||r.finished&&r.active===0&&r.cancelReturns===r.cancels))&&
   s.calls.every(c=>s.calls.filter(x=>x.method===c.method&&x.path===c.path).length===source.calls.filter(x=>x.method===c.method&&x.path===c.path&&x.originalKey===true).length);
  if(!census)stageFailures.push(Error('private producer ownership or retirement incomplete'));
  // Accounting is independent of the strict data-rejection verdict, but never precedes physical joins.
@@ -237,10 +265,14 @@ export async function retirePrivateWorkerOwner(s,proof,accounting,locked){
  observation={producer:[...producerStatus,source?.joined??null,...['pending','faults','expired','held','requests','originals','observers','canceled','settled'].map(k=>count(source?.[k])),!!census],
   accounting:[...accountingStatus,available,available?count(usage.events.length):null,physical]};
  }catch(error){stageFailures.push(error);}
- s.retirementFailures=[...s.ledger.values(),...stageFailures];
+ let admitted=[];
+ if(census&&physical&&stageFailures.length===0)try{admitted=privateWorkerReadDisposition(s,source,usage);}catch(error){stageFailures.push(error);}
+ s.workerCancellation=admitted.map(o=>o.id);
+ const remaining=()=>[...s.ledger.operations.filter(o=>o.errorPresent&&!admitted.includes(o)).map(o=>o.error),...s.ledger.faults];
+ s.retirementFailures=[...remaining(),...stageFailures];
  await attempt(()=>s.ownership.retire());
  // The baseline is after the intended lifetime transition, never after a later mutation.
- if(stageFailures.length+s.ledger.values().length!==s.retirementFailures.length)s.retirementFailures=[...s.ledger.values(),...stageFailures];
+ if(stageFailures.length+remaining().length!==s.retirementFailures.length)s.retirementFailures=[...remaining(),...stageFailures];
  try{if(!s.ownership.seal())throw Error('invalid private retirement seal');}catch(error){s.retirementFailures.push(error);}
  return {source,usage,observation,retired:s.retirementFailures.length===0};
 }
@@ -280,6 +312,7 @@ import {sha256Hex} from './worker/utils.ts';
 ${createPrivateOperationLedger.toString()}
 ${createPrivateRequestOwnership.toString()}
 ${privateControlResponse.toString()}
+${privateWorkerReadDisposition.toString()}
 ${retirePrivateWorkerOwner.toString()}
 ${privateWorkerOperationFacts.toString()}
 ${joinPrivateOriginals.toString()}
@@ -366,7 +399,7 @@ export default {async fetch(request,bindings,originalContext){const u=new URL(re
   if(kind==='complete')return Response.json(await control(s,'complete'));
   if(kind==='join'){
    if(!s.retirement)s.retirement=(async()=>{const outcome=await retirePrivateWorkerOwner(s,()=>control(s,'proof'),()=>usageSnapshot(bindings,'fixture',s.id,{kind:'admin'}),r=>r.body.locked);
-    return {id:s.id,observation:outcome.observation,diagnostic:privateWorkerOperationFacts(s),retired:outcome.retired,operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),calls:s.calls,requests:s.ownership.requests.map(r=>({id:r.id,requestId:r.requestId,status:r.status,credential:r.credential})),source:outcome.source??null,events:outcome.usage?.events??[],charged:bodyBudgetCharged(),timeline:s.timeline,authority:s.authority,inspections:s.inspections,readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.locked}))};})();
+    return {id:s.id,observation:outcome.observation,diagnostic:privateWorkerOperationFacts(s),retired:outcome.retired,workerCancellation:s.workerCancellation,operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),calls:s.calls,requests:s.ownership.requests.map(r=>({id:r.id,requestId:r.requestId,status:r.status,credential:r.credential})),source:outcome.source??null,events:outcome.usage?.events??[],charged:bodyBudgetCharged(),timeline:s.timeline,authority:s.authority,inspections:s.inspections,readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.locked}))};})();
    const proof=await s.retirement;if(!s.ownership.validate())throw Error('changed private retirement lifetime');return Response.json(proof,{status:proof.retired?200:500});
   }throw Error('unknown private control');
  }
@@ -378,23 +411,60 @@ export default {async fetch(request,bindings,originalContext){const u=new URL(re
  try{observe(s,pending.then(response=>{const r=s.ownership.requests.find(r=>r.token===token);if(!r||r.request!==request||r.requestId!==null)throw Error('foreign private publication');r.requestId=response.headers.get('x-clawrouter-request-id');r.status=response.status;s.timeline.push({phase:'publication',sequence:++s.sequence});}),'publication_observer',token,{originalRead:pending});}catch(error){s.ledger.fault(error);}return pending;
 },queue:worker.queue};`;
 
+export function privateSourceStream(s,r,prefix,suffix,context,wait=ms=>scheduler.wait(ms)){
+ let finish,fail,timer,controller,terminal=false;
+ r.active=0;r.cancelReturns=0;
+ r.producer=new Promise((resolve,reject)=>{finish=resolve;fail=reject;});
+ s.ledger.retain('source_producer',r.producer,r);
+ const settle=(failed,error)=>{
+  if(terminal)return;terminal=true;clearTimeout(timer);s.held--;r.finished=true;s.ledger.touch();
+  if(failed)fail(error);else finish();
+ };
+ const pull=async function(c){
+  r.active++;s.ledger.touch();
+   try{await wait(20);if(terminal||r.cancels)return;
+   if(r.explicitRelease){c.enqueue(new TextEncoder().encode(suffix));c.close();settle(false);}
+   else c.enqueue(new TextEncoder().encode(suffix===null?': fixture heartbeat\n\n':' '));
+  }catch(error){settle(true,error);throw error;}finally{r.active--;s.ledger.touch();}
+ };
+ const cancel=async function(){
+  r.cancels++;s.canceled++;s.ledger.touch();clearTimeout(timer);
+  try{if(r.cancels!==1)throw Error('repeated private source cancellation');
+   if(r.pulling)await r.pulling;r.cancelReturns++;s.ledger.touch();settle(false);
+  }catch(error){settle(true,error);throw error;}
+ };
+ if(suffix!==null)r.complete=()=>{if(terminal||r.explicitRelease)throw Error('retired private source completion');r.explicitRelease=true;s.ledger.touch();};
+ const stream=new ReadableStream({start(c){controller=c;s.held++;c.enqueue(new TextEncoder().encode(prefix));
+  timer=setTimeout(()=>{s.expired++;s.ledger.touch();const error=Error('fixture expired');try{controller.error(error);}finally{settle(true,error);}},10000);
+ },pull(c){const pending=s.ledger.invoke('source_pull',pull,this,arguments,r);r.pulling=pending;return pending;},
+ cancel(){return s.ledger.invoke('source_cancel',cancel,this,arguments,r);}});
+ // The original request owns the producer and every source callback, including
+ // the cancel return. A later control merely joins those retained originals.
+ r.joined=(async()=>{await Promise.allSettled([r.producer]);let at=0;
+  while(at<s.ledger.operations.length){const batch=s.ledger.operations.slice(at);at=s.ledger.operations.length;
+   await Promise.allSettled(batch.filter(o=>o.binding===r).map(o=>o.pending));}
+ })();context.waitUntil(r.joined);
+ return stream;
+}
+
 const upstream=`
 ${createPrivateOperationLedger.toString()}
+${privateSourceStream.toString()}
 const states=new Map(),bases={baseten:'https://inference.baseten.co/v1',arcee:'https://api.arcee.ai/api/v1',novita:'https://api.novita.ai/openai/v1'};
 function row(provider,id){return provider==='arcee'?{id,name:id,context_length:1024,max_output_length:512,input_modalities:['text'],output_modalities:['text']}:provider==='novita'?{id,object:'model',created:1,context_size:1024}:{id};}
 async function upstreamControl(request,u){const [,kind,id]=u.pathname.split('/');if(kind==='setup'){const cfg=await request.json();
  const s={...cfg,requests:[],calls:[],held:0,canceled:0,expired:0,settled:0};s.ledger=createPrivateOperationLedger(s);states.set(id,s);return Response.json({ready:true});}
  const s=states.get(id);if(!s)throw Error('missing upstream owner');
  if(kind==='complete'){if(s.sealed)throw Error('retired private producer');const active=s.requests.filter(r=>r.complete&&!r.finished);if(active.length!==1)throw Error('no unique pending source');active[0].complete();return Response.json({accepted:true});}
- if(kind==='proof'){await s.ledger.drain();s.ledger.assert();
+ if(kind==='proof'){await Promise.all(s.requests.flatMap(r=>r.joined?[r.joined]:[]));await s.ledger.drain();s.ledger.assert();
   if(s.requests.some(r=>r.owner!==s||!r.request||r.call!==s.calls[r.index]||!r.finished&&r.producer))throw Error('foreign or unfinished source request');
   if(!s.sealed){s.settled=s.requests.filter(r=>r.producer&&r.finished).length;s.sealed=true;s.ledger.freeze([s.requests,s.calls]);}
   if(!s.ledger.validate())throw Error('changed private producer lifetime');
   return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,expired:s.expired,settled:s.settled,joined:true,pending:s.ledger.facts().pending,
    originals:s.ledger.operations.length,observers:s.ledger.observers.length,faults:s.ledger.values().length,requests:s.requests.length,
-   census:s.requests.map(r=>({index:r.index,originals:s.ledger.operations.filter(o=>o.binding===r).length,cancels:r.cancels,producer:r.producer!==null,finished:r.finished,explicitRelease:r.explicitRelease}))});}
+   census:s.requests.map(r=>({index:r.index,originals:s.ledger.operations.filter(o=>o.binding===r).length,cancels:r.cancels,cancelReturns:r.cancelReturns??0,active:r.active??0,producer:r.producer!==null,finished:r.finished,explicitRelease:r.explicitRelease}))});}
  throw Error('unknown source control');}
-async function upstreamProduct(request,s,u,r){const base=bases[s.provider];
+async function upstreamProduct(request,s,u,r,context){const base=bases[s.provider];
  if(u.search||![base+'/models',base+'/chat/completions'].includes(u.href))throw Error('foreign original destination');const chat=u.pathname.endsWith('/chat/completions');
  const body=chat?await s.ledger.invoke('request_body',request.json,request,[],r):null;
  const call={method:request.method,path:u.pathname,query:!!u.search,chat,model:body?.model??null,stream:body?.stream??null,originalKey:true};r.call=call;s.calls[r.index]=call;s.ledger.touch();
@@ -404,32 +474,19 @@ async function upstreamProduct(request,s,u,r){const base=bases[s.provider];
   const payload={data:(s.scenario==='empty'?[]:['tenant/opaque-a','tenant/opaque-b']).map(id=>row(s.provider,id))};
   if(!['narrow','broaden','shared_abort'].includes(s.scenario))return Response.json(payload);
   const text=JSON.stringify(payload),prefix='{"data":[';
-  const pull=function(c){if(r.producer)return r.producer;
-   let notify;const notification=new Promise(resolve=>{notify=resolve;});s.ledger.retain('source_notification',notification,r);
-   let timer;r.complete=()=>{r.explicitRelease=true;s.ledger.touch();notify('complete');};
-   timer=setTimeout(()=>{s.expired++;s.ledger.touch();notify('expired');},10000);
-   r.cancel=()=>{clearTimeout(timer);notify('cancel');};
-   r.producer=notification.then(command=>{clearTimeout(timer);if(command==='expired'){c.error(Error('fixture expired'));throw Error('fixture expired');}
-    if(command==='complete'){c.enqueue(new TextEncoder().encode(text.slice(prefix.length)));c.close();}r.finished=true;s.held--;s.ledger.touch();});
-   s.ledger.retain('source_continuation',r.producer,r,{originalRead:notification});return r.producer;
-  };
-  const cancel=function(){r.cancels++;s.canceled++;s.ledger.touch();r.cancel?.();};
-  return new Response(new ReadableStream({start(c){s.held++;c.enqueue(new TextEncoder().encode(prefix));},pull(c){return s.ledger.invoke('source_pull',pull,this,arguments,r);},cancel(){return s.ledger.invoke('source_cancel',cancel,this,arguments,r);}}),{headers:{'content-type':'application/json'}});
+  return new Response(privateSourceStream(s,r,prefix,text.slice(prefix.length),context),{headers:{'content-type':'application/json'}});
  }
  const frame=v=>'data: '+JSON.stringify(v)+'\\n\\n',prefix=frame({id:'fixture',object:'chat.completion.chunk',created:1,model:body.model,choices:[{index:0,delta:{role:'assistant',content:'private-prefix'},finish_reason:null}]});
  if(s.scenario==='provider_error')return new Response(prefix+frame({error:{message:'fixture provider rejected',type:'server_error'}}),{headers:{'content-type':'text/event-stream'}});
  if(['stream_abort','simple_abort'].includes(s.scenario)){
-  const pull=function(c){if(r.producer)return r.producer;r.producer=new Promise((resolve,reject)=>{r.resolve=resolve;r.timer=setTimeout(()=>{s.expired++;s.held--;r.finished=true;s.ledger.touch();c.error(Error('fixture expired'));reject(Error('fixture expired'));},10000);});
-   s.ledger.retain('source_producer',r.producer,r);return r.producer;};
-  const cancel=function(){r.cancels++;s.canceled++;clearTimeout(r.timer);s.held--;r.finished=true;s.ledger.touch();r.resolve?.();};
-  return new Response(new ReadableStream({start(c){s.held++;c.enqueue(new TextEncoder().encode(prefix));},pull(c){return s.ledger.invoke('source_pull',pull,this,arguments,r);},cancel(){return s.ledger.invoke('source_cancel',cancel,this,arguments,r);}}),{headers:{'content-type':'text/event-stream'}});
+  return new Response(privateSourceStream(s,r,prefix,null,context),{headers:{'content-type':'text/event-stream'}});
  }
  return new Response(prefix+frame({id:'fixture',object:'chat.completion.chunk',created:1,model:body.model,choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:4,completion_tokens:3,total_tokens:7}})+'data: [DONE]\\n\\n',{headers:{'content-type':'text/event-stream'}});
 }
-export default {fetch(request){const u=new URL(request.url);if(u.hostname==='private-control.fixture')return upstreamControl(request,u);
+export default {fetch(request,env,context){const u=new URL(request.url);if(u.hostname==='private-control.fixture')return upstreamControl(request,u);
  const auth=request.headers.get('authorization'),matches=[...states.values()].filter(s=>auth==='Bearer synthetic-private-'+s.id);if(matches.length!==1)throw Error('foreign source credential');const s=matches[0];if(s.sealed){s.ledger.fault(Error('late private producer request'));throw Error('late private producer request');}
  const r={owner:s,request,index:s.requests.length,call:null,producer:null,finished:false,cancels:0,explicitRelease:false};s.requests.push(r);s.ledger.touch();
- return s.ledger.invoke('source_handler',upstreamProduct,undefined,[request,s,u,r],r);
+ return s.ledger.invoke('source_handler',upstreamProduct,undefined,[request,s,u,r,context],r);
 }};`;
 
 export async function startPrivateCatalogFixture(){const directory=await mkdtemp(join(tmpdir(),'private-catalog-client-'));let runtime,origin;
@@ -461,7 +518,12 @@ export function assertPrivateReceipt(row,p,w=createPrivateReceiptWitness()){
  const equal=(id,n,read,expected)=>w.check(id,n,read,value=>assert.equal(value,expected));
  const ok=(id,read)=>w.check(id,null,read,value=>assert.ok(value));
  equal(0,null,()=>p.retired,true);
- ok(1,()=>p.operations.every((o,i)=>w.test(1,i,()=>o.state==='fulfilled')));
+ const admitted=p.workerCancellation??[];
+ assert.ok(Array.isArray(admitted)&&new Set(admitted).size===admitted.length);
+ if(admitted.length){assert.ok(['stream_abort','simple_abort'].includes(row.scenario));assert.equal(admitted.length,2);
+  assert.deepEqual(admitted.map(i=>p.operations[i]?.kind),['read','read_observer']);
+  assert.ok(admitted.every(i=>Number.isSafeInteger(i)&&i>=0&&p.operations[i]?.state==='rejected'));}
+ ok(1,()=>p.operations.every((o,i)=>w.test(1,i,()=>o.state==='fulfilled'||admitted.includes(i))));
  ok(2,()=>p.readers.every((r,i)=>w.test(2,i,()=>r.unlocks===1)&&w.test(3,i,()=>!r.locked)));
  equal(4,null,()=>p.charged,0);equal(5,null,()=>p.source.held,0);equal(6,null,()=>p.source.expired,0);equal(7,null,()=>p.source.joined,true);
  equal(8,null,()=>p.source.pending,0);equal(9,null,()=>p.source.faults,0);w.check(10,null,()=>[p.source.requests,p.calls.length],([a,b])=>assert.equal(a,b));
@@ -472,7 +534,7 @@ export function assertPrivateReceipt(row,p,w=createPrivateReceiptWitness()){
  if(['narrow','broaden'].includes(row.scenario)){const mutation=p.timeline.find(t=>t.phase==='mutation'),publication=p.timeline.find(t=>t.phase==='publication');ok(25,()=>mutation&&publication);
   const refresh=p.authority.find(r=>r.path==='/authorization/snapshot'&&r.mutation&&r.unlocked),inspect=p.inspections.find(r=>r.path==='/inspect'&&r.mutation);ok(26,()=>refresh&&inspect);
   ok(27,()=>mutation.sequence<refresh.sequence&&refresh.sequence<inspect.sequence&&inspect.sequence<publication.sequence);equal(28,null,()=>p.source.settled,1);}
- if(['stream_abort','simple_abort'].includes(row.scenario)){equal(29,null,()=>p.source.canceled,1);equal(30,null,()=>p.source.settled,1);equal(31,null,()=>p.source.census.filter(r=>r.producer&&r.cancels===1&&r.finished&&!r.explicitRelease).length,1);}
+ if(['stream_abort','simple_abort'].includes(row.scenario)){equal(29,null,()=>p.source.canceled,1);equal(30,null,()=>p.source.settled,1);equal(31,null,()=>p.source.census.filter(r=>r.producer&&r.cancels===1&&r.cancelReturns===1&&r.active===0&&r.finished&&!r.explicitRelease).length,1);}
  if(row.scenario==='shared_abort'){equal(32,null,()=>p.source.settled,1);equal(33,null,()=>p.source.canceled,0);}// Explicit completion, not disconnect proof.
  assertPrivateUsage(row,p);
 }
@@ -528,18 +590,18 @@ export function privateInertOwner(){
  const context={value:undefined,getStore(){return this.value;},run(token,fn){const previous=this.value;this.value=token;try{return fn();}finally{this.value=previous;}}};
  s.ledger=createPrivateOperationLedger(s);s.ownership=createPrivateRequestOwnership(s,context);s.readers=s.ownership.readers;return {s,context};
 }
-export async function privateInertReader(read,closed=Promise.resolve()){
- const {s,context}=privateInertOwner(),request={},token=s.ownership.register(request,'discovery'),calls=[];
+export async function privateInertReader(read,closed=Promise.resolve(),method='GET'){
+ const {s,context}=privateInertOwner(),request={},token=s.ownership.register(request,method==='POST'?'inference':'discovery'),calls=[];
  const body={locked:true,cancel(){calls.push(['body_cancel',this,[...arguments]]);return Promise.resolve();},getReader(){calls.push(['getReader',this,[...arguments]]);return reader;}};
  const reader={closed,read(){calls.push(['read',this,[...arguments]]);return Reflect.apply(read,this,arguments);},cancel(){calls.push(['cancel',this,[...arguments]]);return Promise.resolve();},releaseLock(){calls.push(['release',this,[...arguments]]);body.locked=false;}};
  const nativeFetch=function(){calls.push(['fetch',this,[...arguments]]);return Promise.resolve({body});};
  const helpers=router.slice(router.indexOf('function observe(s,p,kind,'),router.indexOf('async function mutate'));
  const wrapper=router.slice(router.indexOf('globalThis.fetch=function(input,init){'),router.indexOf('export default {async fetch(request,bindings,originalContext)'));
- class FakeURL{constructor(value){this.href=value;this.pathname='/v1/models';this.search='';}}
+ class FakeURL{constructor(value){this.href=value;this.pathname=new URL(value).pathname;this.search='';}}
  class FakeHeaders{constructor(value){this.value=value;}get(key){return this.value[key]??null;}has(key){return Object.hasOwn(this.value,key);}}
  const sandbox={states:new Map([[s.id,s]]),nativeFetch,bases:{baseten:'https://inference.baseten.co/v1'},URL:FakeURL,Headers:FakeHeaders,privateControlResponse,mutate(){throw Error('unexpected inert mutation');}};
  const fetch=runInNewContext(helpers+wrapper+';globalThis.fetch',sandbox);
- const response=await s.ownership.run(token,()=>Reflect.apply(fetch,sandbox,['https://inference.baseten.co/v1/models',{headers:{authorization:'Bearer synthetic-private-inert'}}]));
+ const response=await s.ownership.run(token,()=>Reflect.apply(fetch,sandbox,['https://inference.baseten.co/v1/'+(method==='POST'?'chat/completions':'models'),{method,headers:{authorization:'Bearer synthetic-private-inert'}}]));
  const actual=s.ownership.run(token,()=>response.body.getReader());return {s,context,token,request,body,reader:actual,calls};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
@@ -1665,7 +1727,7 @@ test('Private execution V13 preserves the original capsule, binds delivery and r
  // END Private early runner inert regressions
  // BEGIN Private primary and receipt inert regressions
  function receiptFixture(){const row={id:'inert',provider:'baseten',scenario:'stream_abort'},p={id:'inert',retired:true,operations:[{state:'fulfilled'}],readers:[{unlocks:1,locked:false}],charged:0,
-  source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:1,canceled:1,settled:1,census:[{producer:true,cancels:1,finished:true,explicitRelease:false}]},
+  source:{held:0,expired:0,joined:true,pending:0,faults:0,requests:1,canceled:1,settled:1,census:[{producer:true,cancels:1,cancelReturns:1,active:0,finished:true,explicitRelease:false}]},
   requests:[{id:0,requestId:'receipt-0',status:200,credential:'discovery'}],calls:[{request:0,originalKey:true,noCaller:true,redirect:'manual',query:false,method:'GET',bodyAbsent:true}],events:[{request_id:'receipt-0',key_id:'inert_discovery',status_code:200,status:'success',provider:'baseten',policy_id:'inert',capability:'models.list',model:null,reserved_cost_micros:0,actual_cost_micros:0}],
   observation:{producer:[2,false,null,true,0,0,0,0,1,3,6,1,1,true],accounting:[2,false,null,true,1,true]}};return {row,p};}
  test('Private primary selection failure precedes fixture and never invents collection identity',async()=>{
@@ -1870,24 +1932,24 @@ test('Private execution V13 preserves the original capsule, binds delivery and r
   assert.deepEqual(privateWorkerCheckpointRecords({id:'foreign',diagnostic:d},f.s,0),[]);
  });
  test('Private Worker actual upstream callbacks join notification, producer and attached observers',async()=>{
-  const states=new Map(),timers=[];
+  const states=new Map(),timers=[],lifetimes=[];
   class FakeURL{constructor(value){this.href=value;const slash=value.indexOf('/',value.indexOf('://')+3);this.hostname=value.slice(value.indexOf('://')+3,slash);this.pathname=value.slice(slash);this.search='';}}
   class FakeResponse{constructor(body,options){this.body=body;this.options=options;}static json(value){return {value};}}
   class InertStream{constructor(callbacks){this.callbacks=callbacks;this.chunks=[];this.controller={enqueue:value=>this.chunks.push(value),close:()=>{this.closed=true;},error:value=>{this.error=value;}};callbacks.start?.(this.controller);}}
   class FakeEncoder{encode(value){return {byteLength:value.length,text:value};}}
   const declarations=upstream.slice(upstream.indexOf('function row('),upstream.indexOf('export default'));
   const entry=upstream.slice(upstream.indexOf('export default')+'export default'.length).replace(/;\s*$/,'');
-  const actual=runInNewContext(declarations+';('+entry+')',{states,bases:{baseten:'https://inference.baseten.co/v1'},createPrivateOperationLedger,URL:FakeURL,Response:FakeResponse,ReadableStream:InertStream,TextEncoder:FakeEncoder,
+  const actual=runInNewContext(privateSourceStream.toString()+';'+declarations+';('+entry+')',{states,bases:{baseten:'https://inference.baseten.co/v1'},createPrivateOperationLedger,URL:FakeURL,Response:FakeResponse,ReadableStream:InertStream,TextEncoder:FakeEncoder,scheduler:{wait:()=>Promise.resolve()},
    setTimeout:fn=>{const timer={fn,cleared:false};timers.push(timer);return timer;},clearTimeout:timer=>{timer.cleared=true;}});
   const request=(url,body)=>({url,method:'GET',headers:{get:()=> 'Bearer synthetic-private-inert'},json:()=>Promise.resolve(body)});
   await actual.fetch(request('https://private-control.fixture/setup/inert',{id:'inert',provider:'baseten',scenario:'narrow'}));
-  const response=await actual.fetch(request('https://inference.baseten.co/v1/models'));
-  const stream=response.body,p=stream.callbacks.pull(stream.controller),owner=states.get('inert');assert.equal(owner.requests[0].producer,p);
+  const response=await actual.fetch(request('https://inference.baseten.co/v1/models'),{}, {waitUntil:p=>lifetimes.push(p)});
+  const stream=response.body,p=stream.callbacks.pull(stream.controller),owner=states.get('inert');assert.notEqual(owner.requests[0].producer,p);await p;
   let done=false;const proof=actual.fetch(request('https://private-control.fixture/proof/inert')).then(v=>{done=true;return v;});
   for(let i=0;i<5;i++)await Promise.resolve();assert.equal(done,false);
-  const receiver={},value=Reflect.apply(stream.callbacks.cancel,receiver,[undefined]);assert.equal(value,undefined);
+  const receiver={},value=Reflect.apply(stream.callbacks.cancel,receiver,[undefined]);await value;await Promise.all(lifetimes);
   const result=(await proof).value;assert.equal(result.joined,true);assert.equal(result.pending,0);assert.equal(result.faults,0);assert.equal(result.canceled,1);assert.equal(result.expired,0);assert.equal(result.settled,1);
-  assert.ok(result.originals>=4);assert.equal(result.observers,owner.ledger.operations.filter(o=>o.pending&&typeof o.pending.then==='function').length*2);assert.equal(result.census[0].explicitRelease,false);
+  assert.ok(result.originals>=4);assert.equal(result.observers,owner.ledger.operations.filter(o=>o.pending&&typeof o.pending.then==='function').length*2);assert.equal(result.census[0].explicitRelease,false);assert.equal(result.census[0].cancelReturns,1);assert.equal(result.census[0].active,0);
   const cancel=owner.ledger.operations.find(o=>o.kind==='source_cancel');assert.equal(cancel.receiver,receiver);assert.equal(cancel.args.length,1);assert.equal(cancel.args[0],undefined);
   const again=(await actual.fetch(request('https://private-control.fixture/proof/inert'))).value;assert.equal(again.originals,result.originals);assert.equal(again.observers,result.observers);
   assert.throws(()=>actual.fetch(request('https://inference.baseten.co/v1/models')));await assert.rejects(actual.fetch(request('https://private-control.fixture/proof/inert')));
@@ -2289,6 +2351,81 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
  });
  test('private client inventory, real shipping compilation and additive row',()=>{const manifests=readdirSync('providers').filter(p=>p.endsWith('.provider.yaml')).sort().map(p=>parse(readFileSync('providers/'+p,'utf8')));assert.ok(manifests.length);assert.deepEqual(manifests.map(p=>p.id).sort(),snapshot.providers.map(p=>p.id).sort());assert.deepEqual(compileProviderSnapshot(manifests),snapshot);
   const rows=parse(readFileSync('.github/workflows/openclaw-contract.yml','utf8')).jobs.consumer.strategy.matrix.include;assert.equal(new Set(rows.map(r=>r.consumer)).size,rows.length);assert.deepEqual(rows.filter(r=>r.consumer==='private-catalogs'),[{consumer:'private-catalogs',ref:privateCatalogPin,test:'test/openclaw-private-catalogs.test.mjs'}]);assert.equal(Object.keys(privateGroups).length,14);assert.equal(new Set(privateCases.map(r=>r.id)).size,privateCases.length);
+ });
+ test('Private producer joins real callback returns without converting expiry or falsey failures',async()=>{
+  function fixture(){const timers=[],waits=[],lifetimes=[],chunks=[];let source;
+   class Stream{constructor(value){source=value;value.start({enqueue:b=>chunks.push(b),close(){},error(){}});}}
+   const make=runInNewContext('('+privateSourceStream.toString()+')',{ReadableStream:Stream,TextEncoder,setTimeout:fn=>{timers.push(fn);return fn;},clearTimeout(){}});
+   const s={held:0,canceled:0,expired:0},r={cancels:0,explicitRelease:false,finished:false};s.ledger=createPrivateOperationLedger(s);
+   make(s,r,'prefix',null,{waitUntil:p=>lifetimes.push(p)},()=>new Promise((resolve,reject)=>waits.push({resolve,reject})));
+   return {s,r,source,timers,waits,lifetimes,chunks,controller:{enqueue:b=>chunks.push(b),close(){},error(){}}};
+  }
+  for(const mode of ['early','pull','expiry','undefined','cancelUndefined','duplicate']){const f=fixture();let p;
+   if(mode!=='early'&&mode!=='expiry')p=f.source.pull(f.controller);
+   let cancel;if(['early','pull','cancelUndefined'].includes(mode))cancel=f.source.cancel(undefined);
+   if(mode==='pull'){assert.equal(f.r.active,1);assert.equal(f.r.cancelReturns,0);assert.equal(f.r.finished,false);f.waits[0].resolve();}
+   if(mode==='undefined'||mode==='cancelUndefined'){p.catch(()=>{});f.waits[0].reject(undefined);}
+   if(mode==='duplicate'){f.waits[0].resolve();await p;await f.source.cancel();await assert.rejects(f.source.cancel());}
+   if(mode==='expiry')f.timers[0]();
+   await Promise.allSettled([p,cancel,...f.lifetimes]);await f.s.ledger.drain();
+   assert.equal(f.s.held,0);assert.equal(f.r.active,0);assert.equal(f.r.finished,true);
+   const producer=f.s.ledger.operations.find(o=>o.kind==='source_producer');assert.equal(producer.pending,f.r.producer);
+   if(['early','pull'].includes(mode)){assert.equal(f.s.expired,0);assert.equal(f.s.canceled,1);assert.equal(f.r.cancelReturns,1);assert.equal(producer.state,'fulfilled');f.s.ledger.assert();}
+   else {assert.throws(()=>f.s.ledger.assert());if(mode==='expiry')assert.equal(f.s.expired,1);if(mode==='undefined'||mode==='cancelUndefined')assert.ok(f.s.ledger.values().every(e=>e===undefined));
+    if(mode==='cancelUndefined'){assert.equal(f.r.cancelReturns,0);assert.equal(f.s.ledger.operations.find(o=>o.kind==='source_cancel').state,'rejected');}}
+  }
+ });
+ async function privateOwnedReadEvidence(reason){
+  let reject;const pending=new Promise((_,no)=>{reject=no;});const f=await privateInertReader(()=>pending,Promise.resolve(),'POST');
+  f.s.row.scenario='stream_abort';const request=f.s.ownership.requests[0];request.requestId='receipt-0';request.status=200;
+  const read=f.reader.read();read.catch(()=>{});await f.reader.cancel();reject(reason);await f.s.ledger.drain();f.reader.releaseLock();
+  const r=f.s.readers[0];r.locked=false;
+  const source={joined:true,pending:0,faults:0,expired:0,held:0,canceled:1,settled:1,requests:1,
+   calls:[{method:'POST',path:'/v1/chat/completions',originalKey:true}],census:[{index:0,originals:4,producer:true,finished:true,cancels:1,cancelReturns:1,active:0,explicitRelease:false}]};
+  const usage={events:[{request_id:'receipt-0',status_code:200,status:'client_error',provider:'baseten',policy_id:'inert',key_id:'inert_inference',capability:'llm.chat',reserved_cost_micros:7,actual_cost_micros:7,cost_basis:'policy_fixed'}]};
+  return {...f,r,source,usage,read:f.s.ledger.operations.find(o=>o.kind==='read'),observer:f.s.ledger.operations.find(o=>o.kind==='read_observer'),cancel:f.s.ledger.operations.find(o=>o.kind==='cancel')};
+ }
+ test('Private owned pending-read disposition preserves originals and rejects foreign, early and independent failures',async()=>{
+  const changes={
+   foreign:f=>{f.r.token={...f.r.token};},generation:f=>{f.s.generation={};},otherReader:f=>{f.read.binding={};},
+   early:f=>{f.read.settlement=f.cancel.invocation-1;},callback:f=>{f.read.callbackEntered=true;},
+   duplicateCancel:f=>{f.r.cancels=2;},failedCancel:f=>{f.cancel.state='rejected';f.cancel.errorPresent=true;f.cancel.error=f.read.error;},
+   failedClosed:f=>{f.r.closedRecord.state='rejected';f.r.closedRecord.errorPresent=true;},
+   foreignObserver:f=>{f.observer.originalRead=Promise.resolve();},independentObserver:f=>{f.observer.error={};},
+   fault:f=>{f.s.ledger.fault(undefined);},otherOriginal:f=>{f.s.ledger.retain('independent',Promise.reject(undefined));},
+   held:f=>{f.source.held=1;},active:f=>{f.source.census[0].active=1;},expiry:f=>{f.source.expired=1;},
+   sourceFault:f=>{f.source.faults=1;},cancelNotReturned:f=>{f.source.census[0].cancelReturns=0;},notSettled:f=>{f.source.settled=0;},
+   foreignSource:f=>{f.source.calls[0].path='/foreign';},sourceExplicit:f=>{f.source.census[0].explicitRelease=true;},
+   providerFirst:f=>{f.usage.events[0].status='provider_error';},missingUsage:f=>{f.usage.events=[];},duplicateUsage:f=>{f.usage.events.push({...f.usage.events[0]});},
+   wrongCost:f=>{f.usage.events[0].actual_cost_micros=0;},foreignUsage:f=>{f.usage.events[0].request_id='foreign';},
+   release:f=>{f.r.unlocks=2;},heldAtRelease:f=>{f.r.pendingAtUnlock=1;},heldBody:f=>{f.r.locked=true;},
+  };
+  for(const reason of [{},undefined])for(const [name,change]of [['positive',null],...Object.entries(changes)]){
+   const f=await privateOwnedReadEvidence(reason);if(change)change(f);await f.s.ledger.drain();
+   const allowed=privateWorkerReadDisposition(f.s,f.source,f.usage);assert.equal(allowed.length,change?0:2,name);
+   if(!change){assert.equal(allowed[0],f.read);assert.equal(allowed[1],f.observer);assert.equal(f.read.error,reason);assert.equal(f.read.state,'rejected');}
+  }
+  for(const fail of ['restoration','accounting','source','assessment']){const f=await privateOwnedReadEvidence(undefined);
+   if(fail==='restoration')f.s.restores.push(()=>{throw undefined;});
+   if(fail==='assessment')Object.defineProperty(f.s.row,'scenario',{get(){throw undefined;}});
+   const result=await retirePrivateWorkerOwner(f.s,()=>{if(fail==='source')throw undefined;return f.source;},()=>{if(fail==='accounting')throw undefined;return f.usage;},()=>false);
+   assert.equal(result.retired,false);assert.ok(f.s.retirementFailures.includes(undefined));assert.deepEqual(f.s.workerCancellation,[]);
+  }
+ });
+ test('Private actual Worker cancels before and after a pending pull; uncanceled expiry remains fatal',{timeout:45000},async()=>{
+  const f=await startPrivateCatalogFixture();
+  try{for(const mode of ['early','pending','expiry']){
+   const row={id:'local_partial_'+mode,provider:'baseten',scenario:'stream_abort'};await f.setup(row);const controller=new AbortController();
+   const response=await fetch(f.origin+'/v1/native/baseten/chat/completions',{method:'POST',signal:controller.signal,headers:{authorization:'Bearer '+privateKey(row.id),'content-type':'application/json'},body:JSON.stringify({model:'tenant/opaque-a',stream:true,messages:[{role:'user',content:'fixture'}]})});
+   const reader=response.body.getReader();reader.closed.catch(()=>{});
+   if(mode==='early')controller.abort(new Error('synthetic caller abort'));
+   else {await reader.read();if(mode==='pending'){const pending=reader.read();pending.catch(()=>{});controller.abort(new Error('synthetic caller abort'));await Promise.allSettled([pending,reader.closed]);}
+    else await assert.rejects(async()=>{while(!(await reader.read()).done){}});}
+   await Promise.allSettled([reader.closed]);reader.releaseLock();
+   if(mode==='expiry'){await assert.rejects(f.join(row));assert.equal(f.evidence(row).retired,false);continue;}
+   const proof=await f.join(row);assertPrivateReceipt(row,proof);assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);assert.equal(proof.source.expired,0);
+   assert.equal(proof.source.census[0].cancelReturns,1);assert.equal(proof.source.census[0].active,0);
+  }}finally{await f.close();}
  });
  test('Private actual Worker binds catalog and inference accounting to original response IDs',{timeout:60000},async()=>{
   const f=await startPrivateCatalogFixture();
