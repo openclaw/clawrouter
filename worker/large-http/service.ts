@@ -2,7 +2,6 @@ import type {Env} from '../types.ts';
 import {readJson} from '../utils.ts';
 import {runtimeFields} from './config.ts';
 import {lifecycleCall} from './lifecycle-client.ts';
-declare const __LARGE_HTTP_RUNTIME_SHA__:string;
 const prefix='/__large_http/';
 /** Private control and canonical binding bridge; remains available for drain. */
 export async function largeHttpService(r:Request,e:Env):Promise<Response>{
@@ -13,12 +12,12 @@ export async function largeHttpService(r:Request,e:Env):Promise<Response>{
  if(!auth.ok)return new Response(null,{status:403});const state=await auth.json<any>();if(state.authorized!==true)return new Response(null,{status:403});
  const op=new URL(r.url).pathname.slice(prefix.length);
  if(op==='runtime'&&r.method==='GET'){
-  // Versioned static assets keep native source out of Worker module startup.
-  // Worker-first routing and the slot authorization above guard public access;
-  // only this binding call reaches the immutable, content-addressed artifact.
-  if(typeof __LARGE_HTTP_RUNTIME_SHA__!=='string'||!e.ASSETS)return new Response(null,{status:503});
+  // Edge and slot code can differ during deployment. Serve the authenticated
+  // generation's persisted start intent, never the serving edge's build.
+  // Worker-first routing keeps the content-addressed artifact private.
+  if(typeof state.runtimeSha!=='string'||!/^[a-f0-9]{64}$/.test(state.runtimeSha)||!e.ASSETS)return new Response(null,{status:503});
   try{
-   const artifact=await e.ASSETS.fetch('https://runtime.invalid/__large_http/artifact/'+__LARGE_HTTP_RUNTIME_SHA__+'.mjs');
+   const artifact=await e.ASSETS.fetch('https://runtime.invalid/__large_http/artifact/'+state.runtimeSha+'.mjs');
    if(artifact.status!==200||!artifact.body){await artifact.body?.cancel();return new Response(null,{status:503});}
    return new Response(artifact.body,{headers:{'content-type':'text/javascript','cache-control':'no-store','x-content-type-options':'nosniff'}});
   }catch{return new Response(null,{status:503});}

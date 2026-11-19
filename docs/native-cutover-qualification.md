@@ -42,7 +42,9 @@ Before dispatch the coordinator must prepare, inspect and own:
 - Original blue carrying the exact deployed old native bytes, healthy at 100%,
   with real old persistent state. Its source and native digest must have the
   normal native receipt. Do not relabel a mock as the launch payload.
-- Green carrying current reviewed edge/control and current native payload.
+- Green carrying current reviewed edge/control and current native payload for
+  `kind: payload` (the default). For explicit `kind: control`, green retains
+  exactly the blue native payload and its original native-source annotation.
 - Recovery carrying the **same current edge/control** and exactly reproduced
   old payload, with the normal native-source annotation. Never restore unfenced
   old control as recovery.
@@ -56,7 +58,8 @@ config (its Worker/account/origin/owners must be inspected). Set
 source/digest when invoking `prepareNativeRecovery`; it refuses a reproduction
 mismatch. Upload only the verified green stages with the existing Wrangler
 `versions upload --config <green.toml> --tag <source> --message <receipt>` mechanism.
-Generate each message with `uploadMessage`, never manually rewrite deployed
+For control adoption, the verified old-payload/current-control package is uploaded
+twice as distinct green and recovery versions. Generate each message with `uploadMessage`, never manually rewrite deployed
 metadata. Green and recovery share `state.run`, `state.sha` and original
 `state.blue`; recovery additionally has `nativeSource` and the old native digest.
 Keep the entire contiguous preserved-secret lineage. No secret rotation occurs.
@@ -112,7 +115,7 @@ authenticate to the Worker. Authentication does not establish native readiness,
 session continuity or cutover qualification. Stop on failure; do not activate or
 retry the campaign. Recheck if credentials or the target configuration change.
 
-The coordinator supplies six non-secret dispatch inputs:
+The coordinator supplies these non-secret dispatch inputs:
 
 | Input | Value |
 | --- | --- |
@@ -121,6 +124,7 @@ The coordinator supplies six non-secret dispatch inputs:
 | `origin` | Exact HTTPS workers.dev origin, no trailing slash |
 | `versions` | JSON `{"blue":"<UUID>","green":"<UUID>","recovery":"<UUID>","run":"<numeric upload-lineage run>"}` |
 | `mode` | `cutover`, `fail-smoke`, `interrupt-drain`, `interrupt-green`, or `recover` |
+| `kind` | `payload` (default, different native bytes) or `control` (equal native bytes); preserve for recovery |
 | `hold_seconds` | 0–300; default 120, after green's actual eight-slot warm check |
 
 `cutover` exercises successful terminal forward completion. `fail-smoke`
@@ -154,6 +158,45 @@ Review all external evidence plus both runner artifacts before a separate regist
 PR. Registry `source` is the tested source ancestor, `controlSha256` the recorded
 digest, and `evidence` the actual Actions run URL. Determining code changes,
 including this workflow/smoke/target path, invalidate earlier qualification.
+
+## Compatible control adoption
+
+Use the explicit production `native-control` mode when old slot controllers must
+adopt a repair before replacing native bytes. Packaging reproduces the deployed
+payload using its original native source and refuses a digest mismatch; both
+candidate and distinct compatible recovery contain that payload with current
+control. This mode permits reviewed lifecycle/service changes, retains all
+owner/configuration/secret/source/CI checks, and requires a separate registry row
+with `kind: "control"` and equal blue/green digests. Ordinary `native-cutover`
+still requires different digests and cannot use that row.
+
+Both modes reuse the existing ordered drain, exact absence, full selection,
+bounded observation and fenced recovery. Before reopening admission, the pool
+and all eight actual slot controllers must attest `artifactProtocol: 1`, as well
+as matching configured runtime/fingerprint. Warmth additionally checks each
+persisted generation, boot and runtime against the pool. The capability marks
+journal-selected artifact authorization; equal payload fingerprints alone cannot
+prove that old slot code has adopted it. It adds no inference-path calls.
+
+Pending observations retain bounded sanitized per-slot readiness fields and a
+last snapshot on failure. Hosted receipts retain the first 16 and latest 48
+observations plus the total count. They do not retain tokens, prompts or grant
+IDs. Authentication, ownership, selected-version and deadline failures retain
+their existing stop semantics; no mutation is retried.
+
+For a targeted adoption repair, reuse independently valid unchanged payload,
+accounting and session evidence. Newly prove adoption from unpatched control,
+mixed-version artifact delivery, eight-slot readiness and distinct compatible
+recovery. Separately qualify the subsequent exact payload replacement with the
+same repaired control. This is not permission to relabel historical results or
+skip a changed behavior. Record the finite case/evidence checklist before launch.
+No local test or controller receipt populates the qualification registry.
+
+After control adoption, a manual `native-cutover` can select the same source tag
+again if its exact main CI passes: the bridge deliberately retained old native
+bytes. Packaging must still prove a different payload and the registry must
+qualify that exact pair. Scheduled selection and ordinary same-source rollouts
+remain no-ops. Production authorization is separate for both stages.
 
 ## Production smoke
 
