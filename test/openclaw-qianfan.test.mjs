@@ -829,15 +829,18 @@ test("Qianfan controls reject mocked or foreign dependency admission without exe
 });
 
 test("Qianfan actual registrations isolate twelve controls from the exact fifteen product hooks", () => {
-  const scopes = [], cases = [], hooks = [];
-  function suite(name, body) { scopes.push(name); body(); scopes.pop(); }
-  suite.sequential = suite;
+  const scopes = [], cases = [], hooks = [], options = [];
+  function suite(name, config, body) {
+    if (typeof config === "function") { body = config; config = undefined; }
+    options.push(config); scopes.push(name); body(); scopes.pop();
+  }
   function register(name, body) { cases.push({ name, body, scope: scopes.at(-1), hooks: hooks.filter(h => h.scope === scopes.at(-1)).length }); }
   register.each = rows => (name, body) => { for (const row of rows) register(name, () => body(...Array.isArray(row) ? row : [row])); };
-  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('describe.sequential("exact d8 parser'), sdkText.lastIndexOf('sdkDiagnostic("collection", "progress", "fulfilled");')));
+  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('describe("exact d8 parser'), sdkText.lastIndexOf('sdkDiagnostic("collection", "progress", "fulfilled");')));
   new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", "sdkDiagnostic", registrations)(
     suite, body => hooks.push({ scope: scopes.at(-1), body }), register, register, models, createPinnedControlSummary, pinnedControlIds, () => {});
   assert.equal(cases.length, 27); assert.equal(hooks.length, 1);
+  assert.deepEqual(options, [{ concurrent: false }, undefined], "Vitest 5 suite options keep controls serial without the removed sequential API");
   assert.ok(cases.slice(0, 12).every(row => row.scope.startsWith("exact d8 parser") && row.hooks === 0));
   assert.ok(cases.slice(12).every(row => row.scope.startsWith("actual Qianfan") && row.hooks === 1));
   assert.equal((sdkText.match(/\bbeforeEach\(/g) ?? []).length, 1);
@@ -942,7 +945,7 @@ test("Qianfan control failure retains actual case masks, stage and undefined rea
 
 test("Qianfan actual collection boundaries rethrow undefined and retain the failing registration phase", () => {
   const callbacks = [], events = [];
-  function suite(name, body) { callbacks.push(body); } suite.sequential = suite;
+  function suite(name, config, body) { callbacks.push(typeof config === "function" ? config : body); }
   const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('sdkStage("collection");')));
   const register = () => {}; register.each = () => () => { throw undefined; };
   new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", "sdkStage", "sdkDiagnostic", registrations)(

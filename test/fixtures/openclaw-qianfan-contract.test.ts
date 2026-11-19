@@ -839,7 +839,7 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
 
 sdkStage("collection");
 try {
-describe.sequential("exact d8 parser and guard controls, separate from registered product cases", () => {
+describe("exact d8 parser and guard controls, separate from registered product cases", { concurrent: false }, () => {
 sdkDiagnostic("control_registration", "progress", "entered");
 try {
   const controls = createPinnedControlSummary(); let groupDeadline: number | undefined;
