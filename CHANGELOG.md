@@ -899,7 +899,7 @@
 - Add an atomic body-budget phase transfer that replaces an existing charge with independently owned input/response charges under the same pool, leaving the original lease unchanged on refusal; route activation remains separate.
 - Add a single-use nonmutating JSON transport with exact bounded bytes and explicit serializer-reference retirement, preserving frozen input and leaving existing route and capacity behavior unchanged.
 - Add GPT-6.1 Terra with sourced text/image metadata, Responses tool calling, Standard/Fast/Flex pricing and long-context budget bounds.
-- Add MiniMax M3.1 Flash with sourced Chat modalities, reasoning controls and token prices; reserve the full context for unbounded media and undocumented output defaults.
+- Add MiniMax M3.1 Flash with sourced Chat modalities, reasoning controls and token prices; reserve the full context for unbounded media and undocumented output defaults. Qualify the explicitly configured registered Chat client, cached-token settlement, preserved M3 denials and independently joined SDK/Worker/source retirement. Keep the pinned Chat effort-domain limitation and separate default Anthropic/video gaps explicit.
 - Cut streamed Responses inspection CPU in cold (interpreted) isolates by 25–35%: SSE lines are split with a native search instead of a per-character loop, and adjacent JSON string chunks of a feed are merged before reaching the projections instead of one dispatch per escape; evidence, limits and error semantics are unchanged.
 
 - Add Google service-account and Anthropic Vertex request codecs with explicit project/region/model binding, token expiration checks and deterministic signature tests for credential-owner integration.
