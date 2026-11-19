@@ -375,7 +375,7 @@ export function privateStoredErrorVector(w:any):any[]|undefined {
    c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(read.settle,closed.settle)<cancel.invoke&&cancel.invoke<cancel.settle&&
    Math.max(read.settle,closed.settle,cancel.settle)<r.unlockAt))return;
  if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
-   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==a.result||
+   t.release?.state!=="fulfilled"||t.release.acquisition!==a||typeof a.releaseOriginal!=="function"||t.release.fn!==a.releaseOriginal||
    !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;
  const vector=[read,closed,cancel];
  if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
@@ -819,7 +819,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
    observer(pending.then((result:any)=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
     expect(new URL(input.url).pathname).toBe(t.path);expect(input.init?.method??"GET").toBe(t.method);expect(new Headers(input.init?.headers).get("authorization")).toBe(t.credential);
     ownership.attach(a,result);
-    const release=result.release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const o=record("guard_release",{acquisition:a,receiver:this,args:params});t.release=o;
+    const release=result.release;a.releaseOriginal=release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const o=record("guard_release",{acquisition:a,fn:release,receiver:this,args:params});t.release=o;
      let p;try{p=returned(o,Reflect.apply(release,this,params));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
      observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
    },()=>{}));callbacks?.returned(callbackEntry);return pending;

@@ -26,6 +26,8 @@
 
 ## Unreleased
 
+- Bind Private fixture release qualification to the captured original release function and acquisition, preserving detached callback receivers, arguments and outcomes. Keep once-only successful release and complete retirement requirements.
+
 - Keep Private catalog fixture producers responsive with bounded yielding pulls and join their original source callbacks in the request lifetime. Qualify only an exactly owned pending read and its forwarding observer after successful cancellation, source retirement and request-bound cancellation accounting; retain rejected states, expiry guards and all independent failures.
 
 - Observe the Private SDK guard actually called by the pinned dispatcher, including native module instances outside the defining test spy. Require matching invocation-bound guard entry, original result attachment, release and complete retirement; no guard-entry observation alone qualifies an acquisition.

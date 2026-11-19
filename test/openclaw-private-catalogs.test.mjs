@@ -2123,7 +2123,8 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const closed={...common,kind:"closed",state:"rejected",reason:stored,pending:reader.closed,invoke:3,settle:11};
   const cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],invoke:12,settle:13};
   const prefix={...common,kind:"read",state:"fulfilled",value:{done:false,value:new Uint8Array([1])},settle:5};
-  const release={owner,kind:"guard_release",state:"fulfilled",acquisition,receiver:acquisition.result,invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
+  acquisition.releaseOriginal=()=>{};
+  const release={owner,kind:"guard_release",state:"fulfilled",acquisition,fn:acquisition.releaseOriginal,receiver:acquisition.result,args:[],invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
   const invocation=Object.freeze({owner,caller,signal:caller.signal,kind:"inference",fn:()=>{},receiver:undefined,args:Object.freeze([{}, {}, {signal:caller.signal}])});
   acquisition.invocation=invocation;acquisition.context=Object.freeze({invocation,acquisition});transport.invocation=invocation;transport.context=acquisition.context;transport.caller=caller;
   return {owner,identity,provider:"baseten",api:"stream",role:"partial",caller,callers:[caller],transports:[transport],originals:[prefix,read,closed,cancel,release],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
@@ -2301,7 +2302,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'no pending read':w=>{w.caller.pending=[];},'missing actual delivery':w=>{w.caller.delivered=0;},'missing nonempty read':w=>{w.originals[0].value.value=new Uint8Array();},
   'cancel before stored error':w=>{w.originals[3].invoke=9;},'foreign cancel argument':w=>{w.originals[3].args=[{}];},
   'pending release':w=>{w.transports[0].release.state='pending';},'failed release undefined':w=>{w.transports[0].release.state='rejected';w.transports[0].release.reason=undefined;},
-  'wrong release receiver':w=>{w.transports[0].release.receiver={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
+  'foreign release function':w=>{w.transports[0].release.fn=()=>{};},'foreign release acquisition':w=>{w.transports[0].release.acquisition={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
   'duplicate release':w=>{w.transports[0].releases=2;},'early unlock':w=>{w.transports[0].readers[0].unlockAt=10;},'duplicate unlock':w=>{w.transports[0].readers[0].unlocks=2;},
   'releaseLock error':w=>{w.transports[0].readers[0].unlockFailed=true;w.syncFailures.push(new TypeError('synthetic'));},'locked body':w=>{w.transports[0].response.body.locked=true;},
   'failed restoration':w=>{w.restored=false;},'observer undefined':w=>{w.observerFailures.push(undefined);},'sync undefined':w=>{w.syncFailures.push(undefined);},
@@ -2309,6 +2310,25 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'late independent join failure':w=>{w.originals.push({kind:'late',state:'rejected',reason:undefined});}
  };
  for(const [name,mutate] of Object.entries(nativeCounterfactuals))test('private native evaluator refuses '+name,()=>{const w=nativeEvidence();mutate(w);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);});
+ test('Private detached release retains the original callable, receiver, arguments and outcome',async()=>{
+  for(const receiver of [undefined,{},null]){const w=nativeEvidence();w.transports[0].release.receiver=receiver;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);}
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const start=source.indexOf('    const release=result.release;'),end=source.indexOf('\n   },()=>{}));',start);assert.ok(start>0&&end>start);
+  const install=new Function('result','a','t','w','patch','record','returned','observer','checkpoints','caseIndex','row','"use strict";'+stripTypeScriptTypes(source.slice(start,end),{mode:'strip'}));
+  for(const mode of ['fulfilled','rejected','threw'])for(const receiver of [undefined,{},null]){
+   const a={},t={releases:0,releaseDone:false},w={sequence:0,syncFailures:[]},args=[{},undefined],observed=[];let reads=0,calls=0;
+   const promise=mode==='rejected'?Promise.reject(undefined):Promise.resolve();promise.catch(()=>{});
+   const original=function(...actual){assert.equal(this,receiver);assert.deepEqual(actual,args);calls++;if(mode==='threw')throw undefined;return promise;};
+   const result={get release(){reads++;return original;}};
+   install(result,a,t,w,(object,key,value)=>Object.defineProperty(object,key,{value,writable:true,configurable:true}),
+    (kind,facts)=>({kind,...facts}), (o,p)=>{o.pending=p;return p;},p=>observed.push(p),{bodyOperationFailure(){}},0,{});
+   assert.equal(reads,1);assert.equal(a.releaseOriginal,original);
+   if(mode==='threw')assert.throws(()=>Reflect.apply(result.release,receiver,args),e=>e===undefined);
+   else {const returned=Reflect.apply(result.release,receiver,args);assert.equal(returned,promise);await Promise.allSettled([returned,...observed]);}
+   assert.equal(calls,1);assert.equal(t.releases,1);assert.equal(t.release.fn,original);assert.equal(t.release.acquisition,a);assert.equal(t.release.receiver,receiver);assert.deepEqual(t.release.args,args);
+   assert.equal(t.releaseDone,mode==='fulfilled');assert.equal(w.syncFailures.length,mode==='threw'?1:0);if(mode==='threw')assert.equal(w.syncFailures[0],undefined);
+  }
+ });
  test('private native qualification needs four independent exact-runtime roles after restoration',()=>{
   const identity={guard:()=>{}},reports=controls(identity);assert.ok(reports.every(r=>r.qualified));
   const qualify=r=>evaluator.privateQualification(r,identity,'baseten','stream');assert.ok(qualify(reports));assert.equal(qualify(reports.slice(1)),undefined);
