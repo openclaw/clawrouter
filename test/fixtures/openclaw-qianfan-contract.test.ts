@@ -14,6 +14,9 @@ import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runt
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 import { types as nodeTypes } from "node:util";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { APIError } from "openai";
+import * as transportStream from "../../packages/ai/src/transports/transport-stream-shared.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const models = ["deepseek-v4-pro", "ernie-5.1", "ernie-5.0", "deepseek-v3.2", "ernie-5.0-thinking-preview"];
@@ -281,11 +284,106 @@ function createRequestBindings() {
     verify() { if (bindings.some(row => !row.claimed)) throw new Error("unobserved Qianfan request binding"); },
   };
 }
-function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => boolean }) {
+// Test-only hooks bind the real operation and its actual read-failure handler.
+// This proves the committed logical outcome, never the native error's cause.
+function createWorkerOutcomeWitness(lifetime: any, ingress: any[], outbound: any[], Operation: any) {
+  const rows = new Map<any, any>(), stops = new Map<any, any>(), rejected = new Set<any>();
+  const activeCancels = new Map<any, any>(), downstream = new Map<any, any>();
+  const status = Object.getOwnPropertyDescriptor(Operation.prototype, "status")!.get!;
+  const delivery = Object.getOwnPropertyDescriptor(Operation.prototype, "delivery")!.get!;
+  const received = Object.getOwnPropertyDescriptor(Operation.prototype, "receivedRejection")!.get!;
+  const own = (value: any, key: string) => { const d = Object.getOwnPropertyDescriptor(value, key); return d && Object.hasOwn(d, "value") ? d.value : undefined; };
+  const note = (fn: () => void) => { try { fn(); } catch (error) { lifetime.errors.push(error); } };
+  const originalCancel = Operation.prototype.cancel, originalStop = Operation.prototype.stop, originalRejection = Operation.prototype.acceptRejection;
+  lifetime.patch(Operation.prototype, "acceptRejection", function (this: any, ...args: any[]) {
+    // History is sticky even when revokeRejection later clears billing evidence.
+    note(() => { rejected.add(this); });
+    return Reflect.apply(originalRejection, this, args);
+  });
+  lifetime.patch(Operation.prototype, "cancel", function (this: any, ...args: any[]) {
+    let record: any, parent: any;
+    note(() => { parent = activeCancels.get(this); record = { operation: this, args, entered: lifetime.stamp(), returned: 0, threw: false }; activeCancels.set(this, record); });
+    try {
+      const value = Reflect.apply(originalCancel, this, args);
+      note(() => { if (record) record.returned = lifetime.stamp(); }); return value;
+    } catch (error) { note(() => { if (record) record.threw = true; }); throw error; }
+    finally { note(() => { if (parent) activeCancels.set(this, parent); else activeCancels.delete(this); }); }
+  });
+  lifetime.patch(Operation.prototype, "stop", function (this: any, ...args: any[]) {
+    let record: any;
+    note(() => {
+      if (stops.has(this)) return;
+      const binding = rows.get(this), incoming = binding?.owner?.ingress, cancel = activeCancels.get(this);
+      const pending = binding?.reading && lifetime.operations.filter((op: any) => op.reader?.reader === binding.reader && op.kind === "reader.read" && op.invoked > binding.readStart);
+      record = { operation: this, entered: lifetime.stamp(), args, cancel, returned: 0, threw: false, binding,
+        beforeStatus: Reflect.apply(status, this, []), beforeDelivery: Reflect.apply(delivery, this, []),
+        received: Reflect.apply(received, this, []), priorRejection: rejected.has(this),
+        pending: pending?.length === 1 && pending[0].state === "pending" ? pending[0] : undefined,
+        origin: !!cancel && (incoming?.abort?.sequence < cancel.entered && incoming.signal === own(this, "caller")
+          || downstream.get(this)?.reason === cancel.args[0] && downstream.has(this)) };
+      stops.set(this, record);
+    });
+    let value;
+    try { value = Reflect.apply(originalStop, this, args); }
+    catch (error) { note(() => { if (record) record.threw = true; }); throw error; }
+    note(() => { if (record) { record.returned = lifetime.stamp(); record.status = Reflect.apply(status, this, []); record.delivery = Reflect.apply(delivery, this, []); } });
+    return value;
+  });
+  return {
+    bind(operation: any, response: any, reader: any) { note(() => {
+      if (rows.has(operation)) throw new Error("duplicate Worker operation binding");
+      const signal = own(operation, "signal"), caller = own(operation, "caller");
+      const owners = outbound.filter(owner => owner.signal === signal && owner.claimed);
+      const row = lifetime.readers.find((row: any) => row.reader === reader && row.body === response.body);
+      if (owners.length !== 1 || !row || row.owner !== owners[0] || row.receivedBody !== row.body) return;
+      const owner = owners[0], incoming = owner.ingress;
+      const fetched = lifetime.operations.filter((op: any) => op.kind === "fetch" && op.owner === owner);
+      if (fetched.length !== 1 || fetched[0].state !== "fulfilled" || fetched[0].value !== response || !fetched[0].pending) return;
+      if (!ingress.includes(incoming) || !incoming.claimed || incoming.signal !== caller || stops.has(operation)
+        || rejected.has(operation) || Reflect.apply(received, operation, []) || Reflect.apply(status, operation, []) !== undefined
+        || Reflect.apply(delivery, operation, []) !== undefined) return;
+      rows.set(operation, { operation, owner, signal, caller, reader, body: response.body, bound: lifetime.stamp(), reading: false, failures: [] });
+    }); },
+    readStart(operation: any, reader: any) { note(() => { const row = rows.get(operation); if (row?.reader === reader) { if (row.reading) throw new Error("overlapping Worker read"); row.reading = true; row.readStart = lifetime.stamp(); } }); },
+    readDone(operation: any, reader: any) { note(() => { const row = rows.get(operation); if (row?.reader === reader) row.reading = false; }); },
+    failure(operation: any, reader: any, error: unknown) { note(() => {
+      const row = rows.get(operation); if (row?.reader === reader) {
+        row.failures.push({ at: lifetime.stamp(), error, reading: row.reading, readStart: row.readStart }); row.reading = false;
+      }
+    }); },
+    inspection(operation: any, inspection: any, delivered: any) { note(() => {
+      const row = rows.get(operation); if (row) { if (row.inspection) throw new Error("duplicate Worker inspection"); row.inspection = { outcome: own(inspection, "outcome"), delivered, at: lifetime.stamp() }; }
+    }); },
+    downstreamStart(operation: any, reason: unknown) { let previous: any; note(() => { previous = downstream.get(operation); downstream.set(operation, { reason }); }); return previous; },
+    downstreamEnd(operation: any, previous: any) { note(() => { if (previous) downstream.set(operation, previous); else downstream.delete(operation); }); },
+    matches(op: any) {
+      const matches = [...rows.values()].filter(row => row.owner === op.owner && row.reader === op.reader?.reader);
+      if (matches.length !== 1) return false;
+      const row = matches[0], record = stops.get(row.operation), owner = row.owner, incoming = owner.ingress, cancel = record?.cancel;
+      const failure = row.failures.length === 1 ? row.failures[0] : undefined;
+      return outbound.includes(owner) && ingress.includes(incoming) && owner.claimed === true && incoming.claimed === true
+        && owner.id === incoming.id && owner.kind === "chat" && incoming.kind === "chat" && owner.method === "POST" && incoming.method === "POST"
+        && row.caller === incoming.signal && row.signal === owner.signal && op.guardSignal === row.signal
+        && Object.getPrototypeOf(row.operation) === Operation.prototype && op.reader.body === row.body
+        && record?.binding === row && record.pending === op && record.origin === true
+        && record.beforeStatus === undefined && record.beforeDelivery === undefined && record.received === false
+        && !record.priorRejection && !rejected.has(row.operation) && record.args[0] === "caller"
+        && record.status === "client_error" && record.delivery === "canceled" && !record.threw
+        && cancel?.operation === row.operation && !cancel.threw && cancel.entered < record.entered
+        && record.entered < record.returned && record.returned < cancel.returned
+        && row.bound < failure?.readStart && failure.readStart < op.invoked && op.invoked < record.entered
+        && failure.reading === true && Object.is(failure.error, op.reason) && cancel.returned < failure.at
+        && row.inspection?.outcome === null && row.inspection.delivered === "canceled" && row.inspection.at < failure.at;
+    },
+  };
+}
+function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => boolean; current?: () => any; apiPrototype?: object; isProxy?: (value: any) => boolean }, worker?: { source: () => any; outcome: (op: any) => boolean }) {
   const operations: OriginalOperation[] = [], errors: unknown[] = [], readers: any[] = [], bodies: any[] = [], guards: any[] = [];
   const restores: Array<() => void> = [], bodyOwners = new WeakMap<object, any>();
   let sequence = 0;
   let lastJoin: any = null;
+  const providerErrors = new Map<any, any>();
+  let qualifiedReadRejections = 0;
   const event = () => ++sequence;
   const snapshot = (signal?: AbortSignal) => ({ aborted: signal?.aborted === true, reason: signal?.reason });
   function safe(callback: () => void) { try { callback(); } catch (error) { errors.push(error); } }
@@ -397,6 +495,79 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
     return op.receiver === row.reader && op.unlocksAtInvoke === 0 && row.unlockInvocations.every(unlock => op.invoked < unlock) &&
       op.signalAtInvoke.aborted === true && op.signalAtInvoke.reason === reason;
   }
+  function providerError(params: any) {
+    safe(() => {
+      const owner = sdk?.current?.();
+      if (!owner || owner.id !== "error" || owner.kind !== "chat" || !sdk?.bindings.includes(owner) || !owner.claimed) return;
+      if (providerErrors.has(owner)) { providerErrors.get(owner).ambiguous = true; return; }
+      const own = (value: any, key: string) => {
+        if (!value || typeof value !== "object" || !sdk.isProxy || sdk.isProxy(value)) return undefined;
+        const field = Object.getOwnPropertyDescriptor(value, key);
+        return field && Object.hasOwn(field, "value") ? field : undefined;
+      };
+      const original = own(params, "error"), output = own(params, "output"), caller = own(params, "signal");
+      if (!original || !output || !caller || caller.value !== owner.caller) return;
+      const error = original.value, payload = own(error, "error")?.value;
+      const controlled = !!error && typeof error === "object" && !sdk.isProxy!(error)
+        && Object.getPrototypeOf(error) === sdk.apiPrototype && !!own(error, "status") && own(error, "status")!.value === undefined
+        && own(error, "message")?.value === "synthetic-upstream-error" && own(error, "code")?.value === "server_error"
+        && !!payload && !sdk.isProxy!(payload) && Object.getPrototypeOf(payload) === Object.prototype
+        && Reflect.ownKeys(payload).sort().join() === "code,message"
+        && own(payload, "message")?.value === "synthetic-upstream-error" && own(payload, "code")?.value === "server_error";
+      const acquired = guards.filter(row => row.owner === owner);
+      if (acquired.length !== 1 || acquired[0].guardSignal !== owner.signal || owner.signal === owner.caller) return;
+      const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")!.get!;
+      const reason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")!.get!;
+      const isAborted = Reflect.apply(aborted, owner.signal, []);
+      providerErrors.set(owner, { error, output: output.value, controlled, acquisition: acquired[0],
+        reason: isAborted ? Reflect.apply(reason, owner.signal, []) : undefined, aborted: isAborted === true, matched: false, ambiguous: false });
+    });
+  }
+  function providerResult(result: any) {
+    safe(() => {
+      if (!sdk?.isProxy || sdk.isProxy(result)) return;
+      for (const observed of providerErrors.values()) if (observed.output === result) {
+        if (observed.matched) observed.ambiguous = true;
+        const stop = Object.getOwnPropertyDescriptor(result, "stopReason"), message = Object.getOwnPropertyDescriptor(result, "errorMessage");
+        observed.matched = !!stop && Object.hasOwn(stop, "value") && stop.value === "error"
+          && !!message && Object.hasOwn(message, "value") && message.value === "synthetic-upstream-error";
+      }
+    });
+  }
+  function sdkProviderErrorDisposition(op: OriginalOperation) {
+    const owner = op.owner, row = op.reader, acquisition = op.acquisition, observed = providerErrors.get(owner);
+    if (!sdk?.bodySucceeded() || !observed?.controlled || !observed.matched || observed.ambiguous || !observed.aborted
+      || !observed.reason || typeof observed.reason !== "object" || observed.reason === observed.error || owner.caller !== undefined
+      || sdk.bindings.filter(binding => binding.id === "error" && binding.kind === "chat").length !== 1
+      || !sdk.bindings.includes(owner) || !owner.claimed || owner.method !== "POST" || !owner.abort
+      || acquisition !== observed.acquisition || guards.filter(guard => guard.owner === owner).length !== 1
+      || !row || !readers.includes(row) || row.owner !== owner || row.acquisition !== acquisition
+      || readers.filter(reader => reader.owner === owner).length !== 1 || row.closed === undefined
+      || acquisition.result?.response.body !== row.body || row.body.locked || row.unlocks !== 1 || row.unlocked !== 1
+      || acquisition.releaseCalls !== 1) return false;
+    const group = operations.filter(item => item.reader === row && ["reader.closed", "reader.read", "reader.cancel"].includes(item.kind) && item.state !== "fulfilled");
+    if (group.length !== 3 || !["reader.closed", "reader.read", "reader.cancel"].every(kind => group.filter(item => item.kind === kind).length === 1)) return false;
+    return group.includes(op) && group.every(item => item.state === "rejected" && item.owner === owner && item.acquisition === acquisition
+      && item.reason === observed.reason && item.guardSignal === acquisition.guardSignal && item.signalAtReject?.aborted === true
+      && item.signalAtReject.reason === observed.reason && owner.abort.reason === observed.reason && owner.abort.sequence < item.settled!
+      && (item.kind === "reader.closed" ? item.pending === row.closed && item.invoked < owner.abort.sequence
+        : item.receiver === row.reader && (item.kind === "reader.read" ? item.invoked < owner.abort.sequence && !item.signalAtInvoke.aborted
+          : item.signalAtInvoke.aborted && item.signalAtInvoke.reason === observed.reason && item.unlocksAtInvoke === 0 && item.invoked < row.unlockInvocations[0])));
+  }
+  function workerReadDisposition(op: OriginalOperation) {
+    if (sdk || !worker || op.kind !== "reader.read" || op.state !== "rejected" || !worker.outcome(op)) return false;
+    const owner = op.owner, row = op.reader, source = worker.source();
+    if (!source || source.ownerId !== "qianfan_cancel" || source.claimed !== true || source.cancelled !== true
+      || source.expired !== false || source.cancelCalls !== 1 || source.cancelReturned !== 1 || source.pending !== 0 || source.failed !== 0
+      || owner.id !== source.ownerId || !row || !readers.includes(row) || row.owner !== owner || bodyOwners.get(row.body) !== owner
+      || row.receivedBody !== row.body || op.receiver !== row.reader || row.unlocks !== 1 || row.unlocked !== 1 || row.body.locked) return false;
+    const related = operations.filter(item => item.reader === row);
+    const cancel = related.filter(item => item.kind === "reader.cancel"), closed = related.filter(item => item.kind === "reader.closed");
+    return cancel.length === 1 && closed.length === 1 && closed[0].pending === row.closed && closed[0].state === "fulfilled"
+      && cancel[0].state === "fulfilled" && cancel[0].owner === owner && cancel[0].receiver === row.reader && cancel[0].unlocksAtInvoke === 0
+      && op.invoked < cancel[0].invoked && cancel[0].invoked < op.settled! && op.settled! < row.unlockInvocations[0]
+      && cancel[0].settled! < row.unlockInvocations[0] && related.filter(item => item.state !== "fulfilled").length === 1;
+  }
   async function join() {
     for (;;) {
       const count = operations.length;
@@ -415,8 +586,10 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
     const releasesFulfilled = guards.every(row => row.acquired && row.returned && typeof row.returned.then === "function" && operations.some(op => op.kind === "acquire" && op.acquisition === row && op.pending === row.returned && op.state === "fulfilled") &&
       releases.filter(op => op.acquisition === row).length === row.releaseCalls && row.releaseCalls > 0) &&
       releases.every(op => op.state === "fulfilled" && op.pending && typeof op.pending.then === "function");
+    const workerReads = structural.length === 0 && releasesFulfilled ? operations.filter(workerReadDisposition) : [];
+    qualifiedReadRejections = workerReads.length === 1 ? 1 : 0;
     const rejected = operations.filter(op => (op.state === "rejected" || op.state === "sync_throw") &&
-      !(structural.length === 0 && releasesFulfilled && sdkAbortDisposition(op)));
+      !(structural.length === 0 && releasesFulfilled && (sdkAbortDisposition(op) || sdkProviderErrorDisposition(op) || qualifiedReadRejections === 1 && workerReads.includes(op))));
     const failures = [...structural, ...rejected.map(op => op.reason)];
     if (sdk && !releasesFulfilled) failures.push(new Error("original SDK request release not fulfilled"));
     // Diagnostic projection only, after the original verdict has been formed.
@@ -499,9 +672,9 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
   }
   async function restore() { const failures: unknown[] = []; for (const undo of restores.splice(0).reverse()) try { undo(); } catch (error) { failures.push(error); } if (failures.length) throw new AggregateError(failures, "Qianfan observer restoration failed"); }
   function summary() { return { operations: operations.length, settled: operations.filter(op => op.state !== "pending").length,
-    rejected: operations.filter(op => op.state === "rejected" || op.state === "sync_throw").length + errors.length,
+    rejected: operations.filter(op => op.state === "rejected" || op.state === "sync_throw").length + errors.length, qualifiedReadRejections,
     readers: readers.length, unlocked: readers.filter(row => row.unlocks > 0 && row.unlocks === row.unlocked).length, releases: guards.reduce((n, row) => n + row.releaseCalls, 0) }; }
-  return { operations, errors, readers, bodies, guards, watch, invoke, patch, signal, partial, response, guard, join, restore, summary, joinDiagnostic: () => lastJoin };
+  return { operations, errors, readers, bodies, guards, stamp: event, watch, invoke, patch, signal, partial, response, guard, providerError, providerResult, join, restore, summary, joinDiagnostic: () => lastJoin };
 }
 const cancelReceiptLine = 'QIANFAN_CANCEL_RECEIPT {"v":1,"scenario":"cancel","partialDelivery":true,"callerAborted":true,"originalsJoined":true,"restored":true}';
 function createCancelReceiptReceiver(context: { diagnostic: (...args: any[]) => any }) {
@@ -582,6 +755,8 @@ function registeredCaseId(name: string, args: any[]) {
     "cancels the actual native SDK stream after partial delivery": "cancel" } as Record<string, string>)[name] ?? "none";
 }
 const originalInferenceGuard = guardedTransport.fetchWithProviderHttpGuard;
+const originalSdkFailure = transportStream.failTransportStream;
+const sdkInvocation = new AsyncLocalStorage<any>();
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, caseState: { bodySucceeded: boolean };
 let cancelReceiptCount = 0;
 sdkDiagnostic("module", "progress", "entered");
@@ -648,7 +823,7 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   const invocation = bindings.expect(id, "chat", configured.baseUrl + "/chat/completions", "POST", options.apiKey ?? key(id), options.signal);
   invocation.callerObservation = {}; lifetime.signal(invocation.callerObservation, options.signal);
   sdkStage("dispatch");
-  return streamSimple(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, reasoning: options.reasoning, signal: options.signal });
+  return sdkInvocation.run(invocation, () => streamSimple(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, reasoning: options.reasoning, signal: options.signal }));
 }
 
 async function discovered(id: string) {
@@ -868,10 +1043,15 @@ try {
 beforeEach(async () => {
   diagnosticCase = "none"; diagnosticRoute = "none";
   bindings = createRequestBindings(); caseState = { bodySucceeded: false };
-  lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => caseState.bodySucceeded });
+  lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => caseState.bodySucceeded,
+      current: () => sdkInvocation.getStore(), apiPrototype: APIError.prototype, isProxy: nodeTypes.isProxy });
   sdkStage("setup");
   try {
     clearLiveCatalogCacheForTests();
+    vi.spyOn(transportStream, "failTransportStream").mockImplementation(function (...args: Parameters<typeof originalSdkFailure>) {
+      lifetime.providerError(args[0]);
+      return Reflect.apply(originalSdkFailure, this, args);
+    });
     vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (...args) {
       const options = args[0], owner = bindings.claim(options.url, options.init, "chat");
       lifetime.signal(owner, options.signal ?? options.init?.signal);
@@ -914,7 +1094,7 @@ beforeEach(async () => {
     }
   });
   it("retains embedded errors without replay", async () => {
-    const result = await (await start("error")).result(); expect(result.stopReason).toBe("error"); expect(result.errorMessage).toContain("synthetic-upstream-error");
+    const result = await (await start("error")).result(); expect(result.stopReason).toBe("error"); expect(result.errorMessage).toBe("synthetic-upstream-error"); lifetime.providerResult(result);
   });
   it("cancels the actual native SDK stream after partial delivery", async () => {
     const controller = new AbortController(), stream = await start("cancel", models[0], { signal: controller.signal });

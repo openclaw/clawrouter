@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { types as nodeTypes } from "node:util";
 import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,7 +28,7 @@ const sdkText = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.
 const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd = sdkText.indexOf("// END ORIGINAL LIFETIME OBSERVERS");
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
-const { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
+const { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
 // Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
 const diagnosticStart = sdkText.indexOf("// BEGIN QIANFAN FAILURE DIAGNOSTICS"), diagnosticEnd = sdkText.indexOf("// END QIANFAN FAILURE DIAGNOSTICS");
 assert.ok(diagnosticStart >= 0 && diagnosticEnd > diagnosticStart);
@@ -490,7 +490,11 @@ function verifyRetirement(proof, side, diagnostics) {
   try {
     assert.equal(proof.accepted, true);
     predicate = "settled"; assert.equal(proof.settled, true);
-    predicate = "rejected"; assert.equal(proof.rejected, 0);
+    predicate = "rejected";
+    if (side === "router" && proof.qualifiedReadRejections === 1) {
+      assert.equal(proof.rejected, 1); assert.deepEqual(proof.join.contract.failureFlags, [0, 0, 0, 0, 0, 0]);
+      assert.equal(proof.join.contract.releasesFulfilled, true);
+    } else assert.equal(proof.rejected, 0);
     if (side === "router") { predicate = "unlocked"; assert.equal(proof.readers, proof.unlocked); }
   } catch (error) {
     try { diagnostics?.retirement(side, predicate, proof, error); } catch { /* original assertion wins */ }
@@ -674,21 +678,26 @@ test("Qianfan multiple SDK join failures reserve both strict Worker predicates w
   assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
 });
 
-async function retireWorker(mf, diagnostics) {
+async function retireWorker(mf, diagnostics, nativeAccepted = false) {
   if (!mf) return;
+  let sourceCancellation;
   async function retire(side, url) {
     let proof;
     try {
-      const worker = await mf.getWorker(side), response = await worker.fetch(url);
+      const worker = await mf.getWorker(side), response = await worker.fetch(url, side === "router" ? {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sourceCancellation, nativeAccepted }),
+      } : undefined);
       proof = await response.json();
     } catch (error) {
       try { diagnostics?.retirement(side, "response", undefined, error); } catch { /* original rejection wins */ }
       throw error;
     }
     verifyRetirement(proof, side, diagnostics);
+    if (side === "upstream") sourceCancellation = proof.sourceCancellation;
   }
-  await preserveFailures(() => retire("router", "https://fixture.example/fixture/retirement"),
-    [() => retire("upstream", "https://fixture.example/retirement")]);
+  // A failed source proof never qualifies router reads; both original joins run.
+  await preserveFailures(() => retire("upstream", "https://fixture.example/retirement"),
+    [() => retire("router", "https://fixture.example/fixture/retirement")]);
 }
 
 test("Qianfan release chronology observes original entry return and settlement without accepting source errors", async () => {
@@ -805,11 +814,12 @@ test("Qianfan unknown Worker response failure stays distinct and still attempts 
   const proof = { accepted: true, settled: true, rejected: 0, readers: 0, unlocked: 0 };
   const mf = { async getWorker(side) { calls.push(side); return { async fetch() { if (side === "router") throw undefined; return Response.json(proof); } }; } };
   let rejected = false; try { await retireWorker(mf, diagnostics); } catch (error) { rejected = true; assert.equal(error, undefined); }
-  assert.equal(rejected, true); assert.deepEqual(calls, ["router", "upstream"]); diagnostics.finish();
+  assert.equal(rejected, true); assert.deepEqual(calls, ["upstream", "router"]); diagnostics.finish();
   const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
   assert.equal(records.length, 4);
-  assert.equal(records[0].predicate, "response"); assert.deepEqual(records[0].retirement, [null, null, null, null, null]);
-  assert.equal(records[2].outcome, "fulfilled");
+  assert.equal(records.find(row => row.phase === "retirement_router").predicate, "response");
+  assert.deepEqual(records.find(row => row.phase === "retirement_router").retirement, [null, null, null, null, null]);
+  assert.equal(records.find(row => row.phase === "retirement_upstream").outcome, "fulfilled");
 });
 
 for (const id of pinnedControlIds.slice(6)) test("Qianfan hosted observer control implementation " + id, { timeout: 5000 }, async () => {
@@ -965,11 +975,10 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
   assert.ok(endpoint);
   assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-qianfan-client-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  let mf;
+  let mf, nativeAccepted = false;
   await preserveFailures(async () => {
     try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startQianfanWorkerd(temporary);
     diagnostics.stage("grant");
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
@@ -1065,17 +1074,172 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
       assert.equal(usage.budget.spentMicros, 0);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
+    nativeAccepted = true;
     } catch (error) { diagnostics.failure(error); throw error; }
-  }, [diagnostics.cleanup("retirement", () => retireWorker(mf, diagnostics)), diagnostics.cleanup("dispose", () => mf?.dispose()), diagnostics.cleanup("rm", () => rm(temporary, { recursive: true, force: true }))]);
+  }, [diagnostics.cleanup("retirement", () => retireWorker(mf, diagnostics, nativeAccepted)), diagnostics.cleanup("dispose", () => mf?.dispose()), diagnostics.cleanup("rm", () => rm(temporary, { recursive: true, force: true }))]);
   } catch (error) { if (!diagnostics.failed) diagnostics.failure(error); throw error; }
   finally { diagnostics.finish(); }
+});
+
+// The test bundle alone observes the original handler boundary. Exact source
+// pins and single anchors prevent an overlay from silently following new code.
+const workerOutcomePins = {"proxy.ts": "0dd94cd16e6205d62a2bc0da80c6a2ba63615393f0b57be851d23b4bbefbddd1", "proxy-response.ts": "d612c0a2181c145c6cc4761b82053d04454bb009c872dd2996595a202c9b2b0f", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+function workerOutcomeOverlay(text, name = "proxy-response.ts") {
+  assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
+  const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
+  if (name === "proxy.ts") {
+    // Thread the already-held operation to the original source owner; the
+    // forwarded/normalized reader is deliberately NOT used as its identity.
+    edit('function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {',
+      'function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, operation: HttpOperation): Response {');
+    edit('ownOrdinaryResponse(response, completion)', 'ownOrdinaryResponse(response, completion, operation)', 2);
+    edit('    const reader = response.body!.getReader(), input = inputRetirement(reader);',
+      '    const reader = response.body!.getReader(), input = inputRetirement(reader);\n    qianfanOutcome.current.bind(operation, response, reader);');
+    edit('              const next = await input.read(() => reader.read());',
+      '              qianfanOutcome.current.readStart(operation, reader);\n              const next = await input.read(() => reader.read());\n              qianfanOutcome.current.readDone(operation, reader);');
+    edit('            } catch (error) {\n              if (!stopped)',
+      '            } catch (error) {\n              qianfanOutcome.current.failure(operation, reader, error);\n              if (!stopped)');
+  } else {
+    assert.equal(name, "proxy-response.ts");
+    edit('    resolve({ ...inspection, delivery,', '    qianfanOutcome.current.inspection(operation, inspection, delivery);\n    resolve({ ...inspection, delivery,');
+    edit('    cancel(reason) { return finish("canceled", reason); },',
+      '    cancel(reason) { const prior = qianfanOutcome.current.downstreamStart(operation, reason); try { return finish("canceled", reason); } finally { qianfanOutcome.current.downstreamEnd(operation, prior); } },');
+  }
+  return 'import { qianfanOutcome } from "qianfan-outcome-witness";\n' + text;
+}
+async function bundleQianfanOutcome(contents) {
+  const require = createRequire(import.meta.resolve("wrangler/package.json")), { build } = require("esbuild");
+  const bundle = await build({ stdin: { contents, resolveDir: process.cwd(), sourcefile: "qianfan-fixture.ts", loader: "ts" },
+    write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
+    plugins: [{ name: "qianfan-first-outcome", setup(build) {
+      build.onResolve({ filter: /^qianfan-outcome-witness$/ }, () => ({ path: "witness", namespace: "qianfan" }));
+      build.onLoad({ filter: /.*/, namespace: "qianfan" }, () => ({ contents: "export const qianfanOutcome = { current: undefined };", loader: "js" }));
+      build.onLoad({ filter: /[/\\]worker[/\\](?:proxy|proxy-response|http-operation)\.ts$/ }, args => {
+        const name = args.path.split(/[/\\]/).at(-1), source = readFileSync(args.path, "utf8");
+        assert.equal(createHash("sha256").update(source).digest("hex"), workerOutcomePins[name]);
+        return { contents: name !== "http-operation.ts" ? workerOutcomeOverlay(source, name) : source, loader: "ts" };
+      });
+    } }],
+  });
+  return bundle.outputFiles[0].text;
+}
+async function startQianfanWorkerd(temporary) {
+  const { startBundledWorkerdFixture } = await import("./helpers/workerd.mjs");
+  return startBundledWorkerdFixture(temporary, await bundleQianfanOutcome(routerFixture()), upstreamFixture());
+}
+
+test("Qianfan Worker first outcome binds the actual handler and retains secondary read rejection", async () => {
+  const proxy = workerOutcomeOverlay(readFileSync(new URL("../worker/proxy.ts", import.meta.url), "utf8"), "proxy.ts");
+  const inner = proxy.slice(proxy.indexOf("function ownOrdinaryResponse("), proxy.indexOf("\nasync function proxySelected("));
+  const code = await bundleQianfanOutcome('import { HttpOperation, InternalHttpAbort } from "./worker/http-operation.ts"; import { inputRetirement } from "./worker/input-retirement.ts"; import { ProxyCompletion } from "./worker/proxy-completion.ts"; import { qianfanOutcome } from "qianfan-outcome-witness"; export { observeUsage } from "./worker/proxy-response.ts"; ' + inner + '; export { HttpOperation, InternalHttpAbort, ProxyCompletion, ownOrdinaryResponse, qianfanOutcome };');
+  const { HttpOperation, InternalHttpAbort, ProxyCompletion, ownOrdinaryResponse, observeUsage, qianfanOutcome } = await import("data:text/javascript;base64," + Buffer.from(code).toString("base64"));
+  const modes = ["caller", "downstream", "undefined_read", "foreign_reason", "prior_400", "revoked_400", "prior_500", "deadline", "upstream",
+    "protocol", "early_read", "foreign_ingress", "foreign_outbound", "no_handler", "missing_source", "expired_source", "held_source", "failed_source",
+    "duplicate_cancel", "cancel_failure", "closed_failure", "unlock_failure", "handler_failure", "waitUntil_failure", "observer_undefined", "native_unqualified"];
+  for (const mode of modes) {
+    const incoming = createRequestBindings(), outgoing = createRequestBindings(), caller = new AbortController();
+    const ingress = incoming.expect("qianfan_cancel", "chat", "https://fixture.example/ingress", "POST", "fixture-in");
+    incoming.claim(ingress.url, { method: "POST", headers: { authorization: "Bearer fixture-in" } }, "chat");
+    const owner = outgoing.expect("qianfan_cancel", "chat", "https://fixture.example/outbound", "POST", "fixture-out");
+    outgoing.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-out" } }, "chat"); owner.ingress = ingress;
+    let sourceProof = { ownerId: "qianfan_cancel", claimed: true, cancelled: true, expired: false, cancelCalls: 1, cancelReturned: 1, pending: 0, failed: 0 };
+    if (["missing_source", "native_unqualified"].includes(mode)) sourceProof = undefined;
+    if (mode === "expired_source") sourceProof.expired = true;
+    if (mode === "held_source") sourceProof.pending = 1;
+    if (mode === "failed_source") sourceProof.failed = 1;
+    const life = createLifetimeObserver(undefined, { source: () => sourceProof, outcome: op => witness.matches(op) });
+    life.signal(ingress, caller.signal);
+    const operation = new HttpOperation(caller.signal); life.signal(owner, operation.signal);
+    const witness = createWorkerOutcomeWitness(life, incoming.bindings, outgoing.bindings, HttpOperation); qianfanOutcome.current = witness;
+    if (mode === "no_handler") witness.failure = () => {};
+    if (mode === "foreign_ingress") owner.ingress = { ...ingress };
+    if (mode === "foreign_outbound") life.signal(owner, new AbortController().signal);
+    const read = deferred(), closed = deferred(), reason = mode === "undefined_read" ? undefined : new Error("secondary native read"), abort = new Error("caller intent");
+    let reads = 0, cancelCalls = 0, unlocks = 0;
+    const reader = {
+      closed: closed.promise,
+      read() {
+        if (++reads === 1) return Promise.resolve({ done: false, value: new TextEncoder().encode(mode === "protocol"
+          ? 'data: {"error":{"message":"synthetic"}}\n\n'
+          : 'data: {"choices":[{"delta":{"content":"synthetic"},"finish_reason":null}]}\n\n') });
+        return read.promise;
+      },
+      cancel() {
+        cancelCalls++; read.reject(reason);
+        if (mode === "closed_failure") closed.reject(undefined); else closed.resolve();
+        return mode === "cancel_failure" ? Promise.reject(undefined) : Promise.resolve();
+      },
+      releaseLock() { unlocks++; if (mode === "unlock_failure") throw undefined; },
+    };
+    const response = new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+    Object.defineProperty(response.body, "getReader", { configurable: true, value: () => reader });
+    const fetched = Promise.resolve(response);
+    assert.equal(life.invoke("fetch", () => fetched, null, [], owner, value => life.response(value, owner)), fetched); await fetched;
+    const completion = new ProxyCompletion(), forwarded = ownOrdinaryResponse(response, completion, operation);
+    completion.seal(); assert.notEqual(forwarded.body, response.body);
+    const observed = observeUsage(forwarded, operation), downstream = observed.response.body.getReader();
+    await downstream.read(); const pending = downstream.read();
+    const settled = Promise.allSettled([pending, observed.retired, observed.result, read.promise, closed.promise, completion.completion]);
+    // Wait for the original shipping inputRetirement to start its second read.
+    for (let i = 0; i < 10 && reads !== 2; i++) await Promise.resolve();
+    assert.equal(reads, 2, mode);
+    if (["prior_400", "revoked_400", "prior_500"].includes(mode)) operation.acceptRejection(mode === "prior_500" ? 500 : 400);
+    if (mode === "revoked_400") operation.revokeRejection();
+    if (mode === "early_read") { read.reject(reason); await Promise.allSettled([pending]); }
+    if (mode === "deadline") operation.cancel(new InternalHttpAbort("deadline", "synthetic"));
+    if (mode === "upstream") operation.stop("upstream", reason);
+    if (mode === "observer_undefined") { const stamp = life.stamp; let once = true; life.stamp = () => { if (once) { once = false; throw undefined; } return stamp(); }; }
+    if (mode === "caller") caller.abort(abort);
+    else await Promise.allSettled([downstream.cancel(abort)]);
+    if (mode === "duplicate_cancel") await reader.cancel();
+    await settled;
+    const result = await observed.result;
+    const handler = mode === "handler_failure" ? Promise.reject(undefined) : Promise.resolve();
+    const work = mode === "waitUntil_failure" ? Promise.reject(undefined) : Promise.resolve();
+    life.watch("handler", handler, ingress); life.watch("waitUntil", work, ingress);
+    const positive = ["caller", "downstream", "undefined_read", "foreign_reason"].includes(mode);
+    try {
+      if (positive) {
+        await life.join(); assert.equal(operation.status, "client_error", mode); assert.equal(result.delivery, "canceled", mode);
+        assert.equal(result.outcome, null, mode); assert.equal(cancelCalls, 1, mode); assert.equal(unlocks, 1, mode);
+        assert.equal(life.summary().qualifiedReadRejections, 1, mode); assert.equal(life.summary().rejected, 1, mode);
+        const rejected = life.operations.find(op => op.kind === "reader.read" && op.state === "rejected");
+        assert.equal(rejected.pending, read.promise); assert.equal(rejected.reason, reason); assert.equal(witness.matches(rejected), true, mode);
+        verifyRetirement({ ...life.summary(), accepted: true, settled: true, join: life.joinDiagnostic() }, "router");
+      } else await assert.rejects(life.join(), AggregateError, mode);
+    } finally { await life.restore(); downstream.releaseLock(); }
+  }
+});
+
+test("Qianfan first-outcome hooks preserve original falsey throws and reject source drift", async () => {
+  const original = readFileSync(new URL("../worker/proxy-response.ts", import.meta.url), "utf8");
+  assert.throws(() => workerOutcomeOverlay(original + "\n"), assert.AssertionError);
+  for (const value of [undefined, false, null]) {
+    class Operation {
+      get status() { return undefined; } get delivery() { return undefined; } get receivedRejection() { return false; }
+      cancel() { throw value; } stop() { throw value; } acceptRejection() { throw value; }
+    }
+    const life = createLifetimeObserver(); createWorkerOutcomeWitness(life, [], [], Operation);
+    const object = new Operation();
+    for (const method of ["cancel", "stop", "acceptRejection"]) {
+      let caught = false; try { object[method]("caller", value); } catch (error) { caught = true; assert.equal(error, value); }
+      assert.equal(caught, true);
+    }
+    await life.restore();
+  }
+  assert.ok((await bundleQianfanOutcome(routerFixture())).length > 0);
 });
 
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
+import { HttpOperation } from "./worker/http-operation.ts";
+import { qianfanOutcome } from "qianfan-outcome-witness";
 ${observerCode}
-const lifetime = createLifetimeObserver(), ingress = createRequestBindings(), outbound = createRequestBindings();
+const ingress = createRequestBindings(), outbound = createRequestBindings();
+let sourceCancellation, nativeAccepted = false;
+const lifetime = createLifetimeObserver(undefined, { source: () => nativeAccepted ? sourceCancellation : undefined, outcome: op => qianfanOutcome.current.matches(op) });
+qianfanOutcome.current = createWorkerOutcomeWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation);
 const originals = globalThis.fetch;
 const ids = ${JSON.stringify(ids)}, charged = ${JSON.stringify(charged)};
 for (const id of [...ids, "qianfan_invalid"]) {
@@ -1113,7 +1277,10 @@ export default { ...handler, fetch(request, env, context) {
     for (const id of ids) await putGrantCredentials(env, "oauth/" + id + "/qianfan", { provider: "qianfan", kind: "api_key", enabled: true, credential: "fixture-upstream-" + id });
     return new Response(null, { status: 204 });
   })();
-  if (path === "/fixture/retirement") return retirement();
+  if (path === "/fixture/retirement") return (async () => {
+    if (request.method === "POST") { const proof = await request.json(); sourceCancellation = proof.sourceCancellation; nativeAccepted = proof.nativeAccepted === true; }
+    return retirement();
+  })();
   if (!path.startsWith("/v1/native/qianfan/")) return handler.fetch(request, { ...env, QIANFAN_API_KEY: "must-not-fallback" }, context);
   const owner = bindIngress(request); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
@@ -1127,7 +1294,7 @@ export default { ...handler, fetch(request, env, context) {
 
 function upstreamFixture() {
   return `${observerCode}
-const lifetime = createLifetimeObserver(), calls = [], retirementSteps = observeRetirementSteps();
+const lifetime = createLifetimeObserver(), calls = [], callOwners = new Map(), retirementSteps = observeRetirementSteps();
 const bindings = createRequestBindings();
 for (const id of ${JSON.stringify(charged)}) bindings.expect(id, "chat", ${JSON.stringify(provider.base_urls.default.replace(/\/$/, "") + endpoint.path)}, "POST", "fixture-upstream-" + id);
 for (const id of ["qianfan_catalog", "qianfan_empty"]) bindings.expect(id, "catalog", ${JSON.stringify(provider.base_urls.default + "/models")}, "GET", "fixture-upstream-" + id);
@@ -1136,11 +1303,16 @@ export default { async fetch(request) {
     if (request.url === "https://fixture.example/retirement") {
       let accepted = false;
       try { await preserveFailures(async () => { await retirementSteps.observe(0, () => lifetime.join()); retirementSteps.observe(1, () => bindings.verify()); }, [() => retirementSteps.observe(3, () => lifetime.restore())]); accepted = true; } catch (error) { lifetime.errors.push(error); }
-      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, retirementChecks: retirementSteps.facts(), join: lifetime.joinDiagnostic() });
+      const owner = bindings.bindings.find(row => row.id === "qianfan_cancel" && row.kind === "chat"), call = callOwners.get(owner);
+      const owned = lifetime.operations.filter(op => op.owner === owner), cancels = owned.filter(op => op.kind === "source.cancel");
+      const sourceCancellation = { ownerId: owner?.id, claimed: owner?.claimed === true, cancelled: call?.cancelled === true, expired: call?.fixtureExpired === true,
+        cancelCalls: cancels.length, cancelReturned: cancels.filter(op => op.state === "fulfilled").length,
+        pending: owned.filter(op => op.state === "pending").length, failed: owned.filter(op => !["pending", "fulfilled"].includes(op.state)).length };
+      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, sourceCancellation, retirementChecks: retirementSteps.facts(), join: lifetime.joinDiagnostic() });
     }
     const owner = bindings.claim(request, undefined, request.method === "GET" ? "catalog" : "chat"); lifetime.signal(owner, request.signal);
     const body = request.method === "POST" ? await request.json() : null;
-    const call = { url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body }; calls.push(call);
+    const call = { url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body }; calls.push(call); callOwners.set(owner, call);
     if (request.method === "GET") return Response.json({ object: "list", data: ["deepseek-v4-pro", "foreign-fixture"].map(id => ({ id, object: "model", owned_by: "qianfan" })) });
     const input = JSON.stringify(body.messages), frame = value => "data: " + JSON.stringify(value) + "\\n\\n";
     const failed = input.includes("qianfan_error"), cancel = input.includes("qianfan_cancel");
@@ -1219,4 +1391,84 @@ test("Qianfan actual replay callback scopes the captured provider and preserves 
     });
   }
   assert.equal(new Set(registries).size, registries.length); assert.equal(storage.getStore(), undefined);
+});
+
+test("Qianfan controlled SDK error disposition binds callback output, owned signal and original reader", async () => {
+  for (const mode of ["owned", "foreign_context", "foreign_reader", "wrong_prototype", "wrong_payload", "wrong_result", "missing_callback", "duplicate_callback", "same_parser_reason", "undefined_reason", "wrong_signal_reason", "late_abort", "release_failure", "body_failure", "observer_undefined"]) {
+    const binding = createRequestBindings(), owner = binding.expect("error", "chat", "https://fixture.example/chat", "POST", "fixture-error");
+    binding.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-error" } }, "chat");
+    const prototype = {}, payload = { message: "synthetic-upstream-error", code: "server_error" };
+    const parserError = Object.assign(Object.create(mode === "wrong_prototype" ? {} : prototype), {
+      status: undefined, message: payload.message, code: payload.code, error: mode === "wrong_payload" ? { ...payload, extra: true } : payload,
+    });
+    const controller = new AbortController(), abortReason = mode === "same_parser_reason" ? parserError : new Error("private SDK abort");
+    const rejectedReason = mode === "undefined_reason" ? undefined : mode === "wrong_signal_reason" ? new Error("independent source error") : abortReason;
+    const life = createLifetimeObserver({ bindings: binding.bindings, bodySucceeded: () => mode !== "body_failure",
+      current: () => { if (mode === "observer_undefined") throw undefined; return mode === "foreign_context" ? {} : owner; },
+      apiPrototype: prototype, isProxy: nodeTypes.isProxy });
+    life.signal(owner, controller.signal);
+    let source; const response = new Response(new ReadableStream({ start(value) { source = value; } }, { highWaterMark: 0 }));
+    const release = () => mode === "release_failure" ? Promise.reject(undefined) : Promise.resolve();
+    const result = { response, release }, acquired = Promise.resolve(result);
+    assert.equal(life.guard(() => acquired, undefined, [], owner), acquired); await acquired;
+    const reader = response.body.getReader(), closed = reader.closed, reading = reader.read();
+    if (mode !== "late_abort") controller.abort(abortReason);
+    source.error(rejectedReason); const cancelling = reader.cancel(); reader.releaseLock();
+    await Promise.allSettled([closed, reading, cancelling]);
+    if (mode === "late_abort") controller.abort(abortReason);
+    const output = { stopReason: "error", errorMessage: payload.message }, params = { error: parserError, output, signal: undefined };
+    if (mode !== "missing_callback") life.providerError(params);
+    if (mode === "duplicate_callback") life.providerError(params);
+    life.providerResult(mode === "wrong_result" ? { ...output } : output);
+    if (mode === "foreign_reader") life.operations.find(op => op.kind === "reader.read").owner = {};
+    await Promise.allSettled([result.release()]);
+    if (mode === "owned") await life.join();
+    else await assert.rejects(life.join(), error => {
+      assert.ok(error.errors.length > 0);
+      if (["undefined_reason", "release_failure", "observer_undefined"].includes(mode)) assert.ok(error.errors.includes(undefined));
+      return true;
+    });
+    const originals = life.operations.filter(op => ["reader.closed", "reader.read", "reader.cancel"].includes(op.kind));
+    assert.equal(originals.length, 3); assert.ok(originals.every(op => op.state === "rejected" && op.reason === rejectedReason));
+    assert.equal(originals.find(op => op.kind === "reader.closed").pending, closed);
+    assert.equal(originals.find(op => op.kind === "reader.read").pending, reading);
+    assert.equal(originals.find(op => op.kind === "reader.cancel").pending, cancelling);
+    assert.equal(life.summary().rejected >= 3, true); await life.restore();
+  }
+});
+
+test("Qianfan actual SDK failure hook preserves receiver operands and falsey original outcomes", () => {
+  const code = stripTypeScriptTypes(sdkText);
+  const start = code.indexOf('vi.spyOn(transportStream, "failTransportStream")');
+  const end = code.indexOf('    vi.spyOn(guardedTransport', start);
+  assert.ok(start >= 0 && end > start);
+  const install = new Function("vi", "transportStream", "lifetime", "originalSdkFailure", code.slice(start, end));
+  for (const throws of [false, true]) for (const reason of [undefined, false, {}]) {
+    const bindings = createRequestBindings(), owner = bindings.expect("error", "chat", "https://fixture.example/chat", "POST", "fixture");
+    bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture" } }, "chat");
+    const life = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => true, current: () => { throw undefined; } });
+    const target = {}, receiver = {}, args = [{ error: reason, output: {}, signal: undefined }, 17];
+    let wrapper, calls = 0;
+    install({ spyOn(object, key) { assert.equal(object, target); assert.equal(key, "failTransportStream"); return { mockImplementation(fn) { wrapper = fn; } }; } },
+      target, life, function (...received) { calls++; assert.equal(this, receiver); assert.deepEqual(received, args); if (throws) throw reason; return reason; });
+    let caught = false, value;
+    try { value = Reflect.apply(wrapper, receiver, args); } catch (error) { caught = true; value = error; }
+    assert.equal(caught, throws); assert.equal(value, reason); assert.equal(calls, 1);
+    assert.deepEqual(life.errors, [undefined], "observer fault remains independent without replacing the original callback");
+  }
+});
+
+test("Qianfan Worker read errors remain fatal despite later successful sibling cancellation", async () => {
+  for (const reason of [undefined, new Error("independent read failure")]) {
+    const life = createLifetimeObserver(), owner = {}, reading = deferred(), closed = deferred();
+    const body = { locked: false, cancel() { return Promise.resolve(); }, getReader() { this.locked = true; return reader; } };
+    const reader = { closed: closed.promise, read() { return reading.promise; }, cancel() { closed.resolve(); return Promise.resolve(); }, releaseLock() { body.locked = false; } };
+    life.response({ body }, owner); const captured = body.getReader(), originalRead = captured.read();
+    // The rejection is queued first; its reaction is observed after cancel entry.
+    reading.reject(reason); const originalCancel = captured.cancel();
+    await Promise.allSettled([originalRead, originalCancel, captured.closed]); captured.releaseLock();
+    await assert.rejects(life.join(), error => error.errors.length === 1 && error.errors[0] === reason);
+    assert.equal(life.operations.find(op => op.kind === "reader.read").pending, originalRead);
+    assert.equal(life.summary().rejected, 1); await life.restore();
+  }
 });

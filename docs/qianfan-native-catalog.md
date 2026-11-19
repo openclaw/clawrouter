@@ -125,12 +125,31 @@ The fixture observes original request, reader and release products and requires
 their settlement before restoring observers or clearing discovery caches. It
 does not close the client's shared dispatcher pool. Local observer regressions
 do not qualify the fifteen actual SDK cases or physical disconnect behavior.
-Only the bound SDK cancellation case can classify matching original read/closed
+The bound SDK cancellation case can classify matching original read/closed
 abort outcomes, and stored-error cancellation invoked before unlock. It requires
 partial delivery, the observed caller abort, matching guard-input signal and
 error identities, fulfilled original request release, completed unlocks and
-successful cleanup. Original errors remain retained. Worker retirement remains
-strict. The outer fixture requires both the once-only post-cleanup SDK receipt
+successful cleanup. The separate controlled provider-error disposition binds
+the actual SDK failure callback, exact APIError payload and identical returned
+output to the invocation and acquired reader. Its three rejected reader originals
+must match the distinct owned SDK abort reason, with fulfilled release and no
+independent faults. Original states, reasons and counts remain retained.
+
+Worker cancellation uses a separate, hash-bound test-bundle witness of the
+actual `HttpOperation`, ingress/outbound and original fetched reader. It requires
+an original caller stop, entered from owned ingress abort or downstream cancel,
+with no earlier operation rejection (including revoked rejection), unset prior
+status/delivery, and committed `client_error`/`canceled` before the original
+inner read-failure handler. The actual protocol inspection must remain nonerror.
+A secondary owned read may retain any reason, including undefined: this proves
+logical outcome and complete cleanup, not native exception causality. The raw
+rejected state, promise and reason remain unchanged. Single fulfilled cancel,
+closed and unlock, original source cancellation with no expiry or pending work,
+handler/waitUntil success, observer restoration and exact SQLite fixed-cost and
+capacity assertions remain required. Foreign ownership, earlier errors and any
+independent cleanup fault remain fatal. The overlay changes only the test bundle,
+not shipping Worker files. SDK dispositions never apply to Worker originals.
+The outer fixture requires both the once-only post-cleanup SDK receipt
 and successful completion of the original consumer helper, in addition to its
 independent upstream cancellation and SQLite assertions. This classifies the
 observed ownership outcome; it does not establish native exception causality.

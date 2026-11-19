@@ -1055,6 +1055,7 @@
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Providers: qualify five frozen Qianfan Chat cards and keyed native model discovery; preserve model-specific thinking, tool replay and cumulative stream usage without inferred limits or prices.
 - Verify the actual registered Qianfan client, five frozen model identities, keyed discovery, image/tool replay and usage through Worker/SQLite; keep unknown-price hard budgets closed and bind replay to each case’s captured provider registry.
+- Tests: bind controlled Qianfan SDK provider-error retirement to the original failure callback, returned output and owned reader; witness Worker caller cancellation at the original source-reader handler while preserving raw rejections and independent retirement failures.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
 - Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
