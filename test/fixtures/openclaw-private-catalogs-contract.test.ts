@@ -436,11 +436,14 @@ export function privateStoredErrorVector(w:any):any[]|undefined {
    !c.abortCalled||!c.abortedAfter||!c.noEarlierFailure||c.pending.length!==1||c.pending[0]!==read||
    read.callerAbortedAtInvoke!==false||read.callerAbortedAtSettle!==true||read.effectiveAbortedAtSettle!==true||
    c.signal!==read.callerSignal||t.signal!==read.effectiveSignal||!c.delivered||c.result!=="aborted")return;
- const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,read.settle,closed.settle,cancel.invoke,cancel.settle,r.unlockAt];
+ const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,read.settle,closed.settle,cancel.invoke,cancel.returnAt,cancel.settle,r.unlockAt];
  if(!order.every(n=>Number.isSafeInteger(n)&&n>0)||!(r.acquired<closed.invoke&&closed.invoke<prefix.settle&&
    prefix.settle<read.invoke&&read.invoke<c.abortInvoke&&c.delivered<c.abortInvoke&&c.abortInvoke<=c.abortObserved&&
    c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(read.settle,closed.settle)<cancel.invoke&&cancel.invoke<cancel.settle&&
-   Math.max(read.settle,closed.settle,cancel.settle)<r.unlockAt))return;
+   Math.max(read.settle,closed.settle,cancel.returnAt)<r.unlockAt&&cancel.invoke<cancel.returnAt&&cancel.returnAt<cancel.settle))return;
+ // E2 releases the reader before awaiting cancellation. The original promise
+ // must still settle and join before this final assessment; it is not rewritten.
+ if(cancel.pending===undefined||cancel.returned!==cancel.pending)return;
  if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
    t.release?.state!=="fulfilled"||t.release.acquisition!==a||typeof a.releaseOriginal!=="function"||t.release.fn!==a.releaseOriginal||
    !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;

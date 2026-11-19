@@ -381,7 +381,7 @@ export default {async fetch(request,bindings,originalContext){const u=new URL(re
    s.ledger=createPrivateOperationLedger(s);s.ownership=createPrivateRequestOwnership(s,requestContext);s.readers=s.ownership.readers;
    const models=['tenant/opaque-a','tenant/opaque-b'].flatMap(m=>[m,row.provider+'/'+m]);
    s.policy={enabled:true,generation:'g1',providers:[row.provider],models:row.scenario==='broaden'?models.slice(0,2):models,tenantId:'fixture',monthlyBudgetMicros:10000,
-     ...(row.scenario==='unpriced'?{}:{requestCostMicros:7}),retainRequestContent:false,grantRouting:{eligibleGrants:{[row.provider]:[row.provider]},environmentFallback:true,failover:true}};
+     ...(row.scenario==='unpriced'?{}:{requestCostMicros:7}),retainRequestContent:false,grantRouting:{eligibleGrants:{[row.provider]:[row.provider]},environmentFallback:row.scenario!=='grant_revoke',failover:true}};
    s.credential={enabled:true,secretSha256:await sha256Hex('fixture-secret'),policyId:id,policyGeneration:'g1'};
    const access=bindings.ACCESS_CONTROL,grants=bindings.GRANT_CREDENTIALS;
    s.env={...bindings,BASETEN_API_KEY:'synthetic-poison-env',ARCEE_API_KEY:'synthetic-poison-env',NOVITA_API_KEY:'synthetic-poison-env',USAGE_QUEUE:{send:e=>ingestUsage(bindings,e)},
@@ -2135,7 +2135,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const common={owner,reader,receiver:reader.original};
   const read={...common,kind:"read",state:"rejected",reason:stored,invoke:6,settle:10,callerSignal:caller.signal,effectiveSignal:transport.signal,callerAbortedAtInvoke:false,callerAbortedAtSettle:true,effectiveAbortedAtSettle:true};
   const closed={...common,kind:"closed",state:"rejected",reason:stored,pending:reader.closed,invoke:3,settle:11};
-  const cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],invoke:12,settle:13};
+  const cancellation=Promise.resolve(),cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],pending:cancellation,returned:cancellation,invoke:12,returnAt:13,settle:15};
   const prefix={...common,kind:"read",state:"fulfilled",value:{done:false,value:new Uint8Array([1])},settle:5};
   acquisition.releaseOriginal=()=>{};
   const release={owner,kind:"guard_release",state:"fulfilled",acquisition,fn:acquisition.releaseOriginal,receiver:acquisition.result,args:[],invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
@@ -2315,6 +2315,8 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'not aborted at rejection':w=>{w.originals[1].callerAbortedAtSettle=false;},'no effective abort':w=>{w.originals[1].effectiveAbortedAtSettle=false;},
   'no pending read':w=>{w.caller.pending=[];},'missing actual delivery':w=>{w.caller.delivered=0;},'missing nonempty read':w=>{w.originals[0].value.value=new Uint8Array();},
   'cancel before stored error':w=>{w.originals[3].invoke=9;},'foreign cancel argument':w=>{w.originals[3].args=[{}];},
+  'missing cancel return':w=>{w.originals[3].returnAt=0;},'cancel returned after unlock':w=>{w.originals[3].returnAt=16;},
+  'foreign cancel promise':w=>{w.originals[3].returned=Promise.resolve();},'pending cancellation':w=>{w.originals[3].state='pending';},
   'pending release':w=>{w.transports[0].release.state='pending';},'failed release undefined':w=>{w.transports[0].release.state='rejected';w.transports[0].release.reason=undefined;},
   'foreign release function':w=>{w.transports[0].release.fn=()=>{};},'foreign release acquisition':w=>{w.transports[0].release.acquisition={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
   'duplicate release':w=>{w.transports[0].releases=2;},'early unlock':w=>{w.transports[0].readers[0].unlockAt=10;},'duplicate unlock':w=>{w.transports[0].readers[0].unlocks=2;},
@@ -2324,6 +2326,13 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'late independent join failure':w=>{w.originals.push({kind:'late',state:'rejected',reason:undefined});}
  };
  for(const [name,mutate] of Object.entries(nativeCounterfactuals))test('private native evaluator refuses '+name,()=>{const w=nativeEvidence();mutate(w);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);});
+ test('Private E2 cancellation may settle after reader unlock but must retain and join its original promise',()=>{
+  const w=nativeEvidence(),cancel=w.originals[3],reader=w.transports[0].readers[0];
+  assert.ok(cancel.invoke<cancel.returnAt&&cancel.returnAt<reader.unlockAt&&reader.unlockAt<cancel.settle);
+  const vector=evaluator.privateStoredErrorVector(w);assert.equal(vector[2],cancel);assert.equal(cancel.state,'rejected');
+  assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
+  cancel.settle=0;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
+ });
  test('Private detached release retains the original callable, receiver, arguments and outcome',async()=>{
   for(const receiver of [undefined,{},null]){const w=nativeEvidence();w.transports[0].release.receiver=receiver;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);}
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
@@ -2551,6 +2560,20 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    if(mode==='expiry'){await assert.rejects(f.join(row));assert.equal(f.evidence(row).retired,false);continue;}
    const proof=await f.join(row);assertPrivateReceipt(row,proof);assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);assert.equal(proof.source.expired,0);
    assert.equal(proof.source.census[0].cancelReturns,1);assert.equal(proof.source.census[0].active,0);
+  }}finally{await f.close();}
+ });
+ test('Private grant revocation forbids inference fallback and preserves zero-charge receipts',{timeout:30000},async()=>{
+  const f=await startPrivateCatalogFixture();
+  try{for(const provider of privateProviders){
+   const row={id:provider+'_local_grant_revoked',provider,scenario:'grant_revoke'};await f.setup(row);
+   const base=f.origin+'/v1/native/'+provider,headers={authorization:'Bearer '+privateKey(row.id,'discovery')};
+   const first=await fetch(base+'/models',{headers});assert.equal(first.status,200);await first.arrayBuffer();
+   const mutation=await fetch(f.origin+'/private-control/mutate/'+row.id,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'grant_revoke'})});assert.equal(mutation.status,200);await mutation.arrayBuffer();
+   const rejected=await fetch(base+'/chat/completions',{method:'POST',headers:{authorization:'Bearer '+privateKey(row.id),'content-type':'application/json'},body:JSON.stringify({model:'tenant/opaque-a',stream:true,messages:[]})});assert.equal(rejected.status,503);await rejected.arrayBuffer();
+   const catalog=await fetch(f.origin+'/v1/native/%'+provider.charCodeAt(0).toString(16)+provider.slice(1)+'/models',{headers});assert.equal(catalog.status,503);await catalog.arrayBuffer();
+   const proof=await f.join(row);assert.equal(proof.calls.length,1);assert.equal(proof.calls[0].method,'GET');assertPrivateReceipt(row,proof);
+   for(const response of [rejected,catalog]){const events=proof.events.filter(e=>e.request_id===response.headers.get('x-clawrouter-request-id'));assert.equal(events.length,1);
+    assert.equal(events[0].status,'provider_error');assert.equal(events[0].reserved_cost_micros,0);assert.equal(events[0].actual_cost_micros,0);assert.equal(events[0].cost_basis,'none');}
   }}finally{await f.close();}
  });
  test('Private actual Worker binds catalog and inference accounting to original response IDs',{timeout:60000},async()=>{
