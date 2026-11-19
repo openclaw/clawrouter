@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { isProxy } from "node:util/types";
+import { APIError } from "openai";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -28,7 +29,7 @@ const envNames={baseten:"BASETEN_API_KEY",arcee:"ARCEEAI_API_KEY",novita:"NOVITA
 const nativeFetch=globalThis.fetch,undici=createRequire(import.meta.url)("undici/index.js") as typeof import("undici"),originalUndiciFetch=undici.fetch;
 const originalGuard=guard.fetchWithSsrFGuard;
 const key=(row:Case,kind="inference",secret="fixture-secret")=>`clawrouter-live-${row.id}_${kind}-${secret}`;
-const base=(row:Case,alias=false)=>origin+"/v1/native/"+(alias?"clawrouter-":"")+row.provider;
+const base=(row:Case,alias=false)=>origin+"/v1/native/"+(alias?"%"+row.provider.charCodeAt(0).toString(16)+row.provider.slice(1):row.provider);
 type Original={kind:string;pending?:Promise<unknown>;returned:unknown;state:"pending"|"fulfilled"|"rejected"|"threw";reason?:unknown;value?:unknown;invoke:number;settle:number;returnAt:number;[key:string]:any};
 type Transport={method:string;path:string;credential:string|null;signal:AbortSignal|undefined;dispatcher:any;response?:Response;guardObserved:boolean;releases:number;releaseDone:boolean;[key:string]:any};
 // This identity is local to this exact child/module graph. It is never loaded
@@ -54,7 +55,8 @@ export function createPrivateExecutionWitness(contract:string,current:Function,e
   host(callable:Function){if(host!==undefined||closed||typeof callable!=="function")throw Error("invalid Private defining host");host=callable;},
   bind(invocation:any){if(target||closed)throw Error("duplicate Private execution target");target=invocation;},
   channel:Object.freeze({fault:fail,observe(index:number,module:object,site:number,values:any[]){try{
-   if(closed||!module||typeof module!=="object"||!Array.isArray(values)||![[1,2],[3],[4],[5],[6]][index]?.includes(site))throw Error("foreign Private execution hook");
+   if(closed||!module||typeof module!=="object"||!Array.isArray(values)||![[1,2],[3],[4],[5],[6],[7]][index]?.includes(site))throw Error("foreign Private execution hook");
+   if(site===7)return; // Separate error witness; no selection identity credit.
    if(site===3){const record=values[0];if(values.length!==1||!record||typeof record!=="object")throw Error("invalid Private normalized record");
     const stream=Object.getOwnPropertyDescriptor(record,"stream"),simple=Object.getOwnPropertyDescriptor(record,"streamSimple");
     if(!stream||!simple||!("value" in stream)||!("value" in simple))throw Error("invalid Private callable fields");
@@ -351,6 +353,71 @@ export function privateCancelOperand(read:any,cancel:any,caller:any):string {
 // Pure, predefined vector over the original graph. It does not consult a
 // product verdict, learn an allowlist, compare error names or infer C1's cause.
 export function privateGuardIdentity(w:any,a:any){return !!a&&(a.guard===w.identity.guard||w.executedGuard?.bound(a)===true);}
+export function createPrivateProviderErrorWitness(current:Function,w:any,apiPrototype:object,proxy:Function,aborted:Function,reason:Function,plainPrototype=Object.prototype){
+ const inputs=new Map<any,unknown>(),errors=new Map<any,any>();
+ const own=(object:any,key:string)=>{if(!object||typeof object!=="object"||proxy(object))return;const d=Object.getOwnPropertyDescriptor(object,key);return d&&Object.hasOwn(d,"value")?d:undefined;};
+ const note=(fn:Function)=>{try{fn();}catch(error){w.observerFailures.push(error);}};
+ return {
+  input(a:any){note(()=>{const d=own(a.input,"signal");if(d)inputs.set(a,d.value);});},
+  failure(error:unknown,output:unknown,signal:unknown){note(()=>{
+   const i=current()?.invocation;if(!i||i.owner!==w.owner||i.kind!=="inference"||i.caller.signal!==signal)return;
+   if(errors.has(i)){errors.get(i).ambiguous=true;return;}
+   const payload=own(error,"error")?.value;
+   const controlled=!!error&&typeof error==="object"&&!proxy(error)&&Object.getPrototypeOf(error)===apiPrototype&&
+    !!own(error,"status")&&own(error,"status")!.value===undefined&&own(error,"message")?.value==="fixture provider rejected"&&own(error,"type")?.value==="server_error"&&
+    !!payload&&typeof payload==="object"&&!proxy(payload)&&Object.getPrototypeOf(payload)===plainPrototype&&Reflect.ownKeys(payload).sort().join() ==="message,type"&&
+    own(payload,"message")?.value==="fixture provider rejected"&&own(payload,"type")?.value==="server_error";
+   const e={error,output,controlled,matched:false,ambiguous:false,samples:new Map()};errors.set(i,e);
+   for(const a of w.acquisitions)if(a.invocation===i&&inputs.has(a)){
+    const held=inputs.get(a),d=own(a.input,"signal");if(!d||d.value!==held||!held||typeof held!=="object"||proxy(held))continue;
+    note(()=>{const state=Reflect.apply(aborted,held,[]);if(typeof state!=="boolean")throw Error("invalid Private SDK signal");
+     e.samples.set(a,{signal:held,aborted:state,reason:state?Reflect.apply(reason,held,[]):undefined});});
+   }
+  });},
+  result(caller:any,output:unknown){note(()=>{for(const [i,e]of errors)if(i.caller===caller&&e.output===output){if(e.matched)e.ambiguous=true;e.matched=true;}});},
+  sample(i:any,a:any){const e=errors.get(i),s=e?.samples.get(a);return e?.controlled&&e.matched&&!e.ambiguous&&s?.aborted===true&&s.signal!==i.caller.signal&&
+   s.reason!==undefined&&s.reason!==e.error&&own(e.output,"stopReason")?.value==="error"&&own(e.output,"errorMessage")?.value==="fixture provider rejected"?s:undefined;},
+ };
+}
+export function privateProviderErrorVector(w:any):any[]|undefined {
+ if(w.scenario!=="provider_error")return;
+ const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;const t=ts[0],a=t.acquisition,c=privateControlCaller(w);
+ const sample=w.sdkErrors?.sample(t.invocation,a);if(!sample)return;
+ if(!c||c!==t.caller||c.owner!==w.owner||c.abortCalled||c.signal?.aborted!==false||c.result!=="error"||!privateInvocationBound(w,t)||
+  !privateGuardIdentity(w,a)||!t.guardObserved||a.response!==t.response||a.operation?.state!=="fulfilled"||t.fetch.state!=="fulfilled"||
+  t.readers.length!==1||t.bodies.length!==1||!w.sdkErrors)return;
+ const r=t.readers[0],history=a.signalHistory;
+ if(!sample||history?.signal!==sample.signal||history.initial!==false||history.abort<=0||history.reason!==sample.reason||
+  r.owner!==w.owner||r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||r.body.locked||r.unlocks!==1||r.unlockFailed||r.unlockReceiver!==r.original||
+  t.releases!==1||!t.releaseDone||t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.fn!==a.releaseOriginal||typeof a.releaseOriginal!=="function")return;
+ const ops=w.originals.filter((o:any)=>o.reader===r),reads=ops.filter((o:any)=>o.kind==="read"&&o.state==="rejected"),closes=ops.filter((o:any)=>o.kind==="closed"),cancels=ops.filter((o:any)=>o.kind==="cancel");
+ if(reads.length!==1||closes.length!==1||cancels.length!==1)return;const vector=[reads[0],closes[0],cancels[0]],cancel=cancels[0];
+ if(!vector.every(o=>o.owner===w.owner&&o.receiver===r.original&&o.pending!==undefined&&o.returned===o.pending&&o.returnAt>o.invoke&&o.state==="rejected"&&o.reason===sample.reason&&o.settle>history.abort&&o.settle>o.returnAt)||
+  reads[0].invoke>=history.abort||closes[0].invoke>=history.abort||closes[0].pending!==r.closed||cancel.invoke<history.abort||
+  !Array.isArray(cancel.args)||cancel.args.length>1||cancel.args.length===1&&cancel.args[0]!==undefined&&cancel.args[0]!==sample.reason||
+  !ops.some((o:any)=>o.kind==="read"&&o.state==="fulfilled"&&o.value?.done===false&&o.value.value?.byteLength>0&&o.settle<history.abort)||
+  w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
+ return vector;
+}
+// Response.clone() leaves its internal tee reader locked. Only the two actual
+// returned branches can prove that reader has no remaining work.
+export function privateClonedBodyRetired(w:any,t:any,body:any):boolean {
+ const clones=(t.bodyClones??[]).filter((c:any)=>c.source===body);if(clones.length!==1)return false;
+ const c=clones[0],o=c.operation,a=t.acquisition;
+ if(!privateInvocationBound(w,t)||!privateGuardIdentity(w,a)||a.response!==t.response||!w.originals.includes(o)||o.owner!==w.owner||
+  o.kind!=="response_clone"||o.state!=="fulfilled"||o.transport!==t||o.receiver!==c.response||o.fn!==c.original||typeof c.original!=="function"||
+  o.args.length!==0||o.returned!==c.copy||o.value!==c.copy||o.returnAt<=o.invoke||o.settle<=o.returnAt||
+  c.response.status!==400||c.response!==t.response||c.response.body!==c.left||c.copy.body!==c.right||
+  c.left===c.right||c.left===body||c.right===body||!t.bodies.includes(c.left)||!t.bodies.includes(c.right))return false;
+ return [c.left,c.right].every(branch=>{
+  const rows=t.readers.filter((r:any)=>r.body===branch);if(rows.length!==1||branch.locked)return false;
+  const r=rows[0],ops=w.originals.filter((p:any)=>p.reader===r),closed=ops.filter((p:any)=>p.kind==="closed");
+  return r.owner===w.owner&&r.transport===t&&r.unlocks===1&&!r.unlockFailed&&r.unlockReceiver===r.original&&
+   closed.length===1&&closed[0].pending===r.closed&&closed[0].state==="fulfilled"&&
+   ops.every((p:any)=>p.owner===w.owner&&p.receiver===r.original&&p.state==="fulfilled")&&
+   ops.some((p:any)=>(p.kind==="read"&&p.value?.done===true||p.kind==="cancel")&&p.settle<r.unlockAt);
+ });
+}
 export function privateStoredErrorVector(w:any):any[]|undefined {
  const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;
  const t=ts[0],a=t.acquisition,c=t.caller;
@@ -382,7 +449,7 @@ export function privateStoredErrorVector(w:any):any[]|undefined {
  return vector;
 }
 export function evaluatePrivateNativeControl(w:any):any {
- const c=privateControlCaller(w),vector=privateStoredErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
+ const c=privateControlCaller(w),vector=privateStoredErrorVector(w),providerVector=privateProviderErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
   !w.restored||w.sourceExpired!==0||w.originals.some((o:any)=>o.state==="pending"||o.state==="threw")||
   w.transports.some((t:any)=>!privateInvocationBound(w,t)||!t.guardObserved||t.owner!==w.owner||t.acquisition?.owner!==w.owner||t.acquisition?.response!==t.response||
    t.acquisition?.transport!==t||!privateGuardIdentity(w,t.acquisition)||t.readers.length!==1||t.bodies.length!==1||
@@ -393,9 +460,9 @@ export function evaluatePrivateNativeControl(w:any):any {
  const posts=w.transports.filter((t:any)=>t.method==="POST").length;
  const role=w.role;
  const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.coldZeroDispatch&&w.preabortPostDelta===0&&c?.abortCalled===true&&c?.signal.aborted===true&&c?.result==="error"&&c?.emptyContent===true&&posts===0:
-  (role==="eof"||role==="provider_error")&&strict&&posts===1&&c?.abortCalled===false&&c?.signal.aborted===false&&
+  (role==="eof"||role==="provider_error")&&(strict||role==="provider_error"&&!!providerVector)&&posts===1&&c?.abortCalled===false&&c?.signal.aborted===false&&
    c?.result===(role==="eof"?"stop":"error");
- return {qualified:!hard&&matched===true,vector:vector?"stored_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],c):null,
+ return {qualified:!hard&&matched===true,vector:vector?"stored_error":providerVector?"provider_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],c):null,
   vectorObserved:!!vector,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
 }
 export function privateQualification(reports:any[],identity:any,provider:string,api:string):any {
@@ -408,6 +475,7 @@ export function privateQualification(reports:any[],identity:any,provider:string,
 export function privateProductExpected(w:any,q:any):any[] {
  if(!q||q.identity!==w.identity||q.provider!==w.provider||q.api!==w.api||q.vector!=="stored_error"||
    q.roles?.join(",")!=="eof,preabort,partial,provider_error")return [];
+ if(w.scenario==="provider_error"){const raw=evaluatePrivateNativeControl({...w,role:"provider_error"});return raw.qualified?privateProviderErrorVector(w)??[]:[];}
  const raw=evaluatePrivateNativeControl({...w,role:"partial"});
  return raw.qualified&&raw.operand===q.operand?privateStoredErrorVector(w)??[]:[];
 }
@@ -416,7 +484,7 @@ function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
   rejects:w.originals.filter((o:Original)=>o.state==="rejected").length,pending:w.originals.filter((o:Original)=>o.state==="pending").length};
  const line="PRIVATE_NATIVE_CONTROL "+JSON.stringify(record);
  if(diagnosticCount>=24||Buffer.byteLength(line)>300||diagnosticBytes+Buffer.byteLength(line)+1>8000)throw Error("native diagnostic quota exceeded");
- diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;console.log(line);
+ diagnosticCount++;diagnosticBytes+=Buffer.byteLength(line)+1;process.stdout.write(line+"\n");
 }
 // Closed diagnostics only. They report boundaries, never classify an error.
 // V2 keeps the first unexpected failure and an independently case-bound receipt.
@@ -728,7 +796,7 @@ function fixture(row:Case,body:Parameters<typeof fixtureOwned>[1]){
 async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Promise<void>){
  const caseIndex=checkpointCase(row);
  const state=await checkpoints.observe(caseIndex,"setup",createOpenClawTestState,undefined,[{label:"private-catalog-client"}]);
- const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:row.provider,api:row.api,role:row.control,
+ const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:row.provider,api:row.api,role:row.control,scenario:row.scenario,
   originals:[],observers:[],transports:[],acquisitions:[],callers:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
  checkpoints.mark(caseIndex,"owner","fulfilled");
  if(row.control==="eof")checkpoints.bindBody(caseIndex,row,w.originals);
@@ -736,6 +804,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const callbacks=caseIndex===0?createPrivateCallbackWitness(w.owner,isProxy,w.observerFailures):undefined;
  const selection=caseIndex===0?createPrivateSelectionWitness(w.owner,isProxy,w.observerFailures,globalThis):undefined;
  const storage=new AsyncLocalStorage();
+ w.sdkErrors=createPrivateProviderErrorWitness(()=>storage.getStore(),w,APIError.prototype,isProxy,
+  Object.getOwnPropertyDescriptor(AbortSignal.prototype,"aborted")?.get!,Object.getOwnPropertyDescriptor(AbortSignal.prototype,"reason")?.get!);
  const execution=caseIndex===0?createPrivateExecutionWitness(process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT!,()=>storage.getStore(),{guard:originalGuard},w.observerFailures):undefined;
  const ownership=createPrivateInvocationOwnership(storage,caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,guardBound:(a:any)=>privateGuardIdentity(w,a),isProxy,selection,callbacks,execution}:undefined);
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
@@ -759,7 +829,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   if(signal?.aborted&&prior?.abortedAfter)Object.assign(c,prior,{pending:[]});
   if(signal&&!signal.aborted){const onAbort=()=>{c.abortObserved=++w.sequence;};signal.addEventListener("abort",onAbort,{once:true});restores.push(()=>signal.removeEventListener("abort",onAbort));}return c;};
  const begin=(signal:AbortSignal|undefined)=>{const c=caller(signal,"inference");c.inferenceInvoked=++w.sequence;return c;};
- const finish=(c:any,p:Promise<any>)=>observer(p.then(v=>{c.result=v.stopReason;c.emptyContent=Array.isArray(v.content)&&v.content.length===0;c.completed=true;},()=>{c.completed=true;}));
+ const finish=(c:any,p:Promise<any>)=>observer(p.then(v=>{c.result=v.stopReason;c.emptyContent=Array.isArray(v.content)&&v.content.length===0;c.completed=true;w.sdkErrors.result(c,v);},()=>{c.completed=true;}));
  const abort=(controller:AbortController,reason:unknown)=>{
   const active=w.callers.filter((c:any)=>c.kind==="inference"&&c.signal===controller.signal&&!c.completed);
   const entry:any={abortCalled:true,noEarlierFailure:!controller.signal.aborted&&!originals.some(o=>o.state==="rejected"||o.state==="threw"),abortInvoke:++w.sequence,reason};
@@ -776,8 +846,13 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  // Product calls retain their original immediate abort timing. Only a
  // diagnostic control may wait for a native pending read before authoring it.
  const partialNow=(controller:AbortController,reason:unknown)=>{partialCaller(controller).delivered=++w.sequence;return abort(controller,reason);};
- const observedBodies=new WeakSet<object>(),observedDispatchers=new WeakSet<object>();
- const observeBody=(response:Response,t:Transport)=>{const b=response.body;if(!b||observedBodies.has(b))return;observedBodies.add(b);t.bodies.push(b);
+ const observedBodies=new WeakSet<object>(),observedResponses=new WeakSet<object>(),observedResponseBodies=new WeakMap<object,any>(),observedDispatchers=new WeakSet<object>();
+ const observeBody=(response:Response,t:Transport)=>{const b=response.body;observedResponseBodies.set(response,b);if(!b||observedBodies.has(b))return;observedBodies.add(b);t.bodies.push(b);
+  if(!observedResponses.has(response)){observedResponses.add(response);const original=response.clone;
+   patch(response,"clone",function(this:Response,...args:unknown[]){const source=observedResponseBodies.get(this),o=record("response_clone",{transport:t,fn:original,receiver:this,args});let copy:Response;
+    try{copy=returned(o,Reflect.apply(original,this,args));}catch(error){o.state="threw";o.reason=error;o.settle=++w.sequence;w.syncFailures.push(error);throw error;}
+    try{if(this!==response)throw Error("foreign Private clone receiver");observeBody(this,t);observeBody(copy,t);
+     (t.bodyClones??=[]).push({source,response:this,copy,left:observedResponseBodies.get(this),right:observedResponseBodies.get(copy),original,operation:o});}catch(error){w.observerFailures.push(error);}return copy;});}
   const cancel=b.cancel,get=b.getReader;patch(b,"cancel",function(this:ReadableStream,...args:Parameters<typeof cancel>){return invoke("body_cancel",()=>Reflect.apply(cancel,this,args),{transport:t,receiver:this,args});});
   patch(b,"getReader",function(this:ReadableStream,...args:any[]){let reader;try{reader=Reflect.apply(get,this,args);}catch(e){w.syncFailures.push(e);throw e;}
    const r:any={owner:w.owner,original:reader,body:b,transport:t,acquired:++w.sequence,unlocks:0,unlockFailed:false};t.readers.push(r);if(this!==b)failures.push(Error("foreign body receiver"));
@@ -813,7 +888,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const observeGuard=(originalGuard:typeof guard.fetchWithSsrFGuard,receiver:unknown,args:Parameters<typeof originalGuard>,guardSource?:object)=>{
    const callbackEntry=callbacks?.enter(2);
    try{
-   const input=args[0],a:any={guard:originalGuard,guardSource,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.callbackEntry=callbackEntry;a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
+   const input=args[0],a:any={guard:originalGuard,guardSource,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.callbackEntry=callbackEntry;a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);w.sdkErrors.input(a);
    const o=record("guard",{acquisition:a,receiver,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;
    try{pending=returned(o,ownership.guard(originalGuard,receiver,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
    observer(pending.then((result:any)=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
@@ -833,7 +908,9 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   const contract=process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT!;expect(contract).toMatch(/^[a-f0-9]{64}$/);
   const executionKey=Symbol.for("clawrouter.private.execution."+contract);expect(Object.hasOwn(globalThis,executionKey)).toBe(false);
   patch(globalThis,executionKey,Object.freeze({guardCall:w.executedGuard.call,fault:(error:unknown)=>w.observerFailures.push(error),
-   observe(index:number,module:object,site:number,values:any[]){if(index===3&&site===5)w.executedGuard.entry(module,values[0],values[1]);execution?.channel.observe(index,module,site,values);}}));
+   observe(index:number,module:object,site:number,values:any[]){if(index===3&&site===5)w.executedGuard.entry(module,values[0],values[1]);
+    if(index===5&&site===7){if(!module||typeof module!=="object"||!Array.isArray(values)||values.length!==3)throw Error("invalid Private error boundary");w.sdkErrors.failure(...values);}
+    execution?.channel.observe(index,module,site,values);}}));
   restores.push(()=>{w.executedGuard.close();execution?.close();});
   const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch,1));selection?.globalDescriptor(globalFetchDescriptor);
   patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,2)});
@@ -857,7 +934,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  if(w.observerFailures.length)checkpoints.mark(caseIndex,"observer","rejected",w.observerFailures[0]);
  if(!row.workerOnly&&row.scenario!=="cold")await check(()=>expect(transports.some(t=>t.method==="GET")).toBe(true));
  if(["eof","provider_error","environment","rotation","caller_revoke","grant_revoke","unpriced","foreign_inference","stream_abort","simple_abort"].includes(row.scenario))await check(()=>expect(transports.some(t=>t.method==="POST")).toBe(true));
- for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(b.locked).toBe(false));}
+ for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(!b.locked||privateClonedBodyRetired(w,t,b)).toBe(true));}
  const workerFailures:unknown[]=[];
  checkpoints.mark(caseIndex,"worker_retirement","enter");
  try{const response=await nativeFetch(origin+"/private-control/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});const text=await response.text();const proof=JSON.parse(text);w.sourceExpired=proof.source?.expired??null;worker=response.status===200&&proof.retired===true;if(!worker)workerFailures.push(Error("independent Worker retirement failed"));}catch(e){workerFailures.push(e);}
@@ -868,13 +945,13 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  for(const cleanup of [()=>ownership.restore(),()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(()=>checkpoints.observe(caseIndex,"cleanup",cleanup,undefined,[]));
  w.restored=failures.length===beforeRestore;
  let allowed:Original[]=[];
- if(row.control){checkpoints.mark(caseIndex,"control","enter");const evaluated=evaluatePrivateNativeControl(w);checkpoints.mark(caseIndex,"control","fulfilled");if(evaluated.qualified&&row.control==="partial")allowed=privateStoredErrorVector(w)??[];
+ if(row.control){checkpoints.mark(caseIndex,"control","enter");const evaluated=evaluatePrivateNativeControl(w);checkpoints.mark(caseIndex,"control","fulfilled");if(evaluated.qualified)allowed=row.control==="partial"?privateStoredErrorVector(w)??[]:row.control==="provider_error"?privateProviderErrorVector(w)??[]:[];
   const k=row.provider+":"+row.api,reports=controlReports.get(k)??new Map();
   try{emitNativeControl(row,w,evaluated,worker);}catch(e){failures.push(e);evaluated.qualified=false;}
   reports.set(row.control,evaluated);controlReports.set(k,reports);
   const qualified=privateQualification([...reports.values()],nativeIdentity,row.provider,row.api);if(qualified)qualifications.set(k,qualified);
   if(!evaluated.qualified)failures.push(Error("native control qualification incomplete"));
- }else if(row.scenario==="stream_abort"||row.scenario==="simple_abort")allowed=privateProductExpected(w,qualifications.get(row.provider+":"+row.api));
+ }else if(row.scenario==="stream_abort"||row.scenario==="simple_abort"||row.scenario==="provider_error")allowed=privateProductExpected(w,qualifications.get(row.provider+":"+row.api));
  for(const o of originals)if(o.state==="rejected"&&!allowed.includes(o))failures.push(o.reason);else if(o.state==="pending")failures.push(Error("original operation pending"));
  failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);
  checkpoints.mark(caseIndex,"postlude",failures.length?"rejected":"fulfilled",failures[0]);
@@ -939,7 +1016,7 @@ async function exercise(row:Case){await fixture(row,async f=>{
  const provider=ready(catalog);
  if(s==="broaden"){expect(provider.models.map((m:{id:string})=>m.id)).toEqual(["tenant/opaque-a"]);return;}
  if(s==="unpriced"){expect(provider.models[0].cost).toMatchObject({input:0,output:0});const value=await f.infer(provider).result;expect(value.stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(1);return;}
- if(s==="warm"){await f.discover();expect((await command(row,"state")).calls).toBe(1);await f.discover({profile:row.provider+":selected"});await f.discover({profile:row.provider+":other-label"});expect((await command(row,"state")).calls).toBe(1);await f.discover({alias:true});expect((await command(row,"state")).calls).toBe(2);await f.discover({credential:key(row,"alternate")});expect((await command(row,"state")).calls).toBe(3);return;}
+ if(s==="warm"){ready(await f.discover());expect((await command(row,"state")).calls).toBe(1);ready(await f.discover({profile:row.provider+":selected"}));ready(await f.discover({profile:row.provider+":other-label"}));expect((await command(row,"state")).calls).toBe(1);ready(await f.discover({alias:true}));expect((await command(row,"state")).calls).toBe(2);ready(await f.discover({credential:key(row,"alternate")}));expect((await command(row,"state")).calls).toBe(3);return;}
  if(s==="warm_abort"){const c=new AbortController();c.abort(new Error("synthetic warm preabort"));failedCatalog(await f.discover({signal:c.signal}),"unavailable");expect((await command(row,"state")).calls).toBe(1);return;}
  if(s==="caller_revoke"||s==="grant_revoke"){await command(row,"mutate",{kind:s});const value=await f.infer(provider).result;expect(value.stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(1);const denied=await f.discover({alias:true});failedCatalog(denied,s==="caller_revoke"?"auth-rejected":"unavailable");return;}
  if(s==="rotation"){await command(row,"mutate",{kind:"rotation"});const before=(await command(row,"state")).calls;expect((await f.infer(provider).result).stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(before);const current=ready(await f.discover({secret:"rotated-secret"}));await completeInference(f,current,{credential:key(row,"inference","rotated-secret")});return;}

@@ -1,5 +1,7 @@
 # Changelog
 
+- Qualify Private catalog error cleanup against the actual cloned response branches and the controlled SDK error, returned output and owned abort signal. Preserve rejected originals, source retirement and accounting checks. Use valid endpoint variants for cache and revocation probes, and deliver the existing bounded native control records outside intercepted console output.
+
 - Run OpenClaw compatibility checks when portable provider contract sources or their build configuration change, including changes that remove or move those sources.
 
 - Report Private catalog fixture capture-entry failure sites separately from native fetch outcomes, preserving original errors and strict retirement/accounting assertions.

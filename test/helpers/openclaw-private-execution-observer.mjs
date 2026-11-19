@@ -12,6 +12,7 @@ export const privateExecutionSources = Object.freeze([
   { path: "packages/ai/src/host.ts", sha256: "b72db9f92331cc55c89e467f1e6e39cd2fdabe82f2e49cbbe07028305d3231c9" },
   { path: "src/infra/net/fetch-guard.ts", sha256: "571a4fc615fa9e4ed3ab44f40b2e09121dae3bae9afaa43b71d740d3627df282" },
   { path: "src/agents/provider-transport-dispatcher-pool.ts", sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" },
+  { path: "packages/ai/src/transports/transport-stream-shared.ts", sha256: "d987e6ccdfb3aa106e0c81f1fa67eb52ec22fab45eb783d6904b0adfabdf2cf7" },
 ].map(Object.freeze));
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -43,6 +44,8 @@ export function overlayPrivateExecutionSource(index, bytes, contract) {
     "export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {\n  __privateE2Observe(5, [fetchWithSsrFGuard, params]);");
   if (index === 4) replace("  return fetchWithSsrFGuard({\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  });",
     "  const __privateE2Guard = fetchWithSsrFGuard;\n  const __privateE2Input = {\n    ...options,\n    dispatcherPool: getProviderTransportDispatcherPool(),\n  };\n  __privateE2Observe(6, [__privateE2Guard, __privateE2Input]);\n  return __privateE2InvokeGuard(__privateE2Guard, __privateE2Input);");
+  if (index === 5) replace("  const { stream, output, signal, error, cleanup } = params;",
+    "  const { stream, output, signal, error, cleanup } = params;\n  __privateE2Observe(7, [error, output, signal]);");
   // The channel is installed for one owned case at a time. Observer
   // exceptions are independent faults, never replacements for SDK outcomes.
   return Buffer.from(`const __privateE2Module = {};
