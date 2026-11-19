@@ -450,6 +450,8 @@ test("audio checkpoints inverse preserves every original runCase operand and all
   const start = audioSdkText.indexOf("async function runCase("), end = audioSdkText.indexOf("\ndescribe(", start);
   let restored = audioSdkText.slice(start, end)
     .replace(/^.*\/\/ passive checkpoint\n/gm, "")
+    .replace('        expect(isMainThread).toBe(true); // Real host broker, never a simulated SQLite owner.\n', "")
+    .replace(', headers: { "accept-encoding": "identity" }', "")
     .replace(/^.*\/\/ passive profile wrapper\n/gm, "").replaceAll("await writeProfile(", "await upsertAuthProfileAsync(")
     .replace(/ \/\* checkpoint:[a-z_]+ \*\/ checkpoint\.before\("[a-z_]+"\);/g, "")
     .replace("const call = checkpoint.call(", "const call = ").replace("})); // passive call wrapper", "});")
@@ -1353,6 +1355,31 @@ async function runShippingRows(selected, t) {
   nodePhases = undefined;
   await finishOwned(failures, []);
 }
+test("native transcription response keeps the SDK complete-JSON wire contract", { timeout: 30000 }, async t => {
+  for (const encoding of [undefined, "identity"]) {
+    const temporary = await mkdtemp(join(tmpdir(), "clawrouter-audio-encoding-"));
+    let mf; const failures = [];
+    try {
+      let origin; ({ mf, origin } = await setup(temporary));
+      for (const row of cases.filter(row => row.scenario === "success")) {
+        const response = await fetch(origin + row.route, { method: "POST", body: form(row),
+          headers: { authorization: `Bearer ${token(row)}`, ...(encoding ? { "accept-encoding": encoding } : {}) } });
+        t.diagnostic(JSON.stringify({ provider: row.provider, requested: encoding ?? "default", status: response.status,
+          type: response.headers.get("content-type"), encoding: response.headers.get("content-encoding"),
+          range: response.headers.get("content-range"), redirected: response.redirected }));
+        assert.equal(response.status, 200); assert.equal((await response.json()).text, "café 東京 🦊");
+        if (encoding === "identity") {
+          assert.equal(response.redirected, false); assert.equal(response.headers.has("content-range"), false);
+          assert.ok([null, "identity"].includes(response.headers.get("content-encoding")));
+          assert.equal(response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase(), "application/json");
+        }
+        await control(origin, "join", row.id);
+      }
+    } catch (error) { failures.push(error); }
+    await finishOwned(failures, [() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
+  }
+});
+
 test("real shipping Groq/Mistral multipart catalog, grants, denial and SQLite", { timeout: 60000 }, async t => {
   await runShippingRows(cases.filter(row => ["success", "unpriced", "denied", "stale", "malformed", "partial", "error", "redirect", "truncated", "rotation"].includes(row.scenario)), t);
 });
@@ -1365,7 +1392,7 @@ test("registered OpenClaw Groq/Mistral native transcription through Worker and S
   const diagnostics = audioDiagnosticSession();
   try {
     ({ mf, origin } = await setup(temporary));
-    await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-groq-mistral-transcription-contract.test.ts", import.meta.url), testPath: "extensions/clawrouter/worker-contract.test.ts",
+    await runOpenClawConsumer(t, { source, sourceHead, audioHost: true, fixture: new URL("./fixtures/openclaw-groq-mistral-transcription-contract.test.ts", import.meta.url), testPath: "extensions/clawrouter/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases), CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead } });
   } catch (error) { failures.push(error); diagnostics.rejected(error); }
   await finishOwned(failures, [

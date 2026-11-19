@@ -10,7 +10,7 @@ import { makeQwenValuePlan, qwenValueArgv, qwenValueSources, readQwenValueInput 
 import { withPrivateExecutionOverlay } from "./openclaw-private-execution-observer.mjs";
 import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, runnerPlan, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
 
-export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport, privateExec }) {
+export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport, privateExec, audioHost }) {
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
   if (privateExec !== undefined) {
@@ -22,6 +22,12 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
     assert.equal(process.version, "v24.22.1", "unqualified native diagnostic runtime");
     // The source-qualified plan cannot borrow dirty native runner or configuration inputs.
     execFileSync("git", ["diff", "--quiet", "HEAD", "--"], { cwd: source });
+  }
+  if (audioHost !== undefined) {
+    assert.equal(audioHost, true, "unsupported Audio host runner");
+    assert.equal(sourceHead, "6de028c4e960db91bdf87882989cb6756a6429c3");
+    assert.equal(testPath, "extensions/clawrouter/worker-contract.test.ts");
+    assert.equal(runnerReport, undefined); assert.equal(privateExec, undefined);
   }
   const clientTest = join(resolve(source), testPath);
   await withCopiedConsumerFixture(() => copyFile(fixture, clientTest, constants.COPYFILE_EXCL), async () => {
@@ -47,6 +53,17 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
           cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
           env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env, CLAWROUTER_PRIVATE_EXECUTION_CONTRACT: executionContract },
         })));
+      t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
+      return;
+    }
+    if (audioHost === true) {
+      // This pinned profile-write path requires the real main-thread SQLite broker.
+      // Its native project runner forwards the supported Vitest forks option.
+      const started = performance.now();
+      const result = await promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1", "--pool=forks"], {
+        cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
+      });
       t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
       return;
     }

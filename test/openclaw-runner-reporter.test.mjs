@@ -833,3 +833,37 @@ test("native launch failure plus invalid report and fixture cleanup preserves or
   }
 });
 // END pinned runner inert coverage.
+
+
+test("Audio host runner uses supported forks only for its pinned native fixture", async t => {
+  const text = readFileSync(new URL("./helpers/openclaw-consumer.mjs", import.meta.url), "utf8");
+  const entry = text.slice(text.indexOf("export async function runOpenClawConsumer"), text.indexOf("\n// Private/E2 only.")).replace("export ", "");
+  const pin = "6de028c4e960db91bdf87882989cb6756a6429c3", target = "extensions/clawrouter/worker-contract.test.ts";
+  for (const mode of ["host", "default", "foreign_pin", "foreign_target", "false_flag", "undefined_failure", "cleanup_failure"]) await t.test(mode, async () => {
+    const events = [], commands = [], original = undefined, cleanup = new Error("owned cleanup");
+    const options = { source: "/native", sourceHead: pin, testPath: target, fixture: "/fixture.ts", env: {}, audioHost: true };
+    if (mode === "default") delete options.audioHost;
+    if (mode === "foreign_pin") options.sourceHead = "0".repeat(40);
+    if (mode === "foreign_target") options.testPath = "extensions/foreign/contract.test.ts";
+    if (mode === "false_flag") options.audioHost = false;
+    const run = new Function("assert", "process", "execFileSync", "join", "resolve", "withCopiedConsumerFixture", "copyFile", "constants", "rm", "performance", "promisify", "execFile", entry + ";return runOpenClawConsumer;")(
+      assert, { env: { CI: "true", PATH: "inert", HOME: "inert", TMPDIR: "inert" } }, () => options.sourceHead,
+      join, resolve, withCopiedConsumerFixture, async () => { events.push("copy"); }, { COPYFILE_EXCL: 1 },
+      async () => { events.push("remove"); if (mode === "cleanup_failure") throw cleanup; }, { now: () => 0 }, fn => fn,
+      async (command, args, config) => { events.push("execute"); commands.push({ command, args, config });
+        if (mode === "undefined_failure" || mode === "cleanup_failure") throw original;
+        return { stdout: "complete native output" }; });
+    let failed = false, reason;
+    try { await run({ diagnostic(line) { events.push(line); } }, options); } catch (error) { failed = true; reason = error; }
+    if (["foreign_pin", "foreign_target", "false_flag"].includes(mode)) {
+      assert.equal(failed, true); assert.deepEqual(events, []); return;
+    }
+    assert.deepEqual(commands[0].args, ["test", target, "--maxWorkers=1", ...(mode === "default" ? [] : ["--pool=forks"])]);
+    assert.equal(commands[0].command, "pnpm"); assert.equal(commands[0].config.cwd, "/native");
+    assert.equal(commands[0].config.timeout, 240000); assert.equal(commands[0].config.maxBuffer, 2 * 1024 * 1024);
+    assert.equal(events[0], "copy"); assert.equal(events[1], "execute"); assert.equal(events.at(-1), "remove");
+    if (mode === "undefined_failure") { assert.equal(failed, true); assert.equal(reason, original); }
+    else if (mode === "cleanup_failure") { assert.equal(failed, true); assert.deepEqual(reason.errors, [original, cleanup]); }
+    else { assert.equal(failed, false); assert.ok(events[2].endsWith("complete native output")); }
+  });
+});

@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { types as nodeTypes } from "node:util";
+import { isMainThread } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
@@ -399,6 +400,7 @@ async function runCase(row: Case): Promise<void> {
       let pending: Promise<{ value: unknown } | { error: unknown }> | undefined;
       const caller = new AbortController(), callerReason = new Error("original transcription caller abort");
       try {
+        expect(isMainThread).toBe(true); // Real host broker, never a simulated SQLite owner.
         expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(sourceHead);
         expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead);
         expect(cases).toHaveLength(30);
@@ -460,7 +462,7 @@ async function runCase(row: Case): Promise<void> {
         vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(observeGuard);
         const filePath = state.path(`${row.id}.wav`); await writeFile(filePath, wav());
         const cfg: OpenClawConfig = { plugins: { allow: ["clawrouter"], entries: { clawrouter: { enabled: true } } },
-          models: { providers: { clawrouter: { baseUrl: origin + "/v1", apiKey: token(row), request: { allowPrivateNetwork: true }, models: [] } } },
+          models: { providers: { clawrouter: { baseUrl: origin + "/v1", apiKey: token(row), headers: { "accept-encoding": "identity" }, request: { allowPrivateNetwork: true }, models: [] } } },
           tools: { media: { models: [{ provider: "clawrouter", model: row.model, capabilities: ["audio"] }], audio: { enabled: true } } } };
         const agentDir = state.agentDir();
         const provider = cfg.models!.providers!.clawrouter!, model = cfg.tools!.media!.models![0]!;

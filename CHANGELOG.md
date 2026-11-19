@@ -1,5 +1,7 @@
 # Changelog
 
+- Run the pinned Audio SDK profile-write cases in a real Vitest fork for host-broker ownership, and request identity encoding for its complete-JSON transcription contract. Keep the original broker, response validation, credentials and accounting assertions.
+
 - Retain and join Audio transcription fixture source pull and cancellation callbacks in the original Worker request context. Preserve the bounded expiry, controlled owner-local cancellation boundary, original rejection evidence and accounting checks.
 
 - Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
