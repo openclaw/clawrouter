@@ -1,9 +1,27 @@
 # Provider contracts, access products, and the shared model catalogue
 
-Status: proposed design, not implemented. Review baseline: ClawRouter `6fceb88`,
-catalog `8680cc8`, OpenClaw `b3aa84d0d79`, inspected 2026-11-04. These are local
-revisions, not a claim about current remote heads. Examples below are proposed
-contracts, not valid v1 manifests or promises of upstream access.
+Status: partially implemented. The package format, portable declarations, and
+build-tool boundaries are implemented. Catalogue import and the runtime migrations
+below remain planned. Implementation status uses ClawRouter `c1e7338`, checked
+2026-11-20. The original design review used ClawRouter `6fceb88`, catalog
+`8680cc8`, and OpenClaw `b3aa84d0d79` on 2026-11-04.
+
+Proposed v2 examples below are not valid v1 manifests or promises of upstream
+access. Use [Provider plugins](provider-plugins.md) for supported commands and
+the current package format.
+
+## Implementation status
+
+| Boundary | Implemented behavior | Remaining work |
+| --- | --- | --- |
+| Provider packages | Explicit local descriptors, bounded file loading, collision checks, scaffolding, and package indexes | Asset admission and publication. No automatic discovery or package code execution. |
+| Portable declarations | Products, offers, auth, endpoints, model facts, pricing, quotas, observations, and complete compiled snapshots | The contract package remains private. Public publication is a separate decision. |
+| Compiler | Focused modules compile v1 manifests and selected packages into the same registry | Shared catalogue import and explicit source provenance. |
+| Conformance | Fixture declaration checks and deterministic native REST JSON exchanges | Streaming, model routing, OAuth, lifecycle, and accounting assertions. |
+| Runtime | Existing credential, admission, routing, quota, and settlement owners remain authoritative | Product-aware eligibility, multiple connection identities, and accounting migration. |
+
+The default production input remains `providers/*.provider.yaml`. Portable
+types do not make a plugin executable or an authored offer eligible.
 
 ## 1. Decision
 
@@ -48,7 +66,7 @@ The pressure is in the domain model:
 | Grant transport overrides | OpenAI and Anthropic manifests | A distinct product's endpoint, auth, and lifecycle hide inside credential-kind overrides. |
 | One provider connection key | `ProviderConnection.providerId`; `worker/provider-connections.ts` | No explicit identity for two projects/accounts of the same provider. |
 | Model metadata beside execution rules | Provider `models.entries` | The catalogue and router can drift on names, limits, reasoning, and prices. |
-| Model type ownership (resolved) | `shared/provider-model.ts` | Compiled models and client DTOs share model facts without making the client response the execution contract. |
+| Model type ownership (resolved) | `packages/provider-plugin-contract/src/models.ts` | Compiled models and client DTOs share model facts through compatibility exports. The client response does not own the execution contract. |
 | Provider logic in discovery | `supportsHostedSearch` in `worker/discovery.ts` | Discovery must know implementation-specific qualifications. |
 | Central logo registry | `scripts/sync-provider-icons.mjs` | Adding a provider also requires editing an unrelated branding map. |
 
@@ -117,8 +135,9 @@ adapters and lifecycle validation retain their existing owners.
 
 ### Model contract ownership
 
-`shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
-pricing types. `CompiledModel` refers to that definition directly. The client
+`packages/provider-plugin-contract/src/models.ts` owns `ProviderModelDefinition`.
+The same package owns pricing, availability, request-parameter, and native
+capability declarations. `CompiledModel` refers to that definition directly. The client
 `ClientCatalogModel` projection currently extends the same fields, preserving the
 v1 response shape and existing type imports from `shared/contracts.ts`.
 
@@ -133,14 +152,19 @@ owning these provider-specific checks.
 This separation gives future catalogue import and client presentation changes
 an explicit boundary. It does not turn router price qualification into a public
 catalogue fact, change price units, or establish execution eligibility. The
-provider snapshot imports account observations from
-`shared/provider-observations.ts`. Existing account type imports from
-`shared/contracts.ts` remain available.
+portable package also owns provider-reported account observations.
+`shared/provider-model.ts`, `shared/provider-observations.ts`, and the other
+shared modules preserve existing imports through compatibility exports.
+Existing account type imports from `shared/contracts.ts` remain available.
 
-The compiled snapshot's declaration dependency graph is independent of the client
-API and Worker environment. `test/provider-snapshot-contract.test.mjs` emits that
-graph and typechecks a consumer using only the emitted declarations. This is an
-internal build boundary, not a published package or a new runtime validator.
+`packages/provider-plugin-contract/src/snapshot.ts` owns `ProviderSnapshot`,
+`CompiledProvider`, and `CompiledModel`. The graph depends only on sibling
+contracts, without the client API or Worker environment.
+`shared/provider-snapshot.ts` preserves existing imports.
+`test/provider-snapshot-contract.test.mjs` checks declaration compatibility.
+`test/provider-plugin-package.test.mjs` builds a private archive and checks an
+external consumer. Neither test turns the declarations into a runtime validator.
+OpenClaw compatibility selection includes the package sources and build configuration.
 
 ## 3. Vocabulary and identities
 
@@ -189,12 +213,14 @@ There is already a reusable core: OpenClaw's
 `packages/model-catalog-core`, named `@openclaw/model-catalog-core`. It exports
 reference helpers, model types, normalization, and versioned bundle validation.
 It is currently `private: true`, version `0.0.0-private`, and depends on a
-workspace normalization package. It is not yet an installable public dependency.
+workspace normalization package. Its [package metadata](https://github.com/openclaw/openclaw/blob/main/packages/model-catalog-core/package.json)
+still declares these constraints as of 2026-11-20. ClawRouter has no supported
+standalone core release pinned for the importer.
 
-The `catalog` repository is currently a publication repository. Its workflow
-runs OpenClaw's `scripts/publish-model-catalog.mts` against plugin manifests and
-publishes v1, v2, and v3 together. Do not pretend the JSON repository currently
-owns model authoring or move that ownership implicitly during this refactor.
+At the original review baseline, `catalog` was a publication repository. Its
+workflow ran OpenClaw's `scripts/publish-model-catalog.mts` against plugin
+manifests and published v1, v2, and v3 together. Verify that ownership before
+the importer work. Do not move model authoring implicitly during this refactor.
 
 | Owner | Owns | Must not own |
 | --- | --- | --- |
@@ -233,6 +259,27 @@ schemas into ClawRouter and call that sharing. Moving model authoring into
 
 ## 5. A provider package
 
+The implemented v1 distribution contains data and resources:
+
+```text
+my-provider/
+  clawrouter.plugin.json
+  example.provider.yaml
+  README.md
+  LICENSE
+  assets/logo.svg
+  fixtures/request.json
+```
+
+The operator selects descriptors explicitly. The loader rejects invalid paths,
+symlinked resources, oversized files, and duplicate provider IDs.
+The compiler validates the captured manifest and produces the static registry.
+The package index records resource hashes. It does not sanitize or serve logos.
+Fixtures contain JSON data. The host runner executes supported scenarios through
+the Worker with synthetic credentials and intercepted upstream calls.
+
+The following layout is a possible later split for larger integrations:
+
 ```text
 providers/
   openai/
@@ -249,12 +296,14 @@ providers/
     adapter.ts                only if declarative bindings are insufficient
 ```
 
-Allow one-file declarations for small integrations. Self-contained means one
-ownership boundary, not a mandatory pile of empty files. The compiler discovers
-packages and validates all references. It generates registry entries, branding
-metadata, setup form descriptors, offer indexes, and the lean Worker snapshot.
+Keep one-file declarations for small integrations. Self-contained means one
+ownership boundary, not a mandatory pile of empty files. Any later split must
+retain explicit package selection and validate all references. Generated setup
+forms and asset publication require their own admission steps.
 
-An adapter is a statically imported, reviewed TypeScript module. Remote catalogue
+Future package adapters require a reviewed host API and static imports.
+The current package format does not load `adapter.ts` or `contract.test.mjs`.
+Remote catalogue
 data cannot introduce code, URLs, secret bindings, refresh endpoints, headers,
 or arbitrary templates. Avoid a generic scripting language in YAML.
 
@@ -685,21 +734,25 @@ Keep old storage and routes authoritative until each replacement has parity.
 Use one implementation owner per slice. Do not combine this refactor with
 provider expansion, a UI redesign, or a new distributed scheduler.
 
-| Slice | Deliverable | Acceptance and rollback |
+| Slice | Status | Acceptance and rollback |
 | --- | --- | --- |
-| 0. Freeze invariants | Golden offer, grant-selection, request, and accounting fixtures for representative products | Current behavior captured, including intentional denials; no production change. |
-| 1. Shared catalogue core | Supported package release, v3 importer, pin/provenance manifest | Reproducible import; unknown/withdrawn/zero prices preserved; old static metadata remains usable. |
-| 2. Provider v2 compiler | Package schema and v1-to-v2 internal normalization | All bundled v1 manifests produce equivalent routes, offers, and pricing; retain v1 input support. |
-| 3. Product-aware offers | Pure shared eligibility evaluator; internal/public DTO separation | Shadow comparison with discovery and admission; explain every difference before switching reads. |
-| 4. Connection identities | Explicit connection IDs, legacy default mapping, grant references | Multiple accounts remain isolated; old keys/routes resolve; roll back through projection compatibility. |
-| 5. Accounting dimensions | Versioned attempt events, product/connection views, explicit charge bases | Deduplicated replay matches old budget totals; new reporting does not alter enforcement. |
-| 6. Provider-owned setup and branding | Generated UI descriptors, package assets, product setup flow | No false Connect availability; asset and descriptor validation; legacy UI remains reversible. |
-| 7. Remove compatibility code | Retire redundant metadata and old projections | Only after consumers, stored generations, and delayed executions no longer require them. |
+| Package and declaration boundaries | Landed: v1 package loading, portable contracts, compiler modules, and narrow conformance runner | Existing shared imports remain available. Runtime owners retain authority. |
+| Shared catalogue import | Pending: supported standalone core, explicit mappings, and source provenance | Reproducible v3 import preserves unknown, withdrawn, and zero prices. Existing static metadata remains usable. |
+| Product-aware offers | Pending: shared eligibility evaluator and separate internal/public DTOs | Compare discovery and admission without changing decisions. Explain each difference before switching reads. |
+| Connection identities | Pending: explicit IDs, legacy default mapping, and grant references | Isolate accounts. Preserve old keys and routes through compatible projections. |
+| Accounting dimensions | Pending: versioned attempt events, product/connection views, and explicit charge bases | Deduplicated replay matches existing budget totals. New reports do not alter enforcement. |
+| Provider-owned setup and branding | Pending: admitted assets and product setup flow | Validate supported setup methods and assets. Keep the existing UI reversible. |
+| Remove compatibility code | Deferred | Consumers, stored generations, and delayed executions must no longer require the old contracts. |
+
+Capture representative routing, denial, grant-selection, and accounting behavior
+before each runtime slice. Existing contract extraction tests do not prove these
+future migrations. Keep v1 manifest input support. Introduce a v2 schema only
+when a concrete declaration needs it, with equivalent v1 normalization tests.
 
 Pilot with one simple metered provider and OpenAI's API/existing-subscription
 split. Then exercise Anthropic, a gateway, a non-LLM REST service, and a native
-decision provider. The inspected baseline lacks some later integrations; do not
-assume work in other branches has landed.
+decision provider. Qualify each pilot against its task revision. Work in another
+branch does not establish support in that revision.
 
 For legacy grants, map `api_key` to a credential method and the verified metered
 product; map `subscription` through that provider's explicit product; map `oauth`
@@ -757,16 +810,17 @@ into a dedicated shared repository. That could simplify multi-consumer
 governance, but requires a publication and ownership migration. Do not put it on
 the critical path for ClawRouter's internal cleanup.
 
-The first implementation should end after a supported catalogue import and an
-equivalent compiled registry for existing providers. That proves the shared
-contract before connection/storage migration. The later subscription and
-analytics slices then have a stable object model to build on.
+The next integration milestone is a supported catalogue import that preserves
+the compiled registry for existing providers. First pin a standalone catalogue
+core and define explicit model mappings. Then add provenance and import fixtures
+before changing production model facts. Connection and storage migrations follow
+separately. Portable declarations alone do not complete those milestones.
 
-Open decisions before implementation: package release ownership; automatic
-versus explicit admission of new model rows; which product facts require live
-entitlement proof; financial allocation defaults; and the deprecation window for
-legacy public projections. Recommended defaults are explicit model admission,
-no allocation in cash-spend totals, and no public alias removal in this refactor.
+Before the remaining migrations, assign catalogue package release ownership and
+define which product facts require live entitlement proof. Define financial
+allocation defaults and the deprecation window for legacy public projections.
+Use explicit model admission, exclude allocations from cash-spend totals, and
+preserve public aliases throughout this refactor.
 
 ## 14. Evidence and scope
 
