@@ -557,6 +557,7 @@ test("audio boundary inverse preserves every original SQLite request and asserti
   const restored = text.slice(start, end).replace(/^.*\/\/ passive evidence\n/gm, "")
     .replace(/\/\* evidence:[a-z_]+ \*\/ checkpoint\?\.\([^;]+\); /g, "")
     .replaceAll("rows, checkpoint)", "rows)")
+    .replace(" assert.equal(call.producerActivePulls, 0); assert.equal(call.producerActiveCancels, 0); assert.equal(call.producerCallbacksJoined, true);", "")
     .replace('for (const field of ["input_tokens", "output_tokens", "total_tokens"]) { assert.equal(event[field], null); }', 'for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[field], null);');
   assert.equal(hash(restored), "aa72b8f76adb67c5a41df5e525fac44f9c3d02544fe20de8cd19fa1fe48c7f57");
 });
@@ -704,15 +705,25 @@ async function joinOperations(records) {
   if (failures.length) throw new AggregateError(failures, "original transport operations failed");
 }
 
-// The returned pull promise owns a bounded real timer, not additional wire bytes.
+// Retain original pull/cancel callback tails in the source request context.
+// The pull promise owns a bounded real timer, not additional wire bytes.
 // Signal notification is evidence only; it never substitutes for source cancel.
 function pendingResponseProducer(signal, held, id, call, watchdog = 10000) {
   const phase = id === "groq_abort" && typeof upstreamPhases !== "undefined" ? upstreamPhases : null;
   if (!Number.isSafeInteger(watchdog) || watchdog < 1 || watchdog > 10000) throw new Error("producer watchdog bound");
   let sequence = 0, pending, observer, resolvePull, rejectPull, timer, expiry;
-  const failures = [];
+  const failures = [], callbacks = [];
+  const completion = Promise.withResolvers();
+  const lifetime = (async () => {
+    const original = await Promise.allSettled([completion.promise]);
+    const outcomes = [...original, ...await Promise.allSettled(callbacks)];
+    call.producerCallbacksJoined = true;
+    await finishOwned(outcomes.filter(row => row.status === "rejected").map(row => row.reason), []);
+  })();
+  void lifetime.catch(() => {}); // The original rejection remains retained by join/waitUntil.
   Object.assign(call, { producerPulls: 0, producerPending: false, producerSettled: false, producerRejected: false,
-    producerJoined: false, producerJoinFailures: 0, timerActive: false, fixtureExpired: false,
+    producerJoined: false, producerJoinFailures: 0, producerActivePulls: 0, producerActiveCancels: 0,
+    producerCallbacksJoined: false, timerActive: false, fixtureExpired: false,
     signalNotifications: 0, producerPullAt: 0, producerSettleAt: 0, producerCancelAt: 0, producerReturnAt: 0,
     producerSignalAt: 0, producerExpiryAt: 0, cancelRejected: false });
   const notified = () => { phase?.emit("producer_signal", "enter"); call.signalNotifications++; call.producerSignalAt = ++sequence; phase?.emit("producer_signal", "fulfill"); };
@@ -738,35 +749,49 @@ function pendingResponseProducer(signal, held, id, call, watchdog = 10000) {
       phase?.emit("producer_timer", "enter");
       timer = setTimeout(() => {
         call.timerActive = false; call.fixtureExpired = true; call.producerExpiryAt = ++sequence;
-        expiry = new Error("pending producer expired"); rejectPull(expiry);
+        expiry = new Error("pending producer expired"); rejectPull(expiry); completion.reject(expiry);
         phase?.emit("producer_timer", "reject", { defined: true, type: "object" });
         try { controller.error(expiry); } catch (error) { failures.push(error); }
       }, watchdog);
+      call.producerActivePulls++;
+      const tail = pending.finally(() => { call.producerActivePulls--; });
+      callbacks.push(tail); void tail.catch(() => {});
       phase?.emit("producer_pull", "fulfill");
       return pending;
     },
-    async cancel(reason) {
-      phase?.emit("producer_cancel", "enter");
-      call.cancelCalls++; call.producerCancelAt = ++sequence;
-      call.cancelReasonType = reason === null ? "null" : typeof reason;
-      try {
-        await finishOwned([], [
-          () => { clearTimeout(timer); call.timerActive = false; phase?.emit("producer_timer", "fulfill"); },
-          () => { resolvePull?.(); }, () => held.delete(id),
-          () => signal.removeEventListener("abort", notified),
-          () => pending, () => observer,
-        ]);
-        call.cancelReturns++; call.producerReturnAt = ++sequence;
-        phase?.emit("producer_cancel", "fulfill");
-      } catch (error) { phase?.emit("producer_cancel", "reject", { defined: error !== undefined, type: error === null ? "null" : typeof error }); failures.push(error); call.cancelRejected = true; throw error; }
+    cancel(reason) {
+      call.producerActiveCancels++;
+      const original = (async () => {
+        phase?.emit("producer_cancel", "enter");
+        call.cancelCalls++; call.producerCancelAt = ++sequence;
+        call.cancelReasonType = reason === null ? "null" : typeof reason;
+        try {
+          await finishOwned([], [
+            () => { clearTimeout(timer); call.timerActive = false; phase?.emit("producer_timer", "fulfill"); },
+            () => { resolvePull?.(); }, () => held.delete(id),
+            () => signal.removeEventListener("abort", notified),
+            () => pending, () => observer,
+          ]);
+          call.cancelReturns++; call.producerReturnAt = ++sequence;
+          phase?.emit("producer_cancel", "fulfill");
+        } catch (error) { phase?.emit("producer_cancel", "reject", { defined: error !== undefined, type: error === null ? "null" : typeof error }); failures.push(error); call.cancelRejected = true; throw error; }
+      })();
+      const tail = original.then(() => {
+        call.producerActiveCancels--; completion.resolve();
+      }, error => {
+        call.producerActiveCancels--; completion.reject(error); throw error;
+      });
+      callbacks.push(tail); void tail.catch(() => {});
+      return original;
     },
   });
-  return { body, get pending() { return pending; }, async join() {
+  return { body, lifetime, get pending() { return pending; }, async join() {
     phase?.emit("producer_join", "enter");
     const joined = [];
-    for (const outcome of await Promise.allSettled([pending, observer])) if (outcome.status === "rejected") joined.push(outcome.reason);
+    for (const outcome of await Promise.allSettled([pending, observer, lifetime, ...callbacks])) if (outcome.status === "rejected") joined.push(outcome.reason);
     if (expiry !== undefined && !joined.includes(expiry)) joined.push(expiry);
-    if (call.cancelCalls !== 1 || call.cancelReturns !== 1 || call.cancelRejected || held.has(id) || call.timerActive) joined.push(new Error("producer retirement incomplete"));
+    if (call.cancelCalls !== 1 || call.cancelReturns !== 1 || call.cancelRejected || held.has(id) || call.timerActive
+      || call.producerActivePulls !== 0 || call.producerActiveCancels !== 0 || !call.producerCallbacksJoined) joined.push(new Error("producer retirement incomplete"));
     call.producerJoined = true; call.producerJoinFailures = joined.length + failures.length;
     try { await finishOwned([...failures, ...joined], []); phase?.emit("producer_join", "fulfill"); }
     catch (error) { phase?.emit("producer_join", "reject", { defined: error !== undefined, type: error === null ? "null" : typeof error }); throw error; }
@@ -781,8 +806,8 @@ function validateHeldRecords(records) {
     disposition: ["controlled_native_read_retired"], failureType: ["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"],
     state: ["pending", "fulfilled", "rejected", "sync_throw", "unknown"], reasonType: ["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"],
     operandType: ["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"], upReasonType: ["undefined", "null", "boolean", "number", "bigint", "string", "symbol", "object", "function"] };
-  const numbers = new Set(["v", "op", "invoke", "settle", "pendingReads", "earlierReadFailures", "unlockBefore", "unlocks", "returns", "status", "posts", "held", "charged", "events", "spent", "cost", "failures", "upCancelCalls", "upCancelReturns", "producerPulls", "producerJoinFailures", "signalNotifications", "producerPullAt", "producerSettleAt", "producerCancelAt", "producerReturnAt", "producerSignalAt", "producerExpiryAt"]);
-  const booleans = new Set(["operandPresent", "reasonDefined", "operandDefined", "sameClosed", "sameRead", "sameOperand", "allowed", "locked", "bound", "responseSame", "bodySame", "closedCaptured", "expired", "tokensNull", "policyFixed", "identityMatched", "noReplay", "disposed", "removed", "handlerPending", "producerPending", "producerSettled", "producerRejected", "producerJoined", "timerActive", "cancelRejected", "attempted", "descriptorOwned", "restored", "failurePresent", "failureDefined", "liveIncomplete"]);
+  const numbers = new Set(["v", "op", "invoke", "settle", "pendingReads", "earlierReadFailures", "unlockBefore", "unlocks", "returns", "status", "posts", "held", "charged", "events", "spent", "cost", "failures", "upCancelCalls", "upCancelReturns", "producerPulls", "producerJoinFailures", "producerActivePulls", "producerActiveCancels", "signalNotifications", "producerPullAt", "producerSettleAt", "producerCancelAt", "producerReturnAt", "producerSignalAt", "producerExpiryAt"]);
+  const booleans = new Set(["operandPresent", "reasonDefined", "operandDefined", "sameClosed", "sameRead", "sameOperand", "allowed", "locked", "bound", "responseSame", "bodySame", "closedCaptured", "expired", "tokensNull", "policyFixed", "identityMatched", "noReplay", "disposed", "removed", "handlerPending", "producerPending", "producerSettled", "producerRejected", "producerJoined", "producerCallbacksJoined", "timerActive", "cancelRejected", "attempted", "descriptorOwned", "restored", "failurePresent", "failureDefined", "liveIncomplete"]);
   for (const name of ["Ingress", "Control", "Combined", "Forwarded", "Fetch"]) for (const prefix of ["invoke", "settle"]) {
     booleans.add(prefix + name); booleans.add(prefix + name + "Reason");
   }
@@ -1006,6 +1031,45 @@ test("pending producer preserves expiry, signal-only and original cancellation f
   });
 });
 
+test("producer lifetime joins original cancellation callback before source acceptance", async t => {
+  for (const mode of ["before_pull", "pending_read", "held_cancel", "undefined_cancel"]) await t.test(mode, async () => {
+    const control = new AbortController(), held = new Map(), call = { cancelCalls: 0, cancelReturns: 0 };
+    const producer = pendingResponseProducer(control.signal, held, "groq_abort", call);
+    let reader, reading;
+    if (mode !== "before_pull") {
+      reader = producer.body.getReader();
+      await reader.read(); reading = reader.read();
+    }
+    const blocker = Promise.withResolvers();
+    if (mode === "held_cancel") control.signal.removeEventListener = () => blocker.promise;
+    if (mode === "undefined_cancel") control.signal.removeEventListener = () => { throw undefined; };
+    let settled = false;
+    const retained = producer.lifetime.then(() => { settled = true; }, () => { settled = true; });
+    const cancellation = reader ? reader.cancel(new Error("owned cancellation")) : producer.body.cancel();
+    const observed = Promise.allSettled([cancellation, reading, producer.lifetime]);
+    if (mode === "held_cancel") {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      assert.equal(call.producerSettled, true);
+      assert.equal(call.producerActiveCancels, 1);
+      assert.equal(call.cancelReturns, 0); assert.equal(settled, false);
+      blocker.resolve();
+    }
+    const results = await observed; await retained;
+    assert.equal(call.producerActivePulls, 0); assert.equal(call.producerActiveCancels, 0);
+    assert.equal(call.producerCallbacksJoined, true); assert.equal(call.fixtureExpired, false);
+    if (mode === "undefined_cancel") {
+      assert.equal(results[0].status, "rejected"); assert.equal(results[0].reason, undefined);
+      await assert.rejects(producer.join(), error => error instanceof AggregateError && error.errors.includes(undefined));
+      assert.equal(call.cancelRejected, true);
+    } else {
+      assert.ok(results.every(result => result.status === "fulfilled"));
+      await producer.join(); assert.equal(call.cancelCalls, 1); assert.equal(call.cancelReturns, 1);
+      assert.equal(call.producerJoined, true); assert.equal(call.producerJoinFailures, 0);
+    }
+    if (reader) reader.releaseLock();
+  });
+});
+
 test("typed held observer rejects undefined, foreign, late, synchronous, missing and early outcomes", async t => {
   for (const fault of ["undefined", "foreign", "late", "sync", "missing", "early"]) await t.test(fault, async () => {
     const controller = new AbortController(), reason = new Error("owned"), foreign = new Error("foreign");
@@ -1041,7 +1105,8 @@ test("typed held observer keeps ambiguous ownership and primary/cleanup failures
 });
 
 test("Groq/Mistral declarations compile to native-only offers and preserve the consumer selector", () => {
-  assert.equal(manifests.length, 87);
+  assert.deepEqual(snapshot.providers.map(provider => provider.id).sort(), manifests.map(manifest => manifest.id).sort(),
+    "compiled snapshot must contain every bundled provider manifest exactly once");
   for (const profile of profiles) {
     const provider = snapshot.providers.find(row => row.id === profile.provider);
     const endpoint = provider.endpoints.find(row => row.id === "transcription");
@@ -1053,7 +1118,8 @@ test("Groq/Mistral declarations compile to native-only offers and preserve the c
     assert.equal(models[0].pricing, null); assert.equal(models[0].pricing_ref, null);
   }
   const rows = parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy.matrix.include;
-  assert.equal(rows.length, 44); assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
+  assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
+  assert.equal(parse(readFileSync(".github/workflows/openclaw-contract.yml", "utf8")).jobs.consumer.strategy["max-parallel"], 4);
   assert.deepEqual(rows.filter(row => row.consumer === "groq-mistral-transcription"), [{ consumer: "groq-mistral-transcription", ref: sourceHead, test: "test/openclaw-groq-mistral-transcription.test.mjs" }]);
   for (const path of ["test/openclaw-groq-mistral-transcription.test.mjs", "test/fixtures/openclaw-groq-mistral-transcription-contract.test.ts"])
     assert.equal(affectsOpenClawContract(path), true);
@@ -1169,7 +1235,7 @@ function assertShippingEvidence(state, usage, rows, checkpoint) {
       /* evidence:abort_status */ checkpoint?.("abort_status", row.id, calls.length, events.length, expected); assert.equal(event.status, "client_error"); /* evidence:abort_code */ checkpoint?.("abort_code", row.id, calls.length, events.length, expected); assert.equal(event.status_code, 499);
       /* evidence:cancel_calls */ checkpoint?.("cancel_calls", row.id, calls.length, events.length, expected); assert.equal(call.cancelCalls, 1); /* evidence:cancel_returns */ checkpoint?.("cancel_returns", row.id, calls.length, events.length, expected); assert.equal(call.cancelReturns, 1); /* evidence:cancel_rejected */ checkpoint?.("cancel_rejected", row.id, calls.length, events.length, expected); assert.equal(call.cancelRejected, false);
       /* evidence:producer_pulls */ checkpoint?.("producer_pulls", row.id, calls.length, events.length, expected); assert.equal(call.producerPulls, 1); /* evidence:producer_settled */ checkpoint?.("producer_settled", row.id, calls.length, events.length, expected); assert.equal(call.producerSettled, true); /* evidence:producer_pending */ checkpoint?.("producer_pending", row.id, calls.length, events.length, expected); assert.equal(call.producerPending, false);
-      /* evidence:producer_joined */ checkpoint?.("producer_joined", row.id, calls.length, events.length, expected); assert.equal(call.producerJoined, true); /* evidence:producer_join_failures */ checkpoint?.("producer_join_failures", row.id, calls.length, events.length, expected); assert.equal(call.producerJoinFailures, 0); /* evidence:producer_rejected */ checkpoint?.("producer_rejected", row.id, calls.length, events.length, expected); assert.equal(call.producerRejected, false);
+      /* evidence:producer_joined */ checkpoint?.("producer_joined", row.id, calls.length, events.length, expected); assert.equal(call.producerJoined, true); /* evidence:producer_join_failures */ checkpoint?.("producer_join_failures", row.id, calls.length, events.length, expected); assert.equal(call.producerJoinFailures, 0); assert.equal(call.producerActivePulls, 0); assert.equal(call.producerActiveCancels, 0); assert.equal(call.producerCallbacksJoined, true); /* evidence:producer_rejected */ checkpoint?.("producer_rejected", row.id, calls.length, events.length, expected); assert.equal(call.producerRejected, false);
       /* evidence:producer_expired */ checkpoint?.("producer_expired", row.id, calls.length, events.length, expected); assert.equal(call.fixtureExpired, false); /* evidence:producer_expiry_at */ checkpoint?.("producer_expiry_at", row.id, calls.length, events.length, expected); assert.equal(call.producerExpiryAt, 0); /* evidence:producer_timer */ checkpoint?.("producer_timer", row.id, calls.length, events.length, expected); assert.equal(call.timerActive, false);
       /* evidence:producer_failures */ checkpoint?.("producer_failures", row.id, calls.length, events.length, expected); assert.equal(state.producerFailures, 0);
     }
@@ -1256,7 +1322,7 @@ async function runShippingRows(selected, t) {
       const state = await phaseStart(nodePhases, "upstream_observe", () => control(origin, "state", "all")), posts = state.calls.filter(call => call.id === heldRow.id);
       typed.push({ ...facts, kind: "upstream", state: "fulfilled", posts: posts.length, held: state.held, charged: state.charged,
         noReplay: posts.length === 1, expired: posts[0]?.fixtureExpired ?? null, upCancelCalls: posts[0]?.cancelCalls ?? null, upCancelReturns: posts[0]?.cancelReturns ?? null, upReasonType: posts[0]?.cancelReasonType ?? "undefined",
-        ...Object.fromEntries(["producerPulls", "producerPending", "producerSettled", "producerRejected", "producerJoined", "producerJoinFailures", "timerActive", "signalNotifications", "producerPullAt", "producerSettleAt", "producerCancelAt", "producerReturnAt", "producerSignalAt", "producerExpiryAt", "cancelRejected"].map(key => [key, posts[0]?.[key] ?? null])) });
+        ...Object.fromEntries(["producerPulls", "producerPending", "producerSettled", "producerRejected", "producerJoined", "producerJoinFailures", "producerActivePulls", "producerActiveCancels", "producerCallbacksJoined", "timerActive", "signalNotifications", "producerPullAt", "producerSettleAt", "producerCancelAt", "producerReturnAt", "producerSignalAt", "producerExpiryAt", "cancelRejected"].map(key => [key, posts[0]?.[key] ?? null])) });
       assert.equal(posts.length, 1); assert.equal(posts[0].fixtureExpired, false);
       assert.equal(posts[0].cancelCalls, 1); assert.equal(posts[0].cancelReturns, 1); assert.equal(state.held, 0);
       assert.equal(posts[0].producerJoined, true); assert.equal(posts[0].producerJoinFailures, 0);
@@ -1603,7 +1669,7 @@ ${livePhaseWriter.toString()}
 const phaseStart = ${phaseStart.toString()};
 const upstreamPhases = livePhaseWriter("upstream", line => console.log(line));
 const calls = [], held = new Map(), producers = new Map(), producerFailures = [];
-export default { async fetch(request) {
+export default { async fetch(request, env, context) {
   if (request.url === 'https://fixture.example/state') {
     const id = request.headers.get('x-fixture-producer-join');
     if (id) {
@@ -1621,7 +1687,7 @@ export default { async fetch(request) {
   calls.push(call);
   if (id.endsWith('_redirect')) return new Response(null, { status: 307, headers: { location: 'https://must-not-follow.example/transcriptions' } });
   if (id.endsWith('_abort')) {
-    const producer = pendingResponseProducer(request.signal, held, id, call); producers.set(id, producer);
+    const producer = pendingResponseProducer(request.signal, held, id, call); producers.set(id, producer); context.waitUntil(producer.lifetime);
     return new Response(producer.body, { headers: { 'content-type': 'application/json' } });
   }
   if (id.endsWith('_malformed') || id.endsWith('_truncated')) return new Response(id.endsWith('_truncated') ? '{"text":"prefix' : '{invalid', { headers: { 'content-type': 'application/json' } });
@@ -1891,7 +1957,7 @@ function fetchRetirementControlUpstream() {
   return `${finishOwned.toString()}
 ${pendingResponseProducer.toString()}
 const sources = new Map(), held = new Map();
-export default { async fetch(request) {
+export default { async fetch(request, env, context) {
   const [, operation, arm] = new URL(request.url).pathname.split('/');
   if (arm !== 'active' && arm !== 'returned') return new Response(null, { status: 400 });
   if (operation === 'stream') {
@@ -1899,6 +1965,7 @@ export default { async fetch(request) {
     const call = { cancelCalls: 0, cancelReturns: 0, cancelReasonType: 'undefined' };
     const producer = pendingResponseProducer(request.signal, held, arm, call);
     sources.set(arm, { call, producer, join: undefined, joinFailures: [] });
+    context.waitUntil(producer.lifetime);
     return new Response(producer.body, { headers: { 'content-type': 'application/json' } });
   }
   if (operation === 'state') {
@@ -2740,6 +2807,7 @@ test("shipping adjudication rejects incomplete producer, wire, SQLite and restor
     prompt: "Synthetic café 東京", fileName: row.id + ".wav", mime: "audio/wav", bytes: 2048, digest: hash(wav()),
     fields: ["model", "language", "prompt", "file"], cancelCalls: 1, cancelReturns: 1, cancelRejected: false,
     producerPulls: 1, producerSettled: true, producerPending: false, producerJoined: true, producerJoinFailures: 0,
+    producerActivePulls: 0, producerActiveCancels: 0, producerCallbacksJoined: true,
     producerRejected: false, fixtureExpired: false, producerExpiryAt: 0, timerActive: false,
   }] };
   const usage = { usage: { events: [{ credential_id: row.id, policy_id: row.id, provider: row.provider, model: row.model,
@@ -2756,12 +2824,14 @@ test("shipping adjudication rejects incomplete producer, wire, SQLite and restor
     (s, u) => { u.usage.events[0].provider = "wrong"; }, (s, u) => { u.usage.events[0].policy_id = "wrong"; },
     (s, u) => { u.usage.events[0].actual_cost_micros = 0; }, (s, u) => { u.usage.events[0].status = "timeout"; },
     (s, u) => { u.usage.events[0].input_tokens = 0; }, (s, u) => { u.policies[0].budget.spentMicros = 0; },
+    s => { s.calls[0].producerActivePulls = 1; }, s => { s.calls[0].producerActiveCancels = 1; },
+    s => { s.calls[0].producerCallbacksJoined = false; },
   ];
   for (const [index, change] of changes.entries()) await t.test("evidence_" + index, () => {
     const s = structuredClone(state), u = structuredClone(usage); change(s, u);
     let seen;
     assert.throws(() => assertShippingEvidence(s, u, [row], (step, id) => { seen = { step, id }; }));
-    assert.equal(seen.step, ["producer_pending", "producer_join_failures", "producer_expired", "producer_expiry_at", "cancel_calls", "egress_count", "charged", "wire_auth", "wire_model", "wire_digest", "event_provider", "event_policy", "cost", "abort_status", "input_tokens", "spent"][index]);
+    assert.equal(seen.step, ["producer_pending", "producer_join_failures", "producer_expired", "producer_expiry_at", "cancel_calls", "egress_count", "charged", "wire_auth", "wire_model", "wire_digest", "event_provider", "event_policy", "cost", "abort_status", "input_tokens", "spent", "producer_join_failures", "producer_join_failures", "producer_join_failures"][index]);
   });
   const facts = { v: 1, test: "held_original", case: row.id, scenario: "abort" };
   const receipt = { row, status: 200, result: { retired: true, provisional: true, typed: [
