@@ -77,7 +77,11 @@ test("compiled xAI modes preserve bound empty-202, filtered and expired observat
 
 test("xAI lifecycle declarations reject unbound controls, format aliases and unsupported action or path expansion", () => {
   for (const change of [
-    m => { m.id = "other"; }, m => { delete m.endpoints.generate.lifecycle; },
+    m => {
+      m.id = "other";
+      // Reach the independent video-provider guard without the xAI-only hosted-tool fact rejecting first.
+      delete m.models.entries.find(row => row.upstream === "grok-4.7").nativeCapabilities.endpoints.responses.hostedTools;
+    }, m => { delete m.endpoints.generate.lifecycle; },
     m => { delete m.endpoints.generate.lifecycle.retrieve; }, m => { m.endpoints.generate.lifecycle.cancel = "video_get"; },
     m => { m.endpoints.generate.lifecycle.result = "video_get"; }, m => { m.endpoints.generate.lifecycle.files = { metadata: "video_get", download: "video_get" }; },
     m => { m.endpoints.generate.lifecycle.retrieve = "constructor"; }, m => { m.endpoints.edit.lifecycle.protocol = "together.video"; },

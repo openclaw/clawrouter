@@ -76,7 +76,8 @@ test("unit-price observations do not turn unknown xAI request charges into hard-
 test("new xAI rows preserve the existing default, price card and unrelated passthrough", () => {
   assert.equal(provider.models[0].upstream, "grok-4.3");
   assert.equal(provider.models[0].pricing_ref, "xai-grok-4-3-standard-2026-06-21");
-  assert.equal(provider.endpoints.length, 1);
+  assert.deepEqual(provider.endpoints.filter(row => row.request_format === "openai.chat_completions"), [endpoint]);
+  assert.deepEqual(provider.capabilities.filter(row => row.id === "llm.chat").map(row => row.endpoint), ["chat_completions"]);
   assert.deepEqual(endpoint.modelPassthrough, { pricing_ref: null, pricing: null });
   assert.equal(providerModel(provider, "synthetic-unknown-model", endpoint).pricing, null);
 });
