@@ -13,10 +13,27 @@ const MAX_CACHED_BYTES = 2 * 1024 * 1024;
 // At most 8 MiB of serialized, caller-scoped metadata per isolate. No shared
 // cache, credential material, response streams or cross-request promises.
 const catalogs = registerHotCache(new HotCache<{ json: string; expires: number }>(4));
-const unavailable = () => new HttpError(502, "codex_catalog_unavailable", "current Codex model metadata is unavailable; no usable private catalog remains");
+type CatalogFailureReason = "upstream_http" | "upstream_timeout" | "upstream_transport" | "upstream_body"
+  | "invalid_content_type" | "missing_body" | "body_too_large" | "invalid_utf8" | "invalid_json" | "invalid_schema"
+  | "projection_failed" | "internal";
 class CatalogFailure extends Error {
+  readonly reason: CatalogFailureReason;
   readonly transient: boolean;
-  constructor(transient: boolean) { super("Codex metadata request failed"); this.transient = transient; }
+  readonly upstreamStatus?: number;
+  constructor(reason: CatalogFailureReason, transient = false, upstreamStatus?: number) {
+    super("Codex metadata request failed");
+    this.reason = reason; this.transient = transient; this.upstreamStatus = upstreamStatus;
+  }
+}
+function unavailable(error: unknown): HttpError {
+  // Authenticated diagnostics only: fixed labels and numeric status, never an
+  // upstream body, header, URL, credential or arbitrary exception message.
+  const failure = error instanceof CatalogFailure ? error : undefined;
+  return new HttpError(502, "codex_catalog_unavailable", "current Codex model metadata is unavailable; no usable private catalog remains", {
+    "cache-control": "no-store", "x-content-type-options": "nosniff",
+    "x-clawrouter-catalog-failure": failure?.reason ?? "internal",
+    ...(failure?.upstreamStatus === undefined ? {} : { "x-clawrouter-upstream-status": String(failure.upstreamStatus) }),
+  });
 }
 
 function record(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -24,8 +41,10 @@ function record(value: unknown): value is Record<string, unknown> { return value
 // Validate the fields the router interprets, leaving the rest byte-for-value
 // intact for the requesting client's versioned schema, including access programs.
 export function parseCodexModels(json: string): CodexModelsResponse {
-  const body: unknown = JSON.parse(json);
-  if (!record(body) || !Array.isArray(body.models) || !body.models.length || body.models.length > 2048) throw new CatalogFailure(false);
+  let body: unknown;
+  try { body = JSON.parse(json); }
+  catch { throw new CatalogFailure("invalid_json"); }
+  if (!record(body) || !Array.isArray(body.models) || !body.models.length || body.models.length > 2048) throw new CatalogFailure("invalid_schema");
   const slugs = new Set<string>();
   for (const model of body.models) {
     if (!record(model) || typeof model.slug !== "string" || !model.slug || model.slug.length > 512 || slugs.has(model.slug)
@@ -35,7 +54,7 @@ export function parseCodexModels(json: string): CodexModelsResponse {
       || [model.context_window, model.max_context_window].some(value => value !== undefined && value !== null && (typeof value !== "number" || !Number.isFinite(value) || value <= 0))
       || model.service_tiers !== undefined && (!Array.isArray(model.service_tiers) || model.service_tiers.some(tier => !record(tier) || typeof tier.id !== "string" || !tier.id))
       || model.additional_speed_tiers !== undefined && (!Array.isArray(model.additional_speed_tiers) || model.additional_speed_tiers.some(tier => typeof tier !== "string"))
-      || model.default_service_tier !== undefined && model.default_service_tier !== null && typeof model.default_service_tier !== "string") throw new CatalogFailure(false);
+      || model.default_service_tier !== undefined && model.default_service_tier !== null && typeof model.default_service_tier !== "string") throw new CatalogFailure("invalid_schema");
     slugs.add(model.slug);
   }
   return body as unknown as CodexModelsResponse;
@@ -61,29 +80,36 @@ async function upstreamCatalog(request: Request, headers: Headers, version: stri
     try {
       response = await operation.wait(fetch(url, { headers, redirect: "manual", signal: operation.signal }), undefined,
         late => { void late.body?.cancel().catch(() => {}); });
-    } catch { throw new CatalogFailure(true); }
-    if (!response.ok) throw new CatalogFailure(response.status === 429 || response.status >= 500);
+    } catch { throw new CatalogFailure(operation.status === "timeout" ? "upstream_timeout" : "upstream_transport", true); }
+    if (!response.ok) throw new CatalogFailure("upstream_http", response.status === 429 || response.status >= 500);
     const type = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase();
-    if (type !== "application/json" || !response.body || Number(response.headers.get("content-length")) > MAX_BYTES) throw new CatalogFailure(false);
+    if (type !== "application/json") throw new CatalogFailure("invalid_content_type");
+    if (!response.body) throw new CatalogFailure("missing_body");
+    if (Number(response.headers.get("content-length")) > MAX_BYTES) throw new CatalogFailure("body_too_large");
     reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
     for (;;) {
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try { chunk = await operation.wait(reader.read()); }
-      catch { throw new CatalogFailure(true); }
+      catch { throw new CatalogFailure(operation.status === "timeout" ? "upstream_timeout" : "upstream_body", true); }
       if (chunk.done) break;
       size += chunk.value.byteLength;
-      if (size > MAX_BYTES) throw new CatalogFailure(false);
+      if (size > MAX_BYTES) throw new CatalogFailure("body_too_large");
       chunks.push(chunk.value);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    let json: string;
+    try { json = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+    catch { throw new CatalogFailure("invalid_utf8"); }
     // An invalid response is never a new fallback generation.
     parseCodexModels(json);
     return { json, ttl: lifetime(response.headers) };
+  } catch (error) {
+    if (error instanceof CatalogFailure) throw new CatalogFailure(error.reason, error.transient, response?.status);
+    throw error;
   } finally {
     operation.stop("upstream");
     // Cancellation can be ignored by a hostile source. Do not await its promise.
@@ -106,10 +132,13 @@ export async function codexModelsResponse(request: Request, env: Env): Promise<R
   if (!catalog.providers.find(item => item.id === "openai")?.offers.some(offer => offer.eligible && offer.modelId && offer.routeKind === "native"
     && offer.endpoint === "responses" && offer.transport === "http")) throw new HttpError(403, "codex_models_not_allowed", "no native OpenAI Responses model is currently eligible");
   const project = (json: string) => {
-    const result = buildCodexCatalog(catalog, parseCodexModels(json), "openai");
-    if (params.has("standalone_search")) result.catalog.models = result.catalog.models.filter(model => result.standaloneSearchModels.includes(model.slug));
-    if (!result.catalog.models.length) throw unavailable();
-    return result.catalog;
+    const parsed = parseCodexModels(json);
+    try {
+      const result = buildCodexCatalog(catalog, parsed, "openai");
+      if (params.has("standalone_search")) result.catalog.models = result.catalog.models.filter(model => result.standaloneSearchModels.includes(model.slug));
+      if (!result.catalog.models.length) throw new CatalogFailure("projection_failed");
+      return result.catalog;
+    } catch { throw new CatalogFailure("projection_failed"); }
   };
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === "responses")!;
   const upstream = await upstreamAuth(provider, auth, env, new Set(), null, false, undefined, { provider, endpoint, mode: "http" }, request.signal);
@@ -137,10 +166,10 @@ export async function codexModelsResponse(request: Request, env: Env): Promise<R
       if (request.signal.aborted) throw new HttpError(499, "client_canceled", "catalog request canceled");
       if (error instanceof CatalogFailure && error.transient && cached && cached.value.expires > hotCacheNow()
         && catalogs.peek(key, config)?.value === cached.value) json = cached.value.json;
-      else { catalogs.delete(key); throw unavailable(); }
+      else { catalogs.delete(key); throw unavailable(error); }
     } finally { catalogs.endPublication(key, publication); }
   }
   try {
     return privateJson(project(json));
-  } catch { throw unavailable(); }
+  } catch (error) { throw unavailable(error); }
 }

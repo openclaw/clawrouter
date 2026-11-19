@@ -11,6 +11,16 @@ const descriptor = { slug: "gpt-6-sol", base_instructions: "Synthetic instructio
   default_service_tier: "unpriced", available_access_programs: { cyber: ["standard", "daybreak_blue"] },
   model_messages: { instructions_template: "Synthetic {{ tools }}", future_tool: { keep: true } }, future_metadata: { keep: true } };
 const metadata = () => ({ models: [descriptor, { ...descriptor, slug: "unregistered-model" }], future_wrapper: { keep: true } });
+const failureHeader = "x-clawrouter-catalog-failure";
+const statusHeader = "x-clawrouter-upstream-status";
+
+async function assertFailure(response, reason, upstreamStatus) {
+  assert.equal(response.status, 502);
+  assert.equal(response.headers.get(failureHeader), reason);
+  assert.equal(response.headers.get(statusHeader), upstreamStatus === undefined ? null : String(upstreamStatus));
+  assert.match(response.headers.get("cache-control"), /no-store/);
+  assert.deepEqual(await response.json(), { error: { code: "codex_catalog_unavailable", message: "current Codex model metadata is unavailable; no usable private catalog remains" } });
+}
 
 async function fixture(t) {
   const secret = "synthetic-codex-catalog-secret";
@@ -69,7 +79,10 @@ test("Codex metadata uses inference environment auth, fixed destination and exac
 
 test("unauthorized callers, invalid versions and unsupported query parameters never fetch metadata", async t => {
   const f = await fixture(t);
-  assert.equal((await f.get("client_version=0.169.0", { authorization: "Bearer invalid" })).status, 401);
+  const unauthorized = await f.get("client_version=0.169.0", { authorization: "Bearer invalid" });
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.headers.get(failureHeader), null);
+  assert.equal(unauthorized.headers.get(statusHeader), null);
   for (const query of ["", "client_version=0.169.0-alpha", "client_version=0.169.0&client_version=0.170.0", "client_version=https://evil.example", "client_version=0.169.0&url=https://evil.example", "client_version=0.169.0&standalone_search=false"]) assert.equal((await f.get(query)).status, 400, query);
   assert.equal(f.state.upstream.length, 0);
 });
@@ -87,7 +100,10 @@ test("private cache separates client versions and rotated environment credential
   assert.equal(f.state.upstream.at(-1).headers.authorization, "Bearer synthetic-rotated-upstream");
   f.state.status = 503;
   now += 11_000;
-  assert.equal((await f.get()).status, 200);
+  const stale = await f.get();
+  assert.equal(stale.status, 200);
+  assert.equal(stale.headers.get(failureHeader), null);
+  assert.equal(stale.headers.get(statusHeader), null);
   now += 49_001;
   assert.equal((await f.get()).status, 502);
 });
@@ -102,12 +118,39 @@ test("upstream auth rejection and invalid metadata evict the previous generation
     if (typeof failure === "number") f.state.status = failure;
     else f.state.body = failure === "malformed" ? "invalid json" : { models: [descriptor, descriptor] };
     const failed = await f.get();
-    assert.equal(failed.status, 502, String(failure));
-    assert.equal((await failed.json()).error.code, "codex_catalog_unavailable");
+    await assertFailure(failed, typeof failure === "number" ? "upstream_http" : failure === "malformed" ? "invalid_json" : "invalid_schema", typeof failure === "number" ? failure : 200);
     f.state.status = 503;
     assert.equal((await f.get()).status, 502);
     t.mock.restoreAll();
   }
+});
+
+test("catalog diagnostics distinguish safe failure categories without forwarding upstream content", async t => {
+  const sensitive = "synthetic-private-upstream-detail";
+  const cases = [
+    ["HTTP rejection", "upstream_http", 403, () => new Response(sensitive, { status: 403, headers: { "x-private": sensitive, "set-cookie": sensitive, location: `https://example.com/${sensitive}` } })],
+    ["transport", "upstream_transport", undefined, () => { throw new Error(sensitive); }],
+    ["provider AbortError", "upstream_transport", undefined, () => { throw new DOMException(sensitive, "AbortError"); }],
+    ["media type", "invalid_content_type", 200, () => new Response(sensitive, { headers: { "content-type": "text/html" } })],
+    ["missing body", "missing_body", 204, () => new Response(null, { status: 204, headers: { "content-type": "application/json" } })],
+    ["declared length", "body_too_large", 200, () => new Response(sensitive, { headers: { "content-type": "application/json", "content-length": String(8 * 1024 * 1024 + 1) } })],
+    ["UTF-8", "invalid_utf8", 200, () => new Response(new Uint8Array([0xff]), { headers: { "content-type": "application/json" } })],
+    ["JSON", "invalid_json", 200, () => new Response(sensitive, { headers: { "content-type": "application/json" } })],
+    ["schema", "invalid_schema", 200, () => Response.json({ private: sensitive })],
+    ["body read", "upstream_body", 200, () => new Response(new ReadableStream({ start(controller) { controller.error(new Error(sensitive)); } }), { headers: { "content-type": "application/json" } })],
+    ["authorized projection", "projection_failed", undefined, () => Response.json({ models: [{ ...descriptor, slug: sensitive }] })],
+  ];
+  for (const [name, reason, status, respond] of cases) await t.test(name, async t => {
+    const f = await fixture(t);
+    f.state.respond = respond;
+    const response = await f.get();
+    const delivered = JSON.stringify([...response.headers]) + await response.clone().text();
+    for (const value of [sensitive, "synthetic-upstream-not-real", "synthetic-codex-catalog-secret"]) assert.ok(!delivered.includes(value));
+    assert.equal(response.headers.get("x-private"), null);
+    assert.equal(response.headers.get("set-cookie"), null);
+    assert.equal(response.headers.get("location"), null);
+    await assertFailure(response, reason, status);
+  });
 });
 
 test("upstream cache controls and local max age constrain freshness and stale fallback", async t => {
@@ -125,7 +168,7 @@ test("upstream cache controls and local max age constrain freshness and stale fa
   const f = await fixture(t); f.env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = "0";
   assert.equal((await f.get()).status, 200);
   f.state.status = 503;
-  assert.equal((await f.get()).status, 502);
+  await assertFailure(await f.get(), "upstream_http", 503);
 });
 
 test("budget, connection, policy and revocation restrictions are reapplied before serving catalog data", async t => {
@@ -157,7 +200,7 @@ test("oversize and stalled bodies are canceled and cannot poison the fallback", 
   const f = await fixture(t);
   let canceled = false;
   f.state.respond = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(8 * 1024 * 1024 + 1)); }, cancel() { canceled = true; } }), { headers: { "content-type": "application/json" } });
-  assert.equal((await f.get()).status, 502);
+  await assertFailure(await f.get(), "body_too_large", 200);
   assert.equal(canceled, true);
   canceled = false;
   f.state.respond = () => new Response(new ReadableStream({ cancel() { canceled = true; } }), { headers: { "content-type": "application/json" } });
@@ -166,7 +209,10 @@ test("oversize and stalled bodies are canceled and cannot poison the fallback", 
   // Wait until the mocked upstream owns the response before canceling.
   while (f.state.upstream.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
   controller.abort();
-  assert.equal((await pending).status, 499);
+  const canceledResponse = await pending;
+  assert.equal(canceledResponse.status, 499);
+  assert.equal(canceledResponse.headers.get(failureHeader), null);
+  assert.equal(canceledResponse.headers.get(statusHeader), null);
   assert.equal(canceled, true);
 });
 
@@ -196,7 +242,7 @@ test("metadata fetch and body deadlines retire even when the upstream ignores ab
   const pending = f.get();
   while (!f.state.upstream.length) await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(15_001);
-  assert.equal((await pending).status, 502);
+  await assertFailure(await pending, "upstream_timeout");
   clearHotCaches();
   let canceled = false;
   f.state.respond = () => new Response(new ReadableStream({ cancel() { canceled = true; return new Promise(() => {}); } }), { headers: { "content-type": "application/json" } });
@@ -204,7 +250,7 @@ test("metadata fetch and body deadlines retire even when the upstream ignores ab
   while (f.state.upstream.length < 2) await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
   t.mock.timers.tick(15_001);
-  assert.equal((await bodyPending).status, 502);
+  await assertFailure(await bodyPending, "upstream_timeout", 200);
   assert.equal(canceled, true);
 });
 
