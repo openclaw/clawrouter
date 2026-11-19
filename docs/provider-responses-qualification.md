@@ -11,9 +11,14 @@ Checked 2026-11-03. These are sourced catalog facts, not live runtime certificat
 The existing Grok 4.3 Chat default and OpenRouter auto default remain unchanged.
 The new named offers do not replace those caller selections.
 
-xAI recommends Responses for reasoning models. With `store: false`, callers must
-send all output items back unchanged, including `reasoning.encrypted_content` and
-function calls. The manifest does not claim retrieve/cancel or WebSocket support.
+xAI recommends Responses for reasoning models. Stateless callers retain the
+assistant output, including encrypted reasoning and matching function results.
+The router preserves the submitted wire items. The pinned OpenClaw client
+canonicalizes that history before dispatch: its default
+`replayResponsesItemIds: false` removes reasoning item IDs and clear summaries,
+while retaining qualified ciphertext and matching function-call/result IDs.
+These are different boundaries; whole-item byte identity is not the SDK contract.
+The manifest does not claim retrieve/cancel or WebSocket support.
 Grok 4.7's tariff starts at **200,000** prompt tokens, inclusive. Its configured
 threshold is 199,999 because ClawRouter selects long-context rates strictly above
 the threshold. The full context is a conservative output reservation ceiling,
@@ -50,6 +55,35 @@ OpenRouter Responses requires full history on each request. It rejects
 existing Chat capability; a qualified named row does not qualify dynamic routing.
 The public catalog also lists file input, which is omitted from the manifest's
 modality list until the router/client file contract is qualified.
+
+## Configured OpenClaw route
+
+With the pinned OpenClaw client, explicitly select `api: "openai-responses"`
+for either provider when using a custom Worker URL. For xAI, configure
+`baseUrl: "https://router.example/v1/native/xai/v1"` and model `grok-4.7`.
+For OpenRouter, use `baseUrl: "https://router.example/v1/native/openrouter/v1"`
+and model `openai/gpt-6.1-terra`. Supply the caller's scoped ClawRouter credential,
+not the provider secret. OpenRouter dynamic selection otherwise defaults to Chat;
+the existing OpenRouter auto and xAI Chat defaults are unchanged.
+
+`test/openclaw-provider-responses.test.mjs` binds the actual registered provider,
+public stream adapter, selected credential, original transport and independent
+SDK/Worker/source retirement. Its replay case obtains the first assistant from
+the real stream, appends the matching tool result, and runs the real sanitizer
+inside the captured provider's generation-registry scope. The xAI registered
+wrapper requests encrypted reasoning even when effort is omitted. Final wire
+assertions check `store: false`, no automatic `previous_response_id`, images,
+function history, and the actual number of upstream dispatches; setting SDK
+`maxRetries` alone would not exclude higher-level recovery.
+
+The synthetic xAI receipts exercise standard, inclusive 200k-input and Priority
+whole-bill settlement, plus unknown-outcome reservation. OpenRouter transport
+uses an explicitly labeled seven-micro policy-fixed fixture; a separate hard
+budget case rejects its unpriced catalog offer before egress. This does not
+establish a vendor tariff, live encrypted-history acceptance, entitlement,
+hosted-tool charge bounds, or a generic Azure deployment contract. Hosted/native
+results must be qualified on the actual candidate; local Worker tests alone do
+not qualify the pinned SDK.
 
 Sources:
 

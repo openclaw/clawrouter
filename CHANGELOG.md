@@ -1099,6 +1099,7 @@
 
 - Verify actual OpenClaw memory embedding batch ordering, credential refresh and usage through workerd for concrete OpenAI-format models. Native embedding formats and deployment placeholders remain separately qualified.
 - Add xAI Responses with sourced Grok 4.7 facts, low-reasoning Web Search support and the bounded outcome-fee tariff; preserve independent unknown hosted-tool guards and explicit policy-fixed accounting. Add the live-catalog-qualified OpenRouter GPT-6.1 Terra Responses row without inheriting direct-provider prices or broadening wildcard models.
+- Exercise registered xAI and OpenRouter Responses through the Worker with actual two-turn encrypted-reasoning/tool replay, explicit custom-URL API selection, complete outcome receipts and independently joined cancellation/error retirement; retain SDK canonicalization and unpriced OpenRouter boundaries.
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.

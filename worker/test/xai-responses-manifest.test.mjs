@@ -12,11 +12,28 @@ const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { snapshot } = await import("../providers.ts");
+const { actualModelCost, estimateModelCost } = await import("../pricing.ts");
 const manifest = parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"));
 const provider = compileProviderSnapshot([manifest]).providers[0];
 const input = { model: "grok-4.7", input: "synthetic fixture", max_output_tokens: 1, reasoning: { effort: "low" } };
 const receipt = { id: "resp_synthetic", object: "response", model: "grok-4.7", status: "completed", output: [],
   usage: { input_tokens: 3, output_tokens: 2, cost_in_usd_ticks: 158500 } };
+
+test("declared Grok 4.7 standard, inclusive 200k and Priority tariffs keep cached input and full outcome reservation", () => {
+  const pricing = provider.models.find(row => row.id === "xai/grok-4.7").pricing;
+  for (const [input, cached, ordinary] of [[11, 4, 34], [199999, 40000, 340016], [200000, 40000, 680036]]) {
+    for (const [serviceTier, multiple] of [["default", 1], ["priority", 2]]) {
+      assert.equal(actualModelCost(pricing, { input, cached, output: 3, total: input + 3, serviceTier }, "openai.responses"), ordinary * multiple);
+    }
+  }
+  const endpoint = provider.endpoints.find(row => row.id === "responses");
+  for (const service_tier of [undefined, "default", "priority"]) {
+    const estimate = estimateModelCost(pricing, { model: "grok-4.7", input: "synthetic", max_output_tokens: 1, service_tier }, endpoint, endpoint.requestPricing);
+    assert.equal(estimate.outputTokens, 500000);
+    assert.ok(estimate.reserveMicros > 50000);
+  }
+  assert.equal(actualModelCost(pricing, { input: 11, cached: 4, output: 3, total: 14, serviceTier: "invented" }, "openai.responses"), null);
+});
 
 async function fixture(t, fixed) {
   const original = snapshot.providers;
