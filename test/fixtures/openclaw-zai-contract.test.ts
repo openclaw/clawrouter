@@ -215,7 +215,7 @@ function originalLifetime(options: { sdkQualified?: (kind: string) => boolean } 
   }
   function inspect() { return { structural: structuralErrors(), rejected: operations.filter(op => op.rejected), candidates: operations.filter(cancellationCandidate), cancelWitnesses: readers.filter(cancellationWitness) }; }
   function restore() { const errors: unknown[] = []; for (const undo of restores.splice(0).reverse()) try { undo(); } catch (error) { errors.push(error); } if (errors.length) throw new AggregateError(errors, "Observer restore failed"); }
-  return { failure: (error: unknown) => failures.push(error), bind, record, acquire, observeResponse, observeStream, settle, inspect, join, restore, operations, readers, acquisitions,
+  return { patch, stamp: tick, onRestore: (undo: () => void) => restores.push(undo), failure: (error: unknown) => failures.push(error), bind, record, acquire, observeResponse, observeStream, settle, inspect, join, restore, operations, readers, acquisitions,
     summary: () => ({ operations: operations.length, pending: operations.filter(op => op.state === "pending").length, rejected: operations.filter(op => op.rejected).length, readers: readers.length, releases: acquisitions.reduce((n, row) => n + row.releaseFulfilled, 0) }) };
 }
 
@@ -400,7 +400,9 @@ async function verifyNativeControl(id: string) {
   const proof = await response.json(); expect(response.status).toBe(200);
   const expected = row.outcome === "preabort" ? 0 : 1;
   expect(proof.ingress).toBe(expected); expect(proof.calls).toBe(expected);
-  for (const side of [proof.router, proof.upstream]) { expect(side.pending).toBe(0); expect(side.rejected).toBe(0); }
+  expect(proof.router.pending).toBe(0); expect(proof.upstream.pending).toBe(0); expect(proof.upstream.rejected).toBe(0);
+  expect(proof.router.rejected).toBe(proof.router.qualifiedReadRejections);
+  expect(proof.router.qualifiedReadRejections).toBeLessThanOrEqual(row.outcome === "cancel" ? 1 : 0);
   expect(proof.expired).toBe(false);
   return kinds;
 }

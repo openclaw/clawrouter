@@ -39,11 +39,11 @@ test("registered Z.AI global standard streams preserve original grants, selected
   assert.deepEqual(provider.models.map(m => m.upstream), models);
   assert.ok(provider.models.every(m => m.pricing === null));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-zai-client-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
+  const { startBundledWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
   const controlReceipts = [];
   const proofContext = { diagnostic(value) { for (const record of diagnostics.parse(value)) emit(record); controlReceipts.push(...controlReceipt(value)); } };
   await allFailures(async () => {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
+    mf = await startBundledWorkerdFixture(temporary, await bundleZaiOutcome(routerFixture()), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       const model = id === "foreign_model" ? "not-selected" : cards[id] ?? models[0];
@@ -122,7 +122,7 @@ test("registered Z.AI global standard streams preserve original grants, selected
       try {
         const response = await fetch(origin + "/fixture/retire", { signal: AbortSignal.timeout(15_000) });
         const value = await response.json();
-        assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, 0);
+        assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, value.qualifiedReadRejections);
       } catch (error) { failureRecord("worker", error); throw error; }
     }, [async () => {
       try {
@@ -135,17 +135,155 @@ test("registered Z.AI global standard streams preserve original grants, selected
   }, async () => { try { await mf?.dispose(); } catch (error) { failureRecord("dispose", error); throw error; } },
     async () => { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failureRecord("remove", error); throw error; } }]);
 });
+const workerOutcomePins = {"proxy.ts": "0dd94cd16e6205d62a2bc0da80c6a2ba63615393f0b57be851d23b4bbefbddd1", "proxy-response.ts": "d612c0a2181c145c6cc4761b82053d04454bb009c872dd2996595a202c9b2b0f", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+function workerOutcomeOverlay(text, name = "proxy-response.ts") {
+  assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
+  const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
+  if (name === "proxy.ts") {
+    // Thread the already-held operation to the original source owner; the
+    // forwarded/normalized reader is deliberately NOT used as its identity.
+    edit('function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {',
+      'function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, operation: HttpOperation): Response {');
+    edit('ownOrdinaryResponse(response, completion)', 'ownOrdinaryResponse(response, completion, operation)', 2);
+    edit('    const reader = response.body!.getReader(), input = inputRetirement(reader);',
+      '    const reader = response.body!.getReader(), input = inputRetirement(reader);\n    zaiOutcome.current.bind(operation, response, reader);');
+    edit('              const next = await input.read(() => reader.read());',
+      '              zaiOutcome.current.readStart(operation, reader);\n              const next = await input.read(() => reader.read());\n              zaiOutcome.current.readDone(operation, reader);');
+    edit('            } catch (error) {\n              if (!stopped)',
+      '            } catch (error) {\n              zaiOutcome.current.failure(operation, reader, error);\n              if (!stopped)');
+  } else {
+    assert.equal(name, "proxy-response.ts");
+    edit('    resolve({ ...inspection, delivery,', '    zaiOutcome.current.inspection(operation, inspection, delivery);\n    resolve({ ...inspection, delivery,');
+    edit('    cancel(reason) { return finish("canceled", reason); },',
+      '    cancel(reason) { const prior = zaiOutcome.current.downstreamStart(operation, reason); try { return finish("canceled", reason); } finally { zaiOutcome.current.downstreamEnd(operation, prior); } },');
+  }
+  return 'import { zaiOutcome } from "zai-outcome-witness";\n' + text;
+}
+async function bundleZaiOutcome(contents) {
+  const require = createRequire(import.meta.resolve("wrangler/package.json")), { build } = require("esbuild");
+  const bundle = await build({ stdin: { contents, resolveDir: process.cwd(), sourcefile: "zai-fixture.ts", loader: "ts" },
+    write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
+    plugins: [{ name: "zai-first-outcome", setup(build) {
+      build.onResolve({ filter: /^zai-outcome-witness$/ }, () => ({ path: "witness", namespace: "zai" }));
+      build.onLoad({ filter: /.*/, namespace: "zai" }, () => ({ contents: "export const zaiOutcome = { current: undefined };", loader: "js" }));
+      build.onLoad({ filter: /[/\\]worker[/\\](?:proxy|proxy-response|http-operation)\.ts$/ }, args => {
+        const name = args.path.split(/[/\\]/).at(-1), source = readFileSync(args.path, "utf8");
+        assert.equal(createHash("sha256").update(source).digest("hex"), workerOutcomePins[name]);
+        return { contents: name !== "http-operation.ts" ? workerOutcomeOverlay(source, name) : source, loader: "ts" };
+      });
+    } }],
+  });
+  return bundle.outputFiles[0].text;
+}
+function createWorkerOutcomeWitness(Operation, root, outgoing) {
+  const rows = new Map(), stopped = new Set(), rejections = new Map(), cancels = new Map(), downstream = new Map();
+  const status = Object.getOwnPropertyDescriptor(Operation.prototype, "status").get;
+  const delivery = Object.getOwnPropertyDescriptor(Operation.prototype, "delivery").get;
+  const received = Object.getOwnPropertyDescriptor(Operation.prototype, "receivedRejection").get;
+  const own = (object, key) => { const d = Object.getOwnPropertyDescriptor(object, key); return d && Object.hasOwn(d, "value") ? d.value : undefined; };
+  const note = (fn, row) => { try { fn(); } catch (error) { root.failure(error); row?.life.failure(error); } };
+  const originalCancel = Operation.prototype.cancel, originalStop = Operation.prototype.stop, originalRejection = Operation.prototype.acceptRejection;
+  root.patch(Operation.prototype, "acceptRejection", function (...args) {
+    note(() => rejections.set(this, (rejections.get(this) ?? 0) + 1), rows.get(this));
+    return Reflect.apply(originalRejection, this, args);
+  });
+  root.patch(Operation.prototype, "cancel", function (...args) {
+    const row = rows.get(this); let current, parent;
+    note(() => { parent = cancels.get(this); current = { args, entered: row?.life.stamp(), returned: 0, threw: false }; cancels.set(this, current); }, row);
+    try { const value = Reflect.apply(originalCancel, this, args); note(() => { current.returned = row?.life.stamp(); }, row); return value; }
+    catch (error) { note(() => { current.threw = true; }, row); throw error; }
+    finally { note(() => { if (parent) cancels.set(this, parent); else cancels.delete(this); }, row); }
+  });
+  root.patch(Operation.prototype, "stop", function (...args) {
+    const row = rows.get(this); let record;
+    note(() => {
+      if (stopped.has(this)) return;
+      stopped.add(this);
+      if (!row) return;
+      const cancel = cancels.get(this), incoming = row.owner.ingress;
+      const pending = row.reading && row.life.operations.filter(op => op.reader === row.reader && op.kind === "read" && op.invoked > row.readStart);
+      record = { args, cancel, entered: row.life.stamp(), returned: 0, threw: false,
+        beforeStatus: Reflect.apply(status, this, []), beforeDelivery: Reflect.apply(delivery, this, []),
+        received: Reflect.apply(received, this, []), rejectionCount: rejections.get(this) ?? 0,
+        pending: pending?.length === 1 && pending[0].state === "pending" ? pending[0] : undefined,
+        origin: !!cancel && (incoming.abort > 0 && incoming.abort < cancel.entered && incoming.signal === own(this, "caller")
+          || downstream.has(this) && Object.is(downstream.get(this).reason, cancel.args[0])) };
+      row.stop = record;
+    }, row);
+    let value;
+    try { value = Reflect.apply(originalStop, this, args); }
+    catch (error) { note(() => { if (record) record.threw = true; }, row); throw error; }
+    note(() => { if (record) { record.returned = row.life.stamp(); record.status = Reflect.apply(status, this, []); record.delivery = Reflect.apply(delivery, this, []); } }, row);
+    return value;
+  });
+  return {
+    bind(operation, response, reader) { note(() => {
+      if (rows.has(operation)) throw new Error("Duplicate original Worker operation");
+      const owners = outgoing.filter(owner => owner.response === response && owner.signal === own(operation, "signal"));
+      if (owners.length !== 1) return;
+      const owner = owners[0], life = owner.lifetime, incoming = owner.ingress;
+      const row = life.readers.find(row => row.reader === reader && row.body === response.body && row.owner === owner);
+      if (!row || !incoming || incoming.id !== owner.id || incoming.signal !== own(operation, "caller")
+        || owner.method !== "POST" || incoming.method !== "POST" || !owner.returned || !owner.original
+        || stopped.has(operation) || rejections.has(operation) || Reflect.apply(received, operation, [])
+        || Reflect.apply(status, operation, []) !== undefined || Reflect.apply(delivery, operation, []) !== undefined) return;
+      rows.set(operation, { operation, owner, life, reader: row, body: response.body, bound: life.stamp(), failures: [], reading: false });
+    }); },
+    readStart(operation, reader) { const row = rows.get(operation); note(() => { if (row?.reader.reader === reader) { if (row.reading) throw new Error("Overlapping original Worker read"); row.reading = true; row.readStart = row.life.stamp(); } }, row); },
+    readDone(operation, reader) { const row = rows.get(operation); note(() => { if (row?.reader.reader === reader) row.reading = false; }, row); },
+    failure(operation, reader, error) { const row = rows.get(operation); note(() => { if (row?.reader.reader === reader) { row.failures.push({ error, at: row.life.stamp(), reading: row.reading, readStart: row.readStart }); row.reading = false; } }, row); },
+    inspection(operation, inspection, delivered) { const row = rows.get(operation); note(() => { if (row) { if (row.inspection) throw new Error("Duplicate Worker outcome"); row.inspection = { outcome: own(inspection, "outcome"), delivered, at: row.life.stamp() }; } }, row); },
+    downstreamStart(operation, reason) { let previous; note(() => { previous = downstream.get(operation); downstream.set(operation, { reason }); }, rows.get(operation)); return previous; },
+    downstreamEnd(operation, previous) { note(() => { if (previous) downstream.set(operation, previous); else downstream.delete(operation); }, rows.get(operation)); },
+    matches(op) {
+      const matching = [...rows.values()].filter(row => row.owner === op.owner && row.reader === op.reader);
+      if (matching.length !== 1) return false;
+      const row = matching[0], stop = row.stop, cancel = stop?.cancel, failure = row.failures.length === 1 ? row.failures[0] : undefined;
+      return outgoing.includes(row.owner) && row.owner.lifetime === row.life && row.owner.ingress.id === row.owner.id
+        && row.owner.signal === own(row.operation, "signal") && row.owner.ingress.signal === own(row.operation, "caller")
+        && Object.getPrototypeOf(row.operation) === Operation.prototype && op.reader.body === row.body && op.receiver === row.reader.reader
+        && stop?.pending === op && stop.origin === true && stop.beforeStatus === undefined && stop.beforeDelivery === undefined
+        && stop.received === false && stop.rejectionCount === 0 && !rejections.has(row.operation) && stop.args[0] === "caller"
+        && stop.status === "client_error" && stop.delivery === "canceled" && !stop.threw && cancel && !cancel.threw
+        && cancel.entered < stop.entered && stop.entered < stop.returned && stop.returned < cancel.returned
+        && row.bound < failure?.readStart && failure.readStart < op.invoked && op.invoked < stop.entered
+        && failure.reading === true && Object.is(failure.error, op.reason) && cancel.returned < failure.at
+        && row.inspection?.outcome === null && row.inspection.delivered === "canceled" && row.inspection.at < failure.at;
+    },
+  };
+}
+
+function workerReadDisposition(life, op, source, outcome) {
+  if (op.kind !== "read" || op.state !== "rejected" || !outcome.matches(op)) return false;
+  const row = op.reader, owner = op.owner;
+  if (!source || source.id !== owner.id || source.calls !== 1 || source.cancelCalls !== 1 || source.cancelReturned !== 1
+    || source.settled !== true || source.active !== 0 || source.expired !== false || source.failed !== 0
+    || !life.readers.includes(row) || row.owner !== owner || row.unlocks !== 1 || row.unlocked !== 1 || row.body.locked) return false;
+  const related = life.operations.filter(item => item.reader === row), cancel = related.filter(item => item.kind === "cancel"), closed = related.filter(item => item.kind === "closed");
+  return cancel.length === 1 && closed.length === 1 && closed[0].state === "fulfilled"
+    && cancel[0].state === "fulfilled" && cancel[0].owner === owner && cancel[0].receiver === row.reader
+    && op.invoked < cancel[0].invoked && cancel[0].invoked < op.settled && op.settled < row.unlockInvoke
+    && cancel[0].settled < row.unlockInvoke && related.filter(item => item.state !== "fulfilled").length === 1;
+}
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+import { HttpOperation } from "./worker/http-operation.ts";
+import { zaiOutcome } from "zai-outcome-witness";
 const regional = ${JSON.stringify(regionalRows)};
 ${originalLifetime.toString()}
 ${reservationObserver.toString()}
+${createWorkerOutcomeWitness.toString()}
+${workerReadDisposition.toString()}
 ${retireOwners.toString()}
 const reservations = {};
 const ownership = (${workerOwnership.toString()})();
 const controlOwners = Object.fromEntries(${JSON.stringify(nativeControlCases().map(row => row.id))}.map(id => [id, (${workerOwnership.toString()})()]));
-const ingress = {}, requestWaits = new Map();
+const ingress = {}, requestWaits = new Map(), incoming = new Map(), outgoing = [], sources = new Map();
+zaiOutcome.current = createWorkerOutcomeWitness(HttpOperation, ownership.lifetime, outgoing);
+for (const owner of [ownership, ...Object.values(controlOwners)]) owner.assess = op => workerReadDisposition(owner.lifetime, op, sources.get(op.owner.id), zaiOutcome.current);
+function sourceProof(call, all) { return { ...call.source, id: call.id, calls: all.filter(row => row.id === call.id).length, expired: call.fixtureExpired === true }; }
 const requestIds = ${JSON.stringify([...ids, ...regionalRows.map(row => row.id)])};
 const callerIds = new Map(requestIds.map(id => ["Bearer clawrouter-live-zai_" + id + "-fixture-secret", id]));
 const serverIds = new Map(requestIds.flatMap(id => [["Bearer fixture-upstream-" + id, id], ["Bearer fixture-upstream-" + id + "-rotated", id]]));
@@ -157,10 +295,12 @@ globalThis.fetch = function(...args) {
   if (!["api.z.ai", "open.bigmodel.cn"].includes(url.hostname)) return original;
   const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
   const id = serverIds.get(headers.get("authorization"));
-  const selectedOwner = controlOwners[id] ?? ownership, waitUntil = requestWaits.get(id), owner = { input, init, original, waitUntil };
+  const selectedOwner = controlOwners[id] ?? ownership, waitUntil = requestWaits.get(id), owner = { input, init, original, waitUntil, id, ingress: incoming.get(id),
+    method: init?.method ?? (input instanceof Request ? input.method : "GET"), signal: init?.signal ?? (input instanceof Request ? input.signal : undefined), lifetime: selectedOwner.lifetime, returned: false };
+  outgoing.push(owner);
   if (!waitUntil) selectedOwner.failure(new Error("Missing original request I/O owner"));
   selectedOwner.track("fetch", original);
-  original.then(response => selectedOwner.response(response, owner), error => selectedOwner.failure(error));
+  original.then(response => { owner.response = response; owner.returned = true; selectedOwner.response(response, owner); }, error => selectedOwner.failure(error));
   return original;
 };
 export default { ...handler, async fetch(request, env, context) {
@@ -168,14 +308,21 @@ export default { ...handler, async fetch(request, env, context) {
     const id = new URL(request.url).searchParams.get("id"), owner = controlOwners[id];
     if (!owner) return new Response(null, { status: 400 });
     let router, upstream, failed = false;
-    try { router = await owner.retire(); } catch { router = owner.summary(); failed = true; }
     const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/control?id=" + id]);
     upstream = await response.json(); failed ||= response.status !== 200;
+    if (!failed && upstream.source) sources.set(id, upstream.source);
+    try { router = await owner.retire(); } catch { router = owner.summary(); failed = true; }
     return Response.json({ router, upstream: upstream.proof, calls: upstream.calls, expired: upstream.expired, ingress: ingress[id] ?? 0 }, { status: failed ? 503 : 200 });
   }
   if (new URL(request.url).pathname === "/fixture/reservations") return Response.json(reservations);
   if (new URL(request.url).pathname === "/fixture/retire") {
-    try { return Response.json(await retireOwners([ownership, ...Object.values(controlOwners)])); }
+    try {
+      const retired = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/retire"]);
+      if (retired.status !== 200) throw new Error("Upstream source retirement failed");
+      const calls = await (await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/state"])).json();
+      for (const call of calls) sources.set(call.id, sourceProof(call, calls));
+      return Response.json(await retireOwners([ownership, ...Object.values(controlOwners)]));
+    }
     catch { return Response.json({ pending: null, rejected: null }, { status: 503 }); }
   }
   if (new URL(request.url).pathname === "/fixture/rotate") {
@@ -207,7 +354,14 @@ export default { ...handler, async fetch(request, env, context) {
   if (row?.credential === "environment") selected[row.binding] = "fixture-upstream-" + row.id;
   const selectedOwner = controlOwners[row?.id] ?? ownership;
   const callerId = callerIds.get(request.headers.get("authorization"));
-  if (callerId) requestWaits.set(callerId, context.waitUntil.bind(context));
+  if (callerId) {
+    requestWaits.set(callerId, context.waitUntil.bind(context));
+    const owner = { id: callerId, request, method: request.method, signal: request.signal, abort: 0 };
+    const aborted = () => { owner.abort = selectedOwner.lifetime.stamp(); };
+    request.signal.addEventListener("abort", aborted, { once: true });
+    incoming.set(callerId, owner);
+    selectedOwner.lifetime.onRestore(() => request.signal.removeEventListener("abort", aborted));
+  }
   if (controlOwners[row?.id]) ingress[row.id] = (ingress[row.id] ?? 0) + 1;
   return selectedOwner.track("handler", handler.fetch(request, selected, { ...context, waitUntil(original) { selectedOwner.track("waitUntil", original); context.waitUntil(original); } }));
 } };`;
@@ -216,7 +370,7 @@ function upstreamFixture() {
   return `${retireOwners.toString()}
 const calls = []; const regional = ${JSON.stringify(regionalRows)}; const globalOwnership = (${workerOwnership.toString()})();
   const controlOwners = Object.fromEntries(${JSON.stringify(nativeControlCases().map(row => row.id))}.map(id => [id, (${workerOwnership.toString()})()]));
-  export default { async fetch(request) {
+  export default { async fetch(request, env, context) {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
     if (request.url === "https://fixture.example/retire") { try { return Response.json(await retireOwners([globalOwnership, ...Object.values(controlOwners)])); } catch { return Response.json({ pending: null, rejected: null }, { status: 503 }); } }
     if (new URL(request.url).pathname === "/control") {
@@ -224,11 +378,12 @@ const calls = []; const regional = ${JSON.stringify(regionalRows)}; const global
       if (!owner) return new Response(null, { status: 400 });
       const matching = calls.filter(call => call.authorization === "Bearer fixture-upstream-" + id);
       let proof, failed = false; try { proof = await owner.retire(); } catch { proof = owner.summary(); failed = true; }
-      return Response.json({ proof, calls: matching.length, expired: matching.some(call => call.fixtureExpired === true) }, { status: failed ? 503 : 200 });
+      return Response.json({ proof, calls: matching.length, expired: matching.some(call => call.fixtureExpired === true),
+        source: matching.length === 1 ? { ...matching[0].source, id, calls: 1, expired: matching[0].fixtureExpired === true } : null }, { status: failed ? 503 : 200 });
     }
     const requestId = request.headers.get("authorization")?.replace(/^Bearer fixture-upstream-/, "");
     const ownership = controlOwners[requestId] ?? globalOwnership;
-    const body = await ownership.track("request-json", request.json()); const call = { url: request.url, authorization: request.headers.get("authorization"), apiKey: request.headers.get("api-key"), xApiKey: request.headers.get("x-api-key"), body }; calls.push(call);
+    const body = await ownership.track("request-json", request.json()); const call = { id: requestId, source: { cancelCalls: 0, cancelReturned: 0, settled: false, active: 0, failed: 0 }, url: request.url, authorization: request.headers.get("authorization"), apiKey: request.headers.get("api-key"), xApiKey: request.headers.get("x-api-key"), body }; calls.push(call);
     const id = request.headers.get("authorization").replace("Bearer fixture-upstream-", "");
     const row = regional.find(row => id === row.id || id === row.id + "-rotated"), outcome = row?.outcome;
     if (id === "http_error" || outcome?.startsWith("http")) return Response.json({ error: { message: "synthetic provider rejection" } }, { status: id === "http_error" ? 401 : Number(outcome.slice(4)) });
@@ -239,6 +394,9 @@ const calls = []; const regional = ${JSON.stringify(regionalRows)}; const global
         + (outcome === "cancel" ? "" : frame({ id: "chat_fixture", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], ...usage }) + (id === "control_success" ? "" : "data: [DONE]\\n\\n"));
     const bytes = new TextEncoder().encode(wire); let offset = 0, finish, fail, timer, wake, beats = 0;
     const originalCompletion = new Promise((resolve, reject) => { finish = resolve; fail = reject; }); ownership.track("source", originalCompletion);
+    context.waitUntil(originalCompletion);
+    const sourceObserved = originalCompletion.then(() => { call.source.settled = true; }, () => { call.source.failed++; });
+    ownership.track("source-observer", sourceObserved); context.waitUntil(sourceObserved);
     const stop = () => { clearTimeout(timer); wake?.(); };
     const abort = () => { call.aborted = true; stop(); };
     request.signal.addEventListener("abort", abort, { once: true });
@@ -252,8 +410,11 @@ const calls = []; const regional = ${JSON.stringify(regionalRows)}; const global
         else c.enqueue(new TextEncoder().encode(": fixture heartbeat\\n\\n"));
         resolve();
       }, 50); });
-      ownership.track("pull", original); return original;
-    }, cancel() { call.cancelled = true; retired(); finish(); } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+      call.source.active++;
+      ownership.track("pull", original); context.waitUntil(original);
+      const observed = original.then(() => { call.source.active--; }, () => { call.source.active--; call.source.failed++; });
+      ownership.track("pull-observer", observed); context.waitUntil(observed); return original;
+    }, cancel() { call.source.cancelCalls++; call.cancelled = true; retired(); finish(); call.source.cancelReturned++; } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
   } };`;
 }
 
@@ -262,18 +423,18 @@ async function retireOwners(owners) {
   const settled = await Promise.allSettled(owners.map(owner => { try { return owner.retire(); } catch (error) { return Promise.reject(error); } }));
   const errors = settled.filter(row => row.status === "rejected").map(row => row.reason);
   if (errors.length) throw new AggregateError(errors, "Worker owners failed");
-  return settled.reduce((sum, row) => ({ operations: sum.operations + row.value.operations, pending: sum.pending + row.value.pending, rejected: sum.rejected + row.value.rejected }), { operations: 0, pending: 0, rejected: 0 });
+  return settled.reduce((sum, row) => ({ operations: sum.operations + row.value.operations, pending: sum.pending + row.value.pending, rejected: sum.rejected + row.value.rejected, qualifiedReadRejections: sum.qualifiedReadRejections + row.value.qualifiedReadRejections }), { operations: 0, pending: 0, rejected: 0, qualifiedReadRejections: 0 });
 }
 
 function workerOwnership() {
-  const operations = [], failures = []; let completion;
+  const operations = [], failures = []; let completion, qualifiedReadRejections = 0;
   const lifetime = typeof originalLifetime === "function" ? originalLifetime() : null;
   function track(kind, original) {
     const record = { kind, original, state: "pending" }; operations.push(record);
     Promise.resolve(original).then(() => { record.state = "fulfilled"; }, error => { record.state = "rejected"; record.error = error; });
     return original;
   }
-  function summary() { const body = lifetime?.summary(); return { operations: operations.length + (body?.operations ?? 0), pending: operations.filter(op => op.state === "pending").length + (body?.pending ?? 0), rejected: operations.filter(op => op.state === "rejected").length + failures.length + (body?.rejected ?? 0) }; }
+  function summary() { const body = lifetime?.summary(); return { qualifiedReadRejections, operations: operations.length + (body?.operations ?? 0), pending: operations.filter(op => op.state === "pending").length + (body?.pending ?? 0), rejected: operations.filter(op => op.state === "rejected").length + failures.length + (body?.rejected ?? 0) }; }
   function retire() {
     return completion ??= (async () => {
       let count = -1;
@@ -282,13 +443,20 @@ function workerOwnership() {
         await Promise.allSettled(operations.map(op => op.original)); await lifetime?.settle();
       }
       const errors = [...failures, ...operations.filter(op => op.state !== "fulfilled").map(op => op.error)];
-      try { await lifetime?.join(); } catch (error) { errors.push(error); }
+      if (lifetime) {
+        const inspected = lifetime.inspect(); errors.push(...inspected.structural);
+        let admitted = [];
+        try { if (errors.length === 0) admitted = inspected.rejected.filter(op => api.assess?.(op) === true); } catch (error) { errors.push(error); }
+        qualifiedReadRejections = admitted.length;
+        for (const op of inspected.rejected) if (!admitted.includes(op)) errors.push(op.reason);
+      }
       try { lifetime?.restore(); } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, "Original Worker work failed");
       return summary();
     })();
   }
-  return { track, retire, summary, failure: error => failures.push(error), response(response, owner) { try { lifetime.observeResponse(response, owner); } catch (error) { failures.push(error); } } };
+  const api = { track, retire, summary, lifetime, assess: undefined, failure: error => failures.push(error), response(response, owner) { try { lifetime.observeResponse(response, owner); } catch (error) { failures.push(error); } } };
+  return api;
 }
 
 function reservationObserver(namespace, onReserve) {
@@ -436,7 +604,8 @@ test("diagnostics reject hostile fields without invoking getters and retain esse
 
 test("both generated Worker fixtures and the authored SDK file transform under owned frozen tools", async () => {
   esbuild.transformSync(sdkSource, { loader: "ts", format: "esm" });
-  for (const [name, contents] of [["router", routerFixture()], ["upstream", upstreamFixture()]]) {
+  assert.ok((await bundleZaiOutcome(routerFixture())).length > 0);
+  for (const [name, contents] of [["upstream", upstreamFixture()]]) {
     const result = await esbuild.build({ stdin: { contents, resolveDir: process.cwd(), sourcefile: `${name}-zai-fixture.ts`, loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
     assert.equal(result.errors.length, 0); assert.ok(result.outputFiles[0].text.length > 0);
   }
@@ -655,4 +824,117 @@ test("ZAI actual replay callback owns its captured provider across suspension an
     assert.equal(storage.getStore(), outer);
   });
   assert.equal(new Set(registries).size, registries.length); assert.equal(storage.getStore(), undefined);
+});
+
+test("ZAI Worker outcome binds original reads and keeps independent failures strict", async () => {
+  const proxy = workerOutcomeOverlay(readFileSync(new URL("../worker/proxy.ts", import.meta.url), "utf8"), "proxy.ts");
+  const inner = proxy.slice(proxy.indexOf("function ownOrdinaryResponse("), proxy.indexOf("\nasync function proxySelected("));
+  const code = await bundleZaiOutcome('import { HttpOperation, InternalHttpAbort } from "./worker/http-operation.ts"; import { inputRetirement } from "./worker/input-retirement.ts"; import { ProxyCompletion } from "./worker/proxy-completion.ts"; import { zaiOutcome } from "zai-outcome-witness"; export { observeUsage } from "./worker/proxy-response.ts"; ' + inner + '; export { HttpOperation, InternalHttpAbort, ProxyCompletion, ownOrdinaryResponse, zaiOutcome };');
+  const { HttpOperation, InternalHttpAbort, ProxyCompletion, ownOrdinaryResponse, observeUsage, zaiOutcome } = await import("data:text/javascript;base64," + Buffer.from(code).toString("base64"));
+  const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+  const modes = ["caller", "downstream", "undefined_read", "false_read", "foreign_reason", "prior_400", "revoked_400", "prior_500", "deadline", "upstream",
+    "protocol", "early_read", "foreign_ingress", "foreign_outbound", "foreign_response", "no_handler", "missing_source", "expired_source", "held_source", "failed_source",
+    "duplicate_cancel", "cancel_failure", "closed_failure", "unlock_failure", "handler_failure", "waitUntil_failure", "observer_undefined", "restoration_undefined",
+    "wrong_source", "missing_cancel", "duplicate_source_cancel", "unreturned_cancel", "unsettled_source", "registration_undefined", "foreign_aggregate"];
+  for (const mode of modes) {
+    const store = workerOwnership(), life = store.lifetime, caller = new AbortController();
+    const incoming = { id: "control_cancel", method: "POST", signal: caller.signal, abort: 0 };
+    caller.signal.addEventListener("abort", () => { incoming.abort = life.stamp(); }, { once: true });
+    const operation = new HttpOperation(caller.signal);
+    const owner = { id: incoming.id, method: "POST", signal: operation.signal, ingress: incoming, lifetime: life, returned: true };
+    const outgoing = [owner], witness = createWorkerOutcomeWitness(HttpOperation, life, outgoing); zaiOutcome.current = witness;
+    let source = { id: owner.id, calls: 1, cancelCalls: 1, cancelReturned: 1, settled: true, active: 0, expired: false, failed: 0 };
+    if (mode === "missing_source") source = undefined;
+    if (mode === "expired_source") source.expired = true;
+    if (mode === "held_source") source.active = 1;
+    if (mode === "failed_source") source.failed = 1;
+    if (mode === "wrong_source") source.id = "foreign";
+    if (mode === "missing_cancel") source.cancelCalls = 0;
+    if (mode === "duplicate_source_cancel") source.cancelCalls = 2;
+    if (mode === "unreturned_cancel") source.cancelReturned = 0;
+    if (mode === "unsettled_source") source.settled = false;
+    store.assess = op => workerReadDisposition(life, op, source, witness);
+    if (mode === "no_handler") witness.failure = () => {};
+    if (mode === "foreign_ingress") owner.ingress = { ...incoming, signal: new AbortController().signal };
+    if (mode === "foreign_outbound") owner.signal = new AbortController().signal;
+    const read = deferred(), closed = deferred(), reason = mode === "undefined_read" ? undefined : mode === "false_read" ? false : new Error("secondary read"), abort = new Error("caller intent");
+    let reads = 0, cancels = 0, unlocks = 0;
+    const reader = { closed: closed.promise,
+      read() { if (++reads === 1) return Promise.resolve({ done: false, value: new TextEncoder().encode(mode === "protocol" ? 'data: {"error":{"message":"synthetic"}}\n\n' : 'data: {"choices":[{"delta":{"content":"synthetic"},"finish_reason":null}]}\n\n') }); return read.promise; },
+      cancel() { cancels++; read.reject(reason); if (mode === "closed_failure") closed.reject(undefined); else closed.resolve(); return mode === "cancel_failure" ? Promise.reject(undefined) : Promise.resolve(); },
+      releaseLock() { unlocks++; if (mode === "unlock_failure") throw undefined; },
+    };
+    const response = new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+    Object.defineProperty(response.body, "getReader", { configurable: true, value: () => reader });
+    owner.response = mode === "foreign_response" ? new Response() : response; owner.original = Promise.resolve(response);
+    store.track("fetch", owner.original); life.observeResponse(response, owner);
+    const completion = new ProxyCompletion(), forwarded = ownOrdinaryResponse(response, completion, operation); completion.seal();
+    assert.notEqual(forwarded.body, response.body);
+    const observed = observeUsage(forwarded, operation), downstream = observed.response.body.getReader();
+    await downstream.read(); const pending = downstream.read();
+    const settled = Promise.allSettled([pending, observed.retired, observed.result, read.promise, closed.promise, completion.completion]);
+    for (let i = 0; i < 10 && reads !== 2; i++) await Promise.resolve(); assert.equal(reads, 2, mode);
+    if (["prior_400", "revoked_400", "prior_500"].includes(mode)) operation.acceptRejection(mode === "prior_500" ? 500 : 400);
+    if (mode === "revoked_400") operation.revokeRejection();
+    if (mode === "early_read") { read.reject(reason); await Promise.allSettled([pending]); }
+    if (mode === "deadline") operation.cancel(new InternalHttpAbort("deadline", "synthetic"));
+    if (mode === "upstream") operation.stop("upstream", reason);
+    if (mode === "observer_undefined") life.failure(undefined);
+    if (mode === "registration_undefined") store.failure(undefined);
+    if (mode === "foreign_aggregate") store.failure(new AggregateError([reason], "independent original failure"));
+    if (mode === "restoration_undefined") life.onRestore(() => { throw undefined; });
+    if (mode === "caller") caller.abort(abort); else await Promise.allSettled([downstream.cancel(abort)]);
+    if (mode === "duplicate_cancel") await reader.cancel();
+    await settled;
+    store.track("handler", mode === "handler_failure" ? Promise.reject(undefined) : Promise.resolve());
+    store.track("waitUntil", mode === "waitUntil_failure" ? Promise.reject(undefined) : Promise.resolve());
+    const positive = ["caller", "downstream", "undefined_read", "false_read", "foreign_reason"].includes(mode);
+    if (positive) {
+      const proof = await store.retire(); assert.equal(proof.rejected, 1, mode); assert.equal(proof.qualifiedReadRejections, 1, mode);
+      assert.equal(operation.status, "client_error", mode); assert.equal((await observed.result).delivery, "canceled", mode); assert.equal(cancels, 1, mode); assert.equal(unlocks, 1, mode);
+      const rejected = life.operations.find(op => op.rejected); assert.equal(rejected.original, read.promise); assert.equal(rejected.reason, reason); assert.equal(witness.matches(rejected), true, mode);
+    } else await assert.rejects(store.retire(), AggregateError, mode);
+    downstream.releaseLock();
+  }
+});
+
+test("ZAI outcome overlay and original falsey throws fail closed", () => {
+  const text = readFileSync(new URL("../worker/proxy.ts", import.meta.url), "utf8");
+  assert.throws(() => workerOutcomeOverlay(text + "\n", "proxy.ts"), assert.AssertionError);
+  for (const reason of [undefined, false, null]) {
+    class Operation { get status() {} get delivery() {} get receivedRejection() { return false; } cancel() { throw reason; } stop() { throw reason; } acceptRejection() { throw reason; } }
+    const life = originalLifetime(); createWorkerOutcomeWitness(Operation, life, []);
+    for (const method of ["cancel", "stop", "acceptRejection"]) { let caught = false; try { new Operation()[method]("caller", reason); } catch (actual) { caught = true; assert.equal(actual, reason); } assert.equal(caught, true); }
+    life.restore();
+  }
+});
+
+test("actual ZAI Worker cancellation joins source and preserves its rejected read", { timeout: 45_000 }, async () => {
+  const { startBundledWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-zai-cancel-")); let mf;
+  await allFailures(async () => {
+    mf = await startBundledWorkerdFixture(temporary, await bundleZaiOutcome(routerFixture()), upstreamFixture(), { directRouter: true });
+    const id = "control_cancel", kv = await mf.getKVNamespace("POLICY_KV", "router");
+    await kv.put("policies/zai_" + id, JSON.stringify({ enabled: true, generation: "fixture", tenantId: "fixture", providers: ["zai"], models: ["zai/glm-5.3"],
+      grantRouting: { eligibleGrants: { zai: ["zai"] }, environmentFallback: false }, monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false }));
+    await kv.put("credentials/zai_" + id, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: "zai_" + id, policyGeneration: "fixture" }));
+    await kv.put("connections/zai", JSON.stringify({ providerId: "zai", enabled: true }));
+    const origin = (await mf.unsafeGetDirectURL("router")).origin, caller = new AbortController();
+    assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    const response = await fetch(origin + "/v1/native/zai/chat/completions", { method: "POST", signal: caller.signal,
+      headers: { authorization: "Bearer clawrouter-live-zai_control_cancel-fixture-secret", "content-type": "application/json" },
+      body: JSON.stringify({ model: "glm-5.3", stream: true, messages: [{ role: "user", content: "zai_control_cancel" }] }) });
+    assert.equal(response.status, 200); const reader = response.body.getReader(); let bytes = 0;
+    while (bytes < 180) { const next = await reader.read(); assert.equal(next.done, false); bytes += next.value.length; }
+    const reason = new Error("owned local client cancellation"); caller.abort(reason);
+    await reader.cancel().catch(error => { assert.equal(error, reason); }); reader.releaseLock();
+    const control = await fetch(origin + "/fixture/control?id=" + id, { signal: AbortSignal.timeout(15_000) }), proof = await control.json();
+    assert.equal(control.status, 200, JSON.stringify(proof)); assert.equal(proof.router.pending, 0); assert.equal(proof.router.rejected, 1);
+    assert.equal(proof.router.qualifiedReadRejections, 1); assert.equal(proof.upstream.rejected, 0); assert.equal(proof.upstream.pending, 0);
+    assert.equal(proof.expired, false); assert.equal(proof.calls, 1); assert.equal(proof.ingress, 1);
+    const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
+    assert.equal(calls.length, 1); assert.deepEqual(calls[0].source, { cancelCalls: 1, cancelReturned: 1, settled: true, active: 0, failed: 0 });
+    await verifyRegional(origin, nativeControlCases().find(row => row.id === id), calls);
+    const retired = await fetch(origin + "/fixture/retire", { signal: AbortSignal.timeout(15_000) }); assert.equal(retired.status, 200);
+  }, [async () => { await mf?.dispose(); }, () => rm(temporary, { recursive: true, force: true })]);
 });
