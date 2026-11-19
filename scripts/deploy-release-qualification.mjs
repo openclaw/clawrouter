@@ -6,7 +6,7 @@ import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { assertDeploymentAction, assertActivationAllowed } from './deploy-authorization.mjs';
+import { assertDeploymentAction } from './deploy-authorization.mjs';
 import { qualificationIdentity, createIsolatedResources, observeResource, saveReceipt } from './deploy-release-resources.mjs';
 import { createApi } from './deploy-train-api.mjs';
 import { createNativeControl, observeNativeControl, nativeWarm } from './deploy-native-cutover.mjs';
@@ -197,7 +197,7 @@ export async function qualifyRelease({ state, stage = 'release', env = process.e
   return receipt;
 }
 export async function main(env=process.env){
-  assertDeploymentAction(env);assertActivationAllowed(env);
+  assertDeploymentAction(env);
   const state=JSON.parse(await readFile(env.QUALIFICATION_PLAN_PATH,'utf8'));
   assert.equal(state.sha,env.GITHUB_SHA);
   await qualifyRelease({state,stage:env.QUALIFICATION_STAGE,env});

@@ -55,7 +55,6 @@ jobs:
       CLAWROUTER_OMIT_ROUTES: "1"
       GH_TOKEN: ${{ github.token }}
       TRAIN_PLAN_PATH: ${{ github.workspace }}/clawrouter-train-plan.json
-      CLAWROUTER_DEPLOY_PAUSED: ${{ vars.CLAWROUTER_DEPLOY_PAUSED }}
       TRAIN_EVIDENCE_DIRECTORY: ${{ github.workspace }}/release-evidence
       TRAIN_STATE_PATH: ${{ github.workspace }}/clawrouter-train-state.json
     steps:

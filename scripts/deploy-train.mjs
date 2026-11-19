@@ -13,7 +13,7 @@ import { verifyObservability } from './deploy-train-observability.mjs';
 import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
-import { assertDeploymentAction, assertActivationAllowed } from './deploy-authorization.mjs';
+import { assertDeploymentAction } from './deploy-authorization.mjs';
 import { nativeReceipt, assertRuntimePair, verifyRuntimeRecovery } from './deploy-train-runtime.mjs';
 import { prepareNativeUpload, nativeUploadConfig } from './deploy-train-artifacts.mjs';
 import { runNativeCutover, recoverNativeCutover, createNativeControl } from './deploy-native-cutover.mjs';
@@ -159,7 +159,6 @@ function saveState(path, state) {
 }
 export async function main(env = process.env) {
   assertDeploymentAction(env);
-  assertActivationAllowed(env);
   const state = JSON.parse(readFileSync(env.TRAIN_PLAN_PATH, 'utf8'));
   if (state.noop) return;
   assertDeploymentAction(env,state.sha);

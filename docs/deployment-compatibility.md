@@ -9,8 +9,9 @@ through your GitHub login; it never invokes Wrangler locally.
 The action freezes the event's main SHA, displays it, and waits at most 15 minutes
 for that exact source's main push CI. It never substitutes an older green commit.
 Main advancing during a release does not change the selected source. A failed or
-unfinished CI run stops before exposure. If the source and native artifact already
-run, the action is a no-op. A completed control bridge with the desired payload
+unfinished CI run stops before exposure. CI is a deployment requirement, not a
+merge-enforcement rule; main may advance while its CI is failed or incomplete.
+If the source and native artifact already run, the action is a no-op. A completed control bridge with the desired payload
 still pending is detected automatically on the next run, even at the same SHA.
 
 ## Automatic release paths
@@ -103,11 +104,10 @@ account. The action reads the account workers.dev subdomain. Account, domain,
 Access administration and genuinely new provider credentials are standing setup;
 those are not per-release deployment steps. No plan upgrade is required.
 
-Repository variable `CLAWROUTER_DEPLOY_PAUSED=true` refuses newly started release
-runs. It is operational state, not a Git commit. A run already admitted has frozen
-inputs; cancel it to stop further forward progress and let its independent
-recovery finish. The pause never disables recovery or owned isolated cleanup.
-There is no `config/deployment-hold.json` reader or source hold to edit.
+Manual and scheduled runs automatically check compatibility, perform any required
+isolated qualification, roll out and recover within the same action. No manual
+release authorization, external qualification artifact, preparatory operator
+procedure or routine configuration toggle is required.
 
 All production releases and recovery share one non-cancelling workflow concurrency
 group. Single-shot writes are journaled before exposure, reconciled through bounded

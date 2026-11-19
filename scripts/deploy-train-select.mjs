@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createApi } from './deploy-train-api.mjs';
-import { assertDeploymentAction, assertActivationAllowed } from './deploy-authorization.mjs';
+import { assertDeploymentAction } from './deploy-authorization.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fullSha, LEGACY_DEPLOYMENT, stableVersion, versionSha, deploymentState } from './deploy-train-policy.mjs';
 
@@ -63,7 +63,6 @@ export function candidateCommits(deployedSha, head, runGit = git) {
 }
 export async function main(env = process.env) {
   assertDeploymentAction(env);
-  assertActivationAllowed(env);
   const api = createApi({ env });
   const deployment = await api.latest();
   const source = await deployedSource(api, deployment);

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
-import { assertDeploymentAction, assertActivationAllowed } from '../scripts/deploy-authorization.mjs';
+import { assertDeploymentAction } from '../scripts/deploy-authorization.mjs';
 import { executeRelease } from '../scripts/deploy-release-plan.mjs';
 import { qualificationIdentity, createIsolatedResources } from '../scripts/deploy-release-resources.mjs';
 import { nativeControlDigest } from '../scripts/deploy-native-qualification.mjs';
@@ -23,27 +23,29 @@ function proof(s){return {schema:2,qualified:true,source:s.sha,controlSha256:nat
 test('one input-free canonical Action retains concurrency, recovery and independent cleanup',async()=>{
   const workflow=parse(await readFile('.github/workflows/deploy-cloudflare.yml','utf8'));
   assert.equal(workflow.name,'Deploy ClawRouter');assert.equal(workflow.on.workflow_dispatch,null);
+  assert.equal(workflow.concurrency.group,'clawrouter-production-deploy');
   assert.equal(workflow.concurrency['cancel-in-progress'],false);
+  assert.deepEqual(workflow.on.schedule,[{cron:'7 10 * * 1-5',timezone:'America/Edmonton'}]);
   assert(workflow.jobs['recover-and-alert']);assert(workflow.jobs['clean-qualification']);
   assert.equal(workflow.jobs['clean-qualification'].if,'always()');
   assert.equal(JSON.parse(await readFile('package.json','utf8')).scripts['cf:deploy'],'node scripts/deploy-action.mjs');
   assert.doesNotMatch(await readFile('scripts/deploy-action.mjs','utf8'),/wrangler|CLOUDFLARE_API_TOKEN/);
 });
-test('canonical authorization rejects alternate workflows, sources and branches; pause blocks before credentials',async t=>{
+test('canonical identity rejects alternate workflows, sources and branches before credentials',async t=>{
   assert.doesNotThrow(()=>assertDeploymentAction(actionEnv));
   assert.doesNotThrow(()=>assertDeploymentAction({...actionEnv,GITHUB_EVENT_NAME:'schedule'}));
   for(const patch of [{GITHUB_WORKFLOW_REF:'other'},{GITHUB_REF:'refs/heads/topic'},{GITHUB_REPOSITORY:'fork/clawrouter'},{GITHUB_SHA:'main'},{GITHUB_EVENT_NAME:'push'}])assert.throws(()=>assertDeploymentAction({...actionEnv,...patch}));
-  assert.throws(()=>assertDeploymentAction(actionEnv,source));assert.throws(()=>assertActivationAllowed({...actionEnv,CLAWROUTER_DEPLOY_PAUSED:'true'}),/paused/);
+  assert.throws(()=>assertDeploymentAction(actionEnv,source));
   const directory=await mkdtemp(join(tmpdir(),'release-auth-'));t.after(()=>rm(directory,{recursive:true,force:true}));
   for(const path of ['scripts/deploy-train-select.mjs','scripts/deploy-train.mjs','scripts/deploy-release-qualification.mjs']){
-    await assert.rejects(exec(process.execPath,[resolve(path)],{cwd:directory,env:{...actionEnv,PATH:process.env.PATH,CLAWROUTER_DEPLOY_PAUSED:'true',CLOUDFLARE_API_TOKEN:'',GH_TOKEN:''}}),error=>{assert.match(error.stderr,/paused/);assert.doesNotMatch(error.stderr,/token missing|ENOENT/);return true;});
+    await assert.rejects(exec(process.execPath,[resolve(path)],{cwd:directory,env:{...actionEnv,PATH:process.env.PATH,GITHUB_WORKFLOW_REF:'other',CLOUDFLARE_API_TOKEN:'',GH_TOKEN:''}}),error=>{assert.match(error.stderr,/Production deployment must run through Deploy ClawRouter on main/);assert.doesNotMatch(error.stderr,/token missing|ENOENT/);return true;});
   }
 });
 test('frozen control checkout imports without an install; qualification runs in the installed candidate',async t=>{
   const directory=await mkdtemp(join(tmpdir(),'release-control-'));t.after(()=>rm(directory,{recursive:true,force:true}));
   await cp('scripts',join(directory,'scripts'),{recursive:true});
   const entrypoint=await realpath(join(directory,'scripts/deploy-train.mjs'));
-  await assert.rejects(exec(process.execPath,[entrypoint],{cwd:process.cwd(),env:{...actionEnv,PATH:process.env.PATH,CLAWROUTER_DEPLOY_PAUSED:'true'}}),error=>{assert.match(error.stderr,/paused/);assert.doesNotMatch(error.stderr,/ERR_MODULE_NOT_FOUND/);return true;});
+  await assert.rejects(exec(process.execPath,[entrypoint],{cwd:process.cwd(),env:{...actionEnv,PATH:process.env.PATH,GITHUB_WORKFLOW_REF:'other'}}),error=>{assert.match(error.stderr,/Production deployment must run through Deploy ClawRouter on main/);assert.doesNotMatch(error.stderr,/ERR_MODULE_NOT_FOUND/);return true;});
   const source=await readFile('scripts/deploy-train.mjs','utf8');
   assert.match(source,/resolve\('scripts\/deploy-release-qualification\.mjs'\)/);
 });
