@@ -104,6 +104,20 @@ invalid metadata invalidate the fallback. Responses sent to clients use
 fetch/body reads to 15 seconds; only responses up to 2 MiB are retained, with four
 entries per isolate. Larger valid responses can be served without a fallback.
 
+When no usable catalog remains, the endpoint returns HTTP 502 with
+`codex_catalog_unavailable`. The authenticated response includes
+`x-clawrouter-catalog-failure`: `upstream_http`, `upstream_timeout`,
+`upstream_transport`, `upstream_body`, `invalid_content_type`, `missing_body`,
+`body_too_large`, `invalid_utf8`, `invalid_json`, `invalid_schema`,
+`projection_failed`, or `internal`. Failures while loading upstream metadata also
+include `x-clawrouter-upstream-status` when an HTTP response was received; this
+can be 200 for invalid metadata. `projection_failed` means the router could not
+produce an authorized catalog from valid metadata. These diagnostics contain no
+upstream response content, credentials, model instructions or exception messages.
+Inspect the response headers with an HTTP client using the issued ClawRouter key;
+no underlying OpenAI credential is needed. Successful stale fallback responses
+and failures before catalog loading do not include these diagnostic headers.
+
 Remote mode uses HTTP/SSE because Codex's WebSocket setting applies to the whole
 provider, while a later metadata refresh can introduce an HTTP-only model. Desktop search remains disabled; CLI search
 modes use `?standalone_search=true` on the catalog URL, restricting refreshed
