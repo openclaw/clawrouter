@@ -17,6 +17,7 @@ const provider = JSON.parse(execFileSync(process.execPath,
   ["scripts/compile-providers.mjs", "providers/qianfan.provider.yaml"], { encoding: "utf8" })).providers[0];
 const base = "https://qianfan.baidubce.com/v2";
 const models = ["deepseek-v4-pro", "ernie-5.1", "ernie-5.0", "deepseek-v3.2", "ernie-5.0-thinking-preview"];
+const memoryModels = ["embedding-v1", "bge-large-zh", "bge-large-en"];
 const thinking = models[0];
 const vision = new Set([models[2], models[4]]);
 const toolFacts = new Set(models.slice(1));
@@ -26,7 +27,7 @@ const reasoning = model => model === models[1] ? {} : { reasoning_content: "synt
 const response = model => ({ id: "chatcmpl_fixture", object: "chat.completion", model,
   choices: [{ index: 0, message: { role: "assistant", ...reasoning(model), content: "synthetic-answer" }, finish_reason: "stop" }], usage });
 
-async function fixture(t, { ownGrant = true } = {}) {
+async function fixture(t, { ownGrant = true, memory = false } = {}) {
   const previous = snapshot.providers.find(p => p.id === provider.id), row = structuredClone(provider);
   snapshot.providers.splice(snapshot.providers.indexOf(previous), 1, row);
   t.after(() => { snapshot.providers.splice(snapshot.providers.indexOf(row), 1, previous); });
@@ -41,8 +42,8 @@ async function fixture(t, { ownGrant = true } = {}) {
   }, BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
   attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });
-  const policy = { enabled: true, generation: "fixture", providers: ["qianfan"], models: models.map(m => `qianfan/${m}`), tenantId: "fixture",
-    monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false };
+  const policy = { enabled: true, generation: "fixture", providers: ["qianfan"], models: (memory ? memoryModels : models).map(m => `qianfan/${m}`), tenantId: "fixture",
+    monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false, grantRouting: { environmentFallback: false, eligibleGrants: { qianfan: ["qianfan"] } } };
   await authorityCall(env, "/policies/initialize-all", [{ policyId: "paid", policy },
     { policyId: "unpriced", policy: { ...policy, requestCostMicros: null } }, { policyId: "foreign", policy: { ...policy, providers: ["openrouter"] } }]);
   await authorityCall(env, "/credentials/initialize-all", await Promise.all(["paid", "unpriced", "foreign"].map(async p => ({ credentialId: p,
@@ -53,8 +54,9 @@ async function fixture(t, { ownGrant = true } = {}) {
     provider: "qianfan", kind: "api_key", enabled: true, credential: "synthetic-selected-qianfan" });
   const f = { env, events, sent, grantKey: "oauth/paid/qianfan", reply: async r => Response.json(response((await r.clone().json()).model)),
     call(body, { manifest = false, policyId = "paid", discovery = false, query = "", nativePrefix = "qianfan" } = {}) {
+      const operation = memory ? "embeddings" : "chat_completions";
       const path = discovery ? (manifest ? "/v1/proxy/qianfan/models_list" : `/v1/native/${nativePrefix}/models`)
-        : (manifest ? "/v1/proxy/qianfan/chat_completions" : `/v1/native/${nativePrefix}/chat/completions`);
+        : (manifest ? `/v1/proxy/qianfan/${operation}` : `/v1/native/${nativePrefix}/${memory ? "embeddings" : "chat/completions"}`);
       return worker.fetch(new Request(`https://router.example${path}${query}`, { method: discovery ? "GET" : "POST",
         headers: { authorization: `Bearer clawrouter-live-${policyId}-fixture-${policyId}`, "content-type": "application/json", "x-api-key": "synthetic-caller-key", "x-organization-id": "synthetic-unbound-org" },
         ...(!discovery && { body: JSON.stringify(manifest ? { body } : body) }),
@@ -67,7 +69,7 @@ async function fixture(t, { ownGrant = true } = {}) {
 }
 
 test("Qianfan declaration keeps five exact frozen identities and the existing seed and only qualified native facts", () => {
-  assert.deepEqual(provider.models.map(m => m.upstream), ["ernie-4.5-0.3b", ...models]);
+  assert.deepEqual(provider.models.filter(m => m.capabilities.includes("llm.chat")).map(m => m.upstream), ["ernie-4.5-0.3b", ...models]);
   for (const m of provider.models.filter(m => models.includes(m.upstream))) {
     assert.equal(m.id, `qianfan/${m.upstream}`); assert.equal(m.pricing, null); assert.equal(m.availability, undefined);
     assert.deepEqual(m.supportedReasoningEfforts, m.upstream === thinking ? ["high", "max"] : undefined);
@@ -77,7 +79,7 @@ test("Qianfan declaration keeps five exact frozen identities and the existing se
     assert.deepEqual(native?.input, vision.has(m.upstream) ? ["text", "image"] : ["text"]);
     assert.equal(native?.contextWindow, undefined); assert.equal(native?.maxOutputTokens, m.upstream === "ernie-5.1" ? 65536 : undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "models_list"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id).sort(), ["chat_completions", "embeddings", "models_list"]);
   const metadata = provider.endpoints.find(e => e.id === "models_list");
   assert.equal(metadata.method, "GET"); assert.equal(metadata.streaming, null);
   const opaque = providerModel(provider, "qianfan/synthetic-tenant-model", provider.endpoints.find(e => e.id === "chat_completions"));
@@ -307,3 +309,38 @@ test("Qianfan fixture KV preserves stream, missing and bulk grant reads", async 
   await f.drain();
   assert.equal(f.sent.length, 0);
 });
+
+
+for (const model of memoryModels) for (const manifest of [false, true]) {
+  test(`Qianfan memory ${model}/${manifest ? "manifest" : "native"} preserves selected credentials, input order and attempt settlement`, async t => {
+    const f = await fixture(t, { memory: true });
+    f.reply = async request => {
+      const body = await request.json(); assert.deepEqual(body, { model, input: ["synthetic-first", "synthetic-second"] });
+      assert.equal(request.url, base + "/embeddings"); assert.equal(request.headers.get("authorization"), "Bearer synthetic-selected-qianfan");
+      assert.equal(request.headers.get("x-api-key"), null);
+      return Response.json({ object: "list", model, data: [{ index: 1, embedding: [3, 4] }, { index: 0, embedding: [1, 2] }], usage: { prompt_tokens: 4, total_tokens: 4 } });
+    };
+    const result = await f.call({ model: `qianfan/${model}`, input: ["synthetic-first", "synthetic-second"] }, { manifest });
+    assert.equal(result.status, 200, await result.clone().text()); const body = await result.json();
+    assert.equal(body.data.length, 2); await f.drain(); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    const [event] = f.events; assert.equal(event.model, `qianfan/${model}`); assert.equal(event.capability, "llm.embeddings");
+    assert.equal(event.provider, "qianfan"); assert.equal(event.credential_id, "paid"); assert.equal(event.policy_id, "paid");
+    assert.equal(event.status, "success"); assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed");
+    assert.equal(event.input_tokens, 4); assert.equal(event.total_tokens, 4);
+    assert.ok(event.request_id); assert.doesNotMatch(JSON.stringify(event), /synthetic-first|synthetic-second|synthetic-selected/);
+  });
+}
+
+for (const mode of ["unpriced", "foreign", "missing", "revoked", "unlisted"]) {
+  test(`Qianfan memory ${mode} retains authenticated denial receipt with zero egress and charge`, async t => {
+    const f = await fixture(t, { memory: true, ownGrant: mode !== "missing" });
+    if (mode === "revoked") await revokeGrantCredentials(f.env, f.grantKey);
+    const result = await f.call({ model: mode === "unlisted" ? "qianfan/synthetic-unlisted" : "qianfan/embedding-v1", input: ["must not dispatch"] }, { policyId: ["unpriced", "foreign"].includes(mode) ? mode : "paid" });
+    assert.ok(result.status >= 400); await result.arrayBuffer(); await f.drain();
+    assert.equal(f.sent.length, 0);
+    // Unknown model is rejected during route selection, before accounting exists.
+    if (mode === "unlisted") { assert.equal(f.events.length, 0); return; }
+    assert.equal(f.events.length, 1); assert.ok(f.events[0].request_id);
+    assert.equal(f.events[0].actual_cost_micros, 0); assert.notEqual(f.events[0].status, "success");
+  });
+}

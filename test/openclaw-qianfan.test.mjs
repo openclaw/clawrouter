@@ -11,6 +11,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { registerQianfanMemoryTests } from "./helpers/qianfan-memory.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -28,6 +29,7 @@ const sdkText = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.
 const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd = sdkText.indexOf("// END ORIGINAL LIFETIME OBSERVERS");
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
+registerQianfanMemoryTests({ source, sourceHead, observerCode });
 const { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
 // Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
 const diagnosticStart = sdkText.indexOf("// BEGIN QIANFAN FAILURE DIAGNOSTICS"), diagnosticEnd = sdkText.indexOf("// END QIANFAN FAILURE DIAGNOSTICS");
@@ -973,7 +975,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
   const diagnostics = outerDiagnostics(t);
   try {
   assert.ok(endpoint);
-  assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
+  assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.chat")).map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-qianfan-client-"));
   let mf, nativeAccepted = false;
   await preserveFailures(async () => {
