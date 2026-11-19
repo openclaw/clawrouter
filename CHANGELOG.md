@@ -1,5 +1,7 @@
 # Changelog
 
+- Run OpenClaw compatibility checks when portable provider contract sources or their build configuration change, including changes that remove or move those sources.
+
 - Join Xiaomi fixture source pull and cancellation callbacks in their original Worker request before reporting retirement. Retain independent source failures and require settled work, successful cancellation return, and the existing expiry guard; verify early and pending-read cancellation with the real local Workerd topology.
 - Keep the Xiaomi cancellation producer responsive with bounded SSE heartbeats while joining its original deadline and source callbacks. Qualify only the owned Worker read outcome after source retirement and caller-cancellation accounting; bind SDK provider-error cleanup to the controlled SSE error, original output, acquisition signal and reader. Preserve rejected states and all independent failures; hosted qualification remains required.
 - Export the compiled provider snapshot contract from the standalone provider plugin package, preserving existing shared imports and the registry wire shape.
