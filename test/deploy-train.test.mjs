@@ -298,6 +298,9 @@ test('candidate selection skips newer red commits; skipped required checks never
   await assert.rejects(selectCandidate({ api: skipped, commits: [sha], deployedSha: oldSha, manualSha: sha }), /lacks successful/);
   assert.equal((await selectCandidate({ api, commits: [], deployedSha: oldSha })).noop, true);
   assert.equal((await selectCandidate({ api, commits: [oldSha], deployedSha: oldSha, manualSha: oldSha })).noop, true);
+  assert.equal((await selectCandidate({ api, commits: [], deployedSha: sha, manualSha: sha, mode:'native-cutover' })).sha,sha);
+  assert.equal((await selectCandidate({ api, commits: [], deployedSha: sha, manualSha: sha, mode:'native-control' })).noop,true);
+  await assert.rejects(selectCandidate({api:skipped,commits:[],deployedSha:sha,manualSha:sha,mode:'native-cutover'}),/lacks successful/);
 });
 
 test('legacy source requires exact Cloudflare version plus successful attested historical run', async () => {
@@ -352,6 +355,13 @@ test('native source rejects lifecycle, container, actor and fingerprint-owner ch
   const control = commit();
   assert.throws(() => inspectSource({ blueSha: base, greenSha: control, cwd: directory }), /fingerprint protocol/);
   assert.deepEqual(inspectSource({ blueSha: base, greenSha: control, cwd: directory, nativeCutover:true }), { migration:false,unsafe:false });
+  assert.throws(()=>inspectSource({blueSha:base,greenSha:control,cwd:directory,nativeControl:true}),/fingerprint protocol/);
+  writeFileSync(join(directory,'worker/large-http/continuous.ts'),'');
+  const beforeRepair=commit();
+  for(const name of ['lifecycle','service'])writeFileSync(join(directory,'worker/large-http/'+name+'.ts'),'// journal-selected artifact identity\n');
+  const repaired=commit();
+  assert.deepEqual(inspectSource({blueSha:beforeRepair,greenSha:repaired,cwd:directory,nativeControl:true}),{migration:false,unsafe:false});
+  for(const nativeCutover of [false,true])assert.throws(()=>inspectSource({blueSha:beforeRepair,greenSha:repaired,cwd:directory,nativeCutover}),/fingerprint protocol/);
 });
 
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {

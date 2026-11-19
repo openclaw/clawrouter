@@ -95,6 +95,29 @@ receipts. Do not run two mutating clients against one directory. An owner
 subdirectory prevents concurrent writers; an abrupt runner death leaves that
 lock for operator reconciliation, not automatic inference replay.
 
+The seed writes `seed-diagnostic.json`; resumed commands write
+`overlap-<direction>-diagnostic.json` or `followup-<direction>-diagnostic.json`,
+where direction is `forward` or `recovery`. Each retains the last fixed stage
+(readiness, catalog, Codex initialization/resumption, session save, turn, overlap
+checkpoint, or client close), outcome, timestamps, and a bounded error category
+with an HTTP status or filesystem code when available. These receipts contain no
+exception text, RPC payloads, prompts, responses, or credentials. Preserve them
+alongside `evidence.json`; cleanup retains them after removing private client
+material. A second invocation of the same command/direction refuses to overwrite
+the first receipt or replay the request, including a failure before inference.
+If the process dies abruptly, a `running` receipt identifies the last entered
+stage; it does not prove whether that stage completed. Readiness remains an
+immediate strict eight-slot attestation; diagnostics do not retry observation or
+inference. Resumed app-servers are closed even if saving the pending journal fails.
+
+Coordinators can import `exerciseActions` from
+`scripts/native-rehearsal-actions.mjs` to watch the overlap child while waiting
+for its held checkpoint.
+If the child exits or fails first, stop the bounded attempt and run cleanup; do
+not wait out the checkpoint deadline, dispatch the controller, or replay the
+client. Cleanup must cancel outstanding checkpoint observations and stop owned
+process groups.
+
 ```sh
 P=.native-rehearsal-package/preparation.json
 C=/private/new-native-client
@@ -123,12 +146,36 @@ node scripts/native-rehearsal-client.mjs workloads "$P" "$C" "$RECOVERY_VERSION"
 node scripts/native-rehearsal-client.mjs inspect "$P" "$C"
 ```
 
-Workloads send success, definitive HTTP 400 rejection, a partial-response loss,
-exactly 64 MiB and 64 MiB + 1. They check actual selected version, settlement,
+Workloads send success, definitive HTTP 400 rejection, exactly 64 MiB,
+64 MiB + 1, then a partial-response loss. They check actual selected version, settlement,
 content non-retention, no replay, quarantine of only the affected slot and no
 provider call for overflow. The lost attempt must remain charged/quarantined;
 rejection must refund. Upstream scanning permits 1 MiB transform overhead beyond
 the native ingress limit (e.g. inserted store:false); client limits do not change.
+
+The original executable loss assertion accepts a complete HTTP 424 before response
+delivery, or HTTP 200 followed by a body transport failure after headers were
+forwarded. The reviewed [revision 2 disposition](proof/native-cutover-20261119/QUALIFICATION-ACCEPTANCE.md)
+also accepts this deliberate non-streaming JSON case's completely captured exact
+invalid prefix when a representative supported client rejects it without
+resending the uncertain operation. A clean HTTP EOF does not prove valid JSON.
+The frozen helper still enforces the original rule: its targeted HTTP 200 / six-byte
+clean-EOF response assertion remains failed. Do not relabel it as passing.
+The [consolidated evidence](proof/native-cutover-20261119/README.md) records the
+policy change and actual official-SDK check, separately from the original result.
+
+All accepted outcomes still require one matching fixture attempt, its exact
+quarantined grant/generation and unclean finish callback, seven unaffected
+members, one charged usage event, and matching policy/provider totals. Timeout,
+wrong version, capture-limit exhaustion, an unrelated malformed response or a
+valid complete success cannot satisfy this deliberate loss case. Normal successful
+responses must remain valid. No uncertain request is replayed.
+
+Each workload persists its case intent before dispatch and a separate
+`workload-<mode>-diagnostic.json` with bounded stages, response status/version,
+body completion and failure category. Successful cases also enter `evidence.json`
+individually, so a later failure preserves earlier envelope results. Diagnostics
+exclude raw errors, bodies, prompts and credentials; cleanup retains them.
 
 Every mutation records an intent first. On failure, run inspect; do not rerun a
 pending seed/turn/workload or clear its journal to get a green result. Keep the

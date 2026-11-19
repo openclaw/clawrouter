@@ -21,10 +21,10 @@ on:
         default: ""
         type: string
       mode:
-        description: "Same-runtime rollout/rehearsal, or separately qualified native payload cutover"
+        description: "Same-runtime rollout/rehearsal, or separately qualified native payload/control cutover"
         default: rollout
         type: choice
-        options: [rollout, zero-smoke, zero-failure, native-cutover]
+        options: [rollout, zero-smoke, zero-failure, native-cutover, native-control]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -110,6 +110,7 @@ jobs:
         working-directory: control
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          TRAIN_MODE: ${{ inputs.mode || 'rollout' }}
         run: node scripts/deploy-train-select.mjs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.select.outputs.noop == 'false'

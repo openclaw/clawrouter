@@ -25,7 +25,7 @@ export class NativeControlHttpError extends Error {
 // Convergence is explicit and bounded. A failed snapshot is never readiness,
 // and neither this helper nor the HTTP client retries a mutation.
 export async function observeNativeControl({ control, version, previousVersions = [], assertOwnership, isReady, validate = () => {},
-  now = Date.now, wait = sleep, timeoutMs = NATIVE_PHASE_TIMEOUT_MS, pollMs = 2000, onPending = () => {},
+  now = Date.now, wait = sleep, timeoutMs = NATIVE_PHASE_TIMEOUT_MS, pollMs = 2000, onPending = () => {}, onStatePending = () => {},
   deadlineMessage = 'Native control observation deadline exceeded; preserve custody' }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !Number.isFinite(pollMs) || pollMs <= 0) throw new Error('Invalid native observation bounds');
   const deadline = now() + timeoutMs;
@@ -38,17 +38,20 @@ export async function observeNativeControl({ control, version, previousVersions 
     try { s = await control.snapshot(version); }
     catch (error) {
       const previous = error instanceof NativeControlVersionMismatch && error.expected === version && previousVersions.includes(error.actual);
-      // HTTP500 alone cannot identify a reset. Only a GET from the exact
-      // selected version may remain pending inside this owned window.
+      // HTTP500 alone cannot identify a reset. A GET stamped by the selected
+      // or explicitly known previous version may remain pending only here;
+      // ownership and the same deadline are checked on every observation.
       const unavailable = error instanceof NativeControlHttpError && error.method === 'GET' && error.status === 500 &&
-        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(version ?? '') && error.expected === version && error.actual === version;
+        /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(version ?? '') && error.expected === version &&
+        (error.actual === version || /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(error.actual ?? '') && previousVersions.includes(error.actual));
       if (!previous && !unavailable) throw error;
-      onPending(previous ? {kind:'version',actual:error.actual} : {kind:'http',status:500});
+      onPending(previous ? {kind:'version',actual:error.actual} : {kind:'http',status:500,...(error.actual === version ? {} : {actual:error.actual})});
     }
     withinDeadline();
     if (s) {
       validate(s);
       if (isReady(s)) return s;
+      onStatePending(s);
     }
     await wait(Math.min(pollMs, deadline - now()));
   }
@@ -69,15 +72,22 @@ export function nativeDrained(value) {
   return !s.accepting && s.phase === 'closed' && s.slots.every(m => m.phase === 'idle' && m.ids.length === 0) &&
     s.pool.grants.length === 0 && s.pool.members.every(m => m === null) && s.pool.issued === 0 && Object.keys(s.pool.seen).length === 0;
 }
-export function nativeWarm(value, runtimeSha) {
+export function nativeWarm(value, runtimeSha, { requireArtifactControl = false } = {}) {
   const s = snapshotState(value);
-  const attested = runtimeSha === undefined || controlReady(s,runtimeSha) && Array.isArray(s.inspection) && s.inspection.length === 8 &&
+  const attested = (!requireArtifactControl || artifactControlReady(s)) && (runtimeSha === undefined || controlReady(s,runtimeSha) && Array.isArray(s.inspection) && s.inspection.length === 8 &&
     s.inspection.every((o,i) => o.slot === i && o.qualified === true && o.protocol === 1 && o.phase === 'ready' &&
       o.generation === s.slots[i].generation && o.boot === s.pool.members[i]?.boot && o.fingerprint === s.control.fingerprint &&
-      o.runtimeSha === runtimeSha && o.config?.runtimeSha === runtimeSha && o.config?.fingerprint === s.control.fingerprint);
+      o.runtimeSha === runtimeSha && o.config?.runtimeSha === runtimeSha && o.config?.fingerprint === s.control.fingerprint));
   return attested && s.accepting && s.phase === 'serving' && s.slots.every((m,i) => m.phase === 'ready' && m.generation > 0 &&
     m.fingerprint === s.slots[0].fingerprint && s.pool.members[i]?.quarantined === false &&
     /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(s.pool.members[i]?.boot ?? ''));
+}
+function artifactControlReady(s) {
+  // Inspection comes from the actual slot controller, including while idle.
+  // Equal native bytes cannot otherwise distinguish old and repaired control.
+  return s.control?.artifactProtocol === 1 && Array.isArray(s.inspection) && s.inspection.length === 8 &&
+    s.inspection.every((o,i) => o.slot === i && o.artifactProtocol === 1 && o.protocol === 1 &&
+      o.config?.runtimeSha === s.control.runtimeSha && o.config?.fingerprint === s.control.fingerprint);
 }
 function controlReady(s,runtimeSha) {
   return s.control?.schema === 1 && Number.isSafeInteger(s.control.revision) && s.control.revision >= 0 &&
@@ -107,8 +117,8 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
   }
   return {
     async snapshot(version) { const result = await request('GET',version); if (result.status !== 200) throw new Error('Native control snapshot refused'); return { ...snapshotState(result.state), control: result.control, inspection: result.slots }; },
-    async admission(accepting, version, { allowLegacy = false, runtimeSha } = {}) {
-      const before = await this.snapshot(version);
+    async admission(accepting, version, { allowLegacy = false, runtimeSha, observe = () => this.snapshot(version) } = {}) {
+      const before = await observe();
       const fenced = controlReady(before,runtimeSha ?? before.control?.runtimeSha);
       if (!fenced && (!allowLegacy || accepting)) throw new Error('Native admission control protocol is not available');
       if (!fenced && before.accepting === false) return; // legacy is only ever closed, never reopened
@@ -119,7 +129,7 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
       catch (cause) { error = cause; }
       // Never repeat an uncertain mutation. Reads reconcile a response lost after commit.
       for (let attempt=0; attempt<5; attempt++) {
-        const after = await this.snapshot(version);
+        const after = await observe();
         if (after.accepting === accepting && (!fenced || after.control?.revision === expectedRevision + 1)) return;
         if (attempt<4) await wait(1000);
       }
@@ -129,7 +139,7 @@ export function createNativeControl({ env = process.env, fetchImpl = fetch, wait
 }
 function sameOwner(remote, state) {
   return remote?.run === String(state.run) && remote.blue === state.blue && remote.green === state.green && remote.sha === state.sha &&
-    remote.native?.runtimeSha === state.native?.runtimeSha && remote.cutover?.blueRuntimeSha === state.cutover?.blueRuntimeSha && remote.cutover?.recovery === state.cutover?.recovery && remote.cutover?.nativeSource === state.cutover?.nativeSource;
+    remote.native?.runtimeSha === state.native?.runtimeSha && remote.cutover?.blueRuntimeSha === state.cutover?.blueRuntimeSha && remote.cutover?.recovery === state.cutover?.recovery && remote.cutover?.nativeSource === state.cutover?.nativeSource && remote.cutover?.kind === state.cutover?.kind;
 }
 async function owned(api, state) {
   const latest = await api.latest(), remote = deploymentState(latest);
@@ -141,23 +151,61 @@ async function journal(api,state,version,phase,save,status='rolling',immediate=f
   const result = await api.deploy([{version_id:version,percentage:100}],deploymentMessage(next),state.deploymentId,{immediate});
   Object.assign(state,next,{deploymentId:result.id});save(state);
 }
+// Content-free operational evidence, only on the deployment observation path.
+// Never include tokens, grant IDs, arbitrary inspection fields or response bodies.
+export function nativeReadinessSummary(s) {
+  const digest = v => /^[a-f0-9]{64}$/.test(v ?? '') ? v : null;
+  const phase = v => ['idle','starting','ready','draining','stopping','blocked','failed','destroying','destroyed','stopped'].includes(v) ? v : 'unknown';
+  return {accepting:s.accepting === true,phase:['serving','draining','closed'].includes(s.phase)?s.phase:'unknown',
+    runtimeSha:digest(s.control?.runtimeSha),artifactProtocol:s.control?.artifactProtocol===1?1:null,
+    slots:s.slots.map((m,i)=>{const o=s.inspection?.[i];return {slot:i,phase:phase(m.phase),generation:m.generation,owners:m.ids.length,
+      observedPhase:phase(o?.phase),qualified:o?.qualified===true,artifactProtocol:o?.artifactProtocol===1?1:null,
+      runtimeSha:digest(o?.runtimeSha),configuredRuntimeSha:digest(o?.config?.runtimeSha),
+      generationMatches:o?.generation===m.generation,bootMatches:!!s.pool.members[i]&&o?.boot===s.pool.members[i].boot,
+      fingerprintMatches:o?.fingerprint===s.control?.fingerprint&&o?.config?.fingerprint===s.control?.fingerprint,
+      quarantined:s.pool.members[i]?.quarantined===true};}),
+    grants:s.pool.grants.length,members:s.pool.members.filter(Boolean).length,issued:s.pool.issued,seen:Object.keys(s.pool.seen).length};
+}
 async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
   const observed = new Set(), runtimeSha = version === state.green ? state.native.runtimeSha : state.cutover.blueRuntimeSha;
-  await observeNativeControl({control,version,previousVersions:[state.blue,state.green,state.cutover.recovery],now,wait,timeoutMs,
+  let lastPending;
+  try { return await observeNativeControl({control,version,previousVersions:[state.blue,state.green,state.cutover.recovery],now,wait,timeoutMs,
     assertOwnership:async()=>{
       const {latest} = await owned(api,state);
       if (stableVersion(latest) !== version || latest.id !== state.deploymentId) throw new Error('Native cutover deployment changed during convergence');
     },
     validate:s=>{ if (s.slots.some(m=>m.phase==='blocked')) throw new Error('Native slot destruction is unresolved; preserve custody and inspect'); },
-    isReady:s=>kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) : nativeWarm(s,runtimeSha),
+    isReady:s=>kind === 'snapshot' || (kind === 'drain' ? nativeDrained(s) : kind === 'control' ? controlReady(s,runtimeSha) && artifactControlReady(s) : nativeWarm(s,runtimeSha,{requireArtifactControl:true})),
+    onStatePending:s=>{
+        lastPending = nativeReadinessSummary(s);
+        const key = JSON.stringify(lastPending);
+        if (!observed.has(key) && observed.size < 24) {
+          observed.add(key); console.log('Native ' + kind + ' pending ' + version + ': ' + key);
+        }
+    },
     onPending:observation=>{
-      const key = observation.kind === 'version' ? observation.actual : 'http500';
-      if (observed.has(key)) return;
+      const key = observation.kind === 'version' ? observation.actual : 'http500:' + (observation.actual ?? version);
+      if (observed.has(key) || observed.size >= 24) return;
       observed.add(key);
-      console.log('Native control awaiting Worker ' + version + (observation.kind === 'version' ? '; observed owned version ' + observation.actual : '; snapshot returned HTTP 500'));
+      console.log('Native control awaiting Worker ' + version + (observation.kind === 'version' ? '; observed owned version ' + observation.actual : '; snapshot returned HTTP 500' + (observation.actual ? '; observed owned version ' + observation.actual : '')));
     },
     deadlineMessage:'Native ' + kind + ' deadline exceeded; preserve the remote recovery journal',
-  });
+  }); } catch (error) {
+    if (lastPending) console.log('Native ' + kind + ' last pending ' + version + ': ' + JSON.stringify(lastPending));
+    throw error;
+  }
+}
+async function admission({api,state,control,version,accepting,allowLegacy=false,now,wait,timeoutMs}) {
+  // A successful convergence GET does not pin the next edge request. Keep the
+  // admission pre-read and post-write reconciliation under the same owned,
+  // bounded observation policy. The admission POST remains single-shot.
+  const deadline=now()+Math.min(timeoutMs,60_000);
+  const observe=()=>{
+    const remaining=deadline-now();
+    if(remaining<=0)throw new Error('Native admission deadline exceeded; preserve the remote recovery journal');
+    return converge({api,state,control,version,kind:allowLegacy?'snapshot':'control',now,wait,timeoutMs:remaining});
+  };
+  await control.admission(accepting,version,{allowLegacy,runtimeSha:version===state.green?state.native.runtimeSha:state.cutover.blueRuntimeSha,observe});
 }
 export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=Date.now,wait=sleep,timeoutMs=NATIVE_PHASE_TIMEOUT_MS}) {
   await verifyCutoverRecovery(api,state);
@@ -179,7 +227,7 @@ export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=
   // leaves enough remote custody for recovery without its filesystem/artifacts.
   await verifyObservability(api,state,now());
   await journal(api,state,state.blue,'draining',save);
-  await control.admission(false,state.blue,{allowLegacy:true,runtimeSha:state.cutover.blueRuntimeSha});
+  await admission({api,state,control,version:state.blue,accepting:false,allowLegacy:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.blue,kind:'drain',now,wait,timeoutMs});
   await verifyCutoverRecovery(api,state);
   // A full traffic switch alone can leave active DOs on old code for five
@@ -187,7 +235,7 @@ export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=
   await verifyObservability(api,state,now());
   await journal(api,state,state.green,'warming',save,'rolling',true);
   await converge({api,state,control,version:state.green,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-  await control.admission(true,state.green,{runtimeSha:state.native.runtimeSha});
+  await admission({api,state,control,version:state.green,accepting:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.green,kind:'warm',now,wait,timeoutMs});
   await verifyObservability(api,state,now());
   await smoke(state.green);
@@ -207,13 +255,13 @@ export async function recoverNativeCutover({api,state,control,save=()=>{},now=Da
     const phase = active===state.blue?'recover-draining-blue':active===state.green?'recover-draining-green':'recover-draining-recovery';
     if (state.cutover.phase !== phase) await journal(api,state,active,phase,save);
     if (active !== state.blue) await converge({api,state,control,version:active,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-    await control.admission(false,active,{allowLegacy:active===state.blue,runtimeSha:active===state.green?state.native.runtimeSha:state.cutover.blueRuntimeSha});
+    await admission({api,state,control,version:active,accepting:false,allowLegacy:active===state.blue,now,wait,timeoutMs});
     await converge({api,state,control,version:active,kind:'drain',now,wait,timeoutMs});
     await verifyCutoverRecovery(api,state);
     await journal(api,state,state.cutover.recovery,'recover-warming',save,'rolling',true);
   }
   await converge({api,state,control,version:state.cutover.recovery,kind:'control',now,wait,timeoutMs:Math.min(timeoutMs,60_000)});
-  await control.admission(true,state.cutover.recovery,{runtimeSha:state.cutover.blueRuntimeSha});
+  await admission({api,state,control,version:state.cutover.recovery,accepting:true,now,wait,timeoutMs});
   await converge({api,state,control,version:state.cutover.recovery,kind:'warm',now,wait,timeoutMs});
   await journal(api,state,state.cutover.recovery,'recover-warming',save,'rolled-back');
   state.recovery='compatible-native-restored'; save(state);

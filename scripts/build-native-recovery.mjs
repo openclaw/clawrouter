@@ -38,7 +38,9 @@ export async function prepareNativeRecovery({ state, configPath = '.wrangler.gen
     define:{__LARGE_HTTP_RUNTIME_SHA__:JSON.stringify(hash(runtime)),__LARGE_HTTP_RUNTIME_BYTES__:String(runtime.length)},logLevel:'silent'});
   const worker = resolve(dirname(config.main),'recovery-worker.mjs');
   const assets = resolve(dirname(configPath),config.assets.directory);
-  await writeFile(resolve(assets,'__large_http/artifact/'+hash(runtime)+'.mjs'),runtime,{flag:'wx',mode:0o600});
+  const artifact = resolve(assets,'__large_http/artifact/'+hash(runtime)+'.mjs');
+  try { await writeFile(artifact,runtime,{flag:'wx',mode:0o600}); }
+  catch (error) { if (error.code !== 'EEXIST' || hash(await readFile(artifact)) !== hash(runtime)) throw error; }
   await writeFile(worker,edge.outputFiles[0].contents,{flag:'wx',mode:0o600});
   const recoveryConfig=resolve(dirname(config.main),'recovery-source.toml');
   const text=(await readFile(configPath,'utf8')).replace(/^main =.*$/m,'main = '+JSON.stringify(worker)).replace(/^directory =.*$/m,'directory = '+JSON.stringify(assets));
