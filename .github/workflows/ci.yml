@@ -99,6 +99,13 @@ jobs:
       - name: Synthetic native rehearsal saved-client contract
         if: matrix.version == '0.164.0'
         run: node --test test/native-rehearsal.test.mjs
+      - name: Exact unattended release entrypoint (loopback, synthetic only)
+        if: matrix.version == '0.164.0'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 741e18c16200c57c009ac402f58053a77294f5b9
+          pnpm --dir admin install --frozen-lockfile
+          pnpm --dir admin build
+          node scripts/proof-deploy-release.mjs "$RUNNER_TEMP/deploy-release-proof"
       - name: Native steering and completion-race regression
         if: matrix.version == '0.164.0'
         run: node --test test/codex-interrupt.test.mjs
@@ -212,6 +219,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Fetch exact launch native source for synthetic compatibility
         run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 434a526a37fff4d91e04cc1caa5cd6aa2eff2d82
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -219,6 +229,10 @@ jobs:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
+      - name: Validate deployment compatibility in the feature PR
+        env:
+          DEPLOYMENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/check-deployment-compatibility.mjs
       - name: Script tests with bounded failure identities
         run: node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs
       - name: Validate native preflight workflow expression contexts
@@ -285,7 +299,7 @@ jobs:
       - name: Fetch pinned inventory upgrade baseline
         run: |
           git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin df8c3800fbb413fbe7db6833387a1e885d1379cb
-          git cat-file -e df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}
+          git cat-file -e 'df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}'
       - name: Worker typecheck
         run: pnpm exec tsc -p worker/tsconfig.json --noEmit
       - name: Worker tests with bounded failure identities

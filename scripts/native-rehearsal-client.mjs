@@ -9,8 +9,9 @@ import {setTimeout as sleep} from 'node:timers/promises';
 import {nativeCodexClient} from '../test/helpers/native-codex.mjs';
 import {readCodexCatalog} from './codex-catalog.mjs';
 import {isolatedNativeTarget} from './deploy-native-target.mjs';
-import {createNativeControl,nativeWarm,nativeDrained} from './deploy-native-cutover.mjs';
+import {createNativeControl,nativeWarm,nativeDrained,observeNativeControl} from './deploy-native-cutover.mjs';
 import {nativeControlDigest} from './deploy-native-qualification.mjs';
+import {assertContextAnswer,observeInterruptedTurn} from './native-session-continuity.mjs';
 import {versionId} from './deploy-train-policy.mjs';
 const hash=x=>createHash('sha256').update(x).digest('hex'),id=()=>randomBytes(16).toString('hex');
 const caseText=(caseId,mode,direction)=>'NATIVE_REHEARSAL_CASE:'+caseId+':'+mode+':'+direction;
@@ -62,11 +63,7 @@ export async function openSavedCodex({binary,home,key,threadId,env={},onStage=as
 }
 export async function finishTurn(client,started,expected){
  const completed=await until(()=>{if(client.errors.length)throw Error('Native client transport failed');return client.notifications.find(n=>n.method==='turn/completed'&&n.params.turn.id===started.turn.id);});
- assert.equal(completed.params.turn.status,'completed','native saved turn failed');
- const messages=client.notifications.filter(n=>n.method==='item/completed'&&n.params.turnId===started.turn.id&&n.params.item?.type==='agentMessage');
- assert.ok(messages.some(n=>n.params.item.text===expected),'synthetic answer must derive from prior context');
- assert.equal(client.notifications.filter(n=>n.method==='error'&&n.params.turnId===started.turn.id&&n.params.willRetry).length,0,'no native retry');
- return {turnId:started.turn.id,finishedAt:Date.now(),answerSha256:expected};
+ return assertContextAnswer(client,started,expected);
 }
 export async function runClient(command,preparation,directory,args=[],env=process.env){
  const root=resolve(directory);if(command==='setup')await mkdir(root,{mode:0o700});
@@ -110,13 +107,13 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
  }
  local=JSON.parse(await readFile(localPath,'utf8'));evidence=JSON.parse(await readFile(evidencePath,'utf8'));
  if(local.schema!==1||local.origin!==target.origin||evidence.controlSha256!==p.controlSha256)throw Error('Foreign client directory');
- if(command==='inspect'){const snapshot=await api('snapshot');return {qualified:false,pending:local.pending,threadId:local.threadId,snapshot,pool:projectPool(await control.snapshot())};}
+ if(command==='inspect'){const snapshot=await api('snapshot');return {qualified:false,pending:local.pending,workloadPending:local.workloadPending,threadId:local.threadId,snapshot,pool:projectPool(await control.snapshot())};}
  if(command==='cleanup'){
   await api('close');await until(async()=>nativeDrained(await control.snapshot()),10*60000);
   evidence.cleanup={at:Date.now(),nativeAbsent:true,hostedResourcesDeleted:false};await writeFile(evidencePath,JSON.stringify(evidence,null,2)+'\n',{mode:0o600});
   await rm(join(root,'codex'),{recursive:true,force:true});await rm(localPath);return {qualified:false,nativeAbsent:true,clientRemoved:true,hostedResourcesDeleted:false};
  }
- if(local.pending)throw Error('Prior client mutation is uncertain; inspect, do not replay');
+ if(local.pending&&command!=='workloads')throw Error('Prior client mutation is uncertain; inspect, do not replay');
  const key='clawrouter-live-rehearsal-'+local.secret,home=join(root,'codex'),binary=env.CLAWROUTER_CODEX_BINARY;
  const accessHeaders=env.CF_ACCESS_CLIENT_ID?{'CF-Access-Client-Id':env.CF_ACCESS_CLIENT_ID,'CF-Access-Client-Secret':env.CF_ACCESS_CLIENT_SECRET}:{};
  const clientEnv=env.CF_ACCESS_CLIENT_ID?{CF_ACCESS_CLIENT_ID:env.CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET:env.CF_ACCESS_CLIENT_SECRET}:{};
@@ -157,10 +154,10 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
  if(command==='overlap'){
   const [direction,beforeVersion,afterVersion]=args;if(!['forward','recovery'].includes(direction)||!local.threadId)throw Error('Expected saved thread and direction');versionId(beforeVersion);versionId(afterVersion);
   if(evidence.steps.some(s=>s.kind==='overlap'&&s.direction===direction))throw Error('Direction already observed');
-  const beforeRuntime=direction==='forward'?p.blueRuntimeSha:p.greenRuntimeSha,afterRuntime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha;
+  const beforeRuntime=direction==='forward'||args[3]==='old-before'?p.blueRuntimeSha:p.greenRuntimeSha,afterRuntime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha;
   await onStage('native_readiness');assert.ok(nativeWarm(await control.snapshot(beforeVersion),beforeRuntime));
   await onStage('codex_start');
-  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
+  let {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
   try{
    await onStage('session_save');const held=id();local.pending={id:held,mode:'overlap',direction};await save();
    await onStage('turn_start');const startedAt=Date.now(),started=await turn(client,caseText(held,'hold',direction));
@@ -168,22 +165,37 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
    await onStage('admission_close');const closed=await until(async()=>{const s=await control.snapshot(beforeVersion);if(s.accepting)return false;
     assert.ok(s.pool.grants.some(g=>g.slot===active.slot&&g.generation===active.generation&&g.stage==='intent'),'held request must still own dispatched capacity');
     assert.equal(client.notifications.some(n=>n.method==='turn/completed'&&n.params.turn.id===started.turn.id),false,'native turn must be active at admission close');return {at:Date.now(),pool:projectPool(s)};});
-   await onStage('held_release');await api('release',{id:held});
-   await onStage('turn_complete');const completed=await finishTurn(client,started,hash(local.seed+':'+direction+':'+held));
-   await onStage('native_after_readiness');const after=await until(async()=>{try{const s=await control.snapshot(afterVersion);return nativeWarm(s,afterRuntime)&&s;}catch{return false;}},10*60000);
-   // A DISTINCT follow-up, without repeating the seed, in the SAME saved thread.
-   await onStage('followup_start');const followup=id(),followupStartedAt=Date.now(),followupTurn=await turn(client,caseText(followup,'recall',direction));
+   await onStage('held_release');
+   // Release is single-shot even if its acknowledgement is lost.
+   local.pending.releaseIntentAt=Date.now();await save();
+   try{await api('release',{id:held});}catch{/* Reconcile accepted release by observation below. */}
+   await until(async()=>{const s=await api('snapshot');return s.cases.find(x=>x.id===held&&Number.isFinite(x.releasedAt));},20000);
+   await onStage('turn_complete');const completed=await observeInterruptedTurn(client,started);
+   local.pending.interrupted=completed;await save();
+   // Close the old app-server before resuming the SAME saved thread. Never
+   // resend the uncertain held challenge, even if Codex reported a failed turn.
+   await client.close();
+   await until(async()=>{const s=await api('snapshot');assert.equal(s.replays,0);return s.cases.find(x=>x.id===held&&x.outcome!=='active')&&s.accounting.events.length===s.cases.length;});
+   await onStage('native_after_readiness');
+   const after=await observeNativeControl({control,version:afterVersion,previousVersions:[beforeVersion],timeoutMs:10*60000,pollMs:500,
+    assertOwnership:async()=>{const s=await api('snapshot');assert.equal(s.phase,'ready');assert.equal(s.replays,0);},
+    validate:s=>assert(!s.slots.some(x=>x.phase==='blocked'),'blocked native slot'),isReady:s=>nativeWarm(s,afterRuntime)});
+   // A DISTINCT follow-up, without repeating the seed, after durable resumption.
+   await onStage('followup_start');({client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage}));
+   const followup=id(),followupStartedAt=Date.now();local.pending.followup={id:followup,startedAt:followupStartedAt};await save();
+   const followupTurn=await turn(client,caseText(followup,'recall',direction));
    await onStage('followup_complete');const recalled=await finishTurn(client,followupTurn,hash(local.seed+':'+direction+':'+followup));
    await onStage('fixture_verification');const snap=await api('snapshot');assert.equal(snap.cases.filter(x=>[held,followup].includes(x.id)).length,2);assert.equal(snap.replays,0);
    assert.equal(active.runtimeSha,beforeRuntime);assert.equal(snap.cases.find(x=>x.id===followup).runtimeSha,afterRuntime);
-   assert.ok(snap.callbacks.some(x=>x.op==='finish'&&x.runtimeSha===beforeRuntime&&x.at>=closed.at&&x.status===200&&x.clean===true),'old callback must settle after admission closes');
-   await onStage('evidence_save');evidence.steps.push({kind:'overlap',direction,threadId:local.threadId,beforeVersion,afterVersion,heldCaseId:held,followupCaseId:followup,startedAt,closed,after:projectPool(after),...completed,followupStartedAt,followup:recalled});
+   assert.ok(snap.callbacks.some(x=>x.op==='finish'&&x.runtimeSha===beforeRuntime&&x.at>=closed.at&&x.status===200),'old callback must settle after admission closes');
+   await onStage('evidence_save');evidence.steps.push({kind:'overlap',direction,threadId:local.threadId,beforeVersion,afterVersion,resumedAppServer:true,heldCaseId:held,followupCaseId:followup,startedAt,closed,after:projectPool(after),...completed,followupStartedAt,followup:recalled});
    local.pending=null;await save();await onStage('client_close');return {observed:direction,qualified:false};
   }finally{await client.close();}
  }
  if(command==='workloads'){
+  if(local.workloadPending)throw Error('Prior workload outcome is uncertain; inspect, do not replay');
   const [version]=args;versionId(version);const initial=await control.snapshot(version);assert.ok([p.blueRuntimeSha,p.greenRuntimeSha].includes(initial.control.runtimeSha)&&nativeWarm(initial,initial.control.runtimeSha));
-  local.pending={id:id(),mode:'workloads'};await save();const outcomes=[];
+  local.workloadPending={id:id(),mode:'workloads'};await save();const outcomes=[];
   // Leave delivery uncertainty last; an expected quarantine must not hide
   // otherwise independent envelope observations behind a transport assertion.
   for(const mode of ['success','reject','max','overflow','lost']){
@@ -194,7 +206,7 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
    await writeFile(path,JSON.stringify(receipt,null,2)+'\n',{mode:0o600,flag:'wx'});
    const persist=async()=>{receipt.updatedAt=Date.now();await atomic(path,receipt);};
    try{
-    local.pending={...local.pending,caseId,workloadMode:mode,traceHash:hash(trace)};await save();
+    local.workloadPending={...local.workloadPending,caseId,workloadMode:mode,traceHash:hash(trace)};await save();
     const before=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length===s.cases.length&&s;});
     assert.equal(before.requests,before.cases.length);assert.equal(before.replays,0);
     receipt.stage='request';await persist();
@@ -244,7 +256,7 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
   assert.equal(snapshot.accounting.policySpentMicros,expected);assert.equal(snapshot.accounting.providerSpentMicros,expected);
   assert.equal(snapshot.accounting.events.reduce((sum,x)=>sum+x.actualCostMicros,0),expected);
   assert.ok(snapshot.accounting.events.every(x=>x.contentRetained===false));
-  evidence.steps.push({kind:'workloads',version,outcomes,snapshot});local.pending=null;await save();return {outcomes,qualified:false};
+  evidence.steps.push({kind:'workloads',version,outcomes,snapshot});local.workloadPending=null;await save();return {outcomes,qualified:false};
  }
  throw Error('Commands: setup, seed <blue-version>, overlap <forward|recovery> <before-version> <after-version>, followup <forward|recovery> <version>, workloads <version>, inspect, cleanup');
 }

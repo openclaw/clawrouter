@@ -1,3 +1,8 @@
+> Historical evidence, preserved unchanged below. Its registry checker must be
+> run at the original recorded source revision, where that registry/policy existed.
+> Current releases use automatic isolated evidence; see
+> [deployment compatibility](../../deployment-compatibility.md).
+
 # Reviewed native cutover qualification
 
 This record supports the single entry in `config/native-cutovers.json`. It is an

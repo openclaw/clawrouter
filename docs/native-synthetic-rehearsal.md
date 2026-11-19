@@ -1,3 +1,8 @@
+> Historical/manual diagnostic procedure. Production releases now prepare and
+> qualify themselves through **Deploy ClawRouter**; see
+> [deployment compatibility](deployment-compatibility.md). These steps are not
+> deployment prerequisites.
+
 # Synthetic-only native rehearsal
 
 Executable complement to [the isolated controller](native-cutover-qualification.md),

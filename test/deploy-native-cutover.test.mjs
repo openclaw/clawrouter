@@ -174,31 +174,17 @@ test('cross-digest journals refuse splits, unbound receipts and mismatched termi
   f.state.status='rolling';f.state.cutover.blueRuntimeSha=runtime;deployment.annotations['workers/message']=deploymentMessage(f.state);
   assert.throws(()=>deploymentState(deployment),/cutover receipt/);
 });
-test('qualification requires reviewed exact bytes and a real tested ancestor; offline success remains insufficient',t=>{
-  const f=fixture();assert.throws(()=>assertNativeQualification(f.state),/lacks reviewed hosted/);
-  const cwd=mkdtempSync(resolve('.qualification-test-'));t.after(()=>rmSync(cwd,{recursive:true,force:true}));
-  const git=(...args)=>execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','-c','core.hooksPath=/dev/null',...args],{cwd,encoding:'utf8'}).trim();
-  git('init','-q');
-  for(const file of nativeControlFiles){const target=resolve(cwd,'scripts',file);mkdirSync(dirname(target),{recursive:true});copyFileSync(resolve('scripts',file),target);}
-  git('add','.');git('commit','-qm','tested source');const source=git('rev-parse','HEAD');
-  writeFileSync(resolve(cwd,'registry.json'),'{}');git('add','.');git('commit','-qm','record qualification');f.state.sha=git('rev-parse','HEAD');
-  const row={blueRuntimeSha:oldRuntime,greenRuntimeSha:runtime,evidence:'https://github.com/openclaw/clawrouter/actions/runs/123',source,controlSha256:nativeControlDigest()};
-  assert.deepEqual(assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),row);
-  const controlState={...f.state,native:{schema:1,runtimeSha:oldRuntime},cutover:{...f.state.cutover,kind:'control'}};
-  const controlRow={...row,kind:'control',greenRuntimeSha:oldRuntime};
-  assert.deepEqual(assertNativeQualification(controlState,{schema:1,qualified:[row,controlRow]},{cwd}),controlRow);
-  assert.throws(()=>assertNativeQualification(controlState,{schema:1,qualified:[{...controlRow,kind:undefined}]},{cwd}),/lacks reviewed hosted/);
-  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:'1'.repeat(40)}]},{cwd}),/tested ancestor/);
-  const unchangedCandidate=f.state.sha;
-  for(const file of ['scripts/deploy-native-cutover.mjs','worker/large-http/service.ts','worker/native-rehearsal/bootstrap.ts','worker/native-rehearsal/egress.ts']) {
-    git('checkout','--detach','-q',unchangedCandidate);
-    writeFileSync(resolve(cwd,file),'changed control');git('add','.');git('commit','-qm','drift');
-    const drift=git('rev-parse','HEAD');f.state.sha=drift;
-    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,`${file} drift cannot reuse an unchanged qualified ancestor from the controller checkout`);
-    assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
-  }
-  for(const receipt of [{schema:1,qualified:[row,row]},{schema:1,qualified:[{...row,greenRuntimeSha:'0'.repeat(64)}]},{schema:1,qualified:[{...row,evidence:'https://example.com/123'}]}])
-    assert.throws(()=>assertNativeQualification(f.state,receipt));
+test('automatic evidence is exact-release bound; missing cases and source registries cannot authorize deployment',()=>{
+  const f=fixture();f.state.releaseManifestSha256='1'.repeat(64);f.state.recoveryReleaseManifestSha256='2'.repeat(64);
+  const receipt={schema:2,qualified:true,source:f.state.sha,controlSha256:nativeControlDigest(),kind:'payload',blueRuntimeSha:oldRuntime,greenRuntimeSha:runtime,
+    nativeSource:f.state.cutover.nativeSource,productionBlue:f.state.blue,releaseSha256:f.state.releaseManifestSha256,recoverySha256:f.state.recoveryReleaseManifestSha256,
+    cases:Object.fromEntries(['deployment','continuity','payload','accounting','recovery','cleanup'].map(name=>[name,{outcome:'passed'}]))};
+  assert.deepEqual(assertNativeQualification(f.state,receipt),receipt);
+  for(const patch of [{source:'0'.repeat(40)},{controlSha256:'0'.repeat(64)},{blueRuntimeSha:runtime},{greenRuntimeSha:oldRuntime},{kind:'control'},
+    {productionBlue:green},{nativeSource:'0'.repeat(40)},{releaseSha256:'0'.repeat(64)},{recoverySha256:'0'.repeat(64)},{qualified:false}])
+    assert.throws(()=>assertNativeQualification(f.state,{...receipt,...patch}),/lacks automatic/);
+  for(const name of Object.keys(receipt.cases))assert.throws(()=>assertNativeQualification(f.state,{...receipt,cases:{...receipt.cases,[name]:{outcome:'running'}}}),/lacks automatic/);
+  for(const value of [undefined,{schema:1,qualified:[]},{schema:2,qualified:true}])assert.throws(()=>assertNativeQualification(f.state,value),/lacks automatic/);
 });
 test('drained cutover requests immediate DO adoption and reconciles its readback without POST replay',async()=>{
   for(const acknowledgeStrategy of [true,false]) {

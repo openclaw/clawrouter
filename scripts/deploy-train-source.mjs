@@ -3,8 +3,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { createRequire } from 'node:module';
 import { fullSha, rollbackUnsafe } from './deploy-train-policy.mjs';
 import { observabilityReconciliation } from './deploy-train-observability.mjs';
+import { nativeControlDigest } from './deploy-native-qualification.mjs';
 
-export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCutover = false, nativeControl = false }) {
+export function inspectSource({ blueSha, greenSha, cwd = process.cwd() }) {
   const require = createRequire(`${cwd}/package.json`);
   const { getStaticTOMLValue, parseTOML } = require('toml-eslint-parser');
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 }).trim();
@@ -15,19 +16,12 @@ export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCu
   const old = config(blueSha), candidate = config(greenSha);
   const lifecycle = (c) => ({ migrations: c.migrations ?? [], exports: c.exports ?? null });
   const nonVersioned = (c) => ({ containers: c.containers ?? [], logpush: c.logpush ?? null, tails: c.tail_consumers ?? [], streamingTails: c.streaming_tail_consumers ?? [], triggers: c.triggers ?? null, consumers: c.queues?.consumers ?? [], routes: c.routes ?? [], workersDev: c.workers_dev ?? null, previewUrls: c.preview_urls ?? null });
-  if (!isDeepStrictEqual(nonVersioned(old), nonVersioned(candidate))) throw new Error('Non-versioned Worker settings changed; use a separately authorized configuration deployment, not the version train');
+  if (!isDeepStrictEqual(nonVersioned(old), nonVersioned(candidate))) throw new Error('Development error: non-versioned settings need an automated compatible transition in this feature PR; operator configuration steps are not supported');
   const reconciliation = observabilityReconciliation(old.observability ?? null, candidate.observability ?? null);
   const migration = !isDeepStrictEqual(lifecycle(old), lifecycle(candidate));
   if (old.migrations?.some(m => m.tag === 'v6-large-http')) {
     const native = c => ({ main: c.main, no_bundle: c.no_bundle, keep_vars: c.keep_vars, assets: c.assets, actors: c.durable_objects });
-    if (migration || !isDeepStrictEqual(native(old), native(candidate))) throw new Error('Native lifecycle, assets or actor contract changed; use a separately rehearsed compatible release');
-    // Changes to persistent owners or fingerprint construction need a reviewed
-    // compatibility release, not an implicit protocol-version assertion.
-    const owners = ['config', 'provider-config', 'continuous', 'epoch', 'pool-state', 'native-slot', 'lifecycle', 'lifecycle-client', 'service'];
-    const allowed = nativeControl ? ['lifecycle','service'] : nativeCutover ? ['continuous','lifecycle','native-slot'] : [];
-    const checked = owners.filter(name => !allowed.includes(name));
-    if (git('diff', '--name-only', `${blueSha}..${greenSha}`, '--', ...checked.map(name => `worker/large-http/${name}.ts`)))
-      throw new Error('Native owner or fingerprint protocol changed; use a separately rehearsed compatible release');
+    if (migration || !isDeepStrictEqual(native(old), native(candidate))) throw new Error('Development error: lifecycle or actor changes need an automated compatible transition and old-state proof in this feature PR');
   }
   if (reconciliation && migration) throw new Error('Observability reconciliation requires a version-only candidate; apply lifecycle changes separately');
   const messages = git('log', '--format=%B%x00', `${blueSha}..${greenSha}`).split('\0');
@@ -35,5 +29,8 @@ export function inspectSource({ blueSha, greenSha, cwd = process.cwd(), nativeCu
   // boundary is recorded here so a legacy deployment cannot cross it blindly.
   const attachmentBoundary = '032b0dfa9aa963d4cd18dce48a6d1e9e48c4e7c3';
   const range = new Set(git('rev-list', `${blueSha}..${greenSha}`).split('\n'));
-  return { migration, unsafe: rollbackUnsafe(messages) || range.has(attachmentBoundary), ...(reconciliation ? { observabilityReconciliation: reconciliation } : {}) };
+  let nativeControlChanged = true;
+  try { nativeControlChanged = nativeControlDigest({source:blueSha,cwd}) !== nativeControlDigest({source:greenSha,cwd}); }
+  catch { /* A deployment predating automatic qualification needs the full proof. */ }
+  return { migration, unsafe: rollbackUnsafe(messages) || range.has(attachmentBoundary), nativeControlChanged, ...(reconciliation ? { observabilityReconciliation: reconciliation } : {}) };
 }

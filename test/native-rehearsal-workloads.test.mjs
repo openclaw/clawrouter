@@ -35,7 +35,7 @@ async function fixture(t,mode){
   calls.push({mode:workload,bytes});
   // A journal must identify the CURRENT case before even the first byte is sent.
   const local=JSON.parse(await readFile(join(client,'session.json'),'utf8'));
-  assert.equal(local.pending.caseId,id);assert.equal(local.pending.workloadMode,workload);assert.equal(local.pending.traceHash,hash(trace));
+  assert.equal(local.workloadPending.caseId,id);assert.equal(local.workloadPending.workloadMode,workload);assert.equal(local.workloadPending.traceHash,hash(trace));
   const diagnostic=JSON.parse(await readFile(join(client,'workload-'+workload+'-diagnostic.json'),'utf8'));assert.equal(diagnostic.stage,'request');assert.equal(diagnostic.caseId,id);
   if(workload==='overflow'){s.statusCode=413;return s.end('{}');}
   const slot=state.requests++,lost=kind==='lost',cost=kind==='reject'?0:7;
@@ -88,7 +88,7 @@ for(const mode of ['pre-header','partial','complete-200','unexpected-status','wr
   const lost=JSON.parse(original.at(-1));assert.equal(lost.response.status,mode==='partial'?200:424);assert.equal(lost.response.bodyComplete,mode!=='partial');
   if(mode==='partial')assert.equal(lost.response.failure.kind,'transport');
  }else{
-  assert.equal(local.pending.workloadMode,failedCase);assert.equal(evidence.steps.filter(s=>s.kind==='workloads').length,0);assert.equal(evidence.steps.filter(s=>s.kind==='workload-case').length,modes.length-1);
+  assert.equal(local.workloadPending.workloadMode,failedCase);assert.equal(evidence.steps.filter(s=>s.kind==='workloads').length,0);assert.equal(evidence.steps.filter(s=>s.kind==='workload-case').length,modes.length-1);
   const diagnostic=JSON.parse(original.at(-1));if(mode==='timeout')assert.deepEqual(diagnostic.failure,{kind:'timeout'});
   const count=f.calls.length,controlReads=f.controls.length;assert.equal((await f.run('workloads')).code,1);assert.equal(f.calls.length,count);assert.equal(f.controls.length,controlReads,'pending work is refused before any network request');
  }

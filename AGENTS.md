@@ -23,3 +23,18 @@ Telegraph style. Keep the data plane provider-neutral and the hot path small.
 - Use focused commits.
 - Keep `main` stable; feature work belongs on branches.
 - PRs should include summary, verification, deployment status, and remaining risk.
+
+## Deployment compatibility
+
+- Production deploys through **Deploy ClawRouter** (`deploy-cloudflare.yml`). One
+  main dispatch; no release modes, preparatory PRs, source hold, or operator scripts.
+- A feature that changes native payload, control/state/callback contracts,
+  credentials, accounting or Cloudflare deployment configuration owns its upgrade
+  and recovery behavior. Preserve existing persistent owners and pending work;
+  never replay uncertain inference or deployment writes.
+- Read `docs/deployment-compatibility.md` before changing these contracts. Add the
+  automatic transition and controlled old-state/continuation/accounting proof in
+  the same PR. An unsupported transition is a development failure; do not replace
+  it with a deploy-owner runbook, qualification registry entry or bypass flag.
+- Session continuity means the saved Codex session can later answer a distinct
+  context-dependent turn. A momentary interrupted-turn failure/retry is allowed.

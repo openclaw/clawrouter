@@ -6,7 +6,7 @@ import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApi, observeAnalytics } from '../scripts/deploy-train-api.mjs';
 import { analyticsDecision, deploymentMessage, deploymentState, greenPushRun, recoveryDecision, splitVersions, verifyDispatch } from '../scripts/deploy-train-policy.mjs';
-import { candidateCommits, selectCandidate, deployedSource } from '../scripts/deploy-train-select.mjs';
+import { candidateCommits, waitForSourceCI, deployedSource } from '../scripts/deploy-train-select.mjs';
 import { inspectSource } from '../scripts/deploy-train-source.mjs';
 import { command, runTrain, uploadVersion } from '../scripts/deploy-train.mjs';
 import { assertSecretLineage, uploadMessage } from '../scripts/deploy-train-secrets.mjs';
@@ -284,23 +284,20 @@ test('dispatch rejects short SHAs, non-main branches and stale expected SHA', ()
 });
 
 const run = (head, id, conclusion = 'success') => ({ id, head_sha: head, head_branch: 'main', event: 'push', run_attempt: 1, status: 'completed', conclusion });
-const jobs = ['native-codex (0.153.0)', 'native-codex (0.155.0)', 'native-codex (0.156.1)', 'self-host', 'admin', 'admin-fusion-macos', 'worker-package'].map((name) => ({ name, status: 'completed', conclusion: 'success' }));
-test('candidate selection skips newer red commits; skipped required checks never admit a candidate', async () => {
-  const newer = 'c'.repeat(40), fallback = 'd'.repeat(40);
-  const api = { github: async (path) => {
-    if (path.includes('/jobs')) return { jobs, total_count: jobs.length };
-    const head = new URL(`https://fixture${path}`).searchParams.get('head_sha');
-    return { workflow_runs: [run(head, head === newer ? 3 : 2, head === newer ? 'failure' : 'success')] };
-  } };
-  assert.equal((await selectCandidate({ api, commits: [newer, fallback], deployedSha: oldSha })).sha, fallback);
-  assert.equal(greenPushRun([run(sha, 1), run(sha, 2, 'failure')], sha), null);
-  const skipped = { github: async (path) => path.includes('/jobs') ? { total_count: jobs.length, jobs: jobs.map((j) => ({ ...j, conclusion: j.name === 'worker-package' ? 'skipped' : 'success' })) } : { workflow_runs: [run(sha, 1)] } };
-  await assert.rejects(selectCandidate({ api: skipped, commits: [sha], deployedSha: oldSha, manualSha: sha }), /lacks successful/);
-  assert.equal((await selectCandidate({ api, commits: [], deployedSha: oldSha })).noop, true);
-  assert.equal((await selectCandidate({ api, commits: [oldSha], deployedSha: oldSha, manualSha: oldSha })).noop, true);
-  assert.equal((await selectCandidate({ api, commits: [], deployedSha: sha, manualSha: sha, mode:'native-cutover' })).sha,sha);
-  assert.equal((await selectCandidate({ api, commits: [], deployedSha: sha, manualSha: sha, mode:'native-control' })).noop,true);
-  await assert.rejects(selectCandidate({api:skipped,commits:[],deployedSha:sha,manualSha:sha,mode:'native-cutover'}),/lacks successful/);
+const jobs = ['native-codex (0.153.0)', 'native-codex (0.155.0)', 'native-codex (0.156.1)', 'self-host', 'admin', 'admin-fusion-macos', 'worker-package', 'script-tests'].map((name) => ({ name, status: 'completed', conclusion: 'success' }));
+test('selection waits for only the frozen main SHA and never falls back to older green CI',async()=>{
+  let reads=0,clock=0;
+  const api={github:async path=>{
+    if(path.includes('/jobs'))return {jobs,total_count:jobs.length};
+    assert(path.includes('head_sha='+sha));
+    return {workflow_runs:[{...run(sha,3),status:++reads<3?'in_progress':'completed'},run(oldSha,2)]};
+  }};
+  assert.equal(await waitForSourceCI({api,sha,now:()=>clock,wait:async ms=>{clock+=ms;}}),3);
+  assert.equal(reads,3);assert.equal(greenPushRun([run(sha,1),run(sha,2,'failure')],sha),null);
+  for(const conclusion of ['failure','cancelled','skipped'])await assert.rejects(waitForSourceCI({api:{github:async()=>({workflow_runs:[run(sha,3,conclusion),run(oldSha,2)]})},sha}),/failed exact-source/);
+  const skipped={github:async path=>path.includes('/jobs')?{total_count:jobs.length,jobs:jobs.map(j=>({...j,conclusion:j.name==='worker-package'?'skipped':'success'}))}:{workflow_runs:[run(sha,1)]}};
+  await assert.rejects(waitForSourceCI({api:skipped,sha}),/failed exact-source/);
+  await assert.rejects(waitForSourceCI({api:{github:async()=>({workflow_runs:[]})},sha,now:()=>clock,wait:async ms=>{clock+=ms;},timeoutMs:2}),/within 15 minutes/);
 });
 
 test('legacy source requires exact Cloudflare version plus successful attested historical run', async () => {
@@ -320,9 +317,9 @@ test('real git range detects TOML lifecycle changes and rollback-unsafe commit t
   git('init', '-q');
   const a = commit('name="fixture"\n[[migrations]]\ntag="v1"\nnew_sqlite_classes=["Ledger"]\n', 'first');
   const b = commit('# formatting and reordered fields only\nname = "fixture"\n[[migrations]]\nnew_sqlite_classes = ["Ledger"]\ntag = "v1"\n', 'format');
-  assert.deepEqual(inspectSource({ blueSha: a, greenSha: b, cwd: directory }), { migration: false, unsafe: false });
+  assert.deepEqual(inspectSource({ blueSha: a, greenSha: b, cwd: directory }), { migration: false, unsafe: false, nativeControlChanged:true });
   const c = commit('name="fixture"\n[[migrations]]\ntag="v2"\nnew_sqlite_classes=["SecondLedger"]\n', 'new class\n\nClawRouter-Rollback-Unsafe: forward-only fixture format');
-  assert.deepEqual(inspectSource({ blueSha: a, greenSha: c, cwd: directory }), { migration: true, unsafe: true });
+  assert.deepEqual(inspectSource({ blueSha: a, greenSha: c, cwd: directory }), { migration: true, unsafe: true, nativeControlChanged:true });
   assert.throws(() => inspectSource({ blueSha: a, greenSha: b, cwd: directory }), /checkout differs/);
   assert.deepEqual(candidateCommits(c, a, git), [], 'queued old event cannot downgrade a newer deployment');
   assert.deepEqual(candidateCommits(a, c, git), [c, b]);
@@ -344,24 +341,16 @@ test('native source rejects lifecycle, container, actor and fingerprint-owner ch
   for (const changed of [config.replace('durable_object', 'other'), config.replace('name="LARGE_HTTP_POOL"', 'name="OTHER"'), config.replace('v6-large-http', 'v7')]) {
     writeFileSync(join(directory, 'wrangler.toml'), changed);
     const head = commit();
-    for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory, nativeCutover }), /Non-versioned|Native lifecycle/);
+    for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory, nativeCutover }), /non-versioned|lifecycle or actor/);
   }
   writeFileSync(join(directory, 'wrangler.toml'), config);
   writeFileSync(join(directory, 'worker/large-http/config.ts'), '// changed fingerprint protocol\n');
   const incompatible = commit();
-  for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: incompatible, cwd: directory, nativeCutover }), /fingerprint protocol/);
-  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// fingerprint protocol\n');
-  writeFileSync(join(directory, 'worker/large-http/continuous.ts'), '// additive control fence\n');
-  const control = commit();
-  assert.throws(() => inspectSource({ blueSha: base, greenSha: control, cwd: directory }), /fingerprint protocol/);
-  assert.deepEqual(inspectSource({ blueSha: base, greenSha: control, cwd: directory, nativeCutover:true }), { migration:false,unsafe:false });
-  assert.throws(()=>inspectSource({blueSha:base,greenSha:control,cwd:directory,nativeControl:true}),/fingerprint protocol/);
-  writeFileSync(join(directory,'worker/large-http/continuous.ts'),'');
-  const beforeRepair=commit();
-  for(const name of ['lifecycle','service'])writeFileSync(join(directory,'worker/large-http/'+name+'.ts'),'// journal-selected artifact identity\n');
+  assert.equal(inspectSource({blueSha:base,greenSha:incompatible,cwd:directory}).nativeControlChanged,true,'owner protocol edits require automatic isolated proof instead of manual release modes');
+  for(const name of ['continuous','lifecycle','service'])writeFileSync(join(directory,'worker/large-http/'+name+'.ts'),'// compatible control transition\n');
   const repaired=commit();
-  assert.deepEqual(inspectSource({blueSha:beforeRepair,greenSha:repaired,cwd:directory,nativeControl:true}),{migration:false,unsafe:false});
-  for(const nativeCutover of [false,true])assert.throws(()=>inspectSource({blueSha:beforeRepair,greenSha:repaired,cwd:directory,nativeCutover}),/fingerprint protocol/);
+  assert.equal(inspectSource({blueSha:base,greenSha:repaired,cwd:directory}).nativeControlChanged,true);
+
 });
 
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {
@@ -418,16 +407,21 @@ test('command timeout terminates a descendant CLI before recovery can proceed', 
   });
   const waitReceipt = path => {
     const pending = new Promise((resolve, reject) => {
-      let settled = false, timer, watcher;
+      let settled = false, timer, watcher, poll;
       const finish = (error, value) => {
         if (settled) return;
-        settled = true; realClearTimeout(timer); watcher?.close(); watchers.delete(cancel);
+        settled = true; realClearTimeout(timer); realClearTimeout(poll); watcher?.close(); watchers.delete(cancel);
         if (error) reject(error); else resolve(value);
       };
       const cancel = () => finish(new Error('fixture receipt wait stopped'));
       const check = () => {
+        if(settled)return;
+        realClearTimeout(poll);
         try { if (existsSync(path)) finish(null, readFileSync(path, 'utf8')); }
         catch (error) { finish(error); }
+        // macOS can coalesce the group/ready rename notifications. Real I/O
+        // polling stays bounded and independent of the virtual command timers.
+        if(!settled)poll=realTimeout(check,20);
       };
       watchers.add(cancel);
       watcher = watch(directory, check);
