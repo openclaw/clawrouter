@@ -27,6 +27,31 @@ served-tier evidence retains conservative settlement instead of guessing a tarif
 
 Small's canonical `none`/`high` reasoning values follow the
 [reasoning contract](https://docs.mistral.ai/studio/conversations/reasoning).
-Actual client handling of typed reasoning chunks still needs client-runtime
-fixtures. No Agents, Conversations, built-in tool charges, or newer model IDs are
-introduced by these Chat rows.
+The registered-client fixture exercises typed reasoning chunks, exact model and
+credential selection, `max_tokens`, and the captured Mistral replay hook's
+nine-character tool IDs through the public OpenClaw stream entrypoint. It pins
+OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`; that runtime pin is separate
+from the frozen identity evidence above. Its Large default and non-deprecated
+Large catalog metadata do not replace ClawRouter's existing Medium default or
+the dated tariff disposition in this document.
+
+The fixture uses policy-fixed synthetic charges to exercise the three unpriced
+identities without inventing vendor prices. Separate hard-budget cases require
+zero upstream dispatch and zero charge for those same unpriced models. Codestral
+and Small also use their actual manifest tariffs, including cached tokens,
+standard/standard_only and Priority/auto selection through the supported SDK
+payload callback. Every authenticated attempt requires its own SQLite receipt.
+
+Cancellation is after actual partial response delivery. Acceptance requires the
+SDK's original guard acquisition, reader and release, the Worker's exact first
+caller outcome, source cancellation and joined producer/callback work without
+expiry, and cancellation accounting. Retained read rejections are not rewritten
+as fulfillment. Independent source, release, observer and cleanup failures stay
+fatal. This does not qualify physical disconnect propagation before response
+headers. Provider-error cleanup separately requires the controlled SSE error,
+the actual SDK error callback and returned output.
+
+Native qualification comes from a fresh successful hosted consumer on the exact
+PR head, not from fixture authorship or another provider's result. No Agents,
+Conversations, built-in tool charges, or newer model IDs are introduced by these
+Chat rows. Synthetic transport responses do not establish live account access.
