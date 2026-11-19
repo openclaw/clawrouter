@@ -2349,6 +2349,19 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    const w=nativeEvidence();change(w);const r=evaluator.evaluatePrivateNativeControl(w);assert.equal(r.qualified,false);assert.equal(r.stop,expected);
   }
  });
+ test('Private synchronous owned abort may cancel and unlock before its rejection reactions',()=>{
+  const make=()=>{const w=nativeEvidence();w.caller.reason=w.originals[1].reason;
+   w.originals[1].settle=20;w.originals[2].settle=21;Object.assign(w.originals[3],{invoke:10,returnAt:11,settle:22});
+   w.transports[0].readers[0].unlockAt=12;Object.assign(w.transports[0].release,{invoke:13,returnAt:14,settle:23});return w;};
+  const w=make(),originals=w.originals.filter(o=>o.state==='rejected'),reason=originals[0].reason;
+  assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);
+  assert.deepEqual([...evaluator.privateStoredErrorVector(w)],originals);assert.ok(originals.every(o=>o.state==='rejected'&&o.reason===reason));
+  for(const mutate of [w=>{w.caller.reason={name:'AbortError'};},w=>{w.caller.abortInvoke=10;},w=>{w.caller.noEarlierFailure=false;},
+   w=>{w.caller.pending=[];},w=>{w.originals[2].reason={};},w=>{w.originals[3].state='pending';},w=>{w.originals[3].returnAt=12;},
+   w=>{w.transports[0].release.state='rejected';},w=>{w.observerFailures.push(undefined);},w=>{w.originals.push({state:'rejected',reason});}]){
+   const bad=make();mutate(bad);assert.equal(evaluator.evaluatePrivateNativeControl(bad).qualified,false);
+  }
+ });
  test('Private detached release retains the original callable, receiver, arguments and outcome',async()=>{
   for(const receiver of [undefined,{},null]){const w=nativeEvidence();w.transports[0].release.receiver=receiver;assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,true);}
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');

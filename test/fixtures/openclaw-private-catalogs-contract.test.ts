@@ -484,13 +484,14 @@ export function privateStoredErrorVector(w:any,observe?:(site:number)=>void):any
    reject(56,()=>(!(c.abortInvoke<=c.abortObserved)))||
    reject(57,()=>(!(c.abortObserved<read.settle)))||
    reject(58,()=>(!(c.abortObserved<closed.settle)))||
-   reject(59,()=>(!(Math.max(read.settle,closed.settle)<cancel.invoke)))||
+   reject(59,()=>(!(Math.max(read.settle,closed.settle)<cancel.invoke||read.reason===c.reason&&c.abortInvoke<cancel.invoke)))||
    reject(60,()=>(!(cancel.invoke<cancel.settle)))||
-   reject(61,()=>(!(Math.max(read.settle,closed.settle,cancel.returnAt)<r.unlockAt)))||
+   reject(61,()=>(!(cancel.returnAt<r.unlockAt&&(Math.max(read.settle,closed.settle)<r.unlockAt||read.reason===c.reason&&c.abortInvoke<r.unlockAt))))||
    reject(62,()=>(!(cancel.invoke<cancel.returnAt)))||
    reject(63,()=>(!(cancel.returnAt<cancel.settle))))return;
- // E2 releases the reader before awaiting cancellation. The original promise
- // must still settle and join before this final assessment; it is not rewritten.
+ // E2's abort listener cancels and unlocks synchronously, before rejection
+ // reactions. That ordering requires this caller's exact authored reason.
+ // Every original still settles and joins before assessment; none is rewritten.
  if(reject(64,()=>(cancel.pending===undefined))||
    reject(65,()=>(cancel.returned!==cancel.pending)))return;
  if(reject(66,()=>(r.unlocks!==1))||

@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
+
 - Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
 
 - Match Private fixture cancellation retirement to the pinned SDK's cancel-return, reader-unlock and joined-settlement order. Keep original rejected states and independent ownership failures strict. Disable inference environment fallback only in the grant-revocation scenario, preserving its zero-egress and zero-charge assertions.
