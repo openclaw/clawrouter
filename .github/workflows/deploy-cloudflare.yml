@@ -21,10 +21,10 @@ on:
         default: ""
         type: string
       mode:
-        description: "Same-runtime rollout/rehearsal, or separately qualified native payload cutover"
+        description: "Same-runtime rollout/rehearsal, or separately qualified native payload/control cutover"
         default: rollout
         type: choice
-        options: [rollout, zero-smoke, zero-failure, native-cutover]
+        options: [rollout, zero-smoke, zero-failure, native-cutover, native-control]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -110,6 +110,7 @@ jobs:
         working-directory: control
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          TRAIN_MODE: ${{ inputs.mode || 'rollout' }}
         run: node scripts/deploy-train-select.mjs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.select.outputs.noop == 'false'
@@ -129,6 +130,24 @@ jobs:
             echo "::error::Checkout differs from selected candidate; refusing deployment."
             exit 1
           fi
+      # Fetch CI baselines without shallow boundaries; deployment checks need full history.
+      - name: Fetch pinned release upgrade baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 080831563e0adfcdc1b79cad14613249694d60c9
+          git cat-file -e 080831563e0adfcdc1b79cad14613249694d60c9^{commit}
+      - name: Fetch personal-usage baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          baseline="$(sed -n 's/^export const personalUsageBaseline = "\([0-9a-f]\{40\}\)";$/\1/p' test/helpers/personal-usage-upgrade.mjs)"
+          test -n "$baseline"
+          git fetch --no-tags origin "$baseline"
+          git cat-file -e "$baseline^{commit}"
+      - name: Fetch pinned inventory upgrade baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin df8c3800fbb413fbe7db6833387a1e885d1379cb
+          git cat-file -e df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         if: steps.select.outputs.noop == 'false'
         with:

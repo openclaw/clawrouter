@@ -25,6 +25,11 @@ on:
         default: interrupt-green
         type: choice
         options: [cutover, fail-smoke, interrupt-drain, interrupt-green, recover]
+      kind:
+        description: Payload replacement, or same-payload adoption of compatible control
+        default: payload
+        type: choice
+        options: [payload, control]
       hold_seconds:
         description: Green-warm window for external saved Codex follow-up and next active turn (0-300)
         default: '120'
@@ -43,6 +48,7 @@ env:
   QUALIFICATION_ORIGIN: ${{ inputs.origin }}
   QUALIFICATION_VERSIONS: ${{ inputs.versions }}
   QUALIFICATION_HOLD_SECONDS: ${{ inputs.hold_seconds }}
+  QUALIFICATION_KIND: ${{ inputs.kind || 'payload' }}
 
 jobs:
   exercise:

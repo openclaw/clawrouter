@@ -5,8 +5,11 @@ import {putGrantCredentials} from '../grant-credentials.ts';
 import {lifecycleCall} from '../large-http/lifecycle-client.ts';
 import {rehearsalConfig,caseId,upstreamKey,type RehearsalEnv} from './contract.ts';
 import {inspectSyntheticInput} from './input.ts';
+import {startupStages,startupErrors,readinessValid,monitorValid,type StartupDiagnostics,type StartupStage,type StartupError} from './startup.ts';
+import {bootstrapReceiptValid,closedBootstrapFailure} from './bootstrap.ts';
+import {egressEvent} from './egress.ts';
 interface Case {id:string;mode:string;direction:string;slot:number;generation:number;runtimeSha:string;startedAt:number;finishedAt?:number;releasedAt?:number;contextSha256:string;answerSha256:string;bytes:number;outcome:string}
-interface State {schema:1;phase:'initializing'|'ready'|'closed';seedHash:string;starts:{slot:number;generation:number;runtimeSha:string;at:number}[];requests:number;cases:Case[];callbacks:unknown[];replays:number;createdAt:number;expiresAt:number}
+interface State {schema:1;phase:'initializing'|'ready'|'closed';seedHash:string;starts:{slot:number;generation:number;runtimeSha:string;at:number;diagnostics?:StartupDiagnostics}[];requests:number;cases:Case[];callbacks:unknown[];replays:number;createdAt:number;expiresAt:number}
 const digest=/^[a-f0-9]{64}$/;
 export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
  private async update<T>(fn:(s:State)=>T){return this.ctx.storage.transaction(async tx=>{const s=await tx.get<State>('rehearsal');if(!s)throw Error('fixture_not_initialized');const result=fn(s);await tx.put('rehearsal',s);return result;});}
@@ -19,7 +22,7 @@ export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
  }
  async alarm(){await this.close();}
  async fetch(r:Request):Promise<Response>{
-  const p=new URL(r.url).pathname,c=rehearsalConfig(this.env,Date.now(),['/snapshot','/close','/callback','/release'].includes(p));
+  const p=new URL(r.url).pathname,c=rehearsalConfig(this.env,Date.now(),['/snapshot','/close','/callback','/release','/startup','/readiness','/monitor','/bootstrap','/egress'].includes(p));
   if(r.method!=='POST')return new Response(null,{status:405});
   if(p==='/upstream')return this.upstream(r);
   const v=await readJson<any>(r,undefined,8192);
@@ -45,6 +48,54 @@ export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
    return Response.json({...visible,accounting:{policySpentMicros:policy.spentMicros,providerSpentMicros:provider.spentMicros,events},qualified:false});
   }
   if(p==='/close'){await this.close();return Response.json({closed:true,qualified:false});}
+  if(p==='/egress'){
+   const event=egressEvent(v);
+   if(!event||!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||!digest.test(v.runtimeSha))return new Response(null,{status:400});
+   const recorded=await this.update(s=>{
+    const start=s.starts.find(x=>x.slot===v.slot&&x.generation===v.generation&&x.runtimeSha===v.runtimeSha);
+    if(!start)return false;
+    const rows=(start.diagnostics??={stages:[]}).egress??=[],previous=rows.at(-1)?.event;
+    if(event.event==='entered'?rows.length!==0:!previous||['response','rejected'].includes(previous)||event.event==='forwarding'&&previous!=='entered')return false;
+    if(rows.length>=4)return false;
+    rows.push({...event,at:Date.now()});start.diagnostics!.egress=rows;return true;
+   });
+   return Response.json({recorded});
+  }
+  if(p==='/startup'||p==='/readiness'||p==='/monitor'||p==='/bootstrap'){
+   if(!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||(p==='/startup'||v.runtimeSha!==undefined)&&!digest.test(v.runtimeSha))return new Response(null,{status:400});
+   if(p==='/startup'&&(!startupStages.includes(v.stage)||!['started','completed','failed'].includes(v.outcome)||(v.outcome==='failed'?!startupErrors.includes(v.error):v.error!==undefined)))return new Response(null,{status:400});
+   if(p==='/readiness'&&!readinessValid(v))return new Response(null,{status:400});
+   if(p==='/monitor'&&(!digest.test(v.runtimeSha)||!monitorValid(v)))return new Response(null,{status:400});
+   if(p==='/bootstrap'&&(!digest.test(v.runtimeSha)||!bootstrapReceiptValid({event:v.event,diagnostic:v.diagnostic,fetchCode:v.fetchCode})))return new Response(null,{status:400});
+   const accepted=await this.update(s=>{
+    const start=s.starts.find(x=>x.slot===v.slot&&x.generation===v.generation);
+    // prepare acknowledges persisted intent before its async start override
+    // reaches this fixture. Early polling must not turn that normal race into
+    // a controller error or invent a start; the observer will try again.
+    if(!start)return p==='/readiness'?'pending-start':false;
+    if(v.runtimeSha!==undefined&&start.runtimeSha!==v.runtimeSha)return false;
+    const d=start.diagnostics??={stages:[]},at=Date.now();
+    if(p==='/bootstrap'){
+     const rows=d.bootstrap??=[];
+     if(rows.length>=2||v.event!==(rows.length===0?'entered':'exit'))return false;
+     rows.push({event:v.event,diagnostic:v.diagnostic===null?null:closedBootstrapFailure(v.diagnostic),fetchCode:v.fetchCode,at});
+    }else if(p==='/monitor'){
+     if(d.monitor)return false;
+     d.monitor={outcome:v.outcome,category:v.category,name:v.name,exitCode:v.exitCode,at};
+    }else if(p==='/startup'){
+     const n=d.stages.length;
+     if(n>=startupStages.length*2||d.stages.at(-1)?.outcome==='failed'||v.stage!==startupStages[Math.floor(n/2)]||(n%2===0?v.outcome!=='started':v.outcome==='started'))return false;
+     d.stages.push({stage:v.stage as StartupStage,outcome:v.outcome,at,...(v.outcome==='failed'?{error:v.error as StartupError}:{})});
+    }else{
+     if(d.readiness?.phase===v.phase&&d.readiness?.reason===v.reason)return true;
+     d.readiness={phase:v.phase,reason:v.reason,at};
+     if(v.phase==='ready')d.readyAt??=at;
+     if(['failed','blocked'].includes(v.phase))d.firstFailure??=d.readiness;
+    }
+    return true;
+   });
+   return Response.json({recorded:accepted===true,...(accepted==='pending-start'?{pendingStart:true}:{})},{status:accepted?200:409});
+  }
   if(p==='/start'){
    if(!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||!digest.test(v.runtimeSha))return new Response(null,{status:400});
    const accepted=await this.update(s=>{if(s.phase!=='ready'||s.starts.length>=c.maxStarts||s.starts.some(x=>x.slot===v.slot&&x.generation===v.generation))return false;

@@ -32,10 +32,13 @@ export async function deployedSource(api, deployment) {
   if (!deployedSha) throw new Error('Deployed version has no verified commit annotation; refusing to guess rollback lineage');
   return { blue, deployedSha };
 }
-export async function selectCandidate({ api, commits, deployedSha, manualSha }) {
+export async function selectCandidate({ api, commits, deployedSha, manualSha, mode = 'rollout' }) {
   const choices = manualSha ? [manualSha] : commits;
   for (const sha of choices) {
-    if (sha === deployedSha) return { noop: true, reason: 'Candidate already deployed' };
+    // A control bridge tags current source while deliberately retaining the old
+    // native payload. Only an explicit payload cutover can revisit that source;
+    // packaging must still prove different bytes and exact-source CI below.
+    if (sha === deployedSha && !(manualSha && mode === 'native-cutover')) return { noop: true, reason: 'Candidate already deployed' };
     const response = await api.github(`/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${fullSha(sha)}&per_page=100`);
     const run = greenPushRun(response.workflow_runs, sha);
     if (run && await successfulJobs(api, run)) return { noop: false, sha, ciRun: run.id };
@@ -70,9 +73,11 @@ export async function main(env = process.env) {
   // Freeze the event's main snapshot, not a branch that can advance during selection.
   const head = fullSha(env.GITHUB_SHA);
   const commits = candidateCommits(source.deployedSha, head);
-  const selection = commits.length === 0
+  const manualSha = env.GITHUB_EVENT_NAME === 'workflow_dispatch' ? head : null;
+  const sameSourceCutover = manualSha === source.deployedSha && env.TRAIN_MODE === 'native-cutover';
+  const selection = commits.length === 0 && !sameSourceCutover
     ? { noop: true, reason: 'No main candidate newer than the deployed version' }
-    : await selectCandidate({ api, commits, deployedSha: source.deployedSha, manualSha: env.GITHUB_EVENT_NAME === 'workflow_dispatch' ? head : null });
+    : await selectCandidate({ api, commits, deployedSha: source.deployedSha, manualSha, mode: env.TRAIN_MODE });
   const plan = { ...source, ...selection, deploymentId: deployment.id, run: env.GITHUB_RUN_ID };
   writeFileSync(env.TRAIN_PLAN_PATH, JSON.stringify(plan, null, 2));
   for (const [key, value] of Object.entries({ noop: plan.noop, sha: plan.sha || '', blue: plan.blue, deployed_sha: plan.deployedSha })) appendFileSync(env.GITHUB_OUTPUT, `${key}=${value}\n`);

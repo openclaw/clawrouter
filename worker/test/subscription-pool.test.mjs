@@ -45,6 +45,11 @@ test("collection limits expand into scoped families; reserve and ratios use only
   const f = await fixture(t), state = await f.feedback();
   assert.equal(state.status, "limited");
   assert.equal(state.cooldownUntil, null);
+  const inventory = await handler.fetch(new Request("https://router.example/v1/admin/upstream-grants", { headers: { authorization: "Bearer synthetic-admin" } }), f.env, f.context);
+  assert.equal(inventory.status, 200);
+  const row = (await inventory.json()).grants.find(row => row.key === key);
+  assert.equal(row.quotaStatus, "limited", "a model-only zero is not a whole-account cooldown");
+  assert.equal(row.cooldownUntil, null);
   assert.deepEqual(state.windows.at(-1).models, ["fable"]);
   assert.equal(state.windows.at(-1).id, "subscription-seven-day-fable");
   assert.equal(grantQuotaRatio(state, Date.now(), 300000, "claude-sonnet-5"), .8);
@@ -457,12 +462,21 @@ test("pool is opt-in, scope-bound, explicitly projected, and shares scoped reser
   assert.equal(body.grants[0].plan, "Max 20x"); assert.equal(body.grants[0].account.email, "pool@example.test");
   assert.equal(body.grants[0].eligibility["anthropic/claude-opus-5-5"], "eligible");
   assert.equal(body.grants[0].eligibility["anthropic/claude-fable-5-1"], "exhausted");
+  assert.equal(body.grants[0].exclusionReasons["anthropic/claude-fable-5-1"], "model_quota_exhausted");
+  assert.equal(body.grants[0].exclusionReasons["anthropic/claude-opus-5-5"], null);
   assert.equal(body.usage.grants[0].grantKey, "claude");
   assert.deepEqual([...new Set(queried)], ["policy:tenant-pool:pool"]);
   assert.doesNotMatch(JSON.stringify(body), /access.?token|refresh.?token|credentialFields|secret|synthetic|oauth\/|foreign|tokenType|clientId|accountId/i);
   await f.feedback(usage(90));
   const exhausted = await (await handler.fetch(request(), f.env, f.context)).json();
   assert.equal(exhausted.grants[0].eligibility["anthropic/claude-opus-5-5"], "exhausted");
+  assert.equal(exhausted.grants[0].exclusionReasons["anthropic/claude-opus-5-5"], "shared_quota_reserve");
+  f.auth.policy.providers.push("openai");
+  f.auth.policy.models.push("openai/gpt-6-astra");
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  const mixed = await (await handler.fetch(request(), f.env, f.context)).json();
+  assert.equal(mixed.grants[0].eligibility["openai/gpt-6-astra"], "exhausted", "retain the v1 status enum");
+  assert.equal(mixed.grants[0].exclusionReasons["openai/gpt-6-astra"], "provider_mismatch");
 });
 
 test("Access sessions can read only held policy pools", async t => {

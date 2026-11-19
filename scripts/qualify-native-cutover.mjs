@@ -31,8 +31,9 @@ export async function verifyIsolatedOwners(api, target, versions) {
     if (bindings.some(b => b.type === 'service')) throw new Error('Qualification service bindings are not admitted');
   }
 }
-export async function qualifyNativeCutover({ api, control, target, sha, ids, mode, holdSeconds = 0, save = () => {}, wait = sleep, smoke = version => smokeNativeCutover({ target, env:{CLOUDFLARE_ACCOUNT_ID:target.account}, version }) }) {
+export async function qualifyNativeCutover({ api, control, target, sha, ids, mode, kind, holdSeconds = 0, save = () => {}, wait = sleep, smoke = version => smokeNativeCutover({ target, env:{CLOUDFLARE_ACCOUNT_ID:target.account}, version }) }) {
   if (!['cutover','fail-smoke','interrupt-drain','interrupt-green','recover'].includes(mode)) throw new Error('Invalid qualification mode');
+  if (kind !== undefined && kind !== 'control') throw new Error('Invalid qualification purpose');
   if (!Number.isSafeInteger(holdSeconds) || holdSeconds < 0 || holdSeconds > 300) throw new Error('Invalid qualification hold');
   fullSha(sha);
   if (!ids || Object.keys(ids).sort().join() !== 'blue,green,recovery,run' || !/^[0-9]+$/.test(ids.run)) throw new Error('Invalid qualification version tuple');
@@ -41,29 +42,33 @@ export async function qualifyNativeCutover({ api, control, target, sha, ids, mod
   await verifyIsolatedOwners(api,target,[blue,green,recovery]);
   const state = { run: ids.run, sha, blue: ids.blue, green: ids.green, deploymentId: latest.id,
     status:'rolling', unsafe:false, migration:false, exposed:false, native:nativeReceipt(green),
-    cutover:{schema:1,blueRuntimeSha:nativeReceipt(blue).runtimeSha,nativeSource:nativeSource(blue),recovery:ids.recovery,phase:'prepared'} };
+    cutover:{schema:1,...(kind ? {kind} : {}),blueRuntimeSha:nativeReceipt(blue).runtimeSha,nativeSource:nativeSource(blue),recovery:ids.recovery,phase:'prepared'} };
   await verifyCutoverRecovery(api,state);
   const receipt = { schema:1, source:sha, controlSha256:nativeControlDigest(), worker:target.worker, origin:target.origin,
     blue:ids.blue,green:ids.green,recovery:ids.recovery,blueRuntimeSha:state.cutover.blueRuntimeSha,greenRuntimeSha:state.native.runtimeSha,
-    startedAt:new Date().toISOString(), mode, qualified:false, observations:[],
+    startedAt:new Date().toISOString(), mode, ...(kind ? {kind} : {}), qualified:false, observations:[], observationCount:0,
     limits:['Controller evidence only; synthetic upstream, old-state/mixed-callback, accounting/envelope and saved Codex session evidence must be independently collected and reviewed.'] };
   const record = (phase, snapshot) => {
     // Explicit content-free fields only: no callback bodies, prompts, secrets or request IDs.
     const { accepting, phase:poolPhase, control:identity } = snapshot;
     const slots = snapshot.slots.map(({generation,phase,fingerprint,ids})=>({generation,phase,fingerprint,ids:ids.length}));
-    const inspection = snapshot.inspection?.map(({slot,qualified,protocol,phase,generation,boot,fingerprint,runtimeSha,config})=>({slot,qualified,protocol,phase,generation,boot,fingerprint,runtimeSha,config:config && {runtimeSha:config.runtimeSha,fingerprint:config.fingerprint}}));
-    receipt.observations.push({phase,at:new Date().toISOString(),accepting,poolPhase,control:identity && {schema:identity.schema,revision:identity.revision,runtimeSha:identity.runtimeSha,fingerprint:identity.fingerprint},slots,inspection,grants:snapshot.pool.grants.length,members:snapshot.pool.members.filter(Boolean).length,issued:snapshot.pool.issued,seen:Object.keys(snapshot.pool.seen).length}); save(receipt);
+    const inspection = snapshot.inspection?.map(({slot,qualified,protocol,artifactProtocol,phase,generation,boot,fingerprint,runtimeSha,config})=>({slot,qualified,protocol,artifactProtocol,phase,generation,boot,fingerprint,runtimeSha,config:config && {runtimeSha:config.runtimeSha,fingerprint:config.fingerprint}}));
+    receipt.observationCount++;
+    // Keep the first 16 and latest 48 sanitized observations, including terminal
+    // evidence, rather than growing artifacts with every two-second poll.
+    if (receipt.observations.length === 64) receipt.observations.splice(16,1);
+    receipt.observations.push({phase,at:new Date().toISOString(),accepting,poolPhase,control:identity && {schema:identity.schema,artifactProtocol:identity.artifactProtocol,revision:identity.revision,runtimeSha:identity.runtimeSha,fingerprint:identity.fingerprint},slots,inspection,grants:snapshot.pool.grants.length,members:snapshot.pool.members.filter(Boolean).length,issued:snapshot.pool.issued,seen:Object.keys(snapshot.pool.seen).length}); save(receipt);
   };
   const observed = { snapshot: async version => { const s = await control.snapshot(version); record('snapshot:' + version,s); return s; },
     admission: async (...args) => { await control.admission(...args); if (mode === 'interrupt-drain' && !args[0]) throw interruption; } };
   const interruption = new Error('Deliberate isolated runner interruption');
   const restore = async () => {
     const remote = deploymentState(await api.latest());
-    if (!remote || remote.run !== state.run || remote.sha !== sha || remote.blue !== ids.blue || remote.green !== ids.green || remote.cutover?.recovery !== ids.recovery)
+    if (!remote || remote.run !== state.run || remote.sha !== sha || remote.blue !== ids.blue || remote.green !== ids.green || remote.cutover?.recovery !== ids.recovery || remote.cutover.kind !== kind)
       throw new Error('No exact owned qualification journal to recover');
     await recoverNativeCutover({ api, control:{snapshot:observed.snapshot,admission:(...args)=>control.admission(...args)}, state:remote });
     const active = stableVersion(await api.latest()), snapshot = await control.snapshot(active);
-    if (active !== ids.recovery || !nativeWarm(snapshot,state.cutover.blueRuntimeSha)) throw new Error('Qualification recovery is not attested');
+    if (active !== ids.recovery || !nativeWarm(snapshot,state.cutover.blueRuntimeSha,{requireArtifactControl:true})) throw new Error('Qualification recovery is not attested');
     await smoke(active);
     record('recovered',snapshot);
   };
@@ -99,7 +104,7 @@ export async function main(env = process.env) {
     if (!ci || !await successfulJobs(api,ci)) throw new Error('Qualification lacks successful exact-source main CI');
   }
   const receipt = await qualifyNativeCutover({ api,control:createNativeControl({env,target}),target,
-    sha:env.GITHUB_SHA,ids:JSON.parse(env.QUALIFICATION_VERSIONS),mode:env.QUALIFICATION_MODE,holdSeconds:Number(env.QUALIFICATION_HOLD_SECONDS || 0),
+    sha:env.GITHUB_SHA,ids:JSON.parse(env.QUALIFICATION_VERSIONS),mode:env.QUALIFICATION_MODE,kind:env.QUALIFICATION_KIND === 'control' ? 'control' : env.QUALIFICATION_KIND === undefined || env.QUALIFICATION_KIND === 'payload' ? undefined : env.QUALIFICATION_KIND,holdSeconds:Number(env.QUALIFICATION_HOLD_SECONDS || 0),
     save:receipt=>writeFileSync(env.QUALIFICATION_RECEIPT,JSON.stringify({...receipt,actionsRun:env.GITHUB_RUN_ID,actionsAttempt:env.GITHUB_RUN_ATTEMPT},null,2)+'\n',{mode:0o600}) });
   console.log('Isolated controller result: ' + receipt.result + '; hosted qualification remains incomplete.');
 }
