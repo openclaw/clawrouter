@@ -1,4 +1,12 @@
 {
   "schema": 1,
-  "qualified": []
+  "qualified": [
+    {
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+      "controlSha256": "c68cd35e5c66bab05e7fc86f8242c46966df3de20d2ec194b6f1e5d9f497554c",
+      "evidence": "https://github.com/openclaw/clawrouter/actions/runs/44423189515"
+    }
+  ]
 }
