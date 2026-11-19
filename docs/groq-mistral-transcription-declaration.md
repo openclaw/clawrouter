@@ -67,6 +67,56 @@ partial, error, redirect and truncated responses, unsupported inputs and caller
 cancellation. Original response reads, cancellation and dispatcher close promises
 are retained and joined; cleanup errors do not replace earlier failures.
 
+## Pinned client configuration and encoding boundary
+
+For the pinned SDK route, configure identity response encoding on the ClawRouter
+provider. The selected proxy credential remains the original caller credential;
+this header neither substitutes upstream credentials nor relaxes response checks.
+For example, merge the following into the existing OpenClaw configuration:
+
+```json
+{
+  "models": {
+    "providers": {
+      "clawrouter": {
+        "baseUrl": "https://router.example/v1",
+        "apiKey": "${CLAWROUTER_PROXY_KEY}",
+        "headers": { "accept-encoding": "identity" },
+        "models": []
+      }
+    }
+  },
+  "tools": {
+    "media": {
+      "audio": { "enabled": true },
+      "models": [
+        {
+          "provider": "clawrouter",
+          "model": "groq/whisper-large-v3-turbo",
+          "capabilities": ["audio"]
+        }
+      ]
+    }
+  }
+}
+```
+
+Select `mistral/voxtral-mini-latest` instead for the Mistral card. The pinned
+[`resolveClawRouterCapabilityHttpContext`](https://github.com/openclaw/openclaw/blob/6de028c4e960db91bdf87882989cb6756a6429c3/extensions/clawrouter/capability-offers.ts#L38)
+forwards configured headers and sets authorization and JSON acceptance, but does
+not itself request identity encoding. Its
+[`transcribeClawRouterMultipartAudio`](https://github.com/openclaw/openclaw/blob/6de028c4e960db91bdf87882989cb6756a6429c3/extensions/clawrouter/audio-groq-mistral.ts#L80)
+requires HTTP 200, no redirect or content range, JSON content type, and an absent
+or `identity` content encoding. The integration keeps these checks unchanged.
+
+Local real-Worker requests without the header received gzip metadata; requests
+with identity encoding received complete unencoded JSON. The native fixture now
+uses that explicit supported configuration. A successful configured-route run
+therefore does **not** qualify the default compressed route: the pinned client
+can reject that route, even when its fetch implementation decoded the body.
+Default compressed-response compatibility remains an explicit client-owner gap.
+No frozen SDK change or full/default client parity is claimed here.
+
 The held-response case distinguishes caller rejection from controlled cancellation
 of the original Worker request. That control operation and its joined upstream
 reader do not prove that the client disconnect propagated through the service
