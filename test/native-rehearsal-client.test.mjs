@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,readFile,stat,rm,access} from 'node:fs/promises';
+import {randomUUID} from 'node:crypto';
+import {mkdtemp,writeFile,readFile,stat,rm,access,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:http';
@@ -17,16 +18,21 @@ function snapshot(closed=false){
   control:{schema:1,revision:0,runtimeSha:runtime,fingerprint},slots:slots.map(s=>({...s,qualified:!closed,protocol:1,boot:version,runtimeSha:runtime,config:{runtimeSha:runtime,fingerprint}}))};
 }
 const catalog={version:'clawrouter.client-catalog.v1',scope:{authType:'proxy_key',credentialId:'fixture'},providers:[{id:'openai',allowed:true,nativeBaseUrl:'/v1/native/openai',policies:['fixture'],routes:[{endpoint:'responses',path:'/v1/responses',methods:['POST'],requestFormat:'openai.responses',responseFormat:'openai.responses',streaming:'sse'}],models:[{id:'openai/gpt-6-astra',upstream:'gpt-6-astra',capabilities:['llm.responses']}],offers:[{eligible:true,routeKind:'native',policyId:'fixture',policyGeneration:'1',affordability:'request-dependent',modelId:'openai/gpt-6-astra',endpoint:'responses',route:'/v1/native/openai/v1/responses',transport:'http'}]}]};
+// The server and app-server child read the same state concurrently. Publish
+// complete JSON atomically; truncating the shared file can crash either reader.
+async function publishFixtureState(path,state){
+ const next=path+'.server-'+randomUUID();await writeFile(next,JSON.stringify(state),{flag:'wx',mode:0o600});await rename(next,path);
+}
 async function entrypoint(t,mode){
  const directory=await mkdtemp(join(tmpdir(),'native-client-cli-'));let server;const requests=[];let closed=false;
- const modeFile=join(directory,'mode.json'),stateFile=join(directory,'fixture-state.json');await writeFile(modeFile,JSON.stringify(mode));await writeFile(stateFile,JSON.stringify({cases:[],callbacks:[],replays:0}));
+ const modeFile=join(directory,'mode.json'),stateFile=join(directory,'fixture-state.json');await writeFile(modeFile,JSON.stringify(mode));await publishFixtureState(stateFile,{cases:[],callbacks:[],replays:0});
  t.after(async()=>{await new Promise(resolve=>server?.close(resolve)??resolve());await rm(directory,{recursive:true,force:true});});
  server=createServer(async(r,s)=>{
   requests.push(r.method+' '+r.url);let body='';for await(const chunk of r)body+=chunk;
   const state=JSON.parse(await readFile(stateFile,'utf8'));
   s.setHeader('content-type','application/json');s.setHeader('x-clawrouter-version-id',version);
   if(r.url==='/__native_rehearsal/snapshot')return s.end(JSON.stringify(state));
-  if(r.url==='/__native_rehearsal/release'){const c=state.cases.find(c=>c.id===JSON.parse(body).id);c.outcome='completed';state.callbacks.push({op:'finish',runtimeSha:runtime,at:Date.now(),status:200,clean:true});await writeFile(stateFile,JSON.stringify(state));return s.end('{}');}
+  if(r.url==='/__native_rehearsal/release'){const c=state.cases.find(c=>c.id===JSON.parse(body).id);c.outcome='completed';state.callbacks.push({op:'finish',runtimeSha:runtime,at:Date.now(),status:200,clean:true});await publishFixtureState(stateFile,state);return s.end('{}');}
   if(r.url==='/__native_rehearsal/setup')return s.end('{}');
   if(r.url==='/__native_rehearsal/close'){closed=true;return s.end('{}');}
   if(r.url==='/v1/admin/large-http'){
@@ -51,7 +57,7 @@ async function entrypoint(t,mode){
  const preload=join(directory,'bridge.mjs');await writeFile(preload,`const real=globalThis.fetch;globalThis.fetch=(input,init)=>{const r=new Request(input,init),u=new URL(r.url);if(u.origin!==${JSON.stringify(origin)})throw Error('unexpected egress');return real(${JSON.stringify(bridge)}+u.pathname+u.search,{method:r.method,headers:r.headers,body:r.body,duplex:'half',redirect:'error',signal:r.signal});};\n`);
  const binary=join(directory,'codex-fixture.mjs');
  await writeFile(binary,`#!/usr/bin/env node
-import{createInterface}from'node:readline';import{createHash}from'node:crypto';import{writeFileSync,readFileSync,appendFileSync}from'node:fs';
+import{createInterface}from'node:readline';import{createHash,randomUUID}from'node:crypto';import{writeFileSync,readFileSync,appendFileSync,renameSync}from'node:fs';
 const mode=JSON.parse(readFileSync(${JSON.stringify(modeFile)},'utf8')),unsafe=${JSON.stringify(unsafe)};
 if(process.argv.includes('--version')){console.log('codex-cli 0.167.1');process.exit(0);}
 if(process.argv.includes('--bundled')){if(mode==='native-export')process.exit(1);console.log(JSON.stringify({models:[{slug:'gpt-6-astra',base_instructions:'Synthetic instructions'}]}));process.exit(0);}
@@ -66,7 +72,7 @@ if(v.method==='turn/start'){
  send({id:v.id,result:{turn:{id}}});
  const seedFile=${JSON.stringify(join(directory,'fixture-seed'))};if(match)writeFileSync(seedFile,match[1]);const seed=readFileSync(seedFile,'utf8');
  const stateFile=${JSON.stringify(stateFile)},state=JSON.parse(readFileSync(stateFile,'utf8'));
- state.cases.push({id,mode:kind,direction,slot:0,generation:1,runtimeSha:${JSON.stringify(runtime)},outcome:kind==='hold'?'active':'completed'});writeFileSync(stateFile,JSON.stringify(state));
+ state.cases.push({id,mode:kind,direction,slot:0,generation:1,runtimeSha:${JSON.stringify(runtime)},outcome:kind==='hold'?'active':'completed'});const nextState=stateFile+'.child-'+randomUUID();writeFileSync(nextState,JSON.stringify(state),{flag:'wx',mode:0o600});renameSync(nextState,stateFile);
  const answer=createHash('sha256').update(seed+':'+direction+':'+id).digest('hex');
  const finish=()=>{send({method:'item/completed',params:{turnId:id,item:{type:'agentMessage',text:answer}}});send({method:'turn/completed',params:{turn:{id,status:mode==='failed-turn'?'failed':'completed'}}});};
  if(kind==='hold'){const timer=setInterval(()=>{if(JSON.parse(readFileSync(stateFile,'utf8')).cases.find(c=>c.id===id).outcome==='completed'){clearInterval(timer);finish();}},10);}else finish();return;

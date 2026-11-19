@@ -1,5 +1,7 @@
 # Changelog
 
+- Keep the four Z.AI native lifetime controls serial through supported Vitest suite options and prioritize its existing CI row without changing the matrix membership or other rows’ order. Scope actual transcript sanitization to the case-owned captured Z.AI provider, preserving original sanitizer outcomes, resource joins and qualification gates. Bind canceled Worker reads to their exact first caller outcome and original failure handler, retain their rejected state, and require independently joined source cancellation, cleanup and accounting. Keep controlled provider-error handling separate: bind the actual SDK failure callback, returned output and request-owned stored-error rejections without admitting unrelated transport or cleanup failures.
+
 - Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
 
 - Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
@@ -613,6 +615,7 @@
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
+- Add explicit Z.AI China standard and global/China Coding Plan Chat contracts with separate credential bindings, frozen model disposition and native replay/stream/accounting fixtures.
 - Include Qwen China standard and global/China Coding Plan declarations in the shipping snapshot for native and manifest Chat, preserving unrelated providers, scoped credentials, frozen model inventory and retired-ID rejection. Validate selected Coding Plan key shape and raw controls before formatting; add a pinned registered Qwen fixture with 103 authored cases, including 44 positive cases through both stream APIs. Opt in to bounded native runner diagnostics that distinguish collection observations from fixture case receipts; actual SDK outcomes remain unqualified. Render opt-in native child diagnostics without color and report closed witness-admission status without recovering or weakening rejected output. Native model discovery and its caller-signal forwarding remain gaps. Worker fixtures do not establish vendor entitlement or deployment.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
