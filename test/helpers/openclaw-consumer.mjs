@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify, types } from "node:util";
 import { fileURLToPath } from "node:url";
 import { makeQwenValuePlan, qwenValueArgv, qwenValueSources, readQwenValueInput } from "./openclaw-qwen-callsite-observer.mjs";
+import { withPrivateExecutionOverlay } from "./openclaw-private-execution-observer.mjs";
 import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, runnerPlan, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
 
 export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport, privateExec }) {
@@ -40,12 +41,12 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
     }
     if (privateExec !== undefined) {
       const started = performance.now();
-      const result = await observePrivateExec({ sourceHead, testPath, privateExec },
+      const result = await withPrivateExecutionOverlay(source, privateExec.fixtureSha256, executionContract => observePrivateExec({ sourceHead, testPath, privateExec, executionContract },
         () => readCopiedPrivateFixture(clientTest, privateExec.fixtureBytes),
         () => promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {
           cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
-          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
-        }));
+          env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env, CLAWROUTER_PRIVATE_EXECUTION_CONTRACT: executionContract },
+        })));
       t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
       return;
     }
@@ -110,10 +111,12 @@ export function privateExecProcessFields(error) {
 
 export async function observePrivateExec(options, readCopied, run) {
   validatePrivateExecRequest(options);
+  if (options.executionContract !== undefined) assert.match(options.executionContract, /^[a-f0-9]{64}$/);
   const { sourceHead, testPath, privateExec } = options;
   const binding = Object.freeze({ token: privateExec.token, sourceHead, testPath,
     fixtureSha256: privateExec.fixtureSha256, fixtureBytes: privateExec.fixtureBytes,
-    command: "pnpm", args: Object.freeze(["test", testPath, "--maxWorkers=1"]) });
+    command: "pnpm", args: Object.freeze(["test", testPath, "--maxWorkers=1"]),
+    ...(options.executionContract === undefined ? {} : { executionContract: options.executionContract }) });
   const publish = privateExec.onOutcome, failures = []; let original, value, reason, state = "threw", phase = "copy", fields = null;
   try {
     const snapshot = readCopied();

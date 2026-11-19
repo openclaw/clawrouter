@@ -24,6 +24,8 @@
 
 ## Unreleased
 
+- Bind Private catalog failure observations to the actual selected SDK callable and executing transport host/guard references. Keep unknown module identities explicit and restore pinned diagnostic overlays after the native child; ownership, retirement and accounting gates remain unchanged.
+
 - Preserve Private reader ownership across stream pulls outside ingress async context, requiring the original request, generation, transport, response, body, reader and callable while rejecting present foreign contexts.
 
 - Require Private catalog usage events to match each actual ingress response and dispatch, retaining zero-cost denial telemetry separately and rejecting missing, duplicate, foreign or undercharged receipts.

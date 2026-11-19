@@ -38,6 +38,42 @@ const nativeIdentity=Object.freeze({pin,node:process.version,platform:process.pl
 const controlReports=new Map<string,Map<Control,any>>(),qualifications=new Map<string,any>();
 let diagnosticCount=0,diagnosticBytes=0;
 
+// Reference-only E2 execution observations. One diagnostic ALS read per hook
+// associates it with the actual invocation; a sole active case is not ancestry.
+// The source overlay reaches native and Vitest loads without changing loaders.
+// Unknown/preexisting registrations remain unknown. These rows never qualify
+// acquisitions, releases, reader disposition or native controls.
+export function createPrivateExecutionWitness(contract:string,current:Function,expected:any,faults:unknown[]){
+ if(!/^[a-f0-9]{64}$/.test(contract))throw Error("missing Private execution contract");
+ const registered=new WeakMap<object,any>();let target:any,closed=false,unbound=0,errors=0;
+ const row=[0,0,0,0,0,0,0,0];let callee:any,input:any,host:Function|undefined;
+ const fail=(error:unknown)=>{errors=Math.min(2,errors+1);faults.push(error);};
+ const merge=(at:number,value:number)=>{row[at]=row[at]===0?value:row[at]===value?value:3;};
+ const equal=(a:any,b:any)=>a===b?1:2;
+ return {
+  host(callable:Function){if(host!==undefined||closed||typeof callable!=="function")throw Error("invalid Private defining host");host=callable;},
+  bind(invocation:any){if(target||closed)throw Error("duplicate Private execution target");target=invocation;},
+  channel:Object.freeze({fault:fail,observe(index:number,module:object,site:number,values:any[]){try{
+   if(closed||!module||typeof module!=="object"||!Array.isArray(values)||![[1,2],[3],[4],[5],[6]][index]?.includes(site))throw Error("foreign Private execution hook");
+   if(site===3){const record=values[0];if(values.length!==1||!record||typeof record!=="object")throw Error("invalid Private normalized record");
+    const stream=Object.getOwnPropertyDescriptor(record,"stream"),simple=Object.getOwnPropertyDescriptor(record,"streamSimple");
+    if(!stream||!simple||!("value" in stream)||!("value" in simple))throw Error("invalid Private callable fields");
+    registered.set(record,{module,stream:stream.value,simple:simple.value});return;}
+   const context=current();if(!target||context?.invocation!==target){if(target)unbound=Math.min(2,unbound+1);return;}
+   if(site===1||site===2){
+    if(values.length!==3||values[2]!==target.args[0]||typeof values[1]!=="function")throw Error("foreign Private selected callable");
+    row[0]=Math.min(2,row[0]+1);merge(1,site);
+    const known=registered.get(values[0]);if(known)merge(2,equal(values[1],site===1?known.stream:known.simple));
+   }else if(site===4){if(values.length!==2)throw Error("invalid Private host observation");if(host!==undefined)merge(3,equal(values[0],host));}
+   else if(site===6){if(values.length!==2)throw Error("invalid Private guard call");merge(4,equal(values[0],expected.guard));callee=values[0];input=values[1];}
+   else if(site===5){if(values.length!==2)throw Error("invalid Private guard entry");merge(5,equal(values[0],expected.guard));
+    if(callee!==undefined){merge(6,equal(values[0],callee));merge(7,equal(values[1],input));}}
+  }catch(error){fail(error);}}}),
+  snapshot(invocation:any){return invocation===target&&!closed?[contract,...row,unbound,errors]:null;},
+  close(){closed=true;},
+ };
+}
+
 // Only these two pinned defining namespaces may use Vitest's configurable
 // getter exports. Resolve once, then let spyOn read a temporary data descriptor;
 // returned-host buildModelFetch admission remains own-data-only.
@@ -79,7 +115,7 @@ export function createPrivateCallbackWitness(owner:any,proxyCheck:Function,fault
  };
 }
 
-export function installPrivateDefiningSpy(module:any,name:string,observe:Function,restores:Function[],callbacks?:any) {
+export function installPrivateDefiningSpy(module:any,name:string,observe:Function,restores:Function[],callbacks?:any,resolved?:Function) {
  if(!((module===transportHost&&name==="getAiTransportHost")||(module===openAITransport&&name==="withOpenAIErrorResponseHook"))||isProxy(module))throw Error("foreign Private defining module");
  const original=Object.getOwnPropertyDescriptor(module,name);
  if(!original||!original.configurable)throw Error("missing Private defining seam");
@@ -112,6 +148,7 @@ export function installPrivateDefiningSpy(module:any,name:string,observe:Functio
  });
  if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(module,name),owned))throw Error("changed Private defining spy");
  callbacks?.defining(name==="getAiTransportHost"?0:1,module,name,owned);
+ resolved?.(callable);
 }
 
 // Defining-module observations only. Model identity binds a single original
@@ -229,7 +266,7 @@ export function createPrivateInvocationOwnership(storage:any,evidence?:any) {
   invoke(caller:any,kind:string,fn:Function,receiver:unknown,args:any[]){
    if(!active||!["discovery","inference"].includes(kind)||caller.kind!==kind||args[kind==="discovery"?0:2]?.signal!==caller.signal)throw Error("incomplete public caller");
    const invocation=Object.freeze({caller,signal:caller.signal,owner:caller.owner,kind,fn,receiver,args:Object.freeze([...args])});invocations.add(invocation);
-   if(kind==="inference"){evidence?.callbacks?.bind(invocation);evidence?.selection?.bind(invocation);}
+   if(kind==="inference"){evidence?.callbacks?.bind(invocation);evidence?.selection?.bind(invocation);evidence?.execution?.bind(invocation);}
    return storage.run(Object.freeze({invocation}),()=>Reflect.apply(fn,receiver,args));
   },
   guard(fn:Function,receiver:unknown,args:any[],a:any){
@@ -365,6 +402,12 @@ function emitNativeControl(row:Case,w:any,result:any,worker:boolean):void {
 // Each reporter reserves entry and first-failure slots within its seven-record budget;
 // incomplete delivery does not imply an uninvoked test or a successful case.
 export function validatePrivateCheckpoint(record:any):void {
+ if(record?.v===13){
+  const e=record.execution;
+  if(!Array.isArray(e)||e.length!==12||Object.keys(e).length!==12||!Array.from({length:12},(_,i)=>Object.hasOwn(e,i)).every(Boolean)||e[0]!==12||typeof e[1]!=="string"||!/^[a-f0-9]{64}$/.test(e[1])||
+   !e.slice(2).every((v:any,i:number)=>Number.isSafeInteger(v)&&v>=0&&v<=([0,8,9].includes(i)?2:3)))throw Error("invalid Private execution capsule");
+  const {execution,...legacy}=record;validatePrivateCheckpoint({...legacy,v:e[0]});return;
+ }
  // V12 adds only a construction-site enum to an existing capture failure.
  // 0/absent is UNKNOWN (legacy record); 1 global fetch, 2 Undici fetch.
  // Current V7 site / V10-V11 scalar is multiplied by three, then tagged.
@@ -487,8 +530,9 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:first.meta===null?4:first.captureObserver?12:(typeof first.meta[3]==="number"?(first.meta[3]>=8712?11:10):first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6),pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
-   stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
+  const v=b===null?2:first.meta===null?4:first.captureObserver?12:(typeof first.meta[3]==="number"?(first.meta[3]>=8712?11:10):first.meta[3]?.length===1?9:first.meta[3]?.length===2?8:first.meta[3]?.[0]>=4?7:6);
+  send({v:first.execution?13:v,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+   stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta}),...(first.execution?{execution:[v,...first.execution]}:{})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
  const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null,decl:number|null=null)=>{
@@ -498,7 +542,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m){first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null||typeof v==="number"?v:[...v]);if(m.captureObserver&&(typeof m.first==="number"||m.first?.length===3)){first.captureObserver=m.captureObserver;first.meta[3]=typeof m.first==="number"?m.first*3+m.captureObserver:[m.first[0]*3+m.captureObserver,m.first[1],m.first[2]];}}}if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m){if(m.execution)first.execution=[...m.execution];first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null||typeof v==="number"?v:[...v]);if(m.captureObserver&&(typeof m.first==="number"||m.first?.length===3)){first.captureObserver=m.captureObserver;first.meta[3]=typeof m.first==="number"?m.first*3+m.captureObserver:[m.first[0]*3+m.captureObserver,m.first[1],m.first[2]];}}}if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -585,6 +629,11 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
      b.metadata.first=condition.length===9&&condition[8]!==null?legacy+8712*(condition[8]+1):condition.length>=8?legacy:condition.length===7?[packed]:[m,f];}
    }
   }catch(error){invalidateMetadata(index);failures.push(error);}},
+  bodyExecution(index:number,owner:object,value:any){try{
+   const b=bodyScopes.get(index);if(!b?.metadata||b.failed)return;metadata(index,owner);
+   if(value!==null){if(!Array.isArray(value)||value.length!==11||Object.keys(value).length!==11||!Array.from({length:11},(_,i)=>Object.hasOwn(value,i)).every(Boolean)||typeof value[0]!=="string"||!/^[a-f0-9]{64}$/.test(value[0])||!value.slice(1).every((v:any,i:number)=>Number.isSafeInteger(v)&&v>=0&&v<=([0,8,9].includes(i)?2:3)))throw Error("invalid Private execution snapshot");
+    b.metadata.execution??=[...value];}
+  }catch(error){invalidateMetadata(index);failures.push(error);}},
   bodyOperationFailure(index:number,owner:object,operation:Original,reason:unknown){try{const b=bodyScopes.get(index);if(!b?.metadata)return;
    if(b.failed)return;metadata(index,owner);const site=["guard","fetch","read"].indexOf(operation.kind)+1;if(!site)return;
    if(!b.originals.includes(operation)||!["threw","rejected"].includes(operation.state)||!Object.hasOwn(operation,"reason")||!Object.is(operation.reason,reason))throw Error("foreign Private failure observation");
@@ -663,7 +712,9 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  if(caseIndex===0)checkpoints.bindBodyMetadata(caseIndex,row,isProxy);
  const callbacks=caseIndex===0?createPrivateCallbackWitness(w.owner,isProxy,w.observerFailures):undefined;
  const selection=caseIndex===0?createPrivateSelectionWitness(w.owner,isProxy,w.observerFailures,globalThis):undefined;
- const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage(),caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy,selection,callbacks}:undefined);
+ const storage=new AsyncLocalStorage();
+ const execution=caseIndex===0?createPrivateExecutionWitness(process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT!,()=>storage.getStore(),{guard:originalGuard},w.observerFailures):undefined;
+ const ownership=createPrivateInvocationOwnership(storage,caseIndex===0?{ledger:w,owner:w.owner,acquisitions:w.acquisitions,originals:w.originals,guard:originalGuard,isProxy,selection,callbacks,execution}:undefined);
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
   if(signal){const observed=()=>{history.abort=++w.sequence;history.reason=signal.reason;};if(signal.aborted)observed();else{signal.addEventListener("abort",observed,{once:true});restores.push(()=>signal.removeEventListener("abort",observed));}}return history;};
@@ -677,7 +728,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   if(value&&typeof value.then==="function"){o.pending=value;observer(value.then((v:any)=>settle("fulfilled",v),(e:unknown)=>settle("rejected",e)));}else settle("fulfilled",value);return value;};
  const track=<T>(kind:string,pending:Promise<T>):Promise<T>=>returned(record(kind),pending);
  const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}};
- const patch=(object:any,name:string,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
+ const patch=(object:any,name:PropertyKey,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
   restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});return ours;};
  const authoredAborts=new WeakMap<AbortSignal,any[]>();
  const caller=(signal:AbortSignal|undefined,kind:string)=>{const c=newPrivateInvocationCaller(w.owner,signal,kind);w.callers.push(c);
@@ -732,7 +783,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   site=20;const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;
   return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,reason);w.syncFailures.push(reason);},
    returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
-  }catch(reason){try{checkpoints.bodyCaptureFailure(caseIndex,row,site,reason,condition,captureObserver);}catch(error){w.observerFailures.push(error);}throw reason;}
+  }catch(reason){try{if(execution)checkpoints.bodyExecution(caseIndex,row,execution.snapshot((storage.getStore() as any)?.invocation));checkpoints.bodyCaptureFailure(caseIndex,row,site,reason,condition,captureObserver);}catch(error){w.observerFailures.push(error);}throw reason;}
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let bodyEntered=false;
@@ -740,11 +791,13 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  try{
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
+  if(execution){const key=Symbol.for("clawrouter.private.execution."+process.env.CLAWROUTER_PRIVATE_EXECUTION_CONTRACT);
+   expect(Object.hasOwn(globalThis,key)).toBe(false);patch(globalThis,key,execution.channel);restores.push(()=>execution.close());}
   const globalFetchDescriptor=patch(globalThis,"fetch",observedFetch(nativeFetch,1));selection?.globalDescriptor(globalFetchDescriptor);
   patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,2)});
   if(selection){
    for(const [module,name,observe] of [[transportHost,"getAiTransportHost",selection.lookup],[openAITransport,"withOpenAIErrorResponseHook",selection.hook]] as const){
-    installPrivateDefiningSpy(module,name,observe,restores,callbacks);
+    installPrivateDefiningSpy(module,name,observe,restores,callbacks,name==="getAiTransportHost"?execution?.host:undefined);
    }
    restores.push(()=>selection.restore());
   }

@@ -11,6 +11,9 @@ import { fileURLToPath } from "node:url";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
+import { inflateSync } from "node:zlib";
+import { privateExecutionSources, overlayPrivateExecutionSource, withPrivateExecutionOverlay } from "./helpers/openclaw-private-execution-observer.mjs";
+
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -84,9 +87,9 @@ export function privateCheckpointFunctions(){
  const functions=runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({validatePrivateCheckpoint,createPrivateCheckpointReporter,finishPrivateCheckpointCase,privateCheckpointCaseIndex})",{},{timeout:1000});
  return {...functions,fixtureSha256:createHash("sha256").update(source).digest("hex"),fixtureBytes:Buffer.byteLength(source)};
 }
-export function privateCheckpointRecords(error){
+export function privateCheckpointRecords(error,executionContract){
  const {validatePrivateCheckpoint}=privateCheckpointFunctions();
- return privateChildDiagnosticRecords(error,"PRIVATE_CHECKPOINT ",record=>{validatePrivateCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
+ return privateChildDiagnosticRecords(error,"PRIVATE_CHECKPOINT ",record=>{validatePrivateCheckpoint(record);assert.equal(record.lane,"sdk");if(record.v===13){assert.match(executionContract??"",/^[a-f0-9]{64}$/);assert.equal(record.execution[1],executionContract);}return JSON.stringify(record);});
 }
 export function privateAnnotationEmitter(write){
  let bytes=0,count=0;
@@ -94,9 +97,9 @@ export function privateAnnotationEmitter(write){
   assert.ok(Buffer.byteLength(line)<=768&&bytes+Buffer.byteLength(line)<=16384&&count<48,"Private annotation quota exceeded");
   bytes+=Buffer.byteLength(line);count++;write(line);};
 }
-export async function withPrivateNativeDiagnostics(run,emit){
+export async function withPrivateNativeDiagnostics(run,emit,executionContract=()=>undefined){
  try{return await run();}catch(error){const reporting=[];
-  for(const collect of [privateCheckpointRecords,privateNativeDiagnosticRecords])try{for(const record of collect(error))emit(record);}catch(reportError){reporting.push(reportError);}
+  for(const collect of [privateCheckpointRecords,privateNativeDiagnosticRecords])try{for(const record of collect(error,executionContract()))emit(record);}catch(reportError){reporting.push(reportError);}
   if(reporting.length)throw new AggregateError([error,...reporting],"native child and diagnostic delivery failed");throw error;}
 }
 // The expected digest uses the existing source extraction. The helper independently
@@ -109,6 +112,7 @@ export function privateExecObservation(source,reporter){
   assert.equal(b.testPath,'extensions/baseten/clawrouter-private-catalogs-contract.test.ts');
   assert.equal(b.fixtureSha256,source.fixtureSha256);assert.equal(b.fixtureBytes,source.fixtureBytes);assert.equal(b.command,'pnpm');
   assert.deepEqual([...b.args],['test',b.testPath,'--maxWorkers=1']);
+  if(b.executionContract!==undefined){assert.match(b.executionContract,/^[a-f0-9]{64}$/);reporter.executionContract=b.executionContract;}
   assert.equal(outcome.errorPresent,outcome.state!=='fulfilled');
   reporter.execOutcome({v:3,pin:privateCatalogPin,lane:'outer',kind:'exec',phase:outcome.phase,state:outcome.state,defined:outcome.errorDefined,fields:outcome.fields});
  }};
@@ -539,6 +543,179 @@ export async function privateInertReader(read,closed=Promise.resolve()){
  const actual=s.ownership.run(token,()=>response.body.getReader());return {s,context,token,request,body,reader:actual,calls};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+// Frozen E2 source vectors exercise the actual overlays without SDK imports.
+const privateExecutionOriginals = [
+  "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",
+].map(value => inflateSync(Buffer.from(value, "base64")));
+
+function privateExecutionWitness() {
+ const text=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+ const start=text.indexOf('export function createPrivateExecutionWitness('),end=text.indexOf('// Only these two pinned defining namespaces');
+ assert.ok(start>0&&end>start);
+ return new Function(stripTypeScriptTypes(text.slice(start,end).replace(/^export /gm,''),{mode:'strip'})+';return createPrivateExecutionWitness;')();
+}
+
+test('Private execution observations bind the actual selection and original host/guard references',()=>{
+ for(const mode of [1,2]){
+  const faults=[],model={},invocation={args:[model]},context={invocation},host=()=>{},guard=()=>{},normal=()=>{},simple=()=>{};let reads=0;
+  const w=privateExecutionWitness()('a'.repeat(64),()=>{reads++;return context;},{guard},faults);w.host(host);
+  const record={stream:normal,streamSimple:simple},input={};
+  w.channel.observe(1,{},3,[record]);w.bind(invocation);
+  w.channel.observe(0,{},mode,[record,mode===1?normal:simple,model]);
+  w.channel.observe(2,{},4,[host,{}]);w.channel.observe(4,{},6,[guard,input]);w.channel.observe(3,{},5,[guard,input]);
+  assert.deepEqual(w.snapshot(invocation),['a'.repeat(64),1,mode,1,1,1,1,1,1,0,0]);assert.equal(reads,4);assert.deepEqual(faults,[]);
+ }
+});
+test('Private execution observations keep preexisting, foreign, mixed and absent generations unknown',()=>{
+ const faults=[],model={},invocation={args:[model]},host=()=>{},guard=()=>{};let context;
+ const w=privateExecutionWitness()('b'.repeat(64),()=>context,{guard},faults);w.host(host);w.bind(invocation);
+ const record={stream(){}};context={invocation:{args:[model]}};w.channel.observe(0,{},1,[record,record.stream,model]);
+ assert.deepEqual(w.snapshot(invocation).slice(1,9),Array(8).fill(0));context=undefined;w.channel.observe(2,{},4,[host,{}]);
+ context={invocation};w.channel.observe(0,{},1,[record,record.stream,model]);
+ w.channel.observe(2,{},4,[()=>{},{}]);assert.equal(w.snapshot(invocation)[4],2);
+ w.channel.observe(2,{},4,[host,{}]);assert.equal(w.snapshot(invocation)[4],3);
+ assert.equal(w.snapshot(invocation)[3],0);assert.equal(w.snapshot(invocation)[9],2);
+ assert.equal(w.snapshot({}),null);w.close();assert.equal(w.snapshot(invocation),null);
+});
+test('Private execution host binding uses only the installer resolved callable and owns undefined getter failure',()=>{
+ const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+ assert.equal(source.includes('const originalHostLookup='),false);
+ assert.ok(source.includes('name==="getAiTransportHost"?execution?.host:undefined'));
+ for(const failure of [false,true]){
+  const module={},restores=[],faults=[],model={},invocation={args:[model]},result={},calls=[];let reads=0,caught=false;
+  const a=function(...args){calls.push([this,args]);return result;},b=()=>{throw Error('second getter is forbidden');};
+  Object.defineProperty(module,'getAiTransportHost',{configurable:true,enumerable:true,get(){reads++;if(failure)throw undefined;return reads===1?a:b;}});
+  const original=Object.getOwnPropertyDescriptor(module,'getAiTransportHost');
+  const w=privateExecutionWitness()('c'.repeat(64),()=>({invocation}),{guard(){}},faults);w.bind(invocation);
+  const install=privateDefiningFactory(module,{},privateDefiningFakeVi());
+  try{install(module,'getAiTransportHost',(fn,self,args)=>{w.channel.observe(2,{},4,[fn,result]);return Reflect.apply(fn,self,args);},restores,undefined,w.host);}
+  catch(error){caught=true;assert.equal(error,undefined);}
+  assert.equal(reads,1);assert.equal(caught,failure);
+  if(failure){assert.equal(restores.length,0);assert.equal(w.snapshot(invocation)[4],0);}
+  else{assert.equal(module.getAiTransportHost(1,undefined),result);assert.deepEqual(calls,[[module,[1,undefined]]]);assert.equal(reads,1);assert.equal(w.snapshot(invocation)[4],1);}
+  for(const restore of restores.toReversed())restore();assert.deepEqual(Object.getOwnPropertyDescriptor(module,'getAiTransportHost'),original);assert.deepEqual(faults,[]);
+ }
+});
+test('Private execution faults retain undefined independently and reject foreign selected models',()=>{
+ const faults=[],invocation={args:[{}]};let fail=true;
+ const w=privateExecutionWitness()('c'.repeat(64),()=>{if(fail)throw undefined;return {invocation};},{host(){},guard(){}},faults);w.bind(invocation);
+ w.channel.observe(2,{},4,[()=>{},{}]);assert.deepEqual(faults,[undefined]);fail=false;
+ w.channel.observe(0,{},1,[{},()=>{},{}]);assert.equal(faults.length,2);assert.equal(w.snapshot(invocation)[10],2);
+ assert.equal(w.snapshot(invocation)[1],0);
+});
+
+function privateOverlayFunction(text,begin,end,names,values){
+ const at=text.indexOf(begin);assert.ok(at>=0);const stop=end?text.indexOf(end,at+begin.length):text.length;assert.ok(stop>at);
+ const code=stripTypeScriptTypes(text.slice(at,stop).replace(/^export /gm,''),{mode:'strip'});
+ return new Function(...names,code+';return '+begin.match(/function (\w+)/)[1]+';')(...values);
+}
+test('Private execution overlays preserve actual E2 call operands, receiver, order, return and falsey throws',async()=>{
+ const contract='d'.repeat(64),out=privateExecutionOriginals.map((b,i)=>overlayPrivateExecutionSource(i,b,contract).toString());
+ for(let i=0;i<out.length;i++){
+  assert.equal(createHash('sha256').update(privateExecutionOriginals[i]).digest('hex'),privateExecutionSources[i].sha256);
+  assert.doesNotThrow(()=>stripTypeScriptTypes(out[i],{mode:'strip'}));
+  assert.throws(()=>overlayPrivateExecutionSource(i,Buffer.concat([privateExecutionOriginals[i],Buffer.from(' ')]),contract));
+ }
+ for(const simple of [false,true])for(const failure of [false,true]){
+  const traces=[];
+  for(const source of [privateExecutionOriginals[0].toString(),out[0]]){
+   const trace=[],result={},context={},options={},record={};const callable=function(...args){trace.push(['call',this===record,args[0]===model,args[1]===context,args[2]===options]);if(failure)throw undefined;return result;};
+   const model={get api(){trace.push('api');return 'openai-completions';}};
+   Object.defineProperty(record,simple?'streamSimple':'stream',{get(){trace.push('callee');return callable;}});
+   const name=simple?'streamSimple':'stream',fn=privateOverlayFunction(source,'  function '+name+'<',simple?'  async function completeSimple':'  async function complete<',['startStream','resolveApiProvider','__privateE2Observe'],[f=>f(),()=>{trace.push('resolve');return record;},()=>{trace.push('observe');}]);
+   if(failure)assert.throws(()=>fn(model,context,options),e=>e===undefined);else assert.equal(fn(model,context,options),result);
+   traces.push(trace.filter(x=>x!=='observe'));
+  }assert.deepEqual(traces[1],traces[0]);
+ }
+ for(const failure of [false,true]){
+  const traces=[];
+  for(const source of [privateExecutionOriginals[4].toString(),out[4]]){
+   const trace=[],pool={},promise=Promise.resolve(),options={get url(){trace.push('url');return 'synthetic';}};
+   const fn=privateOverlayFunction(source,'export function fetchWithProviderHttpGuard(', '/** Returns the current process-lifecycle', ['fetchWithSsrFGuard','getProviderTransportDispatcherPool','__privateE2Observe'],[function(value){trace.push(['guard',this===undefined,value.url,value.dispatcherPool===pool]);if(failure)throw undefined;return promise;},()=>{trace.push('pool');return pool;},()=>{}]);
+   if(failure)assert.throws(()=>fn(options),e=>e===undefined);else assert.equal(fn(options),promise);traces.push(trace);
+  }assert.deepEqual(traces[1],traces[0]);
+ }
+ const traces=[];
+ for(const source of [privateExecutionOriginals[1].toString(),out[1]]){
+  const trace=[],factory=privateOverlayFunction(source,'function wrapStream<',null,['__privateE2Observe'],[()=>trace.push('observe')]);
+  assert.equal(typeof factory,'function');
+  const code=stripTypeScriptTypes(source.slice(source.indexOf('function wrapStream<')).replace(/^export /gm,''),{mode:'strip'});
+  const registry=new Function('__privateE2Observe',code+';return createApiRegistry();')(()=>trace.push('observe'));
+  const provider={get api(){trace.push('api');return 'openai-completions';},get stream(){trace.push('stream');return ()=>1;},get streamSimple(){trace.push('simple');return ()=>2;}};
+  assert.equal(registry.registerApiProvider(provider,'synthetic'),undefined);traces.push(trace.filter(x=>x!=='observe'));
+ }assert.deepEqual(traces[1],traces[0]);
+});
+
+test('Private E2 host and observer hooks preserve original undefined failures and scoped selection',()=>{
+ const contract='a'.repeat(64),source=overlayPrivateExecutionSource(2,privateExecutionOriginals[2],contract).toString();
+ const prefix=source.slice(0,source.indexOf('import '));
+ for(const mode of ['absent','accessor','observer','reporter','descriptor']){
+  const faults=[],scope={},global={};let observed=0;
+  if(mode==='accessor')Object.defineProperty(global,Symbol.for('clawrouter.private.execution.'+contract),{get(){throw Error('must not read accessor');}});
+  if(mode==='observer'||mode==='reporter')Object.defineProperty(global,Symbol.for('clawrouter.private.execution.'+contract),{value:{observe(){observed++;throw undefined;},fault(e){faults.push(e);if(mode==='reporter')throw undefined;}}});
+  const intrinsics=mode==='descriptor'?{getOwnPropertyDescriptor(){throw undefined;}}:Object;
+  const observer=new Function('Object','globalThis',stripTypeScriptTypes(prefix,{mode:'strip'})+';return __privateE2Observe;')(intrinsics,global);
+  for(const result of [scope,null,undefined]){
+   let reads=0;const fallback={},storage={getStore(){reads++;return result;}};
+   const fn=privateOverlayFunction(source,'export function getAiTransportHost(', '/** Resolves sentinel', ['scopedAiTransportHost','activeAiTransportHost','__privateE2Observe'],[storage,fallback,observer]);
+   assert.equal(fn(),result??fallback);assert.equal(reads,1);
+  }
+  const fn=privateOverlayFunction(source,'export function getAiTransportHost(', '/** Resolves sentinel', ['scopedAiTransportHost','activeAiTransportHost','__privateE2Observe'],[{getStore(){throw undefined;}},{},observer]);
+  assert.throws(()=>fn(),e=>e===undefined);
+  assert.equal(observed,mode==='observer'||mode==='reporter'?3:0);assert.deepEqual(faults,Array(observed).fill(undefined));
+ }
+});
+
+function privateOverlayFS(){
+ const files=new Map(privateExecutionSources.map((r,i)=>['/sdk/'+r.path,{bytes:Buffer.from(privateExecutionOriginals[i]),ino:i+1,clock:1,closes:0}]));
+ const stat=r=>({dev:1,ino:r.ino,uid:process.getuid(),nlink:1,mode:0o100644,size:r.bytes.length,mtimeMs:r.clock,ctimeMs:r.clock,isFile:()=>true});
+ let writes=0,closeFault=false,writeFault=false,syncFault=false,readbackFault=false;
+ return {files,get writes(){return writes;},set closeFault(v){closeFault=v;},set writeFault(v){writeFault=v;},set syncFault(v){syncFault=v;},set readbackFault(v){readbackFault=v;},io:{realpath:async p=>p,lstat:async p=>stat(files.get(p)),open:async p=>{const r=files.get(p);return {
+  stat:async()=>stat(r),read:async(b,o,n,pos)=>{if(readbackFault&&writes>0){readbackFault=false;throw undefined;}const size=Math.min(n,r.bytes.length-pos,257);if(size>0)r.bytes.copy(b,o,pos,pos+size);return {bytesRead:Math.max(0,size)};},
+  write:async(b,o,n,pos)=>{if(writeFault){writeFault=false;throw undefined;}writes++;const size=Math.min(n,193),next=Buffer.alloc(Math.max(r.bytes.length,pos+size));r.bytes.copy(next);b.copy(next,pos,o,o+size);r.bytes=next;r.clock++;return {bytesWritten:size};},
+  truncate:async n=>{r.bytes=r.bytes.subarray(0,n);r.clock++;},sync:async()=>{if(syncFault){syncFault=false;throw undefined;}},close:async()=>{r.closes++;if(closeFault){closeFault=false;throw undefined;}}
+ };}}};
+}
+test('Private E2 overlay restores exact originals after success, falsey child failure and partial writes',async()=>{
+ for(const mode of ['success','child','write','sync','readback','close','both']){
+  const fs=privateOverlayFS();let calls=0,observed;
+  if(mode==='write')fs.writeFault=true;if(mode==='sync')fs.syncFault=true;if(mode==='readback')fs.readbackFault=true;if(mode==='close'||mode==='both')fs.closeFault=true;
+  try{observed=await withPrivateExecutionOverlay('/sdk','a'.repeat(64),async contract=>{calls++;assert.match(contract,/^[a-f0-9]{64}$/);for(const r of fs.files.values())assert.ok(r.bytes.includes(Buffer.from(contract)));if(mode==='child'||mode==='both')throw undefined;return 17;},fs.io);}
+  catch(e){observed=e;}
+  if(mode==='success')assert.equal(observed,17);else if(mode==='both'){assert.ok(observed instanceof AggregateError);assert.deepEqual(observed.errors,[undefined,undefined]);}else assert.equal(observed,undefined);
+  assert.equal(calls,['write','sync','readback'].includes(mode)?0:1);for(const [i,r]of [...fs.files.values()].entries()){assert.ok(r.bytes.equals(privateExecutionOriginals[i]));assert.equal(r.closes,1);}
+ }
+});
+test('Private E2 overlay rejects bad pins before writes and preserves foreign modifications',async()=>{
+ const fs=privateOverlayFS();fs.files.get('/sdk/'+privateExecutionSources[4].path).bytes=Buffer.from('foreign');let calls=0;
+ await assert.rejects(withPrivateExecutionOverlay('/sdk','a'.repeat(64),()=>{calls++;},fs.io));assert.equal(fs.writes,0);assert.equal(calls,0);
+ const changed=privateOverlayFS(),path='/sdk/'+privateExecutionSources[0].path;
+ await assert.rejects(withPrivateExecutionOverlay('/sdk','a'.repeat(64),()=>{changed.files.get(path).bytes=Buffer.from('foreign');},changed.io),/overlay changed/);
+ assert.equal(changed.files.get(path).bytes.toString(),'foreign');for(const r of changed.files.values())assert.equal(r.closes,1);
+});
+test('Private execution V13 preserves the original capsule, binds delivery and rejects malformed tuples',async()=>{
+ const contract='e'.repeat(64),h=privateCaptureHarness(),tuple=[contract,1,1,0,2,2,2,1,1,0,0];
+ h.r.bodyExecution(0,h.row,tuple);h.r.bodyCaptureFailure(0,h.row,11,undefined,[11,5,63,31,false,false,129,0,0],2);
+ const cap=h.capsule(),validate=privateCheckpointFunctions().validatePrivateCheckpoint;
+ assert.equal(cap.v,13);validate(cap);assert.deepEqual([...cap.execution],[12,...tuple]);
+ const legacy=privateCaptureHarness();legacy.r.bodyCaptureFailure(0,legacy.row,11,undefined,[11,5,63,31,false,false,129,0,0],2);
+ const {execution,...rest}=cap;assert.equal(JSON.stringify({...rest,v:12}),JSON.stringify(legacy.capsule()));
+ const raw={stdout:'PRIVATE_CHECKPOINT '+JSON.stringify(cap)+'\n'};
+ assert.equal(privateCheckpointRecords(raw,contract).length,1);
+ for(const expected of [undefined,'f'.repeat(64)])assert.throws(()=>privateCheckpointRecords(raw,expected));
+ const variants=[execution.slice(0,-1),[...execution,0],Object.assign([...execution],{extra:0})];
+ const sparse=[...execution];delete sparse[4];variants.push(sparse);
+ for(let i=0;i<execution.length;i++)for(const value of [null,undefined,true,{},[],NaN,Infinity,-1,4]){const changed=[...execution];changed[i]=value;variants.push(changed);}
+ for(const changed of variants)assert.throws(()=>validate({...cap,execution:changed}));
+ const lines=[];privateAnnotationEmitter(line=>lines.push(line))(cap);assert.ok(Buffer.byteLength(lines[0])<=768);
+ let caught;try{await withPrivateNativeDiagnostics(()=>{throw raw;},()=>{throw undefined;},()=>contract);}catch(e){caught=e;}
+ assert.equal(caught.errors[0],raw);assert.equal(caught.errors[1],undefined);
+});
+
  // BEGIN Private capture entry inert regressions
  function privateCaptureHarness({failAt=0,reason,source,reportThrow=false,fetchThrow=false,ownershipOverride,captureObserver=0}={}){
   source??=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
@@ -562,13 +739,13 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const checkpoints={bodyCaptureFailure(...args){if(reportThrow)throw undefined;r.bodyCaptureFailure(...args);},bodyOperationFailure(...args){r.bodyOperationFailure(...args);}};
   const record=(kind,details)=>{hit(20);const o={kind,...details,state:"pending"};originals.push(o);return o;};
   const returned=(o,p)=>{o.pending=p;o.state="fulfilled";};const observer=()=>{};
-  const dependencies={URL:fakeURL,Headers:fakeHeaders,Request:class {},AbortSignal:signalClass,expect,origin:"https://fixture.invalid",base:()=>"https://fixture.invalid",row,key:()=>"key",ownership,
+  const dependencies={execution:undefined,URL:fakeURL,Headers:fakeHeaders,Request:class {},AbortSignal:signalClass,expect,origin:"https://fixture.invalid",base:()=>"https://fixture.invalid",row,key:()=>"key",ownership,
    signalHistory:()=>{hit(12);return [];},transports:transportRows,observedDispatchers:new Set(),patch:(o,k,v)=>{o[k]=v;},invoke:(_k,fn)=>fn(),record,w,checkpoints,caseIndex:0,returned,observer,observeBody:()=>{}};
   const factory=new Function(...Object.keys(dependencies),'"use strict";'+stripTypeScriptTypes(wrapper+capture,{mode:"strip"})+';return observedFetch;')(...Object.values(dependencies));
   let fetchCalls=0,actualReceiver,actualArgs;
   const wrapped=factory(function(...args){fetchCalls++;actualReceiver=this;actualArgs=args;if(fetchThrow)throw reason;return pending;},captureObserver);
   return {wrapped,receiver,input,init,pending,row,r,w,records,calls,originals,get fetchCalls(){return fetchCalls;},get actualReceiver(){return actualReceiver;},get actualArgs(){return actualArgs;},
-   capsule(){r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);return records.find(v=>v.v===12||v.v===7||v.v===6);}};
+   capsule(){r.bodySite(0,row,20,1);r.mark(0,"body","rejected",reason);return records.find(v=>v.v===13||v.v===12||v.v===7||v.v===6);}};
  }
  test("Private capture entry identifies original URL ownership and header failures before fetch",()=>{
   for(const failAt of Array.from({length:16},(_,i)=>i+5))for(const reason of [undefined,{}]){
@@ -2080,7 +2257,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    f=await report.observe(null,"setup",startPrivateCatalogFixture,undefined,[]);
    for(const [index,row]of all.entries()){await report.observe(index,"case_setup",f.setup,f,[row]);created.push(row);}
    report.mark(null,"child","enter");report.flush(null);
-   await withPrivateNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:report.privateExec,env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}]),emit);
+   await withPrivateNativeDiagnostics(()=>report.observe(null,"child",runOpenClawConsumer,undefined,[t,{source:process.env.CLAWROUTER_OPENCLAW_CHECKOUT,sourceHead:privateCatalogPin,fixture:fileURLToPath(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url)),testPath:'extensions/baseten/clawrouter-private-catalogs-contract.test.ts',privateExec:report.privateExec,env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:privateCatalogPin,CLAWROUTER_PRIVATE_CATALOG_CASES:JSON.stringify(privateCases),CLAWROUTER_PRIVATE_NATIVE_CONTROLS:JSON.stringify(privateNativeControls)}}]),emit,()=>report.executionContract);
   },[...all.map((row,index)=>async report=>{if(!created.includes(row))return;
    let proof;try{proof=await report.observe(index,"worker_retirement",f.join,f,[row]);}catch(primary){
     reportPrivateJoinFailure(report,row,index,()=>f.evidence(row),saved=>{for(const record of privateWorkerCheckpointRecords(saved,row,index)){if(workerDiagnosticCount>=4)break;workerDiagnosticCount++;emit(record);}},primary);}
