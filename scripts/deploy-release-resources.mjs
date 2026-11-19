@@ -39,7 +39,7 @@ export function createIsolatedResources({ env = process.env, identity = qualific
   if (!env.CLOUDFLARE_API_TOKEN) throw new Error('Cloudflare API credential missing');
   // No generic mutation API escapes this owner-scoped adapter. Production paths
   // cannot be passed by a caller, even one holding broad deployment credentials.
-  async function request(path, { method = 'GET', body, absent = false, container = false, raw = false } = {}) {
+  async function request(path, { method = 'GET', body, absent = false, raw = false } = {}) {
     const response = await fetchImpl('https://api.cloudflare.com/client/v4' + base + path, {
       method, redirect: 'error', signal: AbortSignal.timeout(30_000),
       headers: { authorization: 'Bearer ' + env.CLOUDFLARE_API_TOKEN, 'content-type': 'application/json' },
@@ -50,15 +50,13 @@ export function createIsolatedResources({ env = process.env, identity = qualific
     if (response.status === 204) return true;
     if (raw) return response.text();
     const value = await response.json();
-    // Container API is a distinct, unwrapped API; Workers APIs use envelopes.
-    if (container) return value;
-    if (value.success !== true) throw new Error('Isolated resource API envelope failed');
+    if (value?.success !== true) throw new Error('Isolated resource API envelope failed');
     return value.result;
   }
-  async function rows(path, pick = x => x, container = false) {
+  async function rows(path, pick = x => x) {
     const all = [];
     for (let page=1; page<=100; page++) {
-      const value = await request(path + (path.includes('?') ? '&' : '?') + 'per_page=100&page=' + page, {container});
+      const value = await request(path + (path.includes('?') ? '&' : '?') + 'per_page=100&page=' + page);
       const items = pick(value);
       if (!Array.isArray(items)) throw new Error('Incomplete isolated resource inventory');
       all.push(...items);
@@ -76,7 +74,7 @@ export function createIsolatedResources({ env = process.env, identity = qualific
   const bucket = () => request('/r2/buckets/' + identity.bucket, {absent:true});
   const worker = () => request('/workers/scripts/' + identity.worker + '/settings', {absent:true});
   const application = async () => {
-    const value = await request('/containers/applications?name='+encodeURIComponent(identity.container), {container:true});
+    const value = await request('/containers/applications?name='+encodeURIComponent(identity.container));
     if (!Array.isArray(value)) throw new Error('Incomplete isolated container inventory');
     return one(value, x => x.name === identity.container);
   };
@@ -142,7 +140,7 @@ export function createIsolatedResources({ env = process.env, identity = qualific
           // a fresh cleanup runner must retain authority after a partial failure.
           if(label==='policy'&&outcomes.some(x=>x.outcome==='unresolved')){outcomes.push({resource:label,outcome:'unresolved'});continue;}
           const item = await read();
-          if (item) await mutation('delete-' + label, () => request(path(item), {method:'DELETE',container:label === 'container'}), async () => !await read());
+          if (item) await mutation('delete-' + label, () => request(path(item), {method:'DELETE'}), async () => !await read());
           outcomes.push({resource:label,outcome:item?'removed':'absent'});
         } catch { outcomes.push({resource:label,outcome:'unresolved'}); }
       }

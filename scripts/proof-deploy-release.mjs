@@ -98,8 +98,8 @@ const server=createServer(async(r,s)=>{
    if(p.startsWith('/queues/')&&r.method==='DELETE'){queues.splice(queues.findIndex(x=>p.endsWith(x.queue_id)),1);return ok(null);}
    if(p==='/r2/buckets'&&r.method==='POST'){bucket={name:body.name};return ok(bucket);}
    if(p==='/r2/buckets/'+identity.bucket){if(r.method==='DELETE'){bucket=null;return ok(null);}return bucket?ok(bucket):json(s,{},404);}
-   if(p==='/containers/applications')return json(s,app?[app]:[]);
-   if(p==='/containers/applications/app'&&r.method==='DELETE'){app=null;return json(s,{});}
+   if(p==='/containers/applications')return ok(app?[app]:[]);
+   if(p==='/containers/applications/app'&&r.method==='DELETE'){app=null;return ok({message:'Application deletion started'});}
    const w='/workers/scripts/'+identity.worker;
    if(p===w&&r.method==='DELETE'){worker=null;return ok(null);}
    if(p===w+'/settings')return worker?ok(worker):json(s,{},404);

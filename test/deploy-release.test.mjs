@@ -84,8 +84,8 @@ test('interrupted turn may fail or retry; only a successful distinct context ans
   assert.equal(assertContextAnswer(client,{turn:{id:'new'}},'expected').answerSha256,'expected');
 });
 
-function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false}={}){
-  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0;
+function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0}={}){
+  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null;
   const response=value=>Response.json({success:true,result:value});
   const fetchImpl=async(url,init)=>{
     const u=new URL(url),p=u.pathname.split('/accounts/'+identity.account)[1],body=init.body&&JSON.parse(init.body);calls.push({path:p,method:init.method});
@@ -108,8 +108,13 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
     if(p==='/r2/buckets/'+identity.bucket){if(init.method==='DELETE'){bucket=null;return response(null);}return bucket?response(bucket):new Response('',{status:404});}
     if(p==='/workers/scripts/'+identity.worker+'/settings')return worker?response(worker):new Response('',{status:404});
     if(p==='/workers/scripts/'+identity.worker&&init.method==='DELETE'){worker=null;return response(null);}
-    if(p==='/containers/applications')return Response.json(app?[app]:[]);
-    if(p==='/containers/applications/owned-app'&&init.method==='DELETE'){if(failContainerDelete)return new Response('',{status:403});app=null;return Response.json({});}
+    if(p==='/containers/applications'){
+      if(containerResponse!==undefined)return Response.json(containerResponse);
+      const items=app?[app]:[];
+      if(pendingContainerDeleteReads!==null&&--pendingContainerDeleteReads===0)app=null;
+      return response(items);
+    }
+    if(p==='/containers/applications/owned-app'&&init.method==='DELETE'){if(failContainerDelete)return new Response('',{status:403});if(containerDeleteReads===0)app=null;else pendingContainerDeleteReads=containerDeleteReads;return response({message:'Application deletion started'});}
     throw Error('Unexpected test resource path '+p);
   };
   const create=()=>createIsolatedResources({env:actionEnv,identity,fetchImpl,now:()=>time,wait:async ms=>{time+=ms;},save:async operation=>operations.push(operation)});
@@ -121,6 +126,21 @@ test('isolated resource writes reconcile lost acknowledgments without retry; fre
   assert.equal(f.calls.filter(x=>x.path==='/storage/kv/namespaces'&&x.method==='POST').length,1);
   assert.equal(f.operations.find(x=>x.operation==='create-policy'&&x.state==='observed').acknowledgementLost,true);
   assert(f.calls.every(x=>!x.path.includes('clawrouter-edge')));assert.equal(f.kv,null);
+});
+test('container inventory requires a successful envelope and array before any write',async()=>{
+  for(const containerResponse of [[],null,{success:false,result:[]},{success:true},{success:true,result:{}}]){
+    const f=resourceFixture({containerResponse});
+    await assert.rejects(f.create().provision(),/envelope failed|Incomplete isolated container inventory/);
+    assert(f.calls.every(x=>x.method==='GET'));
+  }
+});
+test('enveloped asynchronous container deletion is observed without replay',async()=>{
+  // The delete acknowledgement is not proof of disappearance. Return the old
+  // application twice after DELETE before the readback converges.
+  const delayed=resourceFixture({containerDeleteReads:2});
+  await delayed.create().provision();delayed.addWorker();
+  assert.equal((await delayed.create().cleanup()).complete,true);
+  assert.equal(delayed.calls.filter(x=>x.path==='/containers/applications/owned-app'&&x.method==='DELETE').length,1);
 });
 test('colliding resources are neither adopted nor deleted; partial cleanup retains durable custody',async()=>{
   const foreign=resourceFixture({foreign:true});await assert.rejects(foreign.create().provision(),/already exists/);assert.equal((await foreign.create().cleanup()).complete,false);assert.equal(foreign.calls.filter(x=>x.method==='DELETE').length,0);
