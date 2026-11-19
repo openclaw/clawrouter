@@ -140,11 +140,13 @@ async function observedCancellation(run: (signal: AbortSignal) => Promise<unknow
     });
     await Promise.allSettled(ops.map(op => op.value));
     const rejected = ops.filter(op => op.state === "rejected"), releases = ops.filter(op => op.kind === "releaseLock");
-    assert.ok(rejected.length > 0); assert.ok(rejected.some(op => op.kind === "read" && op.entered < abortAt));
-    assert.ok(rejected.every(op => ["read", "closed", "cancel"].includes(op.kind) && op.receiver === reader && op.error === reason && abortAt < op.settled));
+    assert.equal(rejected.length, 2); assert.ok(rejected.some(op => op.kind === "read" && op.entered < abortAt));
+    assert.ok(rejected.every(op => ["read", "closed"].includes(op.kind) && op.receiver === reader && op.error === reason && abortAt < op.settled));
     const cancelled = ops.filter(op => op.kind === "cancel"), closed = ops.filter(op => op.kind === "closed");
-    assert.equal(closed.length, 1); assert.equal(cancelled.length, 1);
-    assert.ok(abortAt < cancelled[0].entered && cancelled[0].entered < releases[0]?.entered);
+    // D8 readResponsePrefix releases its reader in finally. Caller abort is
+    // carried by the original fetch signal; this reader has no cancel call.
+    assert.equal(closed.length, 1); assert.equal(cancelled.length, 0);
+    assert.ok(abortAt < releases[0]?.entered);
     assert.equal(releases.length, 1); assert.equal(releases[0].state, "fulfilled"); assert.equal(response!.body!.locked, false);
     assert.ok(ops.every(op => op.state !== "pending"));
     proof = { headers: true, firstChunk, originalPendingRead: true, callerAborted: caller.signal.aborted,

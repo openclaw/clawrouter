@@ -86,7 +86,7 @@ export function registerQianfanMemoryTests({ source, sourceHead, observerCode, b
   test("Qianfan memory cancellation observer keeps foreign and undefined originals and held/failed releases fatal", async t => {
     const text = readFileSync(new URL("../fixtures/openclaw-qianfan-memory-contract.test.ts", import.meta.url), "utf8");
     const code = stripTypeScriptTypes(text.slice(text.indexOf("async function observed<"), text.indexOf('describe("registered')));
-    for (const mode of ["owned", "foreign_reason", "undefined_reason", "release_undefined", "held_release"]) {
+    for (const mode of ["owned", "foreign_reason", "undefined_reason", "unexpected_cancel", "release_undefined", "held_release"]) {
       let releaseHeld, signal, controller;
       const held = new Promise(resolve => { releaseHeld = resolve; });
       const foreign = new Error("foreign stream failure"), releaseFault = undefined;
@@ -101,7 +101,7 @@ export function registerQianfanMemoryTests({ source, sourceHead, observerCode, b
       const pending = cancel(async signal => {
         const result = await guard.fetchWithSsrFGuard({ signal }); const reader = result.response.body.getReader();
         try { for (;;) { const next = await reader.read(); if (next.done) return; } }
-        finally { await Promise.allSettled([reader.cancel()]); reader.releaseLock(); await result.release(); }
+        finally { if (mode === "unexpected_cancel") await Promise.allSettled([reader.cancel()]); reader.releaseLock(); await result.release(); }
       });
       if (mode === "held_release") {
         let finished = false; void pending.then(() => { finished = true; }, () => { finished = true; });
@@ -111,7 +111,7 @@ export function registerQianfanMemoryTests({ source, sourceHead, observerCode, b
       if (["owned", "held_release"].includes(mode)) assert.equal((await pending).releaseFulfilled, true);
       else await assert.rejects(pending, error => {
         const flatten = value => value instanceof AggregateError ? value.errors.flatMap(flatten) : [value];
-        const originals = flatten(error); return error instanceof AggregateError && (mode === "foreign_reason" ? originals.includes(foreign) : originals.includes(undefined));
+        const originals = flatten(error); return error instanceof AggregateError && (mode === "foreign_reason" ? originals.includes(foreign) : mode === "unexpected_cancel" ? originals.some(value => value instanceof assert.AssertionError) : originals.includes(undefined));
       });
     }
   });
@@ -186,7 +186,7 @@ export function registerQianfanMemoryTests({ source, sourceHead, observerCode, b
           const rows = cancelRecords.filter(row => row.model === model); assert.equal(rows.length, 1);
           const row = rows[0]; assert.deepEqual(Object.keys(row).sort(), ["model", "headers", "firstChunk", "originalPendingRead", "callerAborted", "rejected", "releaseFulfilled", "unlocked"].sort());
           for (const field of ["headers", "firstChunk", "originalPendingRead", "callerAborted", "releaseFulfilled", "unlocked"]) assert.equal(row[field], true);
-          assert.ok(row.rejected.includes("read")); assert.ok(row.rejected.every(kind => ["read", "closed", "cancel"].includes(kind)));
+          assert.deepEqual(row.rejected.toSorted(), ["closed", "read"]);
         }
         cancelQualified = true;
       }

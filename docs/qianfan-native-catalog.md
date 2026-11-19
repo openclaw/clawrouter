@@ -124,6 +124,9 @@ original source cancel/return/join with no expiry, and request-bound Worker
 embedding reader in `observeUsage` and its first logical cancellation outcome;
 Chat's additional completion wrapper and receipts are not reused as evidence.
 Raw read rejections remain recorded, with independent cleanup failures fatal.
+The pinned SDK bounded JSON reader releases its lock after a rejected read;
+caller-signal transport cancellation does not require an extra SDK reader cancel.
+The original upstream source still must receive and complete its own cancel.
 
 Local real HTTP/Workerd controls cover this post-header route for all three
 models. Independent controls also reject foreign or undefined SDK read reasons
