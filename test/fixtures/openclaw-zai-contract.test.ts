@@ -1,5 +1,5 @@
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin, registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createEmptyPluginRegistry, registerSingleProviderPlugin, registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { describe, expect, it as productIt, vi } from "vitest";
 import * as transport from "../../src/agents/provider-transport-dispatcher-pool.js";
@@ -12,6 +12,7 @@ import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { convertToLlm } from "../../src/agents/sessions/messages.js";
 import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 
@@ -373,8 +374,10 @@ async function run(id: string, modelId = models[0], simple = true, reasoning: "o
   const messages = await withOpenClawTestState({ label: "zai-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: model.provider, modelId, modelApi: model.api, model, runtimeHandle: { provider: model.provider, plugin: provider } });
     expect(policy.dropReasoningFromHistory).toBe(false);
-    return sanitizeSessionHistory({ provider: model.provider, modelId, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: `zai-${id}`,
-      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId })]), messages: history });
+    const replayRegistry = createEmptyPluginRegistry();
+    replayRegistry.providers.push({ pluginId: "zai", provider, source: "test" });
+    return withPluginRuntimeGenerationRegistryScope(replayRegistry, () => sanitizeSessionHistory({ provider: model.provider, modelId, modelApi: model.api, model, policy, env: {}, config: {}, workspaceDir: state.workspaceDir, sessionId: `zai-${id}`,
+      sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: model.provider, modelApi: model.api, modelId })]), messages: history }));
   });
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages), tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   const thinkingLevel = id.startsWith("default") ? undefined : reasoning;
@@ -402,7 +405,7 @@ async function verifyNativeControl(id: string) {
   return kinds;
 }
 
-describe.sequential("genuine registered Z.AI native lifetime controls", () => {
+describe("genuine registered Z.AI native lifetime controls", { concurrent: false }, () => {
   for (const row of nativeControlCases()) productIt(row.id, () => withSdkObservation(async () => {
     activeCase = row.id;
     if (row.outcome === "preabort") {

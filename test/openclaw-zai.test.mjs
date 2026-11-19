@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import assert from "node:assert/strict";
@@ -8,7 +9,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { types as nodeTypes } from "node:util";
-import { createRequire } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
@@ -541,7 +542,8 @@ test("native controls are four separate cases and receipts never replace origina
   const helperFailure = undefined;
   await assert.rejects(allFailures(() => { controlReceipt(lines); throw helperFailure; }, [() => {}]), error => error.errors[0] === undefined);
   assert.match(sdkSource, /nativeQualification\.add\(control\)/);
-  assert.ok(sdkSource.indexOf('describe.sequential("genuine registered') < sdkSource.indexOf('describe("actual registered'));
+  assert.ok(sdkSource.indexOf('describe("genuine registered') < sdkSource.indexOf('describe("actual registered'));
+  assert.doesNotMatch(sdkSource, /describe\.sequential/);
 });
 
 
@@ -602,4 +604,55 @@ test("Node default reporter preserves the actual ZAI diagnostic command at colum
     assert.equal(lines.length, 1); assert.ok(lines[0].startsWith("::error title=ZAI contract diagnostic::"));
     assert.ok(Buffer.byteLength(lines[0]) <= 768);
   }, [() => rm(directory, { recursive: true, force: true })]);
+});
+
+
+test("ZAI actual control registration uses supported serial suite options and retains all four gates", () => {
+  const code = stripTypeScriptTypes(sdkSource);
+  const begin = code.indexOf('describe("genuine registered'), end = code.indexOf('describe("actual registered', begin);
+  assert.ok(begin >= 0 && end > begin);
+  const suites = [], entries = [], calls = [];
+  const describe = (name, options, callback) => { suites.push({ name, options }); callback(); };
+  const productIt = (id, body) => entries.push({ id, body });
+  const observe = (body, id) => { calls.push({ body, id }); return id; };
+  new Function("describe", "productIt", "nativeControlCases", "withSdkObservation", code.slice(begin, end))(describe, productIt, nativeControlCases, observe);
+  assert.deepEqual(suites, [{ name: "genuine registered Z.AI native lifetime controls", options: { concurrent: false } }]);
+  assert.deepEqual(entries.map(row => row.id), ["control_success", "control_preabort", "control_cancel", "control_embedded"]);
+  for (const entry of entries) assert.equal(entry.body(), entry.id);
+  assert.deepEqual(calls.map(row => row.id), entries.map(row => row.id));
+  assert.ok(calls.every(row => typeof row.body === "function"));
+  assert.match(code, /nativeQualification.size === 4 && qualifiedRejectionKinds.has\(kind\)/);
+});
+
+test("ZAI actual replay callback owns its captured provider across suspension and restoration", async () => {
+  const code = stripTypeScriptTypes(sdkSource), anchor = 'withOpenClawTestState({ label: "zai-worker" }, async state => {';
+  const begin = code.indexOf(anchor);
+  // Type stripping may change indentation, so use the next context declaration as the boundary.
+  const tail = code.indexOf('const context', begin), close = code.lastIndexOf('});', tail);
+  assert.ok(begin >= 0 && close > begin);
+  const factory = new Function("resolveTranscriptPolicy", "expect", "createEmptyPluginRegistry", "withPluginRuntimeGenerationRegistryScope", "sanitizeSessionHistory", "makeInMemorySessionManager", "makeModelSnapshotEntry", "modelId", "model", "provider", "id", "history", "return async state => {" + code.slice(begin + anchor.length, close) + "};");
+  const storage = new AsyncLocalStorage(), registries = [], foreign = { id: "zai" }, outer = { providers: [{ pluginId: "zai", provider: foreign, source: "test" }] };
+  for (const failure of [false, true]) for (const reason of [undefined, false, {}]) await storage.run(outer, async () => {
+    await Promise.all([0, 1].map(async index => {
+      const selected = { id: "zai" }, model = { provider: "zai", api: "openai-completions" }, history = [], result = [], policy = { dropReasoningFromHistory: false };
+      let registry, original, calls = 0;
+      const invoke = factory(params => { assert.equal(params.runtimeHandle.plugin, selected); assert.equal(params.model, model); return policy; },
+        value => ({ toBe: expected => assert.equal(value, expected) }), () => { registry = { providers: [] }; registries.push(registry); return registry; },
+        (owned, callback) => { assert.equal(owned, registry); const pending = storage.run(owned, callback); assert.equal(pending, original); return pending; },
+        params => {
+          calls++; assert.equal(storage.getStore(), registry); assert.deepEqual(registry.providers, [{ pluginId: "zai", provider: selected, source: "test" }]);
+          assert.notEqual(selected, foreign); assert.equal(params.policy, policy); assert.equal(params.model, model); assert.equal(params.messages, history);
+          assert.equal(params.sessionId, "zai-case" + index); assert.equal(params.workspaceDir, "/fixture/workspace");
+          original = Promise.resolve().then(async () => {
+            assert.equal(storage.getStore(), registry);
+            await storage.run({ providers: [] }, async () => { assert.deepEqual(storage.getStore().providers, []); });
+            assert.equal(storage.getStore(), registry); if (failure) throw reason; return result;
+          }); return original;
+        }, entries => ({ entries }), value => value, models[index], model, selected, "case" + index, history);
+      let failed = false, value; try { value = await invoke({ workspaceDir: "/fixture/workspace" }); } catch (error) { failed = true; value = error; }
+      assert.equal(failed, failure); assert.equal(value, failure ? reason : result); assert.equal(calls, 1); assert.equal(storage.getStore(), outer);
+    }));
+    assert.equal(storage.getStore(), outer);
+  });
+  assert.equal(new Set(registries).size, registries.length); assert.equal(storage.getStore(), undefined);
 });

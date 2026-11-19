@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: zai
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-zai.test.mjs
           - consumer: qianfan
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-qianfan.test.mjs
@@ -155,9 +158,6 @@ jobs:
           - consumer: xiaomi
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-xiaomi.test.mjs
-          - consumer: zai
-            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
-            test: test/openclaw-zai.test.mjs
           - consumer: qwen-global
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-qwen-global.test.mjs

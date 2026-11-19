@@ -1,5 +1,7 @@
 # Changelog
 
+- Keep the four Z.AI native lifetime controls serial through supported Vitest suite options and prioritize its existing CI row without changing the matrix membership or other rows’ order. Scope actual transcript sanitization to the case-owned captured Z.AI provider, preserving original sanitizer outcomes, resource joins and qualification gates.
+
 - Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
 
 - Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
