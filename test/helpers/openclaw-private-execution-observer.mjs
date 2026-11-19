@@ -63,6 +63,7 @@ function __privateE2Observe(site: number, values: unknown[]) {
 export async function withPrivateExecutionOverlay(root, fixtureSHA, run, io = { open, realpath, lstat }) {
   assert.ok(validHash(fixtureSHA));
   assert.equal(await io.realpath(root), resolve(root));
+  root = resolve(root);
   const contract = sha(JSON.stringify({ v: 1, pin: "e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",
     nonce: randomBytes(32).toString("hex"), fixtureSHA, sources: privateExecutionSources }));
   const rows = [], failures = []; let result;

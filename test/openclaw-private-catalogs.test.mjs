@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire, stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
@@ -670,11 +670,11 @@ test('Private E2 host and observer hooks preserve original undefined failures an
  }
 });
 
-function privateOverlayFS(){
- const files=new Map(privateExecutionSources.map((r,i)=>['/sdk/'+r.path,{bytes:Buffer.from(privateExecutionOriginals[i]),ino:i+1,clock:1,closes:0}]));
+function privateOverlayFS(root="/sdk"){
+ const files=new Map(privateExecutionSources.map((r,i)=>[join(root,r.path),{bytes:Buffer.from(privateExecutionOriginals[i]),ino:i+1,clock:1,closes:0}]));
  const stat=r=>({dev:1,ino:r.ino,uid:process.getuid(),nlink:1,mode:0o100644,size:r.bytes.length,mtimeMs:r.clock,ctimeMs:r.clock,isFile:()=>true});
  let writes=0,closeFault=false,writeFault=false,syncFault=false,readbackFault=false;
- return {files,get writes(){return writes;},set closeFault(v){closeFault=v;},set writeFault(v){writeFault=v;},set syncFault(v){syncFault=v;},set readbackFault(v){readbackFault=v;},io:{realpath:async p=>p,lstat:async p=>stat(files.get(p)),open:async p=>{const r=files.get(p);return {
+ return {files,get writes(){return writes;},set closeFault(v){closeFault=v;},set writeFault(v){writeFault=v;},set syncFault(v){syncFault=v;},set readbackFault(v){readbackFault=v;},io:{realpath:async p=>resolve(p),lstat:async p=>stat(files.get(p)),open:async p=>{const r=files.get(p);return {
   stat:async()=>stat(r),read:async(b,o,n,pos)=>{if(readbackFault&&writes>0){readbackFault=false;throw undefined;}const size=Math.min(n,r.bytes.length-pos,257);if(size>0)r.bytes.copy(b,o,pos,pos+size);return {bytesRead:Math.max(0,size)};},
   write:async(b,o,n,pos)=>{if(writeFault){writeFault=false;throw undefined;}writes++;const size=Math.min(n,193),next=Buffer.alloc(Math.max(r.bytes.length,pos+size));r.bytes.copy(next);b.copy(next,pos,o,o+size);r.bytes=next;r.clock++;return {bytesWritten:size};},
   truncate:async n=>{r.bytes=r.bytes.subarray(0,n);r.clock++;},sync:async()=>{if(syncFault){syncFault=false;throw undefined;}},close:async()=>{r.closes++;if(closeFault){closeFault=false;throw undefined;}}
@@ -689,6 +689,14 @@ test('Private E2 overlay restores exact originals after success, falsey child fa
   if(mode==='success')assert.equal(observed,17);else if(mode==='both'){assert.ok(observed instanceof AggregateError);assert.deepEqual(observed.errors,[undefined,undefined]);}else assert.equal(observed,undefined);
   assert.equal(calls,['write','sync','readback'].includes(mode)?0:1);for(const [i,r]of [...fs.files.values()].entries()){assert.ok(r.bytes.equals(privateExecutionOriginals[i]));assert.equal(r.closes,1);}
  }
+});
+test('Private E2 overlay accepts the workflow relative checkout only after canonical custody',async()=>{
+ const root=resolve('.openclaw-contract'),fs=privateOverlayFS(root);let calls=0;
+ const originalOpen=fs.io.open;fs.io.open=async path=>{assert.ok(path.startsWith(root+'/'));return originalOpen(path);};
+ assert.equal(await withPrivateExecutionOverlay('.openclaw-contract','a'.repeat(64),()=>{calls++;return 19;},fs.io),19);
+ assert.equal(calls,1);for(const [i,r]of [...fs.files.values()].entries()){assert.ok(r.bytes.equals(privateExecutionOriginals[i]));assert.equal(r.closes,1);}
+ const foreign=privateOverlayFS(root);foreign.io.realpath=async()=>root+'-foreign';
+ await assert.rejects(withPrivateExecutionOverlay('.openclaw-contract','a'.repeat(64),()=>{calls++;},foreign.io));assert.equal(calls,1);assert.equal(foreign.writes,0);
 });
 test('Private E2 overlay rejects bad pins before writes and preserves foreign modifications',async()=>{
  const fs=privateOverlayFS();fs.files.get('/sdk/'+privateExecutionSources[4].path).bytes=Buffer.from('foreign');let calls=0;
@@ -1096,8 +1104,10 @@ test('Private execution V13 preserves the original capsule, binds delivery and r
    const before=[Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook")];
    const fakeVi=privateDefiningFakeVi(),vi={spyOn(...args){if(++spies===2&&failSecond)throw undefined;return fakeVi.spyOn(...args);}};
    const installPrivateDefiningSpy=privateDefiningFactory(transportHost,openAITransport,vi);
-   let present=false;try{new Function("selection","transportHost","openAITransport","restores","installPrivateDefiningSpy","callbacks",code)(h.w,transportHost,openAITransport,restores,installPrivateDefiningSpy,undefined);}catch(e){present=true;assert.equal(e,undefined);}
+   const execution=privateExecutionWitness()("a".repeat(64),()=>({invocation:h.invocation}),{guard(){}},h.faults);execution.bind(h.invocation);
+   let present=false;try{new Function("selection","transportHost","openAITransport","restores","installPrivateDefiningSpy","callbacks","execution",code)(h.w,transportHost,openAITransport,restores,installPrivateDefiningSpy,undefined,execution);}catch(e){present=true;assert.equal(e,undefined);}
    assert.equal(present,failSecond);assert.equal(spies,2);assert.equal(restores.length,failSecond?2:3);
+   execution.channel.observe(2,{},4,[before[0].value,h.host]);assert.equal(execution.snapshot(h.invocation)[4],1);
    if(!failSecond){assert.equal(Reflect.apply(transportHost.getAiTransportHost,h.receiver,[1,2]),h.host);const value=h.build();assert.equal(Reflect.apply(openAITransport.withOpenAIErrorResponseHook,h.receiver,[value,undefined,h.model]),h.closure);assert.equal(h.w.snapshot(h.invocation),6);assert.equal(calls.length,2);assert.equal(calls[0][0],h.receiver);}
    for(const restore of restores.toReversed())restore();
    assert.deepEqual(Object.getOwnPropertyDescriptor(transportHost,"getAiTransportHost"),before[0]);assert.deepEqual(Object.getOwnPropertyDescriptor(openAITransport,"withOpenAIErrorResponseHook"),before[1]);
