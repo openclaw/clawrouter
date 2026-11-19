@@ -26,6 +26,10 @@ Telegraph style. Keep the data plane provider-neutral and the hot path small.
 
 ## Deployment compatibility
 
+Context: [fenced native cutovers](https://github.com/openclaw/clawrouter/pull/1058)
+and the [bootstrap artifact incident and control bridge](https://github.com/openclaw/clawrouter/pull/1140)
+require payload and controller changes to preserve old owners and recovery.
+
 - Production deploys through **Deploy ClawRouter** (`deploy-cloudflare.yml`). One
   main dispatch; no release modes, preparatory PRs, source hold, or operator scripts.
 - A feature that changes native payload, control/state/callback contracts,

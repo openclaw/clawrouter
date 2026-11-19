@@ -54,12 +54,12 @@ checksums and tag commit after completion. Leave `main` current and clean.
 ## Deployment boundary
 
 Cloudflare production deploys are independent of release tags and individual
-merges. The **Deploy Cloudflare** workflow runs weekdays at **10:07
-America/Edmonton**, selecting the newest `main` commit with successful exact-SHA
-push CI. Start **Deploy ClawRouter** on `main`, without inputs. The action
-freezes main and automatically chooses and qualifies ordinary/native/control
+merges. **Deploy ClawRouter** runs weekdays at **11:07 a.m. Central time (10:07 a.m.
+America/Edmonton)** or manually on `main`, without inputs. Both triggers freeze
+the event's exact main commit and require its successful push CI. Failed or
+incomplete CI stops deployment; the action never substitutes an older green
+commit. It automatically chooses and qualifies ordinary/native/control
 transitions. See [deployment compatibility](docs/deployment-compatibility.md).
-
 
 FakeCo remains its separate explicitly dispatched workflow and retains its
 full-SHA check. The release proof renders a local config and uses Wrangler
