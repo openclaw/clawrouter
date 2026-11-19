@@ -9,12 +9,92 @@ import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { types } from "node:util";
 import { parse } from "yaml";
-import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
+import { audioShippingContract, audioShippingEvidence, audioShippingText, parseAudioShipping, bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
 import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
 const marker = "synthetic-private-marker-do-not-report";
+// First Audio shipping failure only: closed values, original failure unchanged.
+test("Audio shipping evidence keeps the first stage and falsey original without reading it", () => {
+  for (const reason of [undefined, null, false, 0, {}]) {
+    const evidence = audioShippingEvidence(); let frame;
+    evidence.stage("event_count", 1, 1, 0, 1); evidence.failed(reason);
+    evidence.stage("dispose"); evidence.failed(new Error(marker));
+    evidence.report({ diagnostic(value) { frame = value; } });
+    assert.deepEqual(parseAudioShipping(frame), { v: 1, kind: "audio_shipping", step: "event_count", case: 1, defined: reason !== undefined, calls: 1, events: 0, expected: 1 });
+  }
+  const empty = audioShippingEvidence(); empty.report({ diagnostic() { assert.fail("successful work has no failure record"); } });
+  let reads = 0;
+  const hostile = new Proxy({}, { get() { reads++; throw undefined; } });
+  empty.failed(hostile); assert.throws(() => empty.report({ diagnostic() { throw undefined; } }), value => value === undefined); assert.equal(reads, 0);
+});
+
+test("Audio shipping decoder rejects foreign fields, accessors, malformed and unbounded tuples", () => {
+  const row = { v: 1, kind: "audio_shipping", step: "status", case: 1, defined: false, calls: null, events: null, expected: null };
+  for (const change of [{ step: marker }, { case: 31 }, { case: -1 }, { defined: 0 }, { events: 1000001 }, { expected: 2 }, { extra: marker }]) assert.throws(() => audioShippingText({ ...row, ...change }));
+  let reads = 0;
+  for (const value of [new Proxy(row, { ownKeys() { reads++; throw undefined; } }), Object.defineProperty({ ...row }, "step", { get() { reads++; throw undefined; } })]) assert.throws(() => audioShippingText(value));
+  assert.equal(reads, 0);
+  const frame = audioShippingText(row);
+  for (const text of [frame + " ", frame.replace('"v":1', '"v":1,"v":1'), frame + marker, "x".repeat(513)]) assert.throws(() => parseAudioShipping(text));
+});
+
+function audioShippingEvents(frame) {
+  const target = { file: audioShippingContract.file, entryFile: audioShippingContract.file, name: audioShippingContract.name, line: 1, column: 1, nesting: 0, testId: 3 };
+  return [{ type: "test:enqueue", data: { ...target } },
+    { type: "test:fail", data: { ...target, details: { error: { failureType: "testCodeFailure", code: "ERR_TEST_FAILURE" } } } },
+    { type: "test:diagnostic", data: { ...target, message: frame } }];
+}
+test("Audio shipping relay binds native registration, terminal and diagnostic coordinates", () => {
+  const frame = audioShippingText({ v: 1, kind: "audio_shipping", step: "status", case: 1, defined: true, calls: null, events: null, expected: null });
+  const relay = events => { const r = createObservationRelay(x => x, "audio"); for (const e of events) r.observe(e.type, e.data, e.type === "test:fail" ? { kind: "failure", file: e.data.file } : undefined); return r.finish(); };
+  const events = audioShippingEvents(frame);
+  assert.equal(relay(events).records[0].kind, "audio_shipping");
+  assert.equal(relay([events[0], events[2], events[1]]).records[0].kind, "audio_shipping");
+  for (const changed of [events.slice(1), events.slice(0, 2), [...events, events[2]],
+    events.map((e,i) => i === 2 ? { ...e, data: { ...e.data, file: "test/other.test.mjs" } } : e),
+    events.map((e,i) => i === 1 ? { ...e, data: { ...e.data, testId: 4 } } : e),
+    events.map((e,i) => i === 2 ? { ...e, type: "test:stdout" } : e)]) {
+    const result = relay(changed); assert.equal(result.records[0].kind, "audio_delivery"); assert.equal(result.records[0].state, "incomplete");
+  }
+  assert.equal(relay(events.map(e => e.type === "test:fail" ? { ...e, type: "test:pass" } : e)).active, false);
+});
+
+test("actual Audio shipping callback retains a failed status and independent cleanup failure", async () => {
+  const source = readFileSync("test/openclaw-groq-mistral-transcription.test.mjs", "utf8");
+  const code = source.slice(source.indexOf("async function runShippingRows("), source.indexOf('test("native transcription response'));
+  const cleanup = source.slice(source.indexOf("async function finishOwned("), source.indexOf("const livePhaseNames", source.indexOf("async function finishOwned(")));
+  for (const primary of [undefined, { original: true }]) {
+    const trace = [], frames = [], row = { id: "groq_success", scenario: "success", route: "/fixture" };
+    const dependencies = { audioShippingEvidence, cases: [row], phaseStart: (_p,_kind,start) => start(), mkdtemp: async () => "/fixture", join: () => "/fixture", tmpdir: () => "/fixture",
+      setup: async () => ({ origin: "https://fixture.invalid", mf: { async dispose() { trace.push("dispose"); throw null; } } }),
+      assertCatalog() {}, json: async () => ({}), fetch: async () => ({}), token: () => "fixture", form: () => ({}),
+      phaseFetch: async () => ({ status: 500, json: async () => ({}) }),
+      assert: { equal() { trace.push("status"); throw primary; } },
+      verify: async () => { trace.push("verify"); }, rm: async () => { trace.push("remove"); } };
+    const run = new Function(...Object.keys(dependencies), "let nodePhases;" + cleanup + code + ";return runShippingRows;")(...Object.values(dependencies));
+    await assert.rejects(run([row], { diagnostic(text) { frames.push(text); } }), error => { assert.deepEqual(error.errors, [primary, null]); return true; });
+    assert.deepEqual(trace, ["status", "verify", "dispose", "remove"]);
+    assert.equal(parseAudioShipping(frames[0]).step, "status"); assert.equal(parseAudioShipping(frames[0]).defined, primary !== undefined);
+  }
+});
+
+test("actual Node Audio failure relay emits a bounded stage beside the unchanged failure", async () => {
+  const source = prelude + `import {audioShippingEvidence} from ${JSON.stringify(pathToFileURL(reporter).href)};
+`
+    + `test(${JSON.stringify(audioShippingContract.name)},t=>{const e=audioShippingEvidence();e.stage('event_count',1,1,0,1);try{throw undefined;}catch(reason){e.failed(reason);e.report(t);throw reason;}});`;
+  const f = await fixture(source, true, audioShippingContract.file);
+  const result = spawnSync(process.execPath, f.args, { cwd: f.cwd, env: childEnv, encoding: "utf8", timeout: 15000, maxBuffer: 256 * 1024 });
+  assert.equal(result.error, undefined); assert.notEqual(result.status, 0); assert.equal(result.signal, null);
+  const lines = result.stdout.trim().split("\n"); assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(result.stdout) <= 8192);
+  const rows = lines.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+  assert.equal(rows.filter(r => r.kind === "failure").length, 1);
+  assert.equal(rows.find(r => r.kind === "audio_shipping").step, "event_count");
+  assert.equal(rows.find(r => r.kind === "audio_shipping").defined, false);
+  assert.equal(result.stdout.includes(marker), false);
+});
+
 // BEGIN Bifrost Worker diagnostic pure tests.
 function bifrostWorkerSource() {
   const source = readFileSync("worker/test/bifrost-model-discovery.test.mjs", "utf8");

@@ -829,11 +829,42 @@ export function createRealtimeLedger(caseId, deliver) {
 }
 // END realtime diagnostics.
 
+// Audio shipping diagnostics are first-failure observations, never qualification.
+export const audioShippingContract = Object.freeze({ file: "test/openclaw-groq-mistral-transcription.test.mjs",
+  name: "real shipping Groq/Mistral multipart catalog, grants, denial and SQLite", prefix: "AUDIO_SHIPPING_V1 " });
+export const audioShippingSteps = Object.freeze(["temporary", "setup", "catalog", "rotate", "revoked_catalog", "upload", "upload_body", "status", "text", "stale_code", "unpriced_code", "join", "join_body", "verify", "join_assert", "dispose", "remove", ...["state_request", "state_return", "usage_request", "usage_return", "row", "egress_count", "events_select", "denied_cost", "denied_budget", "wire_url", "wire_method", "wire_redirect", "wire_auth", "wire_other_key", "wire_model", "wire_language", "wire_prompt", "wire_filename", "wire_mime", "wire_bytes", "wire_digest", "wire_fields", "event_count", "event_provider", "event_model", "event_capability", "event_policy", "abort_status", "abort_code", "cancel_calls", "cancel_returns", "cancel_rejected", "producer_pulls", "producer_settled", "producer_pending", "producer_joined", "producer_join_failures", "producer_rejected", "producer_expired", "producer_expiry_at", "producer_timer", "producer_failures", "cost", "cost_basis", "retained", "input_tokens", "output_tokens", "total_tokens", "spent", "privacy", "held", "charged", "complete"]]);
+export function audioShippingText(value) {
+  if (!value || typeof value !== "object" || types.isProxy(value) || Array.isArray(value)) throw Error("invalid audio diagnostic");
+  const keys = ["v", "kind", "step", "case", "defined", "calls", "events", "expected"], row = {};
+  if (Reflect.ownKeys(value).length !== keys.length) throw Error("invalid audio diagnostic");
+  for (const key of keys) { const d = own(value, key); if (!d.present) throw Error("invalid audio diagnostic"); row[key] = d.value; }
+  if (row.v !== 1 || row.kind !== "audio_shipping" || !audioShippingSteps.includes(row.step)
+    || !Number.isSafeInteger(row.case) || row.case < 0 || row.case > 30 || typeof row.defined !== "boolean"
+    || ![row.calls, row.events].every(n => n === null || Number.isSafeInteger(n) && n >= 0 && n <= 1000000)
+    || ![null, 0, 1].includes(row.expected)) throw Error("invalid audio diagnostic");
+  return audioShippingContract.prefix + JSON.stringify(row);
+}
+export function parseAudioShipping(text) {
+  if (typeof text !== "string" || text.length > 512 || !text.startsWith(audioShippingContract.prefix)) throw Error("invalid audio diagnostic");
+  const row = JSON.parse(text.slice(audioShippingContract.prefix.length));
+  if (audioShippingText(row) !== text) throw Error("invalid audio diagnostic");
+  return row;
+}
+export function audioShippingEvidence() {
+  let current = { step: "temporary", case: 0, calls: null, events: null, expected: null }, first;
+  return {
+    stage(step, caseNumber = 0, calls = null, events = null, expected = null) { current = { step, case: caseNumber, calls, events, expected }; },
+    failed(error) { first ??= { v: 1, kind: "audio_shipping", ...current, defined: error !== undefined }; },
+    report(t) { if (first) t.diagnostic(audioShippingText(first)); },
+  };
+}
+
 // BEGIN observation native event binding (pure; final stream ownership only).
 export function createObservationRelay(tracked, realtime = false) {
-  const contract = realtime ? realtimeObservationContract : searchObservationContract;
+  const audio = realtime === "audio"; realtime = realtime === true;
+  const contract = audio ? audioShippingContract : realtime ? realtimeObservationContract : searchObservationContract;
   const targetName = name => realtime ? contract.names.includes(name) : name === contract.name;
-  const parse = realtime ? parseRealtimeDiagnostic : parseObservationDiagnostic;
+  const parse = audio ? parseAudioShipping : realtime ? parseRealtimeDiagnostic : parseObservationDiagnostic;
   const registrations = [], terminals = [], diagnostics = [];
   let active = false, overflow = false, diagnosticEvents = 0, reservedTargetFailure = null, firstFailure = null;
   const coordinate = data => {
@@ -854,7 +885,7 @@ export function createObservationRelay(tracked, realtime = false) {
       const key = coordinate(data), name = own(data, "name").value, id = own(data, "testId");
       if (type === "test:enqueue") {
         const target = inFile && targetName(name);
-        if (target) active = true;
+        if (target && !audio) active = true;
         append(registrations, { key, child, target, name, id: id.present && Number.isSafeInteger(id.value) && id.value > 0 ? id.value : null });
       } else if (type === "test:diagnostic") {
         const text = own(data, "message").value;
@@ -866,14 +897,14 @@ export function createObservationRelay(tracked, realtime = false) {
         const target = inFile && targetName(name);
         // Reserve the original sanitized identity before either bounded buffer can drop it.
         // This retention is not evidence that diagnostic ownership is complete.
-        if (target && type === "test:fail" && firstFailure === null) { firstFailure = { key, child, name, id }; reservedTargetFailure = failure ?? null; if (realtime) active = true; }
+        if (target && type === "test:fail" && firstFailure === null) { firstFailure = { key, child, name, id }; reservedTargetFailure = failure ?? null; if (realtime || audio) active = true; }
         append(terminals, { key, child, target, id, type, failure });
       }
     },
     finish() {
       if (!active) return { active: false, records: [], targetFailure: null, omitted: 0 };
       const allCandidates = registrations.filter(r => r.target);
-      const candidates = realtime && firstFailure ? allCandidates.filter(r => r.child === firstFailure.child && r.id === firstFailure.id.value && r.name === firstFailure.name) : allCandidates;
+      const candidates = (realtime || audio) && firstFailure ? allCandidates.filter(r => r.child === firstFailure.child && r.id === firstFailure.id.value && r.name === firstFailure.name) : allCandidates;
       const target = candidates[0];
       let reason = "complete", terminal, targetFailure = reservedTargetFailure;
       if (overflow) reason = "bounded_overflow";
@@ -890,6 +921,12 @@ export function createObservationRelay(tracked, realtime = false) {
         else { terminal = matching[0]; targetFailure = terminal.failure ?? reservedTargetFailure; }
       }
       const owned = target?.key ? diagnostics.filter(r => r.key === target.key) : [];
+      if (audio) {
+        if (reason === "complete" && (terminal.type !== "test:fail" || owned.length !== 1 || !owned[0].record)) reason = "diagnostics_incomplete";
+        return { active: true, records: reason === "complete" ? [owned[0].record]
+          : [{ v: 1, kind: "audio_delivery", state: "incomplete", reason }], targetFailure,
+          omitted: Math.max(0, diagnosticEvents - (reason === "complete" ? 1 : 0)) };
+      }
       if (reason === "complete" && (owned.length !== 2 || owned.some(r => !r.record) || (!realtime && diagnostics.length !== owned.length))) reason = "diagnostics_incomplete";
       const boundary = owned.find(r => r.record?.kind === (realtime ? "realtime_boundary" : "boundary"))?.record, cleanup = owned.find(r => r.record?.kind === (realtime ? "realtime_cleanup" : "cleanup"))?.record;
       if (reason === "complete" && realtime && (boundary?.case !== `r${String(contract.names.indexOf(target.name) + 1).padStart(2, "0")}` || cleanup?.case !== boundary?.case)) reason = "diagnostics_conflict";
@@ -917,23 +954,27 @@ export function selectFailureRecords(leaves, parents, relay) {
 export async function* workerFailureReport(source, { cwd = process.cwd() } = {}) {
   const tracked = trackedTestFiles(cwd), leaves = new Map(), parents = new Map();
   const observation = createObservationRelay(tracked), realtime = createObservationRelay(tracked, true);
+  const audio = createObservationRelay(tracked, "audio");
   const invocation = workerAbortInvocation(process, cwd);
   const admission = workerAbortAdmission(tracked, invocation), bifrost = workerAbortAdmission(tracked, invocation, true);
   let failures = 0, unknownFiles = 0;
   for await (const event of source) {
     admission.observe(event); bifrost.observe(event);
     const type = own(event, "type").value, data = own(event, "data").value;
-    if (type !== "test:fail") { observation.observe(type, data); realtime.observe(type, data); continue; }
+    if (type !== "test:fail") { observation.observe(type, data); realtime.observe(type, data); audio.observe(type, data); continue; }
     failures = Math.min(limit, failures + 1);
     const record = failureRecord(data, tracked);
-    observation.observe(type, data, record); realtime.observe(type, data, record);
+    observation.observe(type, data, record); realtime.observe(type, data, record); audio.observe(type, data, record);
     if (record.file === null) unknownFiles = Math.min(limit, unknownFiles + 1);
     const bucket = record.failureType === "subtestsFailed" ? parents : leaves;
     const key = JSON.stringify(record);
     if (bucket.has(key) || bucket.size < 9) bucket.set(key, record);
   }
   const search = observation.finish(), media = realtime.finish();
-  const relay = !media.active ? search : { active: true, records: [...search.records, ...media.records], targetFailures: [search.targetFailure, media.targetFailure].filter(Boolean), omitted: search.omitted + media.omitted };
+  let relay = !media.active ? search : { active: true, records: [...search.records, ...media.records], targetFailures: [search.targetFailure, media.targetFailure].filter(Boolean), omitted: search.omitted + media.omitted };
+  const audioResult = audio.finish();
+  if (audioResult.active) relay = { active: true, records: [...relay.records, ...audioResult.records],
+    targetFailures: [...(relay.targetFailures ?? [relay.targetFailure]), audioResult.targetFailure].filter(Boolean), omitted: relay.omitted + audioResult.omitted };
   const evidence = admission.finish(), bf = bifrost.finish();
   if (relay.active) {
     // Script diagnostic families and the qualified Worker invocation are disjoint.

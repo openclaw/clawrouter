@@ -11,7 +11,16 @@ const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const providers = ["groq", "mistral"];
-const existing = Object.fromEntries(providers.map(id => [id, parse(readFileSync(new URL(`../../providers/${id}.provider.yaml`, import.meta.url), "utf8"))]));
+const declared = Object.fromEntries(providers.map(id => [id, parse(readFileSync(new URL(`../../providers/${id}.provider.yaml`, import.meta.url), "utf8"))]));
+// These compiler fixtures insert their own finite transcription contract. Keep
+// that pre-declaration baseline isolated from the now-shipping YAML cards.
+const existing = Object.fromEntries(providers.map(id => {
+  const manifest = structuredClone(declared[id]), upstream = groqMistralAudio[id].model;
+  delete manifest.endpoints.transcription;
+  manifest.capabilities = manifest.capabilities.filter(value => !(value.id === "audio.transcription" && value.endpoint === "transcription"));
+  manifest.models.entries = manifest.models.entries.filter(value => !(value.id === `${id}/${upstream}` && value.upstream === upstream));
+  return [id, manifest];
+}));
 const wire = Object.fromEntries(providers.map(id => [id, JSON.parse(readFileSync(new URL(`../../providers/_fixtures/${id}/transcription.json`, import.meta.url), "utf8"))]));
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture(id) {
@@ -34,6 +43,20 @@ function upload(id, fields = wire[id].fields) {
   const file = wire[id].file;
   return { fields: { ...fields }, file: new File([Buffer.from(file.base64, "base64")], file.name, { type: file.type }) };
 }
+
+test("synthetic transcription insertion preserves every unrelated shipping declaration", () => {
+  for (const id of providers) {
+    const shipping = compile(declared[id]).providers[0], synthetic = compile(fixture(id)).providers[0];
+    assert.deepEqual(synthetic.endpoints.filter(value => value.id !== "transcription"), shipping.endpoints.filter(value => value.id !== "transcription"));
+    assert.deepEqual(synthetic.capabilities.filter(value => value.endpoint !== "transcription"), shipping.capabilities.filter(value => value.endpoint !== "transcription"));
+    assert.deepEqual(synthetic.models.filter(value => value.id !== `${id}/${groqMistralAudio[id].model}`), shipping.models.filter(value => value.id !== `${id}/${groqMistralAudio[id].model}`));
+    assert.deepEqual({ ...synthetic, endpoints: shipping.endpoints, capabilities: shipping.capabilities, models: shipping.models }, shipping);
+    assert.equal(synthetic.endpoints.filter(value => value.id === "transcription").length, 1);
+    assert.equal(synthetic.capabilities.filter(value => value.endpoint === "transcription").length, 1);
+    assert.equal(synthetic.models.filter(value => value.id === `${id}/${groqMistralAudio[id].model}`).length, 1);
+    assert.deepEqual(declared[id], parse(readFileSync(new URL(`../../providers/${id}.provider.yaml`, import.meta.url), "utf8")));
+  }
+});
 
 test("compiled Groq/Mistral bases and suffixes compose the landed multipart codec with the original Bearer credential", async () => {
   for (const id of providers) {

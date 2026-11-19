@@ -1,5 +1,11 @@
 # Changelog
 
+- Report the first Audio shipping-test failure as a bounded case, stage and count record while preserving original failures, cleanup and runner verdicts.
+
+- Run the pinned Audio SDK profile-write cases in a real Vitest fork for host-broker ownership, and request identity encoding for its complete-JSON transcription contract. Keep the original broker, response validation, credentials and accounting assertions. Document the explicit identity-encoding client configuration and leave default compressed-route compatibility unqualified.
+
+- Retain and join Audio transcription fixture source pull and cancellation callbacks in the original Worker request context. Preserve the bounded expiry, controlled owner-local cancellation boundary, original rejection evidence and accounting checks.
+
 - Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
 
 - Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
@@ -661,8 +667,9 @@
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Dispatch declared Groq and Mistral unary transcription through authenticated bounded multipart intake, original-key revalidation and conservative settlement; keep unknown audio-dollar budgets closed and preserve native file bytes.
-- Qualify finite Groq and Mistral multipart transcription declarations with exact frozen models, original credential/path binding and unknown audio costs; shared ingress activation remains separate.
+- Ship the finite Groq and Mistral native transcription cards in the compiled catalog and add registered OpenClaw consumer coverage for original credentials, multipart bytes, unknown audio costs and SQLite settlement.
 - Keep Groq and Mistral native transcription costs unknown before token/free/image estimates and settlement; deny unqualified hard-dollar admission while preserving explicit policy-fixed charges.
+- Declare frozen Groq Whisper Turbo and Mistral Voxtral unary transcription cards on their provider-specific multipart formats, preserving existing inference blocks and keeping whole-upload tariffs unknown.
 - Keep model-less xAI native STT unpriced before token/free/image estimates and settlement, preserving explicit policy-fixed charging and conservative silence/duration accounting.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
 - Qualify model-less xAI native STT declarations with original multipart/credential binding, unchanged Chat cards and conservative unknown-dollar admission; shared upload activation remains separate.
