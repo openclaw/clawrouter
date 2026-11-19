@@ -1,0 +1,55 @@
+# Canonical Jobs service, separate from Models API and Studio run contracts.
+schema: clawrouter.service-provider.v1
+id: vydra
+displayName: Vydra Jobs
+status: experimental
+class: rest_json
+service:
+  platform: vydra
+  kind: tool_provider
+  upstreamService: vydra
+  configKeys: [VYDRA_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://www.vydra.ai
+routing:
+  nativePrefixes: [clawrouter-vydra, vydra]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: media.predict
+    endpoint: jobs
+    methods: [POST]
+endpoints:
+  jobs:
+    path: /api/v1/jobs
+    requestFormat: vydra.job_create
+    responseFormat: vydra.job
+    lifecycle:
+      protocol: vydra.jobs
+      retrieve: job
+      cancel: cancel_job
+    timeoutMs: 120000
+  job:
+    path: /api/v1/jobs/${job_id}
+    method: GET
+    pathParams: [job_id]
+    requestFormat: vydra.job_get
+    responseFormat: vydra.job
+    timeoutMs: 120000
+  cancel_job:
+    path: /api/v1/jobs/${job_id}
+    method: DELETE
+    pathParams: [job_id]
+    requestFormat: vydra.job_cancel
+    responseFormat: vydra.job_cancel
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]

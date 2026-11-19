@@ -35,7 +35,7 @@ export function buildProviderSmokePlan(snapshot, env = process.env) {
       optionalConfig,
       missingConfig,
       configPresent,
-      configured: configPresent && oauthGrantReady,
+      configured: configPresent && oauthGrantReady && !target?.ownerGrantRequired,
       oauthGrantRequired: oauth,
       oauthGrantReady,
       target,
@@ -253,7 +253,7 @@ export function summarizePlan(plan) {
     `providers=${plan.providerCount} smokeTargets=${plan.targetCount} configured=${plan.configuredCount}`,
   ];
   for (const provider of plan.providers) {
-    const config = provider.configPresent
+    const config = provider.target?.ownerGrantRequired ? "owner-grant-required" : provider.configPresent
       ? "configured"
       : `missing=${provider.missingConfig.join(",")}`;
     const target = provider.target
@@ -270,6 +270,18 @@ export function summarizePlan(plan) {
 }
 
 function smokeTarget(provider, env) {
+  // This private authority is deliberately absent from environment config.
+  // Inventory the missing live fixture without manufacturing an executable grant.
+  if (provider.id === "anthropic-vertex" && provider.base_urls.default === "https://aiplatform.googleapis.com"
+    && provider.config_keys.length === 0 && provider.auth.schemes.length === 1
+    && provider.auth.schemes[0].type === "bearer" && provider.auth.schemes[0].secretKind === "api_token") {
+    const endpoint = provider.endpoints.find(endpoint => endpoint.id === "messages" && endpoint.method === "POST"
+      && endpoint.path === "/v1/messages" && endpoint.request_format === "anthropic.messages" && endpoint.response_format === "anthropic.messages");
+    if (endpoint) return {
+      kind: "manifest_proxy", route: "/v1/proxy/anthropic-vertex/messages", method: "POST", upstreamMethod: "POST", endpoint: endpoint.id,
+      ownerGrantRequired: true, unresolved: "Vertex Messages requires an original private owner grant and a qualified smoke policy; no live fixture is declared",
+    };
+  }
   const chatEndpointId = provider.capabilities.find((capability) => capability.id === "llm.chat")?.endpoint;
   const chatEndpoint = provider.endpoints.find((endpoint) => endpoint.id === chatEndpointId);
   if (chatEndpoint && supportsOpenAiCompatibleProxy(provider, chatEndpoint)) {
@@ -297,7 +309,7 @@ function smokeTarget(provider, env) {
   // which can themselves start with another provider's routing prefix.
   const model = manifestSmokeModelOverride(provider, endpoint, env)
     ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.id;
-  if (["openai.chat_completions", "openai.responses", "openai.decisions", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
+  if (["openai.chat_completions", "openai.responses", "openai.decisions", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "voyage.embeddings", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
     endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
   );
@@ -311,8 +323,9 @@ function smokeTarget(provider, env) {
     method: "POST",
     upstreamMethod,
     endpoint: endpoint.id,
-    ...(body === null || unresolvedParams.length ? { unresolved: endpoint.request_format === "replicate.prediction_get"
+    ...(body === null || unresolvedParams.length || endpoint.request_format === "kie.job_get" ? { unresolved: endpoint.request_format === "replicate.prediction_get"
       ? "prediction lookup requires an existing prediction ID; no smoke fixture is declared"
+      : endpoint.request_format === "kie.job_get" ? "Kie lookup requires an existing task ID; no smoke fixture is declared"
       : unresolvedParams.length ? `path parameters require a smoke fixture: ${unresolvedParams.join(", ")}`
       : `no smoke request template for ${endpoint.request_format}` } : {}),
     envelope: {
@@ -380,6 +393,7 @@ function smokeEndpoint(provider) {
     ["openai.decisions", "llm.decisions"],
     ["openai.embeddings", "llm.embeddings"],
     ["cohere.embed", "llm.embeddings"],
+    ["voyage.embeddings", "llm.embeddings"],
     ["tavily.extract", "web.extract"],
   ]) {
     const preferred = provider.endpoints.find(endpoint => endpoint.request_format === format
@@ -441,10 +455,10 @@ function supportsManifestProxy(provider, endpoint) {
 function supportsEdgeAuth(provider) {
   return provider.auth.schemes.every((scheme) => {
     if (scheme.type === "bearer") {
-      return scheme.required === false || providerHasSecretCandidate(provider, scheme.secretKind);
+      return scheme.required === false || providerHasSecretCandidate(provider, scheme);
     }
     if (["api_key", "query_api_key"].includes(scheme.type)) {
-      return providerHasSecretCandidate(provider, scheme.secretKind);
+      return providerHasSecretCandidate(provider, scheme);
     }
     if (scheme.type === "cloudflare_binding") {
       return true;
@@ -470,7 +484,7 @@ function optionalAuthConfig(provider, key) {
     return (
       scheme.type === "bearer" &&
       scheme.required === false &&
-      secretBindingCandidates(provider, scheme.secretKind).includes(key)
+      secretBindingCandidates(provider, scheme).includes(key)
     );
   });
 }
@@ -513,14 +527,29 @@ function pushDeclaredTemplateCandidate(provider, candidates, candidate) {
   }
 }
 
-function providerHasSecretCandidate(provider, secretKind) {
-  return secretBindingCandidates(provider, secretKind).some((candidate) => {
+function providerHasSecretCandidate(provider, scheme) {
+  return secretBindingCandidates(provider, scheme).some((candidate) => {
     return provider.config_keys.includes(candidate);
   });
 }
 
-function secretBindingCandidates(provider, secretKind) {
+function secretBindingCandidates(provider, scheme) {
+  const { secretKind } = scheme;
   const candidates = [];
+  if (
+    provider.id === "fal" && scheme.type === "bearer" && secretKind === "api_key"
+    && scheme.header?.toLowerCase() === "authorization" && scheme.format === "Key ${secret}"
+    && provider.config_keys.includes("FAL_KEY")
+  ) {
+    candidates.push("FAL_KEY");
+  }
+  if (
+    provider.id === "runway" && scheme.type === "bearer" && secretKind === "api_key"
+    && scheme.header?.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}"
+    && provider.config_keys.includes("RUNWAYML_API_SECRET")
+  ) {
+    candidates.push("RUNWAYML_API_SECRET");
+  }
   for (const key of provider.config_keys) {
     if (configKeyMatchesSecretKind(key, secretKind)) {
       candidates.push(key);
@@ -629,6 +658,9 @@ function sampleBody(provider, endpoint, method, model, env) {
   }
   if (format === "openai.embeddings") {
     return { model, input: "OpenClaw" };
+  }
+  if (format === "voyage.embeddings") {
+    return { model, input: ["OpenClaw"], input_type: "query", truncation: false, output_dimension: 256, output_dtype: "float" };
   }
   if (format === "cohere.embed") {
     return { model, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] };

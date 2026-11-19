@@ -1,0 +1,3279 @@
+{
+  "schema": 1,
+  "projection": true,
+  "attempts": [
+    {
+      "mode": "cutover",
+      "passed": false,
+      "source": "7e25045a60628f995b849d9a05d69ef796236cd1",
+      "ids": {
+        "run": "1795040620664",
+        "blue": "6e4572ee-83eb-456a-a867-959aae660d6e",
+        "green": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+        "recovery": "0028c23d-b625-4289-9c5f-dea679be29b1"
+      },
+      "actionsRun": 44411329244,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-forward",
+        "payload"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "attempt-01-cutover",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44411329244",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "payload": {
+          "passed": false,
+          "error": "WORKLOADS exited 1; do not replay"
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 7,
+          "events": 7,
+          "spentMicros": 42,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "754f511e19ae50f1a07581806fc8c132",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "c6edfef00d01bf8b9f6fbc5b35bfb1d1",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "9303c2db28e8de3741886dfd883f1e06",
+              "mode": "recall",
+              "outcome": "completed"
+            },
+            {
+              "id": "3870a18042b2a51099d62589174e11ed",
+              "mode": "success",
+              "outcome": "completed"
+            },
+            {
+              "id": "049f8c8db4e730ad642dc7187104fb8b",
+              "mode": "reject",
+              "outcome": "rejected"
+            },
+            {
+              "id": "bf8d494894801a14adfe79cf31db262c",
+              "mode": "max",
+              "outcome": "completed"
+            },
+            {
+              "id": "e8c4971d70d7b7f705f38b49c8b6f22e",
+              "mode": "lost",
+              "outcome": "delivery_unknown"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-18T22:23:27.480531Z",
+              "modified_on": "2026-11-18T22:23:27.480531Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "ad5bf2b7a8b645c58fefc4d42a9e4565",
+            "queue_name": "clawrouter-native-qualification-3887311adbf8-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-18T22:23:06.100483Z",
+            "modified_on": "2026-11-18T22:23:06.100483Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-3887311adbf8",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-3887311adbf8",
+                "dead_letter_queue": "clawrouter-native-qualification-3887311adbf8-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "42b871b538ac4d57907032942553a3eb",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "0e024294a506d724a7ecd6bf9446811c8e1c69f33a5e1a40e2fbb20ae4059de4",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f0c3-1acb-7863-9270-60e9ec5f47d5",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f0c3-1b83-7962-8de8-d0f541848d70",
+          "status": "completed",
+          "finishedAt": 1795040683343,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "1a68a968b3b5d7854aa55e5002259c1577d9a2cd30eee695f9cc3dd2b626b32e"
+        },
+        {
+          "kind": "overlap",
+          "direction": "forward",
+          "threadId": "01a1f0c3-1acb-7863-9270-60e9ec5f47d5",
+          "beforeVersion": "6e4572ee-83eb-456a-a867-959aae660d6e",
+          "afterVersion": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+          "resumedAppServer": true,
+          "heldCaseId": "c6edfef00d01bf8b9f6fbc5b35bfb1d1",
+          "followupCaseId": "9303c2db28e8de3741886dfd883f1e06",
+          "startedAt": 1795040684766,
+          "turnId": "01a1f0c3-2ae1-7210-a360-393613427a0d",
+          "status": "completed",
+          "finishedAt": 1795040711693,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795040730731,
+          "followup": {
+            "turnId": "01a1f0c3-de8e-7ec0-ad59-de13f77ab14a",
+            "status": "completed",
+            "finishedAt": 1795040733315,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "98772eaaf7736ffef72537425be3eaaf701144e28f2d2576140aa4977b3d5689"
+          },
+          "admissionClosedAt": 1795040711172,
+          "recoveryToContextCompletedMs": 22143,
+          "followupDurationMs": 2584
+        },
+        {
+          "kind": "workload-case",
+          "mode": "success",
+          "caseId": "3870a18042b2a51099d62589174e11ed",
+          "traceHash": "01ed90c88a76624bb0320cd8831d1faeff7afc0b637278a41abd5ea1e2044cad",
+          "status": 200,
+          "response": {
+            "status": 200,
+            "version": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+            "bodyComplete": true
+          },
+          "bytes": 329,
+          "at": 1795040749038,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 2,
+              "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+              "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca"
+            },
+            "grants": [],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 3,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3f82adb1-818c-4932-bd52-6251dc3c4917",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ecafdfb-75a8-485b-a601-70c10bf2c641",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "e66d42cc-9630-4345-a2d5-8d9e2973c023",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 3,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "68d9b174-56bb-4f8b-8af0-dcdd2fa8f22b",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3ebf3da7-cef1-497a-a0cd-b575802fd122",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ba1d1d8-8801-4289-add2-77e0d672e296",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "c086f586-8f5b-4787-b957-03d5f29138c0",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "41ea2b59-95d3-42e7-8ff7-2954ab53b330",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "workload-case",
+          "mode": "reject",
+          "caseId": "049f8c8db4e730ad642dc7187104fb8b",
+          "traceHash": "f3dbf669e76cb7d9d2c671d1906e492a8ce75845e0a8f1893102c61d54a5e039",
+          "status": 400,
+          "response": {
+            "status": 400,
+            "version": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+            "bodyComplete": true
+          },
+          "bytes": 328,
+          "at": 1795040755698,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 2,
+              "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+              "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca"
+            },
+            "grants": [],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 3,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3f82adb1-818c-4932-bd52-6251dc3c4917",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ecafdfb-75a8-485b-a601-70c10bf2c641",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "e66d42cc-9630-4345-a2d5-8d9e2973c023",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 3,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "68d9b174-56bb-4f8b-8af0-dcdd2fa8f22b",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3ebf3da7-cef1-497a-a0cd-b575802fd122",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ba1d1d8-8801-4289-add2-77e0d672e296",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "c086f586-8f5b-4787-b957-03d5f29138c0",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "41ea2b59-95d3-42e7-8ff7-2954ab53b330",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "workload-case",
+          "mode": "max",
+          "caseId": "bf8d494894801a14adfe79cf31db262c",
+          "traceHash": "3e1bf9fc8db1e7fc48b2d828b014ceb2facbd6969095cfb49b168e0a6c1ac328",
+          "status": 200,
+          "response": {
+            "status": 200,
+            "version": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+            "bodyComplete": true
+          },
+          "bytes": 67108864,
+          "at": 1795040772763,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 2,
+              "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+              "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca"
+            },
+            "grants": [],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 3,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3f82adb1-818c-4932-bd52-6251dc3c4917",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ecafdfb-75a8-485b-a601-70c10bf2c641",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "e66d42cc-9630-4345-a2d5-8d9e2973c023",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 3,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "68d9b174-56bb-4f8b-8af0-dcdd2fa8f22b",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3ebf3da7-cef1-497a-a0cd-b575802fd122",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ba1d1d8-8801-4289-add2-77e0d672e296",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "c086f586-8f5b-4787-b957-03d5f29138c0",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "41ea2b59-95d3-42e7-8ff7-2954ab53b330",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "workload-case",
+          "mode": "overflow",
+          "caseId": "7cb0bd2c2ae92826fa46728b95e0a9d6",
+          "traceHash": "7ea1288ba7c7b6990ba9ff779421e42e4d48da55aec67d833ad8349c5c0f9475",
+          "status": 413,
+          "response": {
+            "status": 413,
+            "version": "05a6207f-bb1a-4052-8366-8f1ca38d6269",
+            "bodyComplete": true
+          },
+          "bytes": 67108865,
+          "at": 1795040774045,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 2,
+              "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+              "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca"
+            },
+            "grants": [],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 3,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3f82adb1-818c-4932-bd52-6251dc3c4917",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ecafdfb-75a8-485b-a601-70c10bf2c641",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "e66d42cc-9630-4345-a2d5-8d9e2973c023",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 3,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "68d9b174-56bb-4f8b-8af0-dcdd2fa8f22b",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "3ebf3da7-cef1-497a-a0cd-b575802fd122",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1ba1d1d8-8801-4289-add2-77e0d672e296",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "c086f586-8f5b-4787-b957-03d5f29138c0",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "41ea2b59-95d3-42e7-8ff7-2954ab53b330",
+                "fingerprint": "ffbb3d857abd3fadf847bfee123b7b192bee5a794360c375d79b3c29d50676ca",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              }
+            ]
+          }
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 7,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 42,
+          "providerSpentMicros": 42,
+          "events": [
+            {
+              "idHash": "b80a13e0bb8d0354bd9c5077d32643e1ca42d06e6e28b7e31848107e55fece7b",
+              "requestIdHash": "c674812e1a6ee08970cae1b42d01d4b3c11e288162a23a10688ef790bf08eca1",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "provider_error",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "8e516bb4dfa33a4117fe11d870b9954b268010f43c42cb07b55cc41f90ac0cb9",
+              "requestIdHash": "abd35b7ca681bc2b104bf97a98ca558f56c5ad59babe7ee09db4e1b206d52e10",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "6bdeeb66b0fc24ea991b4ac1a5a00d5572de237da62e768c9e7be932cb80e639",
+              "requestIdHash": "bb66f9279fb5ec0474d412b3e539fe308fb9eaea1d5476f661193bde3e8f0c22",
+              "actualCostMicros": 0,
+              "reservedCostMicros": 7,
+              "status": "client_error",
+              "statusCode": 400,
+              "contentRetained": false
+            },
+            {
+              "idHash": "c80d4051d725b34a32b0ba37e032bb0803d16f6996e939ab9b27871fa78883d7",
+              "requestIdHash": "86c37b6218d1391719f4a15b4a80b0ee5eba7909495b6f3df31fda00f307a990",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "5391879e6f974006db649aeee0de30ac4d08a07dd7ff96f8867c57a7668732b3",
+              "requestIdHash": "4e5a1fce10f77057e9314f4e29b80a8289908e524ee3aaeca85b477d19ad391f",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "6a1e4342b80097aa4c09f996bfec2e58d8966b63b5bfb680fb608d795108e08c",
+              "requestIdHash": "66241a282119e608f0d4ef7df2fddadee52c9c2ce7d071791e71be2bfad1391d",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "3a0d6683498a51cd18034d6cf9536aa85273d0ba8c89f686adf80e3e9aec1298",
+              "requestIdHash": "d32b92b60f8f8580bed0e754d1b60954d0f808c894040e4b0a498b3631a61b6f",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795040683273,
+            "usage": {
+              "idHash": "3a0d6683498a51cd18034d6cf9536aa85273d0ba8c89f686adf80e3e9aec1298",
+              "requestIdHash": "d32b92b60f8f8580bed0e754d1b60954d0f808c894040e4b0a498b3631a61b6f",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795040683512,
+            "idHash": "a36ca212781c653e05c1f09f6dc3a5c720619d03cbd0e3ba6b9d7b3c4047af1b",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795040711698,
+            "usage": {
+              "idHash": "6a1e4342b80097aa4c09f996bfec2e58d8966b63b5bfb680fb608d795108e08c",
+              "requestIdHash": "66241a282119e608f0d4ef7df2fddadee52c9c2ce7d071791e71be2bfad1391d",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795040711797,
+            "idHash": "f13c233e695251497242f0e4657755f86f972c83dc74109825706857731551b4",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040732947,
+            "usage": {
+              "idHash": "5391879e6f974006db649aeee0de30ac4d08a07dd7ff96f8867c57a7668732b3",
+              "requestIdHash": "4e5a1fce10f77057e9314f4e29b80a8289908e524ee3aaeca85b477d19ad391f",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040733071,
+            "idHash": "ee5d53cf970a08f2db922e4eac93b0a1406966d71711dba1ff91e77c9d6f53d7",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040743620,
+            "usage": {
+              "idHash": "c80d4051d725b34a32b0ba37e032bb0803d16f6996e939ab9b27871fa78883d7",
+              "requestIdHash": "86c37b6218d1391719f4a15b4a80b0ee5eba7909495b6f3df31fda00f307a990",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040743722,
+            "idHash": "01ed90c88a76624bb0320cd8831d1faeff7afc0b637278a41abd5ea1e2044cad",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 4,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040750382,
+            "usage": {
+              "idHash": "6bdeeb66b0fc24ea991b4ac1a5a00d5572de237da62e768c9e7be932cb80e639",
+              "requestIdHash": "bb66f9279fb5ec0474d412b3e539fe308fb9eaea1d5476f661193bde3e8f0c22",
+              "actualCostMicros": 0,
+              "reservedCostMicros": 7,
+              "status": "client_error",
+              "statusCode": 400,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 4,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040750504,
+            "idHash": "f3dbf669e76cb7d9d2c671d1906e492a8ce75845e0a8f1893102c61d54a5e039",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 5,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040766431,
+            "usage": {
+              "idHash": "8e516bb4dfa33a4117fe11d870b9954b268010f43c42cb07b55cc41f90ac0cb9",
+              "requestIdHash": "abd35b7ca681bc2b104bf97a98ca558f56c5ad59babe7ee09db4e1b206d52e10",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 5,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040766647,
+            "idHash": "3e1bf9fc8db1e7fc48b2d828b014ceb2facbd6969095cfb49b168e0a6c1ac328",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 6,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040775028,
+            "usage": {
+              "idHash": "b80a13e0bb8d0354bd9c5077d32643e1ca42d06e6e28b7e31848107e55fece7b",
+              "requestIdHash": "c674812e1a6ee08970cae1b42d01d4b3c11e288162a23a10688ef790bf08eca1",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "provider_error",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 6,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795040775157,
+            "idHash": "4269b9534a067b36511f9f8bf8f304bf884d39d46d4f4edc8ea0b4c0afed03ed",
+            "clean": false
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-18T22:34:16.069Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 7,
+        "replays": 0,
+        "accountingEvents": 7,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      },
+      "controller": {
+        "runId": 44411329244,
+        "url": "https://github.com/openclaw/clawrouter/actions/runs/44411329244",
+        "source": "7e25045a60628f995b849d9a05d69ef796236cd1",
+        "mode": "cutover",
+        "exercise": {
+          "id": 135179949883,
+          "runner": 1027492751
+        }
+      }
+    },
+    {
+      "mode": "fail-smoke",
+      "passed": true,
+      "source": "7e25045a60628f995b849d9a05d69ef796236cd1",
+      "ids": {
+        "run": "1795041315822",
+        "blue": "f06e2c8e-4145-4958-a5eb-e93f6e5226ff",
+        "green": "16b15741-f8fd-4faf-8c5f-b26e464ca829",
+        "recovery": "358362b4-7361-4045-8ec2-2706dbf46fd1"
+      },
+      "actionsRun": 44413192211,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-forward",
+        "continuity-recovery"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "attempt-02-fail-smoke",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44413192211",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "continuity-recovery": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 5,
+          "events": 5,
+          "spentMicros": 35,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "c0f2d447e67201a273e691972593152b",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "936d914c9c41bc3a719a2b66665906c4",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "92a2d4d8ec8551a0c16aec2c290aa627",
+              "mode": "recall",
+              "outcome": "completed"
+            },
+            {
+              "id": "0214a3123e7269577cbe26708d8b91b9",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "4b1f8b7b71da6361ead5fbcde8ac46e0",
+              "mode": "recall",
+              "outcome": "completed"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-18T22:34:59.425863Z",
+              "modified_on": "2026-11-18T22:34:59.425863Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "8af9f560ee24481db7905e55add31859",
+            "queue_name": "clawrouter-native-qualification-4b8c54f0ce12-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-18T22:34:37.429976Z",
+            "modified_on": "2026-11-18T22:34:37.429976Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-4b8c54f0ce12",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-4b8c54f0ce12",
+                "dead_letter_queue": "clawrouter-native-qualification-4b8c54f0ce12-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "60f4ff04d1504c7daac5b5ffd2ef7045",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "0e024294a506d724a7ecd6bf9446811c8e1c69f33a5e1a40e2fbb20ae4059de4",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f0cd-c9d9-7cd2-b832-497efbbb1809",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f0cd-ca6d-7590-a634-f03bbfd6b584",
+          "status": "completed",
+          "finishedAt": 1795041383485,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "3ef7982ea788e76e0ffe5afb2c2c202f29a705dd95cfe50770200a291d7c331e"
+        },
+        {
+          "kind": "overlap",
+          "direction": "forward",
+          "threadId": "01a1f0cd-c9d9-7cd2-b832-497efbbb1809",
+          "beforeVersion": "f06e2c8e-4145-4958-a5eb-e93f6e5226ff",
+          "afterVersion": "16b15741-f8fd-4faf-8c5f-b26e464ca829",
+          "resumedAppServer": true,
+          "heldCaseId": "936d914c9c41bc3a719a2b66665906c4",
+          "followupCaseId": "92a2d4d8ec8551a0c16aec2c290aa627",
+          "startedAt": 1795041386641,
+          "turnId": "01a1f0cd-e094-7853-8b0f-4a89057d7ddd",
+          "status": "completed",
+          "finishedAt": 1795041410826,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795041429771,
+          "followup": {
+            "turnId": "01a1f0ce-890e-7801-9fbe-dd304f377fc5",
+            "status": "completed",
+            "finishedAt": 1795041431782,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "9608dc72945b891dde576ca51193873f5e5b35e1d2917191e1c02370f07e3d20"
+          },
+          "admissionClosedAt": 1795041409981,
+          "recoveryToContextCompletedMs": 21801,
+          "followupDurationMs": 2011
+        },
+        {
+          "kind": "overlap",
+          "direction": "recovery",
+          "threadId": "01a1f0cd-c9d9-7cd2-b832-497efbbb1809",
+          "beforeVersion": "16b15741-f8fd-4faf-8c5f-b26e464ca829",
+          "afterVersion": "358362b4-7361-4045-8ec2-2706dbf46fd1",
+          "resumedAppServer": true,
+          "heldCaseId": "0214a3123e7269577cbe26708d8b91b9",
+          "followupCaseId": "4b1f8b7b71da6361ead5fbcde8ac46e0",
+          "startedAt": 1795041436273,
+          "turnId": "01a1f0ce-a275-7fb3-96b2-4fe536e8f4f8",
+          "status": "completed",
+          "finishedAt": 1795041523572,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795041542908,
+          "followup": {
+            "turnId": "01a1f0d0-4300-7d71-bb64-ee3d41f409a9",
+            "status": "completed",
+            "finishedAt": 1795041544928,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "d740dbcdcc0bd2505a6414386144d4930b97e25c370f84bce44e13253e6febc5"
+          },
+          "admissionClosedAt": 1795041522840,
+          "recoveryToContextCompletedMs": 22088,
+          "followupDurationMs": 2020
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 5,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 35,
+          "providerSpentMicros": 35,
+          "events": [
+            {
+              "idHash": "0fbaf9a1ca89caaefbb2e92a884c37dc9427fc916d47f0c54f89a63c72c9a5ba",
+              "requestIdHash": "a3ede652f7e4dada30c83890280a9ef01a270dabc82d287d4016c81f42e8f746",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "cf21c39d2289914206d040e1fca13c066fdf858cc0d1b80d09ddd3549b4430f6",
+              "requestIdHash": "be3d748b7a92686a99c12582cf96b3f8a531fd082851f0e8ad5f4ac4d037401b",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "97a2ec802acd017bd531e179dbd75eb42c0428c5666e5957049d98f8205844ef",
+              "requestIdHash": "e6a69ea4f673460535f925297f45c5f67cffc677597ca7f091602e1c2fd7afd3",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "d1e813e64b6f02354b11d55334838d1f1605cefae3708be21d98a09d9db51e3d",
+              "requestIdHash": "605d6ec170bfa56d15bd68f4902aed3c2849bc897934cecc793d7ee290bff8e5",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "18a13607da4a5811764fe85be1b3c7b324c61da98e0c020d89923356deba444b",
+              "requestIdHash": "2fce62502b96ddf04a39ce5e0a11e1a8890f7d249e631ed4d0927f977b6450ec",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041383109,
+            "usage": {
+              "idHash": "18a13607da4a5811764fe85be1b3c7b324c61da98e0c020d89923356deba444b",
+              "requestIdHash": "2fce62502b96ddf04a39ce5e0a11e1a8890f7d249e631ed4d0927f977b6450ec",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041383255,
+            "idHash": "98daf696a49a36d6b1e38e71bd68de0155ac32ac62c8b3e6e8cfb363f78db750",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041410852,
+            "usage": {
+              "idHash": "d1e813e64b6f02354b11d55334838d1f1605cefae3708be21d98a09d9db51e3d",
+              "requestIdHash": "605d6ec170bfa56d15bd68f4902aed3c2849bc897934cecc793d7ee290bff8e5",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041411020,
+            "idHash": "337970abd01dfff82fab744cfc23610e756c5e6936c2d1d51fe20f511af944d1",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795041431470,
+            "usage": {
+              "idHash": "97a2ec802acd017bd531e179dbd75eb42c0428c5666e5957049d98f8205844ef",
+              "requestIdHash": "e6a69ea4f673460535f925297f45c5f67cffc677597ca7f091602e1c2fd7afd3",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795041431604,
+            "idHash": "6fa4c7e146837a6d8716564f2782e405157bb039370302f27206ba658f7d7f8d",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795041523436,
+            "usage": {
+              "idHash": "cf21c39d2289914206d040e1fca13c066fdf858cc0d1b80d09ddd3549b4430f6",
+              "requestIdHash": "be3d748b7a92686a99c12582cf96b3f8a531fd082851f0e8ad5f4ac4d037401b",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795041523570,
+            "idHash": "d44393bfcb16a6b69f81888edf90283f10495a7ca7f7ce659bc4dbd71cfd3c2e",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 4,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041544871,
+            "usage": {
+              "idHash": "0fbaf9a1ca89caaefbb2e92a884c37dc9427fc916d47f0c54f89a63c72c9a5ba",
+              "requestIdHash": "a3ede652f7e4dada30c83890280a9ef01a270dabc82d287d4016c81f42e8f746",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 4,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041545004,
+            "idHash": "4c14d2f74efbf214c684b3e3fe7b116e60553ccb34e853b8d4161fa9298fa61f",
+            "clean": true
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-18T22:39:31.476Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 5,
+        "replays": 0,
+        "accountingEvents": 5,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      },
+      "controller": {
+        "runId": 44413192211,
+        "url": "https://github.com/openclaw/clawrouter/actions/runs/44413192211",
+        "source": "7e25045a60628f995b849d9a05d69ef796236cd1",
+        "mode": "fail-smoke",
+        "exercise": {
+          "id": 135186497136,
+          "runner": 1027493805
+        }
+      }
+    },
+    {
+      "mode": "interrupt-green",
+      "passed": false,
+      "source": "7e25045a60628f995b849d9a05d69ef796236cd1",
+      "ids": {
+        "run": "1795041628750",
+        "blue": "0d3fa56c-04ca-4ee0-8255-71aeee1ba288",
+        "green": "dbbc01d6-dd78-4c1b-8b04-152df4a62943",
+        "recovery": "31bd9606-1450-4410-ac6a-1e6974a072dc"
+      },
+      "actionsRun": 44414019451,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-forward",
+        "continuity-recovery"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "attempt-03-interrupt-green",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44414019451",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": false,
+          "error": "FORWARD-CLIENT exited 1; do not replay"
+        },
+        "deployment": {
+          "passed": false,
+          "error": "Hosted workflow failed; preserve evidence\n+ actual - expected\n\n+ 'failure'\n- 'success'\n"
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 2,
+          "events": 2,
+          "spentMicros": 14,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "22d2ad7df3752cfaac94ba95cad55652",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "5693fff33687742fce399675cbfcaf61",
+              "mode": "hold",
+              "outcome": "completed"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-18T22:40:14.309225Z",
+              "modified_on": "2026-11-18T22:40:14.309225Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "25c926f20a1e424386daebd0c274c466",
+            "queue_name": "clawrouter-native-qualification-ccbe6b01de29-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-18T22:39:46.011438Z",
+            "modified_on": "2026-11-18T22:39:46.011438Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-ccbe6b01de29",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-ccbe6b01de29",
+                "dead_letter_queue": "clawrouter-native-qualification-ccbe6b01de29-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "a5955dd3c5ca4b7385a42835ad42b1ce",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "0e024294a506d724a7ecd6bf9446811c8e1c69f33a5e1a40e2fbb20ae4059de4",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f0d2-b22d-7661-8049-9ae7095eea98",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f0d2-b2b5-77d3-b874-ede05580852c",
+          "status": "completed",
+          "finishedAt": 1795041704588,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "6b8c27bfaff08cca0c938511356f94dfb86814e7b44053dee16db4434e2c1781"
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 2,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 14,
+          "providerSpentMicros": 14,
+          "events": [
+            {
+              "idHash": "af4ae07a31cab0fe80b6a785643fec9da789083fcf04a98a7012ae61642b962e",
+              "requestIdHash": "a18aefc294464e1dcd219a897b4d40619457be6b07bbbc5fe2fb5b3a9f3c1372",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "21c815f56ec5928877ee1462c9b21f8ded7c135acaee6cc8b4b95987f6be5e13",
+              "requestIdHash": "9e882df44ac112bbb6e0346eed2974f4c808fcc34613f5708fcd21f50ef0ecdf",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041704807,
+            "usage": {
+              "idHash": "21c815f56ec5928877ee1462c9b21f8ded7c135acaee6cc8b4b95987f6be5e13",
+              "requestIdHash": "9e882df44ac112bbb6e0346eed2974f4c808fcc34613f5708fcd21f50ef0ecdf",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041704905,
+            "idHash": "a077d12004fce6d3aa171fc4a7c540b7fbf881d840923112afeb034e3fd21214",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041733389,
+            "usage": {
+              "idHash": "af4ae07a31cab0fe80b6a785643fec9da789083fcf04a98a7012ae61642b962e",
+              "requestIdHash": "a18aefc294464e1dcd219a897b4d40619457be6b07bbbc5fe2fb5b3a9f3c1372",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795041733493,
+            "idHash": "debd0026fa041b7f6d5555f41b6a399750d1b44cc69337818dbd525279f1ad24",
+            "clean": true
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-18T22:43:36.951Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 2,
+        "replays": 0,
+        "accountingEvents": 2,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      }
+    },
+    {
+      "mode": "interrupt-green",
+      "passed": true,
+      "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+      "ids": {
+        "run": "1795045355537",
+        "blue": "99f0cb7a-735d-451b-8cdc-e76822fc46d1",
+        "green": "d09fe6fe-8ccb-41e8-a949-0cb699c8bb79",
+        "recovery": "c00ed875-753d-4234-826a-2d07ffdb7211"
+      },
+      "actionsRun": 44423189515,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-forward",
+        "continuity-recovery"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "attempt-04-interrupt-green",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44423189515",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "continuity-recovery": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 5,
+          "events": 5,
+          "spentMicros": 35,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "4b54e6f19c019a37855c6006818a7e83",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "cf8ed58b4c948c5472197c247ccb5ecd",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "483e338de56b8d78555f0c9fedb9c244",
+              "mode": "recall",
+              "outcome": "completed"
+            },
+            {
+              "id": "88a23cb62c81e439aacd0ed665223691",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "2e1130a94a9374e221a9541d5edd1b1b",
+              "mode": "recall",
+              "outcome": "completed"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-18T23:42:23.892922Z",
+              "modified_on": "2026-11-18T23:42:23.892922Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "39c81c6dc83e4cc9b5eb6c3bd80f4402",
+            "queue_name": "clawrouter-native-qualification-46583b51ecba-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-18T23:42:01.523585Z",
+            "modified_on": "2026-11-18T23:42:01.523585Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-46583b51ecba",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-46583b51ecba",
+                "dead_letter_queue": "clawrouter-native-qualification-46583b51ecba-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "fea9711c6737412fa8787fa9ab2e19f6",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "c68cd35e5c66bab05e7fc86f8242c46966df3de20d2ec194b6f1e5d9f497554c",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f10b-56d3-7672-a86d-962da7593d00",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f10b-571a-7f51-bd38-96d58edfac0b",
+          "status": "completed",
+          "finishedAt": 1795045416689,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "f0c5b45a9d2fe4be626257a6fd2003f46ba90ef25d78fb16e5fead54d4252595"
+        },
+        {
+          "kind": "overlap",
+          "direction": "forward",
+          "threadId": "01a1f10b-56d3-7672-a86d-962da7593d00",
+          "beforeVersion": "99f0cb7a-735d-451b-8cdc-e76822fc46d1",
+          "afterVersion": "d09fe6fe-8ccb-41e8-a949-0cb699c8bb79",
+          "resumedAppServer": true,
+          "heldCaseId": "cf8ed58b4c948c5472197c247ccb5ecd",
+          "followupCaseId": "483e338de56b8d78555f0c9fedb9c244",
+          "startedAt": 1795045418521,
+          "turnId": "01a1f10b-661c-7770-8ac2-691edeaad061",
+          "status": "completed",
+          "finishedAt": 1795045439498,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795045460453,
+          "followup": {
+            "turnId": "01a1f10c-09e9-7102-a979-89f16d57eb24",
+            "status": "completed",
+            "finishedAt": 1795045462464,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "18612b954fc917385912c666f4713196e4b19793f15cd9948ed3e4b308d16224"
+          },
+          "admissionClosedAt": 1795045438941,
+          "recoveryToContextCompletedMs": 23523,
+          "followupDurationMs": 2011
+        },
+        {
+          "kind": "overlap",
+          "direction": "recovery",
+          "threadId": "01a1f10b-56d3-7672-a86d-962da7593d00",
+          "beforeVersion": "d09fe6fe-8ccb-41e8-a949-0cb699c8bb79",
+          "afterVersion": "c00ed875-753d-4234-826a-2d07ffdb7211",
+          "resumedAppServer": true,
+          "heldCaseId": "88a23cb62c81e439aacd0ed665223691",
+          "followupCaseId": "2e1130a94a9374e221a9541d5edd1b1b",
+          "startedAt": 1795045465319,
+          "turnId": "01a1f10c-1cea-7bb0-93ac-290d04d78d3f",
+          "status": "completed",
+          "finishedAt": 1795045571930,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795045593892,
+          "followup": {
+            "turnId": "01a1f10e-1328-7041-9f85-80f98ddad7e2",
+            "status": "completed",
+            "finishedAt": 1795045595904,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "1d3ff1f8a90c2f24d4616d28efbc44db6a817c53c13dd11b78a4f6273aaf9f77"
+          },
+          "admissionClosedAt": 1795045571213,
+          "recoveryToContextCompletedMs": 24691,
+          "followupDurationMs": 2012
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 5,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 35,
+          "providerSpentMicros": 35,
+          "events": [
+            {
+              "idHash": "6e7b0162a0c4034474508351a264525f9844b77a50c56dd31bbdfeb3bb497f9e",
+              "requestIdHash": "72baddbc7014fe7b65eb8396b74891f67493270545797f0455891f82fb436d39",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "0c85cdb26ef2bec3ab0649e7c5769f39fd0ddf23d364533f2d3af677e3ce6391",
+              "requestIdHash": "bf7cfa946ba92e6be51a47aaade993198056e232a5f005f6732e7697343cb7fb",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "42ed2415ebeee9e3f78938e829f31f7645c9f53aab64d5225cdf468beacbda2c",
+              "requestIdHash": "d63a11be73e8d5181d9e0e28150b34498415197004b832d24e8512666afc1420",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "b4f58af8b61965ddfc05afcc99da179a5d278f302946ecbd8cbfd3dd40908db2",
+              "requestIdHash": "7511b2319a408c76591560b5938559595ff2164d102d92de3e01e2a182c0ad96",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "36365c4d99540225c775ff2bbce89d12aa1b8dd18bd055b83da4903c731c8f34",
+              "requestIdHash": "c867d829236e65fb4c6d9a5901da3532c090b0156c2526a4863adb71a174ef54",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045416769,
+            "usage": {
+              "idHash": "36365c4d99540225c775ff2bbce89d12aa1b8dd18bd055b83da4903c731c8f34",
+              "requestIdHash": "c867d829236e65fb4c6d9a5901da3532c090b0156c2526a4863adb71a174ef54",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045416870,
+            "idHash": "5f64d1026ff23b3606d068f7f8c1bf48e6cba32637483c38eade36a1aa5db252",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045439593,
+            "usage": {
+              "idHash": "b4f58af8b61965ddfc05afcc99da179a5d278f302946ecbd8cbfd3dd40908db2",
+              "requestIdHash": "7511b2319a408c76591560b5938559595ff2164d102d92de3e01e2a182c0ad96",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045439700,
+            "idHash": "fe1b2621c8bc3087049d8e68e8166b8bc0a658df1f2eb22685c51e9f132ae3e3",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795045462396,
+            "usage": {
+              "idHash": "42ed2415ebeee9e3f78938e829f31f7645c9f53aab64d5225cdf468beacbda2c",
+              "requestIdHash": "d63a11be73e8d5181d9e0e28150b34498415197004b832d24e8512666afc1420",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795045462510,
+            "idHash": "837b6305ca59cf922d2ae58248ddb2d8f0635fc1c2a1b8e9a21e69290821686b",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795045572367,
+            "usage": {
+              "idHash": "0c85cdb26ef2bec3ab0649e7c5769f39fd0ddf23d364533f2d3af677e3ce6391",
+              "requestIdHash": "bf7cfa946ba92e6be51a47aaade993198056e232a5f005f6732e7697343cb7fb",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795045572460,
+            "idHash": "8202bd7b40cac593b1ef71e9f23c5f075dc06f68228033a41dd3bb539b3ee04f",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 4,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045595678,
+            "usage": {
+              "idHash": "6e7b0162a0c4034474508351a264525f9844b77a50c56dd31bbdfeb3bb497f9e",
+              "requestIdHash": "72baddbc7014fe7b65eb8396b74891f67493270545797f0455891f82fb436d39",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 4,
+            "generation": 3,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795045595777,
+            "idHash": "5e83c513b8f8c47ada94e6853f94391122331ada3ca4df45c3b179a13cf55fbf",
+            "clean": true
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-18T23:47:08.821Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 5,
+        "replays": 0,
+        "accountingEvents": 5,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      },
+      "controller": {
+        "runId": 44423189515,
+        "url": "https://github.com/openclaw/clawrouter/actions/runs/44423189515",
+        "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+        "mode": "interrupt-green",
+        "exercise": {
+          "id": 135221208119,
+          "runner": 1027499995
+        },
+        "recovery": {
+          "id": 135222224440,
+          "runner": 1027500129
+        },
+        "distinctRunners": true,
+        "noFirstJobStateDownload": true
+      }
+    },
+    {
+      "mode": "interrupt-drain",
+      "passed": true,
+      "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+      "ids": {
+        "run": "1795046455282",
+        "blue": "80488d9e-5883-485c-89d6-bb2a8277346f",
+        "green": "f9f571b5-5460-46c3-b319-3941fa9de503",
+        "recovery": "48b12c7d-1f96-4d8b-be40-a95e46a657bc"
+      },
+      "actionsRun": 44425737088,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-drain",
+        "old-payload"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "targeted-preparation/prepared-drain",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44425737088",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "old-payload": {
+          "passed": true
+        },
+        "continuity-drain": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 4,
+          "events": 4,
+          "spentMicros": 28,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "153386ba1636ad0e78fc076e5c8a2087",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "af67faf6201c023f7df279a3c51d9a5c",
+              "mode": "success",
+              "outcome": "completed"
+            },
+            {
+              "id": "e3f7608f8142a3179b667b91746285d6",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "81227007c86f743f396cf6a898bd921c",
+              "mode": "recall",
+              "outcome": "completed"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-19T00:00:39.629451Z",
+              "modified_on": "2026-11-19T00:00:39.629451Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "723a61b40ad1485eab8746757c4e63cb",
+            "queue_name": "clawrouter-native-qualification-ec1482fedd81-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-19T00:00:13.69804Z",
+            "modified_on": "2026-11-19T00:00:13.69804Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-ec1482fedd81",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-ec1482fedd81",
+                "dead_letter_queue": "clawrouter-native-qualification-ec1482fedd81-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "146fa88b8152405aa70dad11d328fec2",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "c68cd35e5c66bab05e7fc86f8242c46966df3de20d2ec194b6f1e5d9f497554c",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f11c-465b-7b71-b87e-fa38679d80f1",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f11c-4a15-74a3-9546-bce3c9f0df5a",
+          "status": "completed",
+          "finishedAt": 1795046527467,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "1f1a4aaa8bd09806275a6bdeba3b93cd33e6bf02e61a3787ac50551c2efcda8b"
+        },
+        {
+          "kind": "workload-case",
+          "mode": "success",
+          "caseId": "af67faf6201c023f7df279a3c51d9a5c",
+          "traceHash": "a1bed43ca20ed417c63074d9d5867428159798a6ad1cc17ffc792708e0f8b47f",
+          "status": 200,
+          "response": {
+            "status": 200,
+            "version": "80488d9e-5883-485c-89d6-bb2a8277346f",
+            "bodyComplete": true
+          },
+          "responseCheck": {
+            "passed": true
+          },
+          "settlementAndAccounting": {
+            "passed": true
+          },
+          "bytes": 329,
+          "at": 1795046540838,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 0,
+              "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+              "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32"
+            },
+            "grants": [],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 1
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 1
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              },
+              {
+                "slot": 3,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 1,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "b7afdee6-201a-4a2a-a932-4e210e37d2ed",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "4426d3d9-18be-4a4f-9fde-38d5b57d07cf",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "119e8000-d042-497f-8bbf-c7bc50784e8e",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 3,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "d7e4ed48-3e25-4c6b-8111-618c60545257",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "18ddc8c7-5637-49a0-8b3e-82e392ebfa6e",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "1b53db47-2f78-400f-a996-0ac811e4fe3b",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "527decee-b46a-4edb-b508-fb6dd8026aff",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 1,
+                "boot": "1907a210-d2ea-4b4a-885e-fe92bdae3a44",
+                "fingerprint": "f954a0026edbc6d52c97d662a0d74b155136a929359fc7299549489c452c8f32",
+                "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671"
+              }
+            ]
+          }
+        },
+        {
+          "kind": "overlap",
+          "direction": "recovery",
+          "threadId": "01a1f11c-465b-7b71-b87e-fa38679d80f1",
+          "beforeVersion": "80488d9e-5883-485c-89d6-bb2a8277346f",
+          "afterVersion": "48b12c7d-1f96-4d8b-be40-a95e46a657bc",
+          "resumedAppServer": true,
+          "heldCaseId": "e3f7608f8142a3179b667b91746285d6",
+          "followupCaseId": "81227007c86f743f396cf6a898bd921c",
+          "startedAt": 1795046542772,
+          "turnId": "01a1f11c-8db7-7e23-977d-20de8d5e9abd",
+          "status": "completed",
+          "finishedAt": 1795046572817,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795046612142,
+          "followup": {
+            "turnId": "01a1f11d-9cb1-71c0-af4f-b84b87af4e51",
+            "status": "completed",
+            "finishedAt": 1795046614154,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "c10e910c92e2bdb4e06e277f9bac9215731aefe3701dc4a1e0a0dec9097b210d"
+          },
+          "admissionClosedAt": 1795046572005,
+          "recoveryToContextCompletedMs": 42149,
+          "followupDurationMs": 2012
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 4,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 28,
+          "providerSpentMicros": 28,
+          "events": [
+            {
+              "idHash": "49abaed1895be9eb19d828385f67f915ddf07afe04dde73542d862d9aaab4ad8",
+              "requestIdHash": "5a66129a5bff5aa82de63e30b944b142259eb2d2ab2fb4b279d5b9fcf49aa518",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "3735f16e0478b4d2ace140a9951791d847c461ebe5cc30955dc842a457fb0844",
+              "requestIdHash": "e5aea700dc15da06fc17e36ad60b840425ed800fb4080f3e722458ef57cf7af5",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "477c5d67529a44f5f63538ea60db44fcc5b4024895dfc49450383e687be6d25b",
+              "requestIdHash": "1f710f1b0e836410a1f10d3b7d06e5f22b2a003b39f27afb7fb0cc32cec2f5d1",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "007c945aedb41398a843b757c97f4277ce565d650bc169f7d9f6b13126720aa7",
+              "requestIdHash": "ab75b31253a4cae6236db61ec7131f049fdafc1faa46f37954eac4076589d4fe",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046527525,
+            "usage": {
+              "idHash": "007c945aedb41398a843b757c97f4277ce565d650bc169f7d9f6b13126720aa7",
+              "requestIdHash": "ab75b31253a4cae6236db61ec7131f049fdafc1faa46f37954eac4076589d4fe",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046527689,
+            "idHash": "39a77211a2638e931e1b7ebb95cbbc74ec70fbda0cdfdaf81dd7f97a94bbe3fa",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046535006,
+            "usage": {
+              "idHash": "477c5d67529a44f5f63538ea60db44fcc5b4024895dfc49450383e687be6d25b",
+              "requestIdHash": "1f710f1b0e836410a1f10d3b7d06e5f22b2a003b39f27afb7fb0cc32cec2f5d1",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046535125,
+            "idHash": "a1bed43ca20ed417c63074d9d5867428159798a6ad1cc17ffc792708e0f8b47f",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 2,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046573016,
+            "usage": {
+              "idHash": "3735f16e0478b4d2ace140a9951791d847c461ebe5cc30955dc842a457fb0844",
+              "requestIdHash": "e5aea700dc15da06fc17e36ad60b840425ed800fb4080f3e722458ef57cf7af5",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 2,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046573143,
+            "idHash": "f1d0308f72396d11c5c3663ad8c6b0027d0ef5da15e629d05c7c597eb4608cb7",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046614248,
+            "usage": {
+              "idHash": "49abaed1895be9eb19d828385f67f915ddf07afe04dde73542d862d9aaab4ad8",
+              "requestIdHash": "5a66129a5bff5aa82de63e30b944b142259eb2d2ab2fb4b279d5b9fcf49aa518",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046614389,
+            "idHash": "79381c0b60462d1b35c4c3c8e776f39d2114b76e531d226e17353b001a95d8ec",
+            "clean": true
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-19T00:04:05.782Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 4,
+        "replays": 0,
+        "accountingEvents": 4,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      },
+      "controller": {
+        "runId": 44425737088,
+        "url": "https://github.com/openclaw/clawrouter/actions/runs/44425737088",
+        "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+        "mode": "interrupt-drain",
+        "exercise": {
+          "id": 135229975620,
+          "runner": 1027502010
+        },
+        "recovery": {
+          "id": 135230201181,
+          "runner": 1027502040
+        },
+        "distinctRunners": true,
+        "noFirstJobStateDownload": true
+      }
+    },
+    {
+      "mode": "cutover",
+      "passed": false,
+      "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+      "ids": {
+        "run": "1795046710282",
+        "blue": "d21c8669-c3d5-4987-84b7-a430d264e187",
+        "green": "ae2aaf3e-69b9-40e9-b249-307e560516aa",
+        "recovery": "72b6b926-e377-48ff-b2ea-ef23fa7165cb"
+      },
+      "actionsRun": 44426289658,
+      "required": [
+        "activation",
+        "seed",
+        "deployment",
+        "accounting",
+        "non-http",
+        "cleanup",
+        "continuity-forward",
+        "payload"
+      ],
+      "cleanupErrors": [],
+      "realProviderRequests": 0,
+      "productionChanges": 0,
+      "hostedResourcesDeleted": false,
+      "qualificationComplete": false,
+      "directory": "targeted-preparation/prepared-loss",
+      "url": "https://github.com/openclaw/clawrouter/actions/runs/44426289658",
+      "cases": {
+        "activation": {
+          "passed": true
+        },
+        "seed": {
+          "passed": true
+        },
+        "continuity-forward": {
+          "passed": true
+        },
+        "deployment": {
+          "passed": true
+        },
+        "payload": {
+          "passed": false,
+          "error": "WORKLOADS exited 1; do not replay"
+        },
+        "accounting": {
+          "passed": true
+        },
+        "non-http": {
+          "passed": true
+        },
+        "cleanup": {
+          "passed": true,
+          "nativeAbsent": true,
+          "hostedResourcesDeleted": false
+        }
+      },
+      "accounting": {
+        "passed": true,
+        "value": {
+          "requests": 4,
+          "events": 4,
+          "spentMicros": 28,
+          "replays": 0,
+          "outcomes": [
+            {
+              "id": "e3a9393ca1a36d6b41db22e4be5a03aa",
+              "mode": "seed",
+              "outcome": "completed"
+            },
+            {
+              "id": "16e1cbcad06c8d7a30499ab23230c242",
+              "mode": "hold",
+              "outcome": "completed"
+            },
+            {
+              "id": "f0d331b637232b0aa9c59bb878ddaef3",
+              "mode": "recall",
+              "outcome": "completed"
+            },
+            {
+              "id": "c1bdd2cfc9a132f0579ecd5688edbf50",
+              "mode": "lost",
+              "outcome": "delivery_unknown"
+            }
+          ]
+        }
+      },
+      "nonHttp": {
+        "passed": true,
+        "value": {
+          "schedules": [
+            {
+              "cron": "*/5 * * * *",
+              "created_on": "2026-11-19T00:04:56.129736Z",
+              "modified_on": "2026-11-19T00:04:56.129736Z"
+            }
+          ],
+          "usageQueue": {
+            "queue_id": "7d35b0bc98eb47fcb8bdb4265be6430f",
+            "queue_name": "clawrouter-native-qualification-92345b709f0c-usage",
+            "settings": {
+              "delivery_delay": 0,
+              "message_retention_period": 345600
+            },
+            "created_on": "2026-11-19T00:04:35.936321Z",
+            "modified_on": "2026-11-19T00:04:35.936321Z",
+            "producers_total_count": 1,
+            "producers": [
+              {
+                "script": "clawrouter-native-qualification-92345b709f0c",
+                "type": "worker"
+              }
+            ],
+            "consumers_total_count": 1,
+            "consumers": [
+              {
+                "script": "clawrouter-native-qualification-92345b709f0c",
+                "dead_letter_queue": "clawrouter-native-qualification-92345b709f0c-dlq",
+                "settings": {
+                  "batch_size": 50,
+                  "max_retries": 5,
+                  "max_wait_time_ms": 5000,
+                  "retry_delay": 0
+                },
+                "consumer_id": "381818652907491c9596ba4b5485d3f9",
+                "type": "worker"
+              }
+            ]
+          }
+        }
+      },
+      "controlSha256": "c68cd35e5c66bab05e7fc86f8242c46966df3de20d2ec194b6f1e5d9f497554c",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "steps": [
+        {
+          "kind": "seed",
+          "threadId": "01a1f120-1c6b-7b51-8b55-b6253ed8d268",
+          "producer": "codex-cli 0.167.1",
+          "turnId": "01a1f120-22b7-7800-95a6-7a83cc104d2d",
+          "status": "completed",
+          "finishedAt": 1795046780040,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "answerSha256": "52c2e0881804cf3ce33c1ef365c90f6c608a3830e63cec6ea5cd4766d6bcbf7b"
+        },
+        {
+          "kind": "overlap",
+          "direction": "forward",
+          "threadId": "01a1f120-1c6b-7b51-8b55-b6253ed8d268",
+          "beforeVersion": "d21c8669-c3d5-4987-84b7-a430d264e187",
+          "afterVersion": "ae2aaf3e-69b9-40e9-b249-307e560516aa",
+          "resumedAppServer": true,
+          "heldCaseId": "16e1cbcad06c8d7a30499ab23230c242",
+          "followupCaseId": "f0d331b637232b0aa9c59bb878ddaef3",
+          "startedAt": 1795046782565,
+          "turnId": "01a1f120-3668-7ca3-85da-c3ac80488258",
+          "status": "completed",
+          "finishedAt": 1795046808157,
+          "retryNotifications": 0,
+          "transportErrors": 0,
+          "followupStartedAt": 1795046827496,
+          "followup": {
+            "turnId": "01a1f120-e5ec-7991-8334-1494bfff0e60",
+            "status": "completed",
+            "finishedAt": 1795046829512,
+            "retryNotifications": 0,
+            "transportErrors": 0,
+            "answerSha256": "d912c8d352169e8f550f92a87328aa3b155c5b93b630c87f9d666fc62ba499f4"
+          },
+          "admissionClosedAt": 1795046807560,
+          "recoveryToContextCompletedMs": 21952,
+          "followupDurationMs": 2016
+        },
+        {
+          "kind": "workload-observation",
+          "mode": "lost",
+          "caseId": "c1bdd2cfc9a132f0579ecd5688edbf50",
+          "traceHash": "5c36de68b7c68d6ab80a9d2d6c6bd49f6d39a0a5ed96bf2a24f050e8a27738ed",
+          "status": 200,
+          "response": {
+            "status": 200,
+            "version": "ae2aaf3e-69b9-40e9-b249-307e560516aa",
+            "bodyComplete": true,
+            "observedBytes": 6,
+            "retainedBytes": 6,
+            "maximumBytes": 65536,
+            "captureComplete": true,
+            "bodySha256": "082027641f4532cec3b8585e1d86e6a9adf1dfb9cd2333de1aca7b1b35cc4ece",
+            "jsonValid": false,
+            "captureFile": "workload-lost-response.json"
+          },
+          "responseCheck": {
+            "passed": false,
+            "failure": {
+              "kind": "assertion"
+            }
+          },
+          "settlementAndAccounting": {
+            "passed": true
+          },
+          "bytes": 326,
+          "at": 1795046844663,
+          "pool": {
+            "accepting": true,
+            "phase": "serving",
+            "control": {
+              "schema": 1,
+              "revision": 2,
+              "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+              "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48"
+            },
+            "grants": [
+              {
+                "idHash": "5c36de68b7c68d6ab80a9d2d6c6bd49f6d39a0a5ed96bf2a24f050e8a27738ed",
+                "slot": 3,
+                "generation": 2,
+                "stage": "intent"
+              }
+            ],
+            "slots": [
+              {
+                "slot": 0,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 1,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 2,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 3,
+                "phase": "draining",
+                "generation": 2,
+                "ids": 1
+              },
+              {
+                "slot": 4,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 5,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 6,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              },
+              {
+                "slot": 7,
+                "phase": "ready",
+                "generation": 2,
+                "ids": 0
+              }
+            ],
+            "inspection": [
+              {
+                "slot": 0,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "ffbd0de6-f149-475e-b9cf-12c45334d3af",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 1,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "8ef716e5-7d54-46ac-a817-daa3d992d507",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 2,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1f3bfce3-66b7-4016-a7c1-016ddf572179",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 3,
+                "qualified": false,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "ee27b574-a38b-4ea4-bd4c-0bcf85767aff",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 4,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "f3c7a13d-5f77-45f7-916e-2561ddaa8978",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 5,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "1eadf957-54d5-485a-85d4-cb01dce45c3e",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 6,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "90cc6a7e-4882-45ac-8c63-9e4ea5b6f596",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              },
+              {
+                "slot": 7,
+                "qualified": true,
+                "protocol": 1,
+                "phase": "ready",
+                "generation": 2,
+                "boot": "5c0954ca-edb0-4799-95e3-8acfced23b34",
+                "fingerprint": "515159c02be187b423e695e7f0298b718608c7812a7e246ec78bc572e6ec8a48",
+                "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472"
+              }
+            ]
+          }
+        }
+      ],
+      "fixture": {
+        "schema": 1,
+        "phase": "ready",
+        "requests": 4,
+        "replays": 0,
+        "accounting": {
+          "policySpentMicros": 28,
+          "providerSpentMicros": 28,
+          "events": [
+            {
+              "idHash": "0d99128a61c66ea52804b329ea06bbbd2c07181774d029860a23b7a712abf7fd",
+              "requestIdHash": "93349a8810834875ad601bd0746fc01dfedef0e234c7e7428df2f333cce67d3d",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "provider_error",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "94225afbd8024b178a9a190e9cc9265c1da99d57230b03cb45eb9dfbce206444",
+              "requestIdHash": "f35cf2b58943f37e6f2ca70f375cc2bb6a9bc839644e469f8737116a6b7be6c4",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "a4e8cc80e30f8732884a6f4515bdd1d989f473a939bac401dcdb37c6fadb3d2e",
+              "requestIdHash": "d1cd50caf4340feb6fcce10e2a0699f1e4d8a2742956d614f51724b1db91951a",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            },
+            {
+              "idHash": "bf1f01a123a11081f8c95d4ae0220908dd3dde75e7592c93bb2bc4c0789d9710",
+              "requestIdHash": "e7911c8e6c78466b2fdc8921912b3ad06684eccb903492362e7f44db509e54d0",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          ]
+        },
+        "qualified": false,
+        "callbacks": [
+          {
+            "op": "queue",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046779934,
+            "usage": {
+              "idHash": "bf1f01a123a11081f8c95d4ae0220908dd3dde75e7592c93bb2bc4c0789d9710",
+              "requestIdHash": "e7911c8e6c78466b2fdc8921912b3ad06684eccb903492362e7f44db509e54d0",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 0,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046780060,
+            "idHash": "d1488706ba47d13d69a0edafc86a382bb1255ac165535be4f54d92dd25e0e58f",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046808374,
+            "usage": {
+              "idHash": "a4e8cc80e30f8732884a6f4515bdd1d989f473a939bac401dcdb37c6fadb3d2e",
+              "requestIdHash": "d1cd50caf4340feb6fcce10e2a0699f1e4d8a2742956d614f51724b1db91951a",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 1,
+            "generation": 1,
+            "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+            "status": 200,
+            "at": 1795046808522,
+            "idHash": "7583c6cb11e57de16ec5dbd72d07aed3ec0cf80d447a2e6600eac844b5434cf5",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795046829429,
+            "usage": {
+              "idHash": "94225afbd8024b178a9a190e9cc9265c1da99d57230b03cb45eb9dfbce206444",
+              "requestIdHash": "f35cf2b58943f37e6f2ca70f375cc2bb6a9bc839644e469f8737116a6b7be6c4",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "success",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 2,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795046829559,
+            "idHash": "fdef7a1ee5d726ec132a62c554e76175e8aef889d0bd829e8bc54bf21a6d0e10",
+            "clean": true
+          },
+          {
+            "op": "queue",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795046838554,
+            "usage": {
+              "idHash": "0d99128a61c66ea52804b329ea06bbbd2c07181774d029860a23b7a712abf7fd",
+              "requestIdHash": "93349a8810834875ad601bd0746fc01dfedef0e234c7e7428df2f333cce67d3d",
+              "actualCostMicros": 7,
+              "reservedCostMicros": 7,
+              "status": "provider_error",
+              "statusCode": 200,
+              "contentRetained": false
+            }
+          },
+          {
+            "op": "finish",
+            "slot": 3,
+            "generation": 2,
+            "runtimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+            "status": 200,
+            "at": 1795046838750,
+            "idHash": "5c36de68b7c68d6ab80a9d2d6c6bd49f6d39a0a5ed96bf2a24f050e8a27738ed",
+            "clean": false
+          }
+        ]
+      },
+      "cleanup": {
+        "at": "2026-11-19T00:15:17.244Z",
+        "nativeAbsent": true,
+        "containerInstances": 0,
+        "fixtureClosed": true,
+        "providerAttempts": 4,
+        "replays": 0,
+        "accountingEvents": 4,
+        "privateStateRemoved": true,
+        "productionIdentityUnchanged": true,
+        "cloudflareMutations": 0,
+        "hostedResourcesDeleted": false
+      },
+      "controller": {
+        "runId": 44426289658,
+        "url": "https://github.com/openclaw/clawrouter/actions/runs/44426289658",
+        "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+        "mode": "cutover",
+        "exercise": {
+          "id": 135231878992,
+          "runner": 1027502197
+        }
+      }
+    }
+  ]
+}

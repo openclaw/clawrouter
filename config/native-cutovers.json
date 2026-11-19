@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "qualified": [
+    {
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "b62d0f6555b44447f15edb8ad87151cee222b5b2672a254e7b858213a4302472",
+      "source": "25c972712d995070ffe0777a7888a749e433bdf4",
+      "controlSha256": "c68cd35e5c66bab05e7fc86f8242c46966df3de20d2ec194b6f1e5d9f497554c",
+      "evidence": "https://github.com/openclaw/clawrouter/actions/runs/44423189515"
+    },
+    {
+      "kind": "control",
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+      "controlSha256": "a01be212ffdc671888dd043a2edb61ca627b668cefe9692e115b423ffae482a7",
+      "evidence": "https://github.com/openclaw/clawrouter/actions/runs/44459687964"
+    },
+    {
+      "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+      "greenRuntimeSha": "45710859f7c316200ed77c41f4ae03bd86845205d83ad3b15d4b11b42e3ebd72",
+      "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+      "controlSha256": "a01be212ffdc671888dd043a2edb61ca627b668cefe9692e115b423ffae482a7",
+      "evidence": "https://github.com/openclaw/clawrouter/actions/runs/44459962727"
+    }
+  ]
+}

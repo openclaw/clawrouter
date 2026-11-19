@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "groq-mistral-unknown-audio",
+      "split": "development",
+      "base": "ebbe7becacdfb38e90f0ca839f2c6d8e80f33b24",
+      "oracle": "8029f0e7dbba6590d7e9ffb4827b06644887dce8",
+      "editPaths": [
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/groq-mistral-transcription-pricing.test.mjs"
+      ],
+      "instruction": "Native Groq and Mistral multipart transcription lacks a qualified native tariff or measured billable usage. Treat these declared transcription formats as unpriced for admission and unknown for settlement. Do not estimate their cost from ordinary token, free, foreign image, or character cards. Preserve qualified OpenAI-compatible transcription pricing and unrelated formats.",
+      "sourceContext": [
+        {
+          "path": "scripts/compile-providers.mjs",
+          "query": "function validateGroqMistralTranscription("
+        },
+        {
+          "path": "worker/proxy-accounting.ts",
+          "query": "const audioUnbounded ="
+        }
+      ]
+    }
+  ]
+}

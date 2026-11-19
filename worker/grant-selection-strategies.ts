@@ -30,9 +30,14 @@ export function selectThresholdGrantKey(
   const cutoffRemaining = 1 - boundedPercent(switchAtUsedPercent, 90) / 100;
   if (current.remainingRatio > cutoffRemaining + 1e-9) return current.key;
   const hysteresis = boundedPercent(hysteresisPercent, 10) / 100;
-  return [...candidates]
-    .filter((candidate) => candidate.key !== current.key && candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
-    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0]?.key ?? current.key;
+  const others = candidates.filter((candidate) => candidate.key !== current.key);
+  const measured = others
+    .filter((candidate) => candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
+    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0];
+  // No reading in an open window means unused or reset since last seen. Such a
+  // grant beats one known to be at the cutoff; measured headroom still wins.
+  const unmeasured = others.filter((candidate) => candidate.remainingRatio === null).sort((a, b) => a.key.localeCompare(b.key))[0];
+  return (measured ?? unmeasured ?? current).key;
 }
 
 export const GRANT_SELECTION_STRATEGIES = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"] as const;
@@ -71,5 +76,80 @@ export function chooseGrantKey(input: GrantChoiceInput, candidates: GrantChoiceC
     return { selectedKey: selected.key, cursorKey: selected.key };
   }
   else if (strategy === "weighted_random") selected = weightedRandom(candidates);
+  return { selectedKey: selected.key };
+}
+
+// PRIVATE bridge only. Caller transfers an exclusive array of fresh scalar
+// choice records; neither source grants nor snapshot records may be passed.
+// Every original key is validated, even when a later collision replaces it.
+export function consumeOwnedChoiceCandidates(candidates: GrantChoiceInput["candidates"], key: (value: unknown) => string): GrantChoiceCandidate[] {
+  let length = 0;
+  for (let read = 0; read < candidates.length; read++) {
+    const candidate = candidates[read], normalized = key(candidate.key);
+    const weight = typeof candidate.weight === "number" && Number.isFinite(candidate.weight) && candidate.weight > 0 && candidate.weight <= 1_000_000 ? candidate.weight : 1;
+    const remainingRatio = typeof candidate.remainingRatio === "number" && Number.isFinite(candidate.remainingRatio) && candidate.remainingRatio >= 0 && candidate.remainingRatio <= 1 ? candidate.remainingRatio : null;
+    let target = 0;
+    while (target < length && candidates[target].key !== normalized) target++;
+    if (target === length) { candidates[length++] = candidate; candidate.key = normalized; }
+    // Map semantics: last value, first insertion position. Reuse that first
+    // owned record rather than retaining the later collision's record.
+    candidates[target].weight = weight; candidates[target].remainingRatio = remainingRatio;
+  }
+  candidates.length = length;
+  // Stable in-place insertion sort: no pair array, Map or engine sort buffer.
+  for (let i = 1; i < length; i++) {
+    const value = candidates[i]; let at = i;
+    while (at > 0 && candidates[at - 1].key.localeCompare(value.key) > 0) { candidates[at] = candidates[at - 1]; at--; }
+    candidates[at] = value;
+  }
+  return candidates as GrantChoiceCandidate[]; // every surviving field assigned above
+}
+
+// Same comparison and pure scoring rules as chooseGrantKey; a stable minimum
+// fold replaces each copied sort/filter vector. Counts can be an existing
+// admitted history object lookup, with no second full-history Map.
+export function chooseOwnedGrantKey(input: GrantChoiceInput, candidates: GrantChoiceCandidate[],
+  cursorKey: string | null, count: (key: string) => { count: number; lastMs: number } | undefined): { selectedKey: string; cursorKey?: string } {
+  const strategy = (GRANT_SELECTION_STRATEGIES as readonly string[]).includes(input.strategy) ? input.strategy : "most_remaining";
+  const stickyHash = typeof input.stickyHash === "string" && /^[0-9a-f]{64}$/.test(input.stickyHash) ? input.stickyHash : null;
+  let selected = candidates[0];
+  if (stickyHash) {
+    for (let i = 1; i < candidates.length; i++) {
+      const next = candidates[i];
+      if ((stickyScore(stickyHash, next) - stickyScore(stickyHash, selected) || next.key.localeCompare(selected.key)) < 0) selected = next;
+    }
+  } else if (strategy === "round_robin") {
+    for (const next of candidates) if (next.key > (cursorKey ?? "")) { selected = next; break; }
+    return { selectedKey: selected.key, cursorKey: selected.key };
+  } else if (strategy === "least_used") {
+    for (let i = 1; i < candidates.length; i++) {
+      const next = candidates[i], a = count(next.key), b = count(selected.key);
+      if (((a?.count ?? 0) - (b?.count ?? 0) || (a?.lastMs ?? 0) - (b?.lastMs ?? 0) || next.key.localeCompare(selected.key)) < 0) selected = next;
+    }
+  } else if (strategy === "most_remaining" || strategy === "threshold") {
+    for (let i = 1; i < candidates.length; i++) {
+      const next = candidates[i];
+      if (((selected.remainingRatio ?? -1) - (next.remainingRatio ?? -1) || next.key.localeCompare(selected.key)) < 0) selected = next;
+    }
+    if (strategy === "threshold") {
+      const current = candidates.find(candidate => candidate.key === cursorKey);
+      if (current) {
+        selected = current;
+        const cutoff = 1 - boundedPercent(input.switchAtUsedPercent, 90) / 100;
+        if (current.remainingRatio !== null && current.remainingRatio <= cutoff + 1e-9) {
+          const hysteresis = boundedPercent(input.hysteresisPercent, 10) / 100;
+          let replacement: GrantChoiceCandidate | undefined, unmeasured: GrantChoiceCandidate | undefined;
+          for (const next of candidates) {
+            if (next.key === current.key) continue;
+            if (next.remainingRatio === null) { if (!unmeasured || next.key.localeCompare(unmeasured.key) < 0) unmeasured = next; }
+            else if (next.remainingRatio > cutoff + 1e-9 && next.remainingRatio + 1e-9 >= current.remainingRatio + hysteresis
+              && (!replacement || (replacement.remainingRatio! - next.remainingRatio || next.key.localeCompare(replacement.key)) < 0)) replacement = next;
+          }
+          selected = replacement ?? unmeasured ?? current;
+        }
+      }
+      return { selectedKey: selected.key, cursorKey: selected.key };
+    }
+  } else if (strategy === "weighted_random") selected = weightedRandom(candidates);
   return { selectedKey: selected.key };
 }

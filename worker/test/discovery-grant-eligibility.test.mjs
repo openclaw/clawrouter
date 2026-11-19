@@ -2,6 +2,7 @@ import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 
@@ -16,7 +17,11 @@ test("models and catalog share read-only grant eligibility, transport support, a
   const env = {
     OPENAI_API_KEY: "fixture-environment-key",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, grants.get(item) ?? null])) : grants.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, grants.get(item) ?? null]));
+        const value = grants.get(key) ?? null;
+        return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+      },
       async list({ prefix }) { return { keys: [...grants.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
     },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
@@ -48,11 +53,16 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
-  await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  const apiCatalog = await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  assert.deepEqual(apiCatalog.products.map(product => product.id), ["platform-api"]);
+  assert.ok(apiCatalog.offers.some(offer => offer.productOffers?.some(reference => reference.productId === "platform-api")));
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
   delete env.OPENAI_API_KEY;
   const subscribed = await compare(["llm.responses"], false);
+  assert.deepEqual(subscribed.products.map(product => product.id), ["chatgpt-subscription"]);
+  assert.ok(subscribed.offers.some(offer => offer.productOffers?.length));
+  assert.ok(subscribed.offers.flatMap(offer => offer.productOffers ?? []).every(reference => reference.productId === "chatgpt-subscription"));
   assert.equal(subscribed.readiness.configPresent, true);
   assert.deepEqual(subscribed.readiness.missingConfig, []);
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
@@ -64,7 +74,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId?.includes("gpt-image-2.5") && eligible), false);
   env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  const mixed = await compare(["llm.responses", "llm.chat", "llm.responses.compact", "llm.count_tokens"], true);
+  assert.deepEqual(mixed.products.map(product => product.id), ["chatgpt-subscription", "platform-api"]);
   policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
   await compare(["llm.responses"], false);
   policy.grantRouting.eligibleGrants.openai = [];
@@ -72,6 +83,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   policy.grantRouting.eligibleGrants.openai = ["subscription"];
   states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60000).toISOString(), windows: [] };
   const cooling = await compare(["llm.responses"], false);
+  assert.equal(cooling.products, undefined);
+  assert.ok(cooling.offers.every(offer => offer.productOffers === undefined));
   assert.ok(cooling.offers.every(offer => !offer.eligible));
   assert.equal(cooling.models.some(({ id }) => id === "openai/tts-1"), false);
   assert.equal(cooling.models.some(({ capabilities }) => capabilities.includes("llm.chat")), false);
@@ -123,7 +136,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/decisions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/moderations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact", "/v1/playground/v1/responses/input_tokens"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/decisions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/edits", "/v1/playground/v1/images/generations", "/v1/playground/v1/moderations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact", "/v1/playground/v1/responses/input_tokens"]);
     const moderationOffers = view.offers.filter(({ endpoint }) => endpoint === "moderations");
     assert.ok(moderationOffers.length > 0);
     assert.ok(moderationOffers.every(({ eligible, policyId, transport, affordability }) => eligible && policyId === "api" && transport === "http" && affordability === "exact-covered"));

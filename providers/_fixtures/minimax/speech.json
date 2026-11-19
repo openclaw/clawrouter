@@ -1,0 +1,38 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "https://platform.minimax.io/docs/api-reference/speech-t2a-http",
+  "checkedAt": "2026-11-03",
+  "method": "POST",
+  "path": "/v1/t2a_v2",
+  "request": {
+    "model": "speech-2.8-hd", "text": "Synthetic speech.", "stream": false, "output_format": "hex",
+    "voice_setting": { "voice_id": "English_expressive_narrator", "speed": 1, "vol": 1, "pitch": 0 },
+    "audio_setting": { "format": "mp3", "sample_rate": 32000 }
+  },
+  "result": {
+    "data": { "audio": " 00FF80 ", "status": 2 },
+    "extra_info": { "audio_format": "mp3", "audio_sample_rate": 32000, "audio_channel": 1, "audio_size": 3,
+      "audio_length": 150, "usage_characters": 12, "word_count": 99, "usage_voice_count": 17 },
+    "base_resp": { "status_code": 0, "status_msg": "synthetic success" },
+    "trace_id": "synthetic-trace"
+  },
+  "qualification": {
+    "audioBytesAreEncodingOnly": true,
+    "actualPlaybackVerified": false,
+    "apiKeyProduct": "native_media",
+    "oauthOrPlanInterchangeQualified": false,
+    "usageCharactersSource": "extra_info.usage_characters",
+    "policyFixedIsUpstreamCost": false,
+    "preDispatchBillableBoundQualified": false,
+    "actualUpstreamCostMicros": null
+  },
+  "pricingEvidence": {
+    "source": "https://platform.minimax.io/docs/pricing/overview",
+    "hdUsdPerMillionCharacters": 100,
+    "turboUsdPerMillionCharacters": 60,
+    "qualifiedPublicFamilies": ["speech-2.8", "speech-2.6", "speech-02"],
+    "speech01PublicRate": null,
+    "customVoiceFirstUseMayAddCharge": true
+  }
+}
+

@@ -21,10 +21,10 @@ on:
         default: ""
         type: string
       mode:
-        description: "Normal rollout or no-user-traffic rehearsal (zero-failure deliberately fails)"
+        description: "Same-runtime rollout/rehearsal, or separately qualified native payload/control cutover"
         default: rollout
         type: choice
-        options: [rollout, zero-smoke, zero-failure]
+        options: [rollout, zero-smoke, zero-failure, native-cutover, native-control]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -48,6 +48,9 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_NATIVE_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_SECRET }}
       CLAWROUTER_ADMIN_TOKEN_SHA256: ${{ secrets.CLAWROUTER_ADMIN_TOKEN_SHA256 }}
       CLAWROUTER_POLICY_KV_ID: ${{ secrets.CLAWROUTER_POLICY_KV_ID }}
       CLAWROUTER_POLICY_KV_PREVIEW_ID: ${{ secrets.CLAWROUTER_POLICY_KV_PREVIEW_ID }}
@@ -99,7 +102,7 @@ jobs:
           path: control
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
       - name: Select newest exact-SHA green main candidate
@@ -107,6 +110,7 @@ jobs:
         working-directory: control
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          TRAIN_MODE: ${{ inputs.mode || 'rollout' }}
         run: node scripts/deploy-train-select.mjs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.select.outputs.noop == 'false'
@@ -126,6 +130,24 @@ jobs:
             echo "::error::Checkout differs from selected candidate; refusing deployment."
             exit 1
           fi
+      # Fetch CI baselines without shallow boundaries; deployment checks need full history.
+      - name: Fetch pinned release upgrade baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 080831563e0adfcdc1b79cad14613249694d60c9
+          git cat-file -e 080831563e0adfcdc1b79cad14613249694d60c9^{commit}
+      - name: Fetch personal-usage baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          baseline="$(sed -n 's/^export const personalUsageBaseline = "\([0-9a-f]\{40\}\)";$/\1/p' test/helpers/personal-usage-upgrade.mjs)"
+          test -n "$baseline"
+          git fetch --no-tags origin "$baseline"
+          git cat-file -e "$baseline^{commit}"
+      - name: Fetch pinned inventory upgrade baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin df8c3800fbb413fbe7db6833387a1e885d1379cb
+          git cat-file -e df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         if: steps.select.outputs.noop == 'false'
         with:
@@ -158,7 +180,7 @@ jobs:
         run: pnpm exec wrangler deployments list --config .wrangler.generated.toml
       - name: Keep non-secret rollout receipt
         if: always() && steps.select.outputs.noop == 'false'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: production-train-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -171,7 +193,7 @@ jobs:
     needs: deploy
     if: always() && (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     permissions:
       contents: read
       issues: write
@@ -179,11 +201,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_NATIVE_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
       - name: Recover from remote journal and update the single failure issue

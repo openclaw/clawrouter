@@ -130,8 +130,8 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
     assert.equal(model.pricing.outputMicrosPerMillion, output);
   }
   const xai = snapshot.providers.find((provider) => provider.id === "xai").models[0];
-  assert.equal(xai.pricing.source, "https://api.x.ai/v1/models/grok-4.3");
-  assert.equal(xai.pricing.longContext.thresholdInputTokens, 200000);
+  assert.equal(xai.pricing.source, "https://docs.x.ai/developers/pricing");
+  assert.equal(xai.pricing.longContext.thresholdInputTokens, 199999);
   assert.equal(xai.pricing.longContext.inputMicrosPerMillion, 2500000);
   assert.equal(xai.pricing.longContext.outputMicrosPerMillion, 5000000);
   const mistralEmbed = snapshot.providers

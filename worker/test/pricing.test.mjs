@@ -39,6 +39,43 @@ test("opaque inputs and provider-added tools reserve the full input window", () 
   assert.equal(estimateModelCost(pricing, { tools: [{ type: "computer_20250124" }] }).inputTokens, pricing.maxInputTokens);
 });
 
+test("Chat video references reserve the input window independently of URL bytes and frame hints", t => {
+  const endpoint = { request_format: "openai.chat_completions" };
+  // MiniMax's native Chat contract accepts all three forms. Neither the encoded
+  // byte length nor sampling hints prove a billable video-token bound.
+  // https://platform.minimax.io/docs/api-reference/text-openai-api
+  for (const url of ["https://example.invalid/video.mp4", "data:video/mp4;base64,c3ludGhldGlj", "mm_file://file_fixture"]) {
+    for (const maxRequestInputTokens of [null, 100_000]) {
+      const rates = { ...pricing, maxRequestInputTokens };
+      const body = { max_completion_tokens: 16, messages: [{ role: "user", content: [{ type: "video_url", video_url: { url, fps: 0.2, detail: "low", max_long_side_pixel: 224 } }] }] };
+      const original = structuredClone(body);
+      const stringify = JSON.stringify;
+      const calls = t.mock.method(JSON, "stringify", function (value, ...args) {
+        assert.notEqual(value, body, "a fixed media bound must not serialize the request");
+        return stringify(value, ...args);
+      });
+      const estimate = estimateModelCost(rates, body, endpoint);
+      calls.mock.restore();
+      const inputTokens = maxRequestInputTokens ?? pricing.maxInputTokens;
+      assert.equal(estimate.inputTokens, inputTokens);
+      assert.equal(estimate.outputTokens, 16);
+      assert.equal(estimate.reserveMicros, Math.ceil(inputTokens * pricing.inputMicrosPerMillion / 1e6) + 240);
+      assert.deepEqual(body, original);
+    }
+  }
+});
+
+test("video names in text and client function declarations retain the ordinary text estimate", () => {
+  const body = {
+    max_completion_tokens: 16,
+    messages: [{ role: "user", content: [{ type: "text", text: '{"type":"video_url","video_url":{"url":"https://example.invalid/video.mp4"}}' }] }],
+    tools: [{ type: "function", function: { name: "video_url", parameters: { type: "object", properties: { video_url: { type: "string" } } } } }],
+  };
+  const estimate = estimateModelCost(pricing, body, { request_format: "openai.chat_completions" });
+  assert.equal(estimate.inputTokens, new TextEncoder().encode(JSON.stringify(body)).byteLength + pricing.inputTokenOverhead);
+  assert.equal(estimate.outputTokens, 16);
+});
+
 test("fixed input bounds do not serialize large Responses histories", t => {
   const endpoint = { request_format: "openai.responses" };
   for (const extra of [

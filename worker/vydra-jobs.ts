@@ -1,20 +1,14 @@
+import { createJobEnvelopeParser, isJobRecord as record } from "./job-envelope.ts";
+
 export const VYDRA_JOB_ORIGIN = "https://www.vydra.ai";
 export const VYDRA_CREATE_JOB_PATH = "/api/v1/jobs";
 export const VYDRA_MAX_ENVELOPE_BYTES = 1024 * 1024;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+const parseEnvelope = createJobEnvelopeParser(VYDRA_MAX_ENVELOPE_BYTES, "vydra_envelope_too_large", "invalid_vydra_envelope");
 
 function envelope(text: string, httpStatus: number): Record<string, unknown> {
   if (!Number.isInteger(httpStatus) || httpStatus < 200 || httpStatus >= 300) throw new Error("vydra_request_rejected");
-  if (text.length > VYDRA_MAX_ENVELOPE_BYTES || new TextEncoder().encode(text).byteLength > VYDRA_MAX_ENVELOPE_BYTES) {
-    throw new Error("vydra_envelope_too_large");
-  }
-  let body: unknown;
-  try { body = JSON.parse(text); } catch { throw new Error("invalid_vydra_envelope"); }
-  if (!record(body)) throw new Error("invalid_vydra_envelope");
-  return body;
+  return parseEnvelope(text);
 }
 
 export function validateVydraJobId(value: unknown): string {
