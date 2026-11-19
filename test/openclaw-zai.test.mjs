@@ -65,6 +65,7 @@ test("registered Z.AI global standard streams preserve original grants, selected
     }
     origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    assert.equal(createHash("sha256").update(readFileSync(join(source, "packages/ai/src/transports/transport-stream-shared.ts"))).digest("hex"), "d987e6ccdfb3aa106e0c81f1fa67eb52ec22fab45eb783d6904b0adfabdf2cf7");
     try {
       await runOpenClawConsumer(proofContext, { source, sourceHead, fixture: new URL("./fixtures/openclaw-zai-contract.test.ts", import.meta.url), testPath: "extensions/zai/worker-contract.test.ts",
         env: { CLAWROUTER_CONTRACT_ORIGIN: origin, ZAI_API_KEY: "must-not-fallback", ZAI_CODING_GLOBAL_API_KEY: "must-not-fallback" } });
@@ -697,7 +698,7 @@ test("zero-acquisition preabort requires the original caller and exact public er
 test("provider error without caller cannot qualify an iterator abort as caller cancellation", async () => {
   const f = await observedAbort("no_caller");
   f.owner.outcome = "embedded"; f.owner.caller.signal = undefined; f.owner.terminal.stopReason = "error";
-  assert.deepEqual(await requireNativeControlLifetime(f.observer, f.owner, "embedded"), []);
+  await assert.rejects(requireNativeControlLifetime(f.observer, f.owner, "embedded"), /Provider error is not caller cancellation/);
   await assert.rejects(f.observer.join()); f.observer.restore();
 });
 
@@ -972,5 +973,66 @@ test("ZAI source failure independently retires and restores every router owner",
     if (mode === "status503") assert.ok(error.errors[0] instanceof Error); else assert.equal(error.errors[0], mode === "fetch_false" ? false : undefined);
     if (path.startsWith("/fixture/control")) { assert.deepEqual(attempts, ["control", "control-restore"]); assert.equal(error.errors[1], undefined); }
     else { assert.deepEqual(attempts, ["global", "global-restore", "control", "control-restore"]); assert.ok(error.errors[1] instanceof AggregateError); assert.deepEqual(error.errors[1].errors, [undefined, undefined]); }
+  }
+});
+
+test("ZAI embedded disposition binds exact handler output, request and three original rejections", async () => {
+  const modes = ["matching", "disabled", "wrong_owner", "wrong_acquisition", "wrong_reader", "wrong_output", "wrong_error", "wrong_payload", "foreign_reason", "undefined_reason",
+    "prior_read", "caller", "duplicate_handler", "duplicate_result", "failed_release", "failed_unlock", "observer_undefined", "restoration_undefined", "accessor_payload", "proxy_error"];
+  for (const mode of modes) {
+    class ControlledAPIError extends Error { constructor() { super("synthetic provider rejection"); this.status = undefined; this.code = "synthetic_error"; this.error = { message: "synthetic provider rejection", code: "synthetic_error" }; } }
+    let active, getters = 0;
+    const life = originalLifetime({ providerQualified: () => mode !== "disabled", current: () => active, apiPrototype: ControlledAPIError.prototype, isProxy: nodeTypes.isProxy });
+    const owner = life.bind({ caseId: "embedded_error", outcome: "embedded", role: "chat", verified: true }); active = owner;
+    if (mode === "caller") owner.caller.signal = new AbortController().signal;
+    const input = new AbortController(); let source;
+    const body = new ReadableStream({ start(controller) { source = controller; } }, { highWaterMark: 0 });
+    const response = new Response(body), release = mode === "failed_release" ? Promise.reject(undefined) : Promise.resolve(); void release.catch(() => {});
+    const result = await life.acquire(() => Promise.resolve({ response, release: () => release }), undefined, [{ signal: input.signal }], owner);
+    const reader = body.getReader(), reading = reader.read(), closed = reader.closed;
+    const reason = mode === "undefined_reason" ? undefined : new Error("private SDK abort"), other = new Error("independent read");
+    if (mode === "prior_read") { source.error(reason); await Promise.allSettled([reading, closed]); }
+    input.abort(reason);
+    if (mode !== "prior_read") source.error(mode === "foreign_reason" ? other : reason);
+    const cancellation = reader.cancel(); await Promise.allSettled([reading, closed, cancellation]);
+    if (mode === "failed_unlock") assert.throws(() => Reflect.apply(reader.releaseLock, {}, []));
+    reader.releaseLock(); await Promise.allSettled([result.release()]);
+    let error = new ControlledAPIError();
+    if (mode === "wrong_error") error = new Error("synthetic provider rejection");
+    if (mode === "wrong_payload") error.error.message = "unrelated";
+    if (mode === "accessor_payload") Object.defineProperty(error, "error", { get() { getters++; throw undefined; } });
+    if (mode === "proxy_error") error = new Proxy(error, { get() { getters++; throw undefined; } });
+    const output = { stopReason: "error", errorMessage: "synthetic provider rejection" }, params = { error, output, signal: owner.caller.signal };
+    if (mode === "wrong_owner") active = { ...owner };
+    life.providerError(params); if (mode === "duplicate_handler") life.providerError(params);
+    owner.terminal = { stopReason: "error" };
+    life.providerResult(owner, mode === "wrong_output" ? { ...output } : output); if (mode === "duplicate_result") life.providerResult(owner, output);
+    if (mode === "wrong_acquisition") life.readers[0].acquisition = {};
+    if (mode === "wrong_reader") life.operations.find(op => op.kind === "read").reader = { ...life.readers[0] };
+    if (mode === "observer_undefined") life.failure(undefined);
+    if (mode === "restoration_undefined") life.onRestore(() => { throw undefined; });
+    if (mode === "matching") {
+      await life.join(); assert.deepEqual(life.inspect().providerCandidates.map(op => op.kind).sort(), ["cancel", "closed", "read"]);
+      assert.equal(life.summary().rejected, 3); assert.equal(life.operations.find(op => op.kind === "read").original, reading);
+      assert.ok(life.inspect().rejected.every(op => op.reason === reason && op.reason !== error));
+    } else if (mode !== "restoration_undefined") await assert.rejects(life.join(), AggregateError, mode);
+    if (mode === "restoration_undefined") { await life.join(); assert.throws(() => life.restore(), error => error instanceof AggregateError && error.errors[0] === undefined); }
+    else life.restore();
+    assert.equal(getters, 0, mode);
+  }
+});
+
+test("ZAI actual failure callback preserves receiver, operands and falsey original throws", () => {
+  const start = sdkSource.indexOf('function (...args: Parameters<typeof originalSdkFailure>)');
+  const end = sdkSource.indexOf('});', start);
+  assert.ok(start >= 0 && end > start);
+  const code = stripTypeScriptTypes('const hook = ' + sdkSource.slice(start, end + 1) + ';');
+  for (const reason of [undefined, false, null]) {
+    const life = originalLifetime({ current: () => { throw undefined; } }), receiver = {}, args = [{ error: reason, output: {}, signal: undefined }];
+    let calls = 0;
+    const original = function (...actual) { calls++; assert.equal(this, receiver); assert.deepEqual(actual, args); throw reason; };
+    const callback = new Function('lifetime', 'originalSdkFailure', code + ';return hook;')(life, original);
+    let caught = false; try { Reflect.apply(callback, receiver, args); } catch (actual) { caught = true; assert.equal(actual, reason); }
+    assert.equal(caught, true); assert.equal(calls, 1); assert.deepEqual(life.inspect().structural, [undefined]); life.restore();
   }
 });
