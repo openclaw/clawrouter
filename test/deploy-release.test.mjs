@@ -84,7 +84,7 @@ test('interrupted turn may fail or retry; only a successful distinct context ans
   assert.equal(assertContextAnswer(client,{turn:{id:'new'}},'expected').answerSha256,'expected');
 });
 
-function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0,foreignConsumer=false,nonemptyDlq=false}={}){
+function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0,foreignConsumer=false,nonemptyDlq=false,usageBacklogReads=0,changeConsumerWhileDraining=false}={}){
   const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null,consumer=false;
   const consumerValue=q=>({consumer_id:'fixture-consumer',type:'worker',script:foreignConsumer?'foreign-worker':identity.worker,dead_letter_queue:identity.dlq,...(q?{queue_id:q.queue_id,queue_name:q.queue_name}: {})});
   const response=value=>Response.json({success:true,result:value});
@@ -107,7 +107,11 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
     const item=queues.find(q=>p==='/queues/'+q.queue_id||p.startsWith('/queues/'+q.queue_id+'/'));
     if(item){
       const path='/queues/'+item.queue_id,usage=item.queue_name===identity.usage;
-      if(p===path+'/metrics')return response({backlog_count:!usage&&nonemptyDlq?1:0,backlog_bytes:!usage&&nonemptyDlq?1:0});
+      if(p===path+'/metrics'){
+        const pending=usage&&usageBacklogReads-->0||!usage&&nonemptyDlq;
+        if(pending&&changeConsumerWhileDraining)foreignConsumer=true;
+        return response({backlog_count:pending?1:0,backlog_bytes:pending?128:0});
+      }
       if(p===path+'/consumers/fixture-consumer'){
         if(!usage||!consumer)return new Response('',{status:404});
         if(init.method==='DELETE'){consumer=false;return response(null);}
@@ -150,6 +154,19 @@ test('foreign queue consumers or pending DLQ work stop cleanup before any deleti
     assert.equal(f.calls.filter(x=>x.method==='DELETE').length,0);
     assert(f.kv);
   }
+});
+test('cleanup waits for asynchronous usage drain before detaching an owned consumer',async()=>{
+  const f=resourceFixture({usageBacklogReads:2});await f.create().provision();f.addWorker();
+  assert.equal((await f.create().cleanup()).complete,true);
+  const detached=f.calls.findIndex(x=>x.method==='DELETE');
+  assert.equal(f.calls.slice(0,detached).filter(x=>x.path.endsWith('/metrics')).length,4);
+  assert.equal(f.operations.filter(x=>x.operation==='drain-usage'&&x.state==='waiting').length,2);
+  assert.equal(f.kv,null);
+});
+test('queue ownership changes during drain stop cleanup before any delete',async()=>{
+  const f=resourceFixture({usageBacklogReads:2,changeConsumerWhileDraining:true});await f.create().provision();f.addWorker();
+  assert.equal((await f.create().cleanup()).complete,false);
+  assert.equal(f.calls.filter(x=>x.method==='DELETE').length,0);assert(f.kv);
 });
 test('container inventory requires a successful envelope and array before any write',async()=>{
   for(const containerResponse of [[],null,{success:false,result:[]},{success:true},{success:true,result:{}}]){

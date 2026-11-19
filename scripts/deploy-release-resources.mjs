@@ -129,7 +129,6 @@ export function createIsolatedResources({ env = process.env, identity = qualific
       // references then prevent queue deletion. Verify every dependency before
       // disconnecting any of them, as in the existing FakeCo teardown.
       try {
-        const consumers=[];
         const ownedConsumer=(value,item)=>{
           const scripts=[value?.script,value?.script_name].filter(x=>x!==undefined);
           if(value?.type!=='worker'||!scripts.length||scripts.some(x=>x!==identity.worker)||
@@ -137,26 +136,37 @@ export function createIsolatedResources({ env = process.env, identity = qualific
              value.queue_id!==undefined&&value.queue_id!==item.queue_id||value.queue_name!==undefined&&value.queue_name!==item.queue_name)
             throw new Error('Foreign isolated queue consumer');
         };
-        for(const name of [identity.usage,identity.dlq]){
-          const item=await queue(name);if(!item)continue;
-          const path='/queues/'+encodeURIComponent(item.queue_id),detail=await request(path);
-          if(detail?.queue_id!==item.queue_id||detail.queue_name!==name||
-             !Array.isArray(detail.producers)||!Array.isArray(detail.consumers)||
-             detail.producers_total_count!==undefined&&detail.producers_total_count!==detail.producers.length||
-             detail.consumers_total_count!==undefined&&detail.consumers_total_count!==detail.consumers.length||
-             detail.producers.length>1||detail.producers.some(x=>x.type!=='worker'||x.script!==identity.worker)||
-             detail.consumers.length>1||name===identity.dlq&&(detail.producers.length||detail.consumers.length))
-            throw new Error('Foreign or incomplete isolated queue dependencies');
-          for(const value of detail.consumers){
-            ownedConsumer(value,item);
-            const consumerPath=path+'/consumers/'+encodeURIComponent(value.consumer_id);
-            const direct=await request(consumerPath);ownedConsumer(direct,item);
-            if(direct.consumer_id!==value.consumer_id)throw new Error('Isolated consumer identity changed');
-            consumers.push(consumerPath);
+        // Fixture/accounting settlement can precede asynchronous queue delivery.
+        // Poll reads only, rechecking dependencies each time; no detach while busy.
+        const consumers=await observeResource(async()=>{
+          const consumers=[];
+          for(const name of [identity.usage,identity.dlq]){
+            const item=await queue(name);if(!item)continue;
+            const path='/queues/'+encodeURIComponent(item.queue_id),detail=await request(path);
+            if(detail?.queue_id!==item.queue_id||detail.queue_name!==name||
+               !Array.isArray(detail.producers)||!Array.isArray(detail.consumers)||
+               detail.producers_total_count!==undefined&&detail.producers_total_count!==detail.producers.length||
+               detail.consumers_total_count!==undefined&&detail.consumers_total_count!==detail.consumers.length||
+               detail.producers.length>1||detail.producers.some(x=>x.type!=='worker'||x.script!==identity.worker)||
+               detail.consumers.length>1||name===identity.dlq&&(detail.producers.length||detail.consumers.length))
+              throw new Error('Foreign or incomplete isolated queue dependencies');
+            for(const value of detail.consumers){
+              ownedConsumer(value,item);
+              const consumerPath=path+'/consumers/'+encodeURIComponent(value.consumer_id);
+              const direct=await request(consumerPath);ownedConsumer(direct,item);
+              if(direct.consumer_id!==value.consumer_id)throw new Error('Isolated consumer identity changed');
+              consumers.push(consumerPath);
+            }
+            const metrics=await request(path+'/metrics');
+            if(!Number.isSafeInteger(metrics?.backlog_count)||metrics.backlog_count<0||!Number.isSafeInteger(metrics.backlog_bytes)||metrics.backlog_bytes<0)
+              throw new Error('Incomplete isolated queue metrics');
+            if(metrics.backlog_count||metrics.backlog_bytes){
+              await save({operation:name===identity.usage?'drain-usage':'drain-dlq',state:'waiting',backlogCount:metrics.backlog_count,backlogBytes:metrics.backlog_bytes,at:now()});
+              return false;
+            }
           }
-          const metrics=await request(path+'/metrics');
-          if(metrics?.backlog_count!==0||metrics.backlog_bytes!==0)throw new Error('Isolated queue is not empty');
-        }
+          return consumers;
+        },{now,wait});
         for(const path of consumers)await mutation('delete-usage-consumer',()=>request(path,{method:'DELETE'}),async()=>!await request(path,{absent:true}));
       }catch{
         return {worker:identity.worker,complete:false,outcomes:[{resource:'queue-dependencies',outcome:'unresolved'}]};

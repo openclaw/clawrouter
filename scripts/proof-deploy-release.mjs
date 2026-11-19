@@ -56,7 +56,7 @@ assert.equal(state.mode,'native-cutover');
 const plan=join(out,'plan.json');await writeFile(plan,JSON.stringify(state));
 let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,staleDeployment=0,previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash,queueConsumer=false;
 const queues=[],requests=[],deployments=[],accounting={events:[],policySpentMicros:0,providerSpentMicros:0},cases=[],callbacks=[],starts=[],seen={},grants=[];
-let lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0;
+let lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0,usageDrainReads=0;
 const boot=randomUUID(),fingerprint='d'.repeat(64);
 const selected=()=>deployment?.versions.find(v=>v.percentage===100)?.version_id;
 const runtime=()=>nativeReceipt(versions.find(v=>v.id===selected())).runtimeSha;
@@ -99,7 +99,7 @@ const server=createServer(async(r,s)=>{
    if(queue){
     const qp='/queues/'+queue.queue_id,usage=queue.queue_name===identity.usage;
     const consumer={consumer_id:'proof-consumer',type:'worker',script:identity.worker,dead_letter_queue:identity.dlq};
-    if(p===qp+'/metrics')return ok({backlog_count:0,backlog_bytes:0});
+    if(p===qp+'/metrics'){const pending=usage&&usageDrainReads++<2;return ok({backlog_count:pending?1:0,backlog_bytes:pending?128:0});}
     if(p===qp+'/consumers/proof-consumer'){
      if(!usage||!queueConsumer)return json(s,{},404);
      if(r.method==='DELETE'){queueConsumer=false;return ok(null);}
@@ -204,10 +204,11 @@ try{
  assert.equal(receipt.finalObservation.accountingEvents,8);
  assert.equal(receipt.cases.continuity.interruptedStatus,'failed');
  assert.equal(new Set(receipt.functionalEvidence.steps.filter(x=>x.threadId).map(x=>x.threadId)).size,1);
+ assert.ok(usageDrainReads>=3,'actual entrypoint must observe usage drain before deletion');
  assert.equal(kv,null);assert.equal(bucket,null);assert.equal(worker,null);assert.equal(app,null);assert.equal(queues.length,0);
  await assert.rejects(access(join(env.TRAIN_EVIDENCE_DIRECTORY,'private/release/client/session.json')));
  assert.equal(deployments.length,6);
- const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
+ const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }finally{
  await writeFile(join(out,'requests.json'),JSON.stringify(requests,null,2));
