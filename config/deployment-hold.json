@@ -1,5 +1,5 @@
 {
   "schema": 1,
-  "hold": true,
+  "hold": false,
   "reason": "Remote Codex catalog release is held for isolated native cutover/recovery qualification and separately authorized production activation."
 }
