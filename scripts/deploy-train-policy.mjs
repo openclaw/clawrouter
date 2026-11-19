@@ -81,9 +81,9 @@ export function deploymentState(deployment) {
   if (state.cutover) {
     const c = state.cutover;
     if (!state.native || c.schema !== 1 || !/^[a-f0-9]{64}$/.test(c.blueRuntimeSha ?? '') ||
-        c.blueRuntimeSha === state.native.runtimeSha || state.unsafe ||
+        (c.kind === 'control' ? c.blueRuntimeSha !== state.native.runtimeSha : c.kind !== undefined || c.blueRuntimeSha === state.native.runtimeSha) || state.unsafe ||
         !['draining', 'warming', 'recover-draining-blue', 'recover-draining-green', 'recover-draining-recovery', 'recover-warming'].includes(c.phase) ||
-        !/^[a-f0-9]{40}$/.test(c.nativeSource ?? '') || Object.keys(c).sort().join() !== 'blueRuntimeSha,nativeSource,phase,recovery,schema') throw new Error('Invalid remote native cutover receipt');
+        !/^[a-f0-9]{40}$/.test(c.nativeSource ?? '') || Object.keys(c).sort().join() !== (c.kind === 'control' ? 'blueRuntimeSha,kind,nativeSource,phase,recovery,schema' : 'blueRuntimeSha,nativeSource,phase,recovery,schema')) throw new Error('Invalid remote native cutover receipt');
     versionId(c.recovery);
     if ([state.blue,state.green].includes(c.recovery)) throw new Error('Recovery must retain the compatible control protocol');
     const target = ['warming', 'recover-draining-green'].includes(c.phase) ? state.green : ['recover-warming','recover-draining-recovery'].includes(c.phase) ? c.recovery : state.blue;

@@ -99,13 +99,32 @@ async function fixture(t,{poolSha=hash(10),slotSha=poolSha}={}){
 }
 const managed=(accepting,expectedRevision,operationId)=>({accepting,expectedRevision,operationId});
 
+test('runtime authorization retains the exact start intent across slot code changes',async t=>{
+ const f=await fixture(t);await f.warm();const slot=f.slots[0],intent=slot.storage.value.get('native');
+ const authorize=async(generation=intent.generation,token=intent.token)=>{
+  const r=await slot.actor.fetch(new Request('https://slot/control/authorize',{method:'POST',headers:{'x-container-token':f.env.LARGE_HTTP_TOKEN},body:JSON.stringify({generation,token})}));
+  assert.equal(r.status,200);return r.json();
+ };
+ assert.equal((await authorize()).runtimeSha,intent.runtimeSha);
+ assert.equal((await authorize(intent.generation+1)).authorized,false);
+ assert.equal((await authorize(intent.generation,hash(98))).authorized,false);
+ slot.env={...slot.env,LARGE_HTTP_RUNTIME_SHA:hash(11)};
+ slot.actor=new LargeHttpSlot(slot.ctx,slot.env);
+ const after=await authorize();assert.equal(after.authorized,true);assert.equal(after.runtimeSha,intent.runtimeSha);
+ assert.notEqual(after.runtimeSha,(await runtimeConfig(slot.env)).runtimeSha);
+ // Legacy journals cannot borrow a newly executing slot's configured digest.
+ const legacy=slot.storage.value.get('native');delete legacy.runtimeSha;slot.storage.seed('native',legacy);
+ assert.equal((await authorize()).runtimeSha,null);
+});
+
 test('authenticated snapshots add safe identities; unauthenticated inspection has no slot effects',async t=>{
  const f=await fixture(t);
  assert.equal((await f.pool.fetch(f.request('snapshot',{},'wrong'))).status,403);
  assert.equal((await f.pool.fetch(new Request('https://pool/snapshot',{headers:{'x-container-token':f.env.LARGE_HTTP_TOKEN}}))).status,405);
  assert.equal(f.reads.length,0);
  const s=await f.warm();
- assert.deepEqual(s.control,{schema:1,revision:0,fenced:false,runtimeSha:f.config.runtimeSha,fingerprint:f.config.fingerprint});
+ assert.deepEqual(s.control,{schema:1,artifactProtocol:1,revision:0,fenced:false,runtimeSha:f.config.runtimeSha,fingerprint:f.config.fingerprint});
+ assert.ok(s.slots.every(o=>o.artifactProtocol===1));
  assert.equal(s.state.schema,2);assert.equal(s.state.control,undefined);
  assert.equal(s.slots.length,8);assert.ok(s.slots.every(o=>o.qualified));
  for(const o of s.slots){
@@ -247,7 +266,7 @@ test('fenced stops preserve uncertain owners and native replay history; reopenin
 });
 
 
-test('HTTP coordinator replaces and recovers real native journals with fenced admission and no owner replay',async t=>{
+for (const kind of [undefined,'control']) test('HTTP coordinator replaces and recovers real native journals: '+(kind??'payload'),async t=>{
  t.mock.timers.enable({apis:['Date'],now:1_800_000_000_000});
  const f=await fixture(t);await f.warm();
  await import('./helpers/typescript-resolver.mjs');
@@ -256,8 +275,8 @@ test('HTTP coordinator replaces and recovers real native journals with fenced ad
  const refused=await adminApi(new Request('https://clawrouter.openclaw.ai/v1/admin/large-http',{method:'POST',headers:{authorization:'Bearer wrong','content-type':'application/json'},body:JSON.stringify(managed(false,0,'unauthorized'))}),f.env,'/v1/admin/large-http');
  assert.equal(refused.status,401);assert.equal((await f.snapshot()).control.revision,0);
  const blue='11111111-1111-1111-1111-111111111111',green='22222222-2222-2222-2222-222222222222',recovery='33333333-3333-3333-3333-333333333333';
- const source='b'.repeat(40),sha='c'.repeat(40),oldRuntime=hash(10),runtime=hash(11);
- const state={run:'123',sha,blue,green,status:'rolling',unsafe:false,exposed:false,deploymentId:'initial',native:{schema:1,runtimeSha:runtime},cutover:{schema:1,blueRuntimeSha:oldRuntime,nativeSource:source,recovery,phase:'prepared'}};
+ const source='b'.repeat(40),sha='c'.repeat(40),oldRuntime=hash(10),runtime=kind==='control'?oldRuntime:hash(11);
+ const state={run:'123',sha,blue,green,status:'rolling',unsafe:false,exposed:false,deploymentId:'initial',native:{schema:1,runtimeSha:runtime},cutover:{schema:1,...(kind?{kind}:{}),blueRuntimeSha:oldRuntime,nativeSource:source,recovery,phase:'prepared'}};
  const versions={[blue]:nativeVersion(blue,source),[green]:nativeVersion(green,sha,blue),[recovery]:nativeVersion(recovery,sha,blue)};
  versions[blue].annotations['workers/message']=uploadMessage({run:'123',sha:source,blue:'9'.repeat(8)+'-9999-9999-9999-999999999999',native:{schema:1,runtimeSha:oldRuntime}});
  versions[green].annotations['workers/message']=uploadMessage(state);

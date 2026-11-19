@@ -12,10 +12,10 @@ const provider = providerById('anthropic');
 const endpoint = provider.endpoints.find(item => item.id === 'messages');
 const model = 'claude-sonnet-5';
 const keyA = 'oauth/fixture/anthropic', keyB = 'oauth/fixture/backup';
-const grant = (extra = {}) => ({ provider: provider.id, kind: 'subscription', enabled: true, accessToken: 'synthetic-token', updatedAt: '2026-01-01T00:00:00Z', ...extra });
-const unavailableBody = (type, requestId) => ({ type: 'error', error: { type, message: 'provider anthropic has no available scoped upstream grant' }, request_id: requestId });
+const grant = () => ({ provider: provider.id, kind: 'subscription', enabled: true, accessToken: 'synthetic-token', updatedAt: '2026-01-01T00:00:00Z' });
+const unavailableBody = (type, requestId, retryAt) => ({ type: "error", error: { type, message: 'provider anthropic has no available scoped upstream grant for model "claude-sonnet-5"' + (retryAt ? `; earliest possible retry at ${retryAt} (eligibility rechecked on retry)` : "") }, request_id: requestId });
 
-// Fixed clock: Retry-After is whole seconds until the earliest pooled grant returns.
+// Fixed clock: Retry-After rounds up to the earliest possible pooled recovery.
 const now = Date.parse('2026-10-21T12:00:00.000Z');
 const at = seconds => new Date(now + seconds * 1_000).toISOString();
 const cooling = (seconds, revision) => ({ status: 'cooldown', observedAt: at(-1), source: 'provider_response', cooldownUntil: at(seconds), lastSignal: 'rate_limited', grantRevision: revision, windows: [] });
@@ -104,7 +104,7 @@ for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter
   assert.equal(response.status, 429);
   assert.equal(response.retryAfter, retryAfter);
   assert.ok(response.exposed.includes('retry-after'), 'browser clients can read the retry time');
-  assert.deepEqual(response.body, unavailableBody('rate_limit_error', response.requestId));
+  assert.deepEqual(response.body, unavailableBody('rate_limit_error', response.requestId, at(name === 'sub-second remainders round up' ? 0.25 : Number(retryAfter))));
   assert.match(response.requestId, /^req_[a-f0-9]{32}$/);
   assert.equal(response.errorCode, 'upstream_grant_pool_unavailable');
   assert.equal(upstream.mock.callCount(), 0);

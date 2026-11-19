@@ -4,11 +4,13 @@ import AxeBuilder from "@axe-core/playwright";
 
 const routing = { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: {}, includedQuotaReservePercent: 5, environmentFallback: true };
 const policy = { policyId: "claude_pool", enabled: true, providers: ["anthropic"], tenantId: "synthetic", grantRouting: routing };
-const grant = { key: "oauth/claude_pool/max", scope: "policies", scopeId: "claude_pool", tokenRef: "max", provider: "anthropic", kind: "subscription", label: "Synthetic Max account", enabled: true, usable: true, hasRefreshToken: true, credentialStatus: "active", selectedCount: 42, account: { email: "operator@example.test", rateLimitTier: "default_claude_max_20x", subscriptionStatus: "active", extraUsageEnabled: true }, extraUsage: { enabled: true, usedCredits: 125, monthlyLimit: 1000, currency: "USD" }, quotaStatus: "limited", quotaObservedAt: new Date().toISOString(), quotaWindows: [
+const grant = { key: "oauth/claude_pool/max", scope: "policies", scopeId: "claude_pool", tokenRef: "max", provider: "anthropic", kind: "subscription", label: "Synthetic Max account", enabled: true, usable: true, hasRefreshToken: true, credentialStatus: "active", selectedCount: 42, account: { email: "operator@example.test", rateLimitTier: "default_claude_max_20x", subscriptionStatus: "active", extraUsageEnabled: true }, extraUsage: { enabled: true, usedCredits: 125, monthlyLimit: 1000, currency: "USD" }, quotaStatus: "limited", quotaObservedAt: "2030-01-01T00:00:00.000Z", quotaWindows: [
   { id: "5h", kind: "subscription", window: "five_hour", limit: 100, remaining: 62, resetAt: "2099-01-01T00:00:00.000Z" },
   { id: "7d", kind: "subscription", window: "seven_day", limit: 100, remaining: 82, resetAt: "2099-01-01T00:00:00.000Z" },
   { id: "fable", kind: "subscription", window: "seven_day_scoped", models: ["fable"], limit: 100, remaining: 0, resetAt: "2099-01-01T00:00:00.000Z" },
 ] };
+
+test.beforeEach(async ({ page }) => { await page.clock.setFixedTime(new Date("2030-01-01T00:00:00Z")); });
 
 test("subscriptions show scoped headroom, currency and usage in both themes", async ({ page }) => {
   let refreshed = 0;
@@ -36,7 +38,7 @@ test("subscriptions show scoped headroom, currency and usage in both themes", as
   await expect(page.getByText("0% free", { exact: true })).toBeVisible();
   await expect(page.getByText(/Max 20x/).first()).toBeVisible();
   await expect(page.getByText(/\$1.25 \/ \$10.00/).first()).toBeVisible();
-  await expect(page.getByText("Fable: unavailable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Fable: model quota exhausted", { exact: true })).toBeVisible();
   await expect(page.getByText("150", { exact: true }).first()).toBeVisible(); // Input already includes the cache subsets.
   await page.getByRole("button", { name: "Refresh quota", exact: true }).first().click();
   await expect.poll(() => refreshed).toBe(1);
@@ -51,6 +53,23 @@ test("subscriptions show scoped headroom, currency and usage in both themes", as
 });
 
 const retiredPolicy = { ...policy, policyId: "retired_pool", enabled: false };
+
+for (const staleState of ["deny", "allow"]) test("subscription cards explain exclusions without claiming stale headroom, staleState=" + staleState, async ({ page }) => {
+  const selectedPolicy = { ...policy, grantRouting: { ...routing, staleState } };
+  await inventoryFixture(page, { policies: [selectedPolicy], grants: [
+    scopedGrant(policy.policyId, "Reserve", { quotaWindows: [{ id: "week", kind: "subscription", limit: 100, remaining: 5, resetAt: "2099-01-01T00:00:00Z" }] }),
+    scopedGrant(policy.policyId, "Stale", { quotaObservedAt: "2029-12-31T23:00:00Z", quotaWindows: [grant.quotaWindows[0]] }),
+    scopedGrant(policy.policyId, "Unknown", { quotaObservedAt: null, quotaWindows: [] }),
+    scopedGrant(policy.policyId, "Renew", { credentialStatus: "reauth_required", usable: false }),
+  ] });
+  await page.goto("/dashboard/subscriptions");
+  for (const [label, text] of [["Reserve", "Fable: shared quota reserve"], ["Stale", staleState === "deny" ? "Fable: stale quota" : "Fable: eligible (stale quota)"], ["Unknown", staleState === "deny" ? "Fable: quota unknown" : "Fable: eligible (quota unknown)"], ["Renew", "Fable: reauth required"]]) {
+    await expect(page.locator(".subscriptionCard").filter({ has: page.getByRole("heading", { name: label, exact: true }) }).getByText(text, { exact: true })).toBeVisible();
+  }
+  await expect(page.getByText(`${staleState === "deny" ? 0 : 2}/4 subs eligible`, { exact: true })).toHaveCount(3);
+  await expect(page.getByText("Best 62% free", { exact: true })).toHaveCount(0);
+  if (staleState === "allow") await expect(page.getByText("Quota unknown or stale", { exact: true })).toHaveCount(3);
+});
 function scopedGrant(scopeId: string, tokenRef: string, fields: Record<string, unknown> = {}) {
   return { ...grant, scopeId, tokenRef, key: "oauth/" + scopeId + "/" + tokenRef, label: tokenRef, ...fields };
 }
@@ -112,6 +131,7 @@ test("default selection prefers a current subscription over revoked-only and emp
   await page.getByLabel("Subscription policy").selectOption(retiredPolicy.policyId);
   await expect(page.getByRole("heading", { name: "Disabled policy account", exact: true })).toBeVisible();
   await expect(page.getByText("0/1 subs eligible", { exact: true })).toHaveCount(3);
+  await expect(page.getByText("Fable: policy disabled", { exact: true })).toBeVisible();
   await page.getByLabel("Show retired / disabled history").uncheck();
   await expect(page.getByLabel("Subscription policy")).toHaveValue(policy.policyId);
   await expect(page.getByRole("heading", { name: "Synthetic Max account", exact: true })).toBeVisible();
@@ -134,6 +154,7 @@ test("paused and reauthorization-required nonrevoked accounts stay visible", asy
   const paused = page.locator(".subscriptionCard").filter({ hasText: "Paused account" });
   await expect(paused.getByText("Paused", { exact: true })).toBeVisible();
   await expect(paused.getByRole("button", { name: "Refresh quota" })).toBeDisabled();
+  await expect(paused.getByText("Fable: grant disabled", { exact: true })).toBeVisible();
   await expect(page.locator(".subscriptionCard").filter({ hasText: "Renew account" }).getByText("reauth required", { exact: true })).toBeVisible();
   await expect(page.getByText("1/3 subs eligible", { exact: true })).toHaveCount(2);
 });
@@ -191,7 +212,6 @@ test("empty inventory stays empty in either history mode", async ({ page }) => {
 });
 
 test("a selected policy disabled by refresh falls back without hiding Access management", async ({ page }) => {
-  await page.clock.setFixedTime(new Date("2030-01-01T00:00:00Z"));
   const other = { ...policy, policyId: "other_pool" };
   const inventory = { policies: [policy, other], grants: [grant, scopedGrant(other.policyId, "Other account")] };
   const requests = await inventoryFixture(page, inventory);

@@ -18,6 +18,18 @@ The API adapter allows mutations only to the isolated Worker's deployments.
 Native admin requests retain bearer authentication, optional paired Access
 credentials, redirect refusal and selected-version response checks.
 
+During owned deployment convergence, a snapshot GET returning HTTP 500 from
+the exact selected Worker version or an explicitly allowed previous immutable
+version is recorded as pending within the existing phase deadline. A previous
+version may still answer after the deployment API selects its replacement.
+Immediate Durable Object code adoption can interrupt a snapshot; HTTP 500 alone
+does not establish either cause. Ownership is checked before every
+observation, and only a successful validated snapshot can establish readiness.
+Persistent errors time out; authentication errors, unknown versions and malformed
+successful responses fail immediately. No activation, admission or inference
+mutation is replayed. The shared `observeNativeControl` helper also supports
+coordinator startup observation with its own admission/runtime guards.
+
 Before dispatch the coordinator must prepare, inspect and own:
 
 - Separate seven actor namespaces, policy KV, content bucket, queue/DLQ,
@@ -30,7 +42,9 @@ Before dispatch the coordinator must prepare, inspect and own:
 - Original blue carrying the exact deployed old native bytes, healthy at 100%,
   with real old persistent state. Its source and native digest must have the
   normal native receipt. Do not relabel a mock as the launch payload.
-- Green carrying current reviewed edge/control and current native payload.
+- Green carrying current reviewed edge/control and current native payload for
+  `kind: payload` (the default). For explicit `kind: control`, green retains
+  exactly the blue native payload and its original native-source annotation.
 - Recovery carrying the **same current edge/control** and exactly reproduced
   old payload, with the normal native-source annotation. Never restore unfenced
   old control as recovery.
@@ -44,7 +58,8 @@ config (its Worker/account/origin/owners must be inspected). Set
 source/digest when invoking `prepareNativeRecovery`; it refuses a reproduction
 mismatch. Upload only the verified green stages with the existing Wrangler
 `versions upload --config <green.toml> --tag <source> --message <receipt>` mechanism.
-Generate each message with `uploadMessage`, never manually rewrite deployed
+For control adoption, the verified old-payload/current-control package is uploaded
+twice as distinct green and recovery versions. Generate each message with `uploadMessage`, never manually rewrite deployed
 metadata. Green and recovery share `state.run`, `state.sha` and original
 `state.blue`; recovery additionally has `nativeSource` and the old native digest.
 Keep the entire contiguous preserved-secret lineage. No secret rotation occurs.
@@ -76,7 +91,31 @@ Environment `native-qualification` supplies only these distinct secrets:
 - Optional paired `NATIVE_QUALIFICATION_ACCESS_CLIENT_ID` and
   `NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET`
 
-The coordinator supplies six non-secret dispatch inputs:
+Before activating a prepared rehearsal, run **Read-only isolated native
+authentication** (`preflight-native-auth.yml`) on exact reviewed main, supplying
+`expected_sha`, `worker` and `origin`. This separate five-minute workflow uses
+the actual `native-qualification` environment credentials. It reads the selected
+version, verifies isolated persistent owners and its configured admin hash, sends
+an anonymous HEAD expecting 401 followed by an authenticated HEAD expecting 404,
+then confirms deployment stability. Both responses must identify the selected
+version. The existing admin router authenticates before rejecting HEAD; HEAD
+never calls the pool. This deliberate authentication probe has no GET fallback,
+and a changed route/status contract blocks it. Owner checks admit disabled
+bootstrap versions without requiring native payload lineage; cutover readiness
+checks remain unchanged. Management requests are GETs; there is no activation, admission mutation,
+fixture initialization, inference, retry or recovery job. A previously closed
+isolated Worker can be used without reusing its terminal fixture. Only the safe
+`native-auth-<run>-<attempt>/native-auth.json` receipt is retained.
+
+`NATIVE_QUALIFICATION_ADMIN_TOKEN` contains the **raw bearer** (locally injected as
+`NATIVE_REHEARSAL_ADMIN_TOKEN`), while the isolated Worker's
+`CLAWROUTER_ADMIN_TOKEN_SHA256` plain-text configuration contains its SHA-256 hash.
+This check supplements the metadata-only rehearsal preflight, which does not
+authenticate to the Worker. Authentication does not establish native readiness,
+session continuity or cutover qualification. Stop on failure; do not activate or
+retry the campaign. Recheck if credentials or the target configuration change.
+
+The coordinator supplies these non-secret dispatch inputs:
 
 | Input | Value |
 | --- | --- |
@@ -85,6 +124,7 @@ The coordinator supplies six non-secret dispatch inputs:
 | `origin` | Exact HTTPS workers.dev origin, no trailing slash |
 | `versions` | JSON `{"blue":"<UUID>","green":"<UUID>","recovery":"<UUID>","run":"<numeric upload-lineage run>"}` |
 | `mode` | `cutover`, `fail-smoke`, `interrupt-drain`, `interrupt-green`, or `recover` |
+| `kind` | `payload` (default, different native bytes) or `control` (equal native bytes); preserve for recovery |
 | `hold_seconds` | 0–300; default 120, after green's actual eight-slot warm check |
 
 `cutover` exercises successful terminal forward completion. `fail-smoke`
@@ -118,6 +158,45 @@ Review all external evidence plus both runner artifacts before a separate regist
 PR. Registry `source` is the tested source ancestor, `controlSha256` the recorded
 digest, and `evidence` the actual Actions run URL. Determining code changes,
 including this workflow/smoke/target path, invalidate earlier qualification.
+
+## Compatible control adoption
+
+Use the explicit production `native-control` mode when old slot controllers must
+adopt a repair before replacing native bytes. Packaging reproduces the deployed
+payload using its original native source and refuses a digest mismatch; both
+candidate and distinct compatible recovery contain that payload with current
+control. This mode permits reviewed lifecycle/service changes, retains all
+owner/configuration/secret/source/CI checks, and requires a separate registry row
+with `kind: "control"` and equal blue/green digests. Ordinary `native-cutover`
+still requires different digests and cannot use that row.
+
+Both modes reuse the existing ordered drain, exact absence, full selection,
+bounded observation and fenced recovery. Before reopening admission, the pool
+and all eight actual slot controllers must attest `artifactProtocol: 1`, as well
+as matching configured runtime/fingerprint. Warmth additionally checks each
+persisted generation, boot and runtime against the pool. The capability marks
+journal-selected artifact authorization; equal payload fingerprints alone cannot
+prove that old slot code has adopted it. It adds no inference-path calls.
+
+Pending observations retain bounded sanitized per-slot readiness fields and a
+last snapshot on failure. Hosted receipts retain the first 16 and latest 48
+observations plus the total count. They do not retain tokens, prompts or grant
+IDs. Authentication, ownership, selected-version and deadline failures retain
+their existing stop semantics; no mutation is retried.
+
+For a targeted adoption repair, reuse independently valid unchanged payload,
+accounting and session evidence. Newly prove adoption from unpatched control,
+mixed-version artifact delivery, eight-slot readiness and distinct compatible
+recovery. Separately qualify the subsequent exact payload replacement with the
+same repaired control. This is not permission to relabel historical results or
+skip a changed behavior. Record the finite case/evidence checklist before launch.
+No local test or controller receipt populates the qualification registry.
+
+After control adoption, a manual `native-cutover` can select the same source tag
+again if its exact main CI passes: the bridge deliberately retained old native
+bytes. Packaging must still prove a different payload and the registry must
+qualify that exact pair. Scheduled selection and ordinary same-source rollouts
+remain no-ops. Production authorization is separate for both stages.
 
 ## Production smoke
 
