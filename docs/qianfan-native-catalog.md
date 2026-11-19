@@ -115,12 +115,22 @@ Router accounting and SDK validation are distinct: a complete JSON response
 with an invalid vector count can still be a dispatched, fixed-cost Router
 success, while the SDK rejects the result.
 
-Pre-dispatch SDK cancellation must make no request. Independent cleanup controls
-exercise the actual remote HTTP wrapper's held or rejected release, including an
-undefined rejection. These controls do not claim physical pre-response client
-disconnect propagation, which remains a separate runtime qualification boundary.
-Fresh hosted qualification is required for the changed head; prior Chat results
-do not transfer to memory.
+Pre-dispatch SDK cancellation must make no request. A separate in-flight case
+for each model uses the actual registered `embed(..., { signal })` call. It waits
+for real response headers, the first incomplete JSON chunk and the next original
+pending read before aborting the caller. Each case needs its own SDK release,
+original source cancel/return/join with no expiry, and request-bound Worker
+`client_error` accounting. A test-only source-pinned witness binds the direct
+embedding reader in `observeUsage` and its first logical cancellation outcome;
+Chat's additional completion wrapper and receipts are not reused as evidence.
+Raw read rejections remain recorded, with independent cleanup failures fatal.
+
+Local real HTTP/Workerd controls cover this post-header route for all three
+models. Independent controls also reject foreign or undefined SDK read reasons
+and failed/held release; the existing first-outcome counterfactuals exercise both
+reader locations. These tests do not qualify physical pre-response disconnect
+propagation, which remains a separate runtime boundary. Fresh hosted qualification
+is required for the changed head; previous Chat or memory results do not transfer.
 
 ## Proof boundary
 

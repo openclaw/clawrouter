@@ -36,7 +36,7 @@
 
 ## Unreleased
 
-- Add the three frozen Qianfan memory embedding models on the native selected-credential route, with registered SDK 16/17-input scheduler, ordered-output, denial, retirement and attempt-bound settlement checks. Keep unknown vendor pricing and limits absent.
+- Add the three frozen Qianfan memory embedding models on the native selected-credential route, with registered SDK 16/17-input scheduler, ordered-output, denial, genuine post-header caller cancellation, retirement and attempt-bound settlement checks. Keep unknown vendor pricing and limits absent.
 
 - Bind Private fixture release qualification to the captured original release function and acquisition, preserving detached callback receivers, arguments and outcomes. Keep once-only successful release and complete retirement requirements.
 

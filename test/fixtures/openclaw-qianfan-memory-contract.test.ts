@@ -11,6 +11,7 @@ import * as guard from "../../src/infra/net/fetch-guard.js";
 import { withRemoteHttpResponse } from "../../packages/memory-host-sdk/src/host/remote-http.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
+const cancelOrigins: string[] = JSON.parse(process.env.CLAWROUTER_MEMORY_CANCEL_ORIGINS ?? "[]");
 const models = ["embedding-v1", "bge-large-zh", "bge-large-en"];
 const captured = createCapturedPluginRegistration();
 const credential = (index: number, mode: string) => `qmem_${index}_${mode}`;
@@ -25,11 +26,11 @@ function inRegistry<T>(run: () => T, include = true) {
   return withPluginRuntimeRegistryScope(registry, () => withPluginRuntimeGenerationRegistryScope(registry, run));
 }
 
-async function client(index: number, mode: string, model = models[index]) {
+async function client(index: number, mode: string, model = models[index], base = origin) {
   const id = credential(index, mode);
   const result = await createEmbeddingProvider({ provider: "qianfan", model, fallback: "none",
     config: { plugins: { enabled: false }, models: { providers: {
-      qianfan: { baseUrl: origin + "/v1/native/qianfan", api: "openai-completions", models: [] },
+      qianfan: { baseUrl: base + "/v1/native/qianfan", api: "openai-completions", models: [] },
     } } }, remote: { apiKey: key(id) } });
   assert.equal(result.requestedProvider, "qianfan");
   assert.equal(result.provider?.id, "qianfan"); assert.equal(result.runtime?.id, "qianfan");
@@ -39,7 +40,7 @@ async function client(index: number, mode: string, model = models[index]) {
 
 // Preserve every original acquisition and release promise. A spy being installed
 // is not proof: each expected real request must produce one completed acquisition.
-async function observed<T>(requests: number, run: () => Promise<T>) {
+async function observed<T>(requests: number, run: () => Promise<T>, acquired: (row: any) => void = () => {}) {
   const original = guard.fetchWithSsrFGuard, rows: any[] = [], tails: Promise<unknown>[] = [], faults: unknown[] = [];
   const spy = vi.spyOn(guard, "fetchWithSsrFGuard").mockImplementation(function (...args) {
     const pending = Reflect.apply(original, this, args);
@@ -56,7 +57,7 @@ async function observed<T>(requests: number, run: () => Promise<T>) {
           return value;
         } catch (error) { faults.push(error); throw error; }
       };
-      row.wrapper = result.release;
+      row.wrapper = result.release; acquired(row);
     }, error => { faults.push(error); }).catch(error => { faults.push(error); }));
     return pending;
   });
@@ -84,6 +85,76 @@ async function observed<T>(requests: number, run: () => Promise<T>) {
   return value as T;
 }
 
+// The gate observes the original read and promise; it never cancels a body on
+// the SDK's behalf. The only cancellation below is the real caller's signal.
+async function observedCancellation(run: (signal: AbortSignal) => Promise<unknown>) {
+  const caller = new AbortController(), reason = new Error("synthetic owned memory cancellation");
+  const ops: any[] = [], restores: Array<() => void> = [], faults: unknown[] = [];
+  let proof: any;
+  let sequence = 0, abortAt = 0, firstChunk = false, response: Response | undefined, reader: any;
+  let ready!: () => void; const pendingRead = new Promise<void>(resolve => { ready = resolve; });
+  const watch = (kind: string, value: any, receiver: any, args: any[], original: any) => {
+    const op: any = { kind, value, receiver, args, original, entered: ++sequence, state: "pending" }; ops.push(op);
+    void Promise.resolve(value).then(result => { op.state = "fulfilled"; op.result = result; op.settled = ++sequence;
+      if (kind === "read" && !result.done && result.value?.byteLength > 0) firstChunk = true;
+    }, error => { op.state = "rejected"; op.error = error; op.settled = ++sequence; });
+    if (kind === "read" && firstChunk) ready();
+    return value;
+  };
+  const patch = (target: any, key: string, wrap: (original: any) => any) => {
+    const descriptor = Object.getOwnPropertyDescriptor(target, key), original = target[key], replacement = wrap(original);
+    Object.defineProperty(target, key, { configurable: true, writable: true, value: replacement });
+    restores.push(() => { assert.equal(target[key], replacement); if (descriptor) Object.defineProperty(target, key, descriptor); else assert.equal(Reflect.deleteProperty(target, key), true); });
+  };
+  try {
+    await observed(1, async () => {
+      const original = run(caller.signal); void original.catch(() => {});
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([pendingRead, original.then(() => { throw new Error("embedding completed before pending read"); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("no original post-header pending read")), 5000); })]);
+        assert.equal(firstChunk, true); assert.equal(response?.status, 200); assert.ok(reader);
+        abortAt = ++sequence; caller.abort(reason);
+        const outcome = await original.then(value => ({ ok: true, value }), error => ({ ok: false, error }));
+        assert.equal(outcome.ok, false);
+        if ("error" in outcome && outcome.error !== reason) { faults.push(outcome.error); throw new Error("foreign original memory rejection"); }
+      } finally {
+        clearTimeout(timer);
+        // Failure cleanup is independent and cannot qualify the failed gate.
+        if (!caller.signal.aborted) caller.abort(reason);
+        await Promise.allSettled([original]);
+      }
+    }, row => {
+      assert.equal(row.args[0].signal, caller.signal); response = row.result.response;
+      patch(response!.body, "getReader", original => function (this: any, ...args: any[]) {
+        assert.equal(this, response!.body); assert.equal(reader, undefined);
+        reader = Reflect.apply(original, this, args);
+        watch("closed", reader.closed, reader, [], undefined);
+        for (const kind of ["read", "cancel", "releaseLock"]) patch(reader, kind, original => function (this: any, ...args: any[]) {
+          assert.equal(this, reader);
+          let value; try { value = Reflect.apply(original, this, args); } catch (error) { faults.push(error); throw error; }
+          return watch(kind, value, this, args, original);
+        });
+        return reader;
+      });
+    });
+    await Promise.allSettled(ops.map(op => op.value));
+    const rejected = ops.filter(op => op.state === "rejected"), releases = ops.filter(op => op.kind === "releaseLock");
+    assert.ok(rejected.length > 0); assert.ok(rejected.some(op => op.kind === "read" && op.entered < abortAt));
+    assert.ok(rejected.every(op => ["read", "closed", "cancel"].includes(op.kind) && op.receiver === reader && op.error === reason && abortAt < op.settled));
+    const cancelled = ops.filter(op => op.kind === "cancel"), closed = ops.filter(op => op.kind === "closed");
+    assert.equal(closed.length, 1); assert.equal(cancelled.length, 1);
+    assert.ok(abortAt < cancelled[0].entered && cancelled[0].entered < releases[0]?.entered);
+    assert.equal(releases.length, 1); assert.equal(releases[0].state, "fulfilled"); assert.equal(response!.body!.locked, false);
+    assert.ok(ops.every(op => op.state !== "pending"));
+    proof = { headers: true, firstChunk, originalPendingRead: true, callerAborted: caller.signal.aborted,
+      rejected: rejected.map(op => op.kind), releaseFulfilled: true, unlocked: true };
+  } catch (error) { faults.push(error); }
+  finally { for (const restore of restores.reverse()) try { restore(); } catch (error) { faults.push(error); } }
+  if (faults.length) throw new AggregateError(faults, "Qianfan memory cancellation originals");
+  return proof;
+}
+
 describe("registered Qianfan memory scheduler through Worker and SQLite", { concurrent: false }, () => {
   beforeAll(() => { plugin.register(captured.api); });
   for (const [index, model] of models.entries()) {
@@ -109,6 +180,14 @@ describe("registered Qianfan memory scheduler through Worker and SQLite", { conc
       assert.deepEqual(usage, [{ promptTokens: 2, totalTokens: 2 }]);
       const reason = new Error("synthetic pre-dispatch cancellation");
       await observed(0, () => assert.rejects(result.provider!.embed("must not dispatch", { signal: AbortSignal.abort(reason) }), error => error === reason));
+    }));
+
+    it(`${model}: original post-header memory caller abort retires its source`, () => inRegistry(async () => {
+      assert.equal(cancelOrigins.length, 3);
+      const result = await client(index, "cancel", model, cancelOrigins[index]);
+      const proof = await observedCancellation(signal => result.provider!.embed(`${credential(index, "cancel")}:0`, { signal }));
+      assert.equal(proof.callerAborted, true);
+      console.log("QIANFAN_MEMORY_CANCEL " + JSON.stringify({ model, ...proof }));
     }));
 
     for (const mode of ["embedded", "malformed", "eof"]) it(`${model}: ${mode} never produces a vector or retries`, () => inRegistry(async () => {

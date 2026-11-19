@@ -286,7 +286,7 @@ function createRequestBindings() {
 }
 // Test-only hooks bind the real operation and its actual read-failure handler.
 // This proves the committed logical outcome, never the native error's cause.
-function createWorkerOutcomeWitness(lifetime: any, ingress: any[], outbound: any[], Operation: any) {
+function createWorkerOutcomeWitness(lifetime: any, ingress: any[], outbound: any[], Operation: any, kind = "chat") {
   const rows = new Map<any, any>(), stops = new Map<any, any>(), rejected = new Set<any>();
   const activeCancels = new Map<any, any>(), downstream = new Map<any, any>();
   const status = Object.getOwnPropertyDescriptor(Operation.prototype, "status")!.get!;
@@ -362,7 +362,7 @@ function createWorkerOutcomeWitness(lifetime: any, ingress: any[], outbound: any
       const row = matches[0], record = stops.get(row.operation), owner = row.owner, incoming = owner.ingress, cancel = record?.cancel;
       const failure = row.failures.length === 1 ? row.failures[0] : undefined;
       return outbound.includes(owner) && ingress.includes(incoming) && owner.claimed === true && incoming.claimed === true
-        && owner.id === incoming.id && owner.kind === "chat" && incoming.kind === "chat" && owner.method === "POST" && incoming.method === "POST"
+        && owner.id === incoming.id && owner.kind === kind && incoming.kind === kind && owner.method === "POST" && incoming.method === "POST"
         && row.caller === incoming.signal && row.signal === owner.signal && op.guardSignal === row.signal
         && Object.getPrototypeOf(row.operation) === Operation.prototype && op.reader.body === row.body
         && record?.binding === row && record.pending === op && record.origin === true
@@ -377,7 +377,7 @@ function createWorkerOutcomeWitness(lifetime: any, ingress: any[], outbound: any
     },
   };
 }
-function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => boolean; current?: () => any; apiPrototype?: object; isProxy?: (value: any) => boolean }, worker?: { source: () => any; outcome: (op: any) => boolean }) {
+function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => boolean; current?: () => any; apiPrototype?: object; isProxy?: (value: any) => boolean }, worker?: { source: () => any; outcome: (op: any) => boolean; ownerId?: string }) {
   const operations: OriginalOperation[] = [], errors: unknown[] = [], readers: any[] = [], bodies: any[] = [], guards: any[] = [];
   const restores: Array<() => void> = [], bodyOwners = new WeakMap<object, any>();
   let sequence = 0;
@@ -557,7 +557,7 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
   function workerReadDisposition(op: OriginalOperation) {
     if (sdk || !worker || op.kind !== "reader.read" || op.state !== "rejected" || !worker.outcome(op)) return false;
     const owner = op.owner, row = op.reader, source = worker.source();
-    if (!source || source.ownerId !== "qianfan_cancel" || source.claimed !== true || source.cancelled !== true
+    if (!source || source.ownerId !== (worker.ownerId ?? "qianfan_cancel") || source.claimed !== true || source.cancelled !== true
       || source.expired !== false || source.cancelCalls !== 1 || source.cancelReturned !== 1 || source.pending !== 0 || source.failed !== 0
       || owner.id !== source.ownerId || !row || !readers.includes(row) || row.owner !== owner || bodyOwners.get(row.body) !== owner
       || row.receivedBody !== row.body || op.receiver !== row.reader || row.unlocks !== 1 || row.unlocked !== 1 || row.body.locked) return false;
