@@ -1,4 +1,4 @@
-# Qianfan frozen native Chat catalog
+# Qianfan frozen native Chat and memory contracts
 
 Scope: the five Chat cards in OpenClaw
 `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
@@ -91,10 +91,49 @@ Normalization trims the model and strips only `qianfan/` or
 That is a per-request batch cap, not a default model, output dimension, price or
 entitlement. The comment points to the
 [original embedding reference](https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu).
-This source adds no embedding endpoint, codec, media file or common changes.
-The three-model memory route requires separate registered-client and Worker
-acceptance, including the 16-input/17-input batch boundary. The Chat and
-discovery tests below do not establish embedding support.
+The manifest declares only these three `llm.embeddings` models and the existing
+`openai.embeddings` format at `/v2/embeddings`. It adds no unrestricted embedding
+model passthrough, dimensions, prices, token limits, encoding defaults or generic
+batch-limit schema. Chat and discovery facts remain separate.
+
+Configure the registered OpenClaw `qianfan` memory provider with its base URL set
+to the Router's `/v1/native/qianfan` route and an explicitly selected Router
+credential. Use one of the three exact model IDs above; no default is inferred.
+The Router resolves the original credential's Qianfan grant and forwards its
+Bearer secret to the native endpoint. An unknown-price hard budget needs an
+explicit fixed-cost policy; the synthetic test tariff is not a vendor price.
+
+The separate memory fixture uses OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`, the captured registered adapter, an
+owned registry scope and the actual memory manager batch method. It requires
+16 inputs to produce one request and 17 to produce ordered requests of 16 and
+1 for each model. Direct `embedBatch(17)` is not the scheduling proof. It checks
+normalization, selected credentials, response index ordering, actual request
+receipts and SQLite settlement. HTTP-200 embedded errors, incomplete JSON and
+invalid vector envelopes must not produce SDK vectors or trigger replay.
+Router accounting and SDK validation are distinct: a complete JSON response
+with an invalid vector count can still be a dispatched, fixed-cost Router
+success, while the SDK rejects the result.
+
+Pre-dispatch SDK cancellation must make no request. A separate in-flight case
+for each model uses the actual registered `embed(..., { signal })` call. It waits
+for real response headers, the first incomplete JSON chunk and the next original
+pending read before aborting the caller. Each case needs its own SDK release,
+original source cancel/return/join with no expiry, and request-bound Worker
+`client_error` accounting. A test-only source-pinned witness binds the direct
+embedding reader in `observeUsage` and its first logical cancellation outcome;
+Chat's additional completion wrapper and receipts are not reused as evidence.
+Raw read rejections remain recorded, with independent cleanup failures fatal.
+The pinned SDK bounded JSON reader releases its lock after a rejected read;
+caller-signal transport cancellation does not require an extra SDK reader cancel.
+The original upstream source still must receive and complete its own cancel.
+
+Local real HTTP/Workerd controls cover this post-header route for all three
+models. Independent controls also reject foreign or undefined SDK read reasons
+and failed/held release; the existing first-outcome counterfactuals exercise both
+reader locations. These tests do not qualify physical pre-response disconnect
+propagation, which remains a separate runtime boundary. Fresh hosted qualification
+is required for the changed head; previous Chat or memory results do not transfer.
 
 ## Proof boundary
 

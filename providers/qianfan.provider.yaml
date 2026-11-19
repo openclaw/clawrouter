@@ -33,7 +33,16 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.embeddings
+    endpoint: embeddings
+    methods: [POST]
 endpoints:
+  embeddings:
+    method: POST
+    path: /embeddings
+    requestFormat: openai.embeddings
+    responseFormat: openai.embeddings
+    timeoutMs: 120000
   models_list:
     method: GET
     path: /models
@@ -49,6 +58,15 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - id: qianfan/embedding-v1
+      upstream: embedding-v1
+      capabilities: [llm.embeddings]
+    - id: qianfan/bge-large-zh
+      upstream: bge-large-zh
+      capabilities: [llm.embeddings]
+    - id: qianfan/bge-large-en
+      upstream: bge-large-en
+      capabilities: [llm.embeddings]
     - id: qianfan/ernie-4.5-0.3b
       displayName: "ERNIE 4.5 0.3B"
       upstream: ernie-4.5-0.3b

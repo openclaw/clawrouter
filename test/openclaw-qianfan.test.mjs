@@ -11,6 +11,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { registerQianfanMemoryTests } from "./helpers/qianfan-memory.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -28,6 +29,7 @@ const sdkText = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.
 const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd = sdkText.indexOf("// END ORIGINAL LIFETIME OBSERVERS");
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
+registerQianfanMemoryTests({ source, sourceHead, observerCode, bundleOutcome: bundleQianfanOutcome });
 const { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
 // Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
 const diagnosticStart = sdkText.indexOf("// BEGIN QIANFAN FAILURE DIAGNOSTICS"), diagnosticEnd = sdkText.indexOf("// END QIANFAN FAILURE DIAGNOSTICS");
@@ -973,7 +975,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
   const diagnostics = outerDiagnostics(t);
   try {
   assert.ok(endpoint);
-  assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
+  assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.chat")).map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-qianfan-client-"));
   let mf, nativeAccepted = false;
   await preserveFailures(async () => {
@@ -1101,6 +1103,14 @@ function workerOutcomeOverlay(text, name = "proxy-response.ts") {
       '            } catch (error) {\n              qianfanOutcome.current.failure(operation, reader, error);\n              if (!stopped)');
   } else {
     assert.equal(name, "proxy-response.ts");
+    // Embeddings bypass the ordinary Chat completion wrapper. Their original
+    // fetched reader belongs directly to observeUsage, not to a forwarded body.
+    edit('  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);',
+      '  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);\n  if (responseFormat === "openai.embeddings") qianfanOutcome.current.bind(operation, response, reader);');
+    edit('        const next = await input.read(() => reader.read());',
+      '        if (responseFormat === "openai.embeddings") qianfanOutcome.current.readStart(operation, reader);\n        const next = await input.read(() => reader.read());\n        if (responseFormat === "openai.embeddings") qianfanOutcome.current.readDone(operation, reader);');
+    edit('      } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }',
+      '      } catch (error) { if (responseFormat === "openai.embeddings") qianfanOutcome.current.failure(operation, reader, error); if (!finished) { finish("failed", error); controller.error(error); } }');
     edit('    resolve({ ...inspection, delivery,', '    qianfanOutcome.current.inspection(operation, inspection, delivery);\n    resolve({ ...inspection, delivery,');
     edit('    cancel(reason) { return finish("canceled", reason); },',
       '    cancel(reason) { const prior = qianfanOutcome.current.downstreamStart(operation, reason); try { return finish("canceled", reason); } finally { qianfanOutcome.current.downstreamEnd(operation, prior); } },');
@@ -1136,12 +1146,12 @@ test("Qianfan Worker first outcome binds the actual handler and retains secondar
   const modes = ["caller", "downstream", "undefined_read", "foreign_reason", "prior_400", "revoked_400", "prior_500", "deadline", "upstream",
     "protocol", "early_read", "foreign_ingress", "foreign_outbound", "no_handler", "missing_source", "expired_source", "held_source", "failed_source",
     "duplicate_cancel", "cancel_failure", "closed_failure", "unlock_failure", "handler_failure", "waitUntil_failure", "observer_undefined", "native_unqualified"];
-  for (const mode of modes) {
+  for (const kind of ["chat", "memory"]) for (const mode of modes) {
     const incoming = createRequestBindings(), outgoing = createRequestBindings(), caller = new AbortController();
-    const ingress = incoming.expect("qianfan_cancel", "chat", "https://fixture.example/ingress", "POST", "fixture-in");
-    incoming.claim(ingress.url, { method: "POST", headers: { authorization: "Bearer fixture-in" } }, "chat");
-    const owner = outgoing.expect("qianfan_cancel", "chat", "https://fixture.example/outbound", "POST", "fixture-out");
-    outgoing.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-out" } }, "chat"); owner.ingress = ingress;
+    const ingress = incoming.expect("qianfan_cancel", kind, "https://fixture.example/ingress", "POST", "fixture-in");
+    incoming.claim(ingress.url, { method: "POST", headers: { authorization: "Bearer fixture-in" } }, kind);
+    const owner = outgoing.expect("qianfan_cancel", kind, "https://fixture.example/outbound", "POST", "fixture-out");
+    outgoing.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-out" } }, kind); owner.ingress = ingress;
     let sourceProof = { ownerId: "qianfan_cancel", claimed: true, cancelled: true, expired: false, cancelCalls: 1, cancelReturned: 1, pending: 0, failed: 0 };
     if (["missing_source", "native_unqualified"].includes(mode)) sourceProof = undefined;
     if (mode === "expired_source") sourceProof.expired = true;
@@ -1150,7 +1160,7 @@ test("Qianfan Worker first outcome binds the actual handler and retains secondar
     const life = createLifetimeObserver(undefined, { source: () => sourceProof, outcome: op => witness.matches(op) });
     life.signal(ingress, caller.signal);
     const operation = new HttpOperation(caller.signal); life.signal(owner, operation.signal);
-    const witness = createWorkerOutcomeWitness(life, incoming.bindings, outgoing.bindings, HttpOperation); qianfanOutcome.current = witness;
+    const witness = createWorkerOutcomeWitness(life, incoming.bindings, outgoing.bindings, HttpOperation, kind); qianfanOutcome.current = witness;
     if (mode === "no_handler") witness.failure = () => {};
     if (mode === "foreign_ingress") owner.ingress = { ...ingress };
     if (mode === "foreign_outbound") life.signal(owner, new AbortController().signal);
@@ -1175,9 +1185,9 @@ test("Qianfan Worker first outcome binds the actual handler and retains secondar
     Object.defineProperty(response.body, "getReader", { configurable: true, value: () => reader });
     const fetched = Promise.resolve(response);
     assert.equal(life.invoke("fetch", () => fetched, null, [], owner, value => life.response(value, owner)), fetched); await fetched;
-    const completion = new ProxyCompletion(), forwarded = ownOrdinaryResponse(response, completion, operation);
-    completion.seal(); assert.notEqual(forwarded.body, response.body);
-    const observed = observeUsage(forwarded, operation), downstream = observed.response.body.getReader();
+    const completion = new ProxyCompletion(), forwarded = kind === "memory" ? response : ownOrdinaryResponse(response, completion, operation);
+    completion.seal(); if (kind === "chat") assert.notEqual(forwarded.body, response.body); else assert.equal(forwarded.body, response.body);
+    const observed = observeUsage(forwarded, operation, undefined, kind === "memory" ? "openai.embeddings" : undefined), downstream = observed.response.body.getReader();
     await downstream.read(); const pending = downstream.read();
     const settled = Promise.allSettled([pending, observed.retired, observed.result, read.promise, closed.promise, completion.completion]);
     // Wait for the original shipping inputRetirement to start its second read.
