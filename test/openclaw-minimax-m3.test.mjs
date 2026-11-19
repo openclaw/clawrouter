@@ -123,12 +123,12 @@ export default { ...handler, fetch(request, env, context) {
     return new Response(null, { status: 204 });
   })();
   if (path === "/fixture/retire") return retire(request);
-  if (path !== ${JSON.stringify(nativePath)}) return handler.fetch(request, { ...env, MISTRAL_API_KEY: "must-not-fallback" }, context);
+  if (path !== ${JSON.stringify(nativePath)}) return handler.fetch(request, { ...env, MINIMAX_API_KEY: "must-not-fallback" }, context);
   for (const row of ingress.bindings) if (row.url.startsWith("/")) row.url = new URL(request.url).origin + row.url;
   const owner = ingress.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
   lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
-  return lifetime.invoke("handler", handler.fetch, handler, [request, { ...env, MISTRAL_API_KEY: "must-not-fallback" }, context], owner);
+  return lifetime.invoke("handler", handler.fetch, handler, [request, { ...env, MINIMAX_API_KEY: "must-not-fallback" }, context], owner);
 } };`;
 }
 
@@ -377,18 +377,41 @@ test(phase + " MiniMax real Worker pricing, denials, fragmented responses and ca
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 
+async function runNative(t, fixture, origin, invoke = runOpenClawConsumer) {
+    let receipts = 0;
+    const observed = new Proxy(t, { get(target, key, receiver) { if (key !== "diagnostic") return Reflect.get(target, key, receiver);
+      return text => { receipts += text.split("\n").filter(line => line.trim() === "MINIMAX_CANCEL_RETIRED " + phase).length; t.diagnostic(text); };
+    } });
+    await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/minimax/worker-contract.test.ts",
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_MINIMAX_PHASE: phase, MINIMAX_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } });
+    assert.equal(receipts, 1, "actual native cancellation and independent SDK cleanup receipt");
+}
+
+test(phase + " MiniMax native runner binds its phase, credentials and exact cancellation receipt", async () => {
+  const origin = "https://fixture.example";
+  const invoke = lines => async (context, options) => {
+    assert.equal(options.sourceHead, sourceHead);
+    assert.equal(options.testPath, "extensions/minimax/worker-contract.test.ts");
+    assert.equal(options.env.CLAWROUTER_MINIMAX_PHASE, phase);
+    assert.equal(options.env.CLAWROUTER_CONTRACT_ORIGIN, origin);
+    assert.equal(options.env.MINIMAX_API_KEY, "must-not-fallback");
+    assert.equal(options.env.MISTRAL_API_KEY, undefined);
+    assert.equal(options.env.OPENAI_API_KEY, "must-not-fallback");
+    for (const line of lines) context.diagnostic(line);
+  };
+  const receipt = "MINIMAX_CANCEL_RETIRED " + phase;
+  const foreign = "MINIMAX_CANCEL_RETIRED " + (flash ? "m3" : "flash");
+  await runNative({ diagnostic() {} }, "/synthetic/minimax.test.ts", origin, invoke([foreign, receipt]));
+  for (const lines of [[], [foreign], ["MISTRAL_CANCEL_RETIRED"], [receipt, receipt]])
+    await assert.rejects(runNative({ diagnostic() {} }, "/synthetic/minimax.test.ts", origin, invoke(lines)));
+});
+
 test(phase + " actual registered MiniMax native SDK through Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-minimax-sdk-")); let mf, accepted = false;
   await preserveFailures(async () => {
     mf = await startBundledWorkerdFixture(temporary, await bundleMiniMaxOutcome(routerFixture()), upstreamFixture()); const origin = await setup(mf);
     const fixture = join(temporary, "minimax-contract.test.ts"); await writeFile(fixture, assembledFixture, { flag: "wx", mode: 0o600 });
-    let receipts = 0;
-    const observed = new Proxy(t, { get(target, key, receiver) { if (key !== "diagnostic") return Reflect.get(target, key, receiver);
-      return text => { receipts += text.split("\n").filter(line => line.trim() === "MISTRAL_CANCEL_RETIRED").length; t.diagnostic(text); };
-    } });
-    await runOpenClawConsumer(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/minimax/worker-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, MISTRAL_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } });
-    assert.equal(receipts, 1, "actual native cancellation and independent SDK cleanup receipt");
+    await runNative(t, fixture, origin);
     await verifyCallsAndUsage(mf, origin, true); accepted = true;
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
