@@ -25,7 +25,7 @@ function xiaomiRunnerReport() {
   const options = {
     expectedInvocations: 1,
     fixtureSha256: "8c93b0bde95c42d7e16d0724387d9fc9b3b18a590e777cb2c9bd839112461e14",
-    reporterSha256: "9c39bb702834528918c1e2f69509cea9de1e557d20ecf8205a9c36cb53f2a478",
+    reporterSha256: "cff81a9039bc554192cc4e4ec5c3f7dad75ece004795260d702a129127dfcfa7",
     onReport(packet) {
       summary = undefined;
       assert.equal(reported, false, "duplicate Xiaomi runner report"); reported = true;

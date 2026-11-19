@@ -1,5 +1,9 @@
 # Changelog
 
+- Retain and join the DeepSeek fixture’s original nested upstream fetch and source callbacks in the request lifetime. Keep source cancellation responsive, reject expiry and independent failures, and observe retirement before teardown.
+
+- Preserve DeepSeek’s pinned native runner alongside the landed Qwen, Xiaomi and Private diagnostics; bind authenticated Search denial receipts to their actual requests while retaining event-free SDK validation.
+
 - Preserve Private caller-abort rejection evidence when the pinned SDK synchronously cancels and unlocks before promise reactions run. Require the exact owned authored reason for that order, joined original settlement, successful release and all existing source/accounting checks.
 
 - Identify the first rejecting Private partial-control predicate in the existing bounded native record. Preserve short-circuit evaluation, original outcomes and all qualification requirements.
@@ -14,6 +18,8 @@
 - Join Xiaomi fixture source pull and cancellation callbacks in their original Worker request before reporting retirement. Retain independent source failures and require settled work, successful cancellation return, and the existing expiry guard; verify early and pending-read cancellation with the real local Workerd topology.
 - Keep the Xiaomi cancellation producer responsive with bounded SSE heartbeats while joining its original deadline and source callbacks. Qualify only the owned Worker read outcome after source retirement and caller-cancellation accounting; bind SDK provider-error cleanup to the controlled SSE error, original output, acquisition signal and reader. Preserve rejected states and all independent failures; hosted qualification remains required.
 - Export the compiled provider snapshot contract from the standalone provider plugin package, preserving existing shared imports and the registry wire shape.
+
+- Bind the DeepSeek native runner to its exact SDK revision, fixture and agents-tools project. Retain a bounded first-failure capsule from existing SDK catches and joins, preserving original errors and independent cleanup without changing Search outcomes. Keep direct scenario-level joins unchanged when no diagnostic owner is supplied.
 
 - Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
 
@@ -80,6 +86,12 @@
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
 
 - Distinguish search-observation body failure boundaries through literal native subtest locations, preserving original operations, failures and cleanup. Missing failure-site delivery remains unknown.
+
+- Preserve DeepSeek runner context when a native helper fails after partial SDK capsule reporting, and report exactly which capsule names remain unobserved without interpreting those omissions as case outcomes. Keep original failures, cleanup, and reporting limits unchanged.
+
+- Drain DeepSeek fixture request work, original reads/cancels and retained observer tails before reporting independent join failures, including undefined reasons.
+
+- Preserve original cancellation rejections and independent cleanup/reporting failures in the DeepSeek held-upstream diagnostic, including undefined reasons.
 
 - Retain Linux proc-stat rows whose parent/group pair is the kernel’s unavailable `0/-1` sentinel. Keep their identities and state counts, report unavailable relationships and comparisons as unknown, and reject every nonempty final census and unqualified control identity. This fixes a source-supported parser mismatch without identifying the cause of a historical hosted failure.
 
@@ -828,6 +840,7 @@
 - Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
+- Declare DeepSeek native Search alongside unchanged Chat cards with the frozen 750-microUSD maximum request tariff, complete-empty zero settlement and conservative uncertain charges; preserve original credentials and explicit fixed policy pricing.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
