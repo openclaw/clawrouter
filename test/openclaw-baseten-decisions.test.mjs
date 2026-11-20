@@ -397,3 +397,33 @@ test("Baseten observation binds actual site, credential, callee and acquired obj
   assert.equal(rows.at(-1).state, "rejected"); assert.equal(rows.at(-1).error, undefined); assert.equal(acquisitions.length, 1);
 });
 
+test("Baseten acquired body cancellation preserves originals and cannot hide held or falsey cleanup failures", async () => {
+  const text = readFileSync(fixture, "utf8"), start = text.indexOf("function observe<T>"), end = text.indexOf("function observeGuard(", start);
+  const cleanupStart = text.indexOf("afterEach(async () =>"), cleanupEnd = text.indexOf("const batch =", cleanupStart);
+  for (const mode of ["fulfilled", "held", "rejected-undefined", "cancel-and-release", "foreign-body"]) {
+    const rows = [], tails = [], faults = [], acquisitions = [], readers = []; let cleanup, joined = false, finish, calls = 0, releases = 0;
+    const reason = {}, cancelPromise = mode === "held" ? new Promise(resolve => { finish = resolve; })
+      : mode === "rejected-undefined" || mode === "cancel-and-release" ? Promise.reject(undefined) : Promise.resolve();
+    cancelPromise.catch(() => {});
+    const releasePromise = mode === "cancel-and-release" ? Promise.reject(reason) : Promise.resolve(); releasePromise.catch(() => {});
+    const body = { getReader() { throw new Error("not used by this original-body control"); }, cancel: function (...args) { calls++; assert.equal(args[0], reason); assert.equal(this, mode === "foreign-body" ? foreign : body); return cancelPromise; } }, foreign = {};
+    const result = { response: { body }, release: function () { assert.equal(this, undefined); releases++; return releasePromise; } };
+    const context = { rows, tails, faults, acquisitions, readers, identities: new Map(), guardChannel: undefined, guardKey: Symbol("unused"), retired: undefined,
+      afterEach(fn) { cleanup = fn; }, expect(value) { return { toBe: expected => assert.equal(value, expected), toEqual: expected => assert.deepEqual(Array.from(value), Array.from(expected)) }; } };
+    runInNewContext('"use strict";\n' + stripTypeScriptTypes(text.slice(start, end)) + ";globalThis.install = installAcquisition;\n" + stripTypeScriptTypes(text.slice(cleanupStart, cleanupEnd)), context);
+    // An empty channel is the actual no-observer cleanup state for this isolated
+    // acquired-body control; there is no manufactured transport acquisition.
+    context.guardChannel = { modules: new Set() }; context[context.guardKey] = context.guardChannel;
+    context.install(result);
+    assert.equal(body.cancel.call(mode === "foreign-body" ? foreign : body, reason), cancelPromise);
+    const detached = result.release; assert.equal(detached(), releasePromise);
+    const joining = cleanup().then(() => { joined = true; return { accepted: true }; }, error => { joined = true; return { accepted: false, error }; });
+    if (mode === "held") { await Promise.resolve(); await Promise.resolve(); assert.equal(joined, false); finish(); }
+    const outcome = await joining; assert.equal(outcome.accepted, mode === "fulfilled" || mode === "held", mode);
+    assert.equal(calls, 1); assert.equal(releases, 1);
+    const cancel = rows.find(row => row.kind === "body.cancel"); assert.equal(cancel.original, cancelPromise); assert.equal(cancel.args[0], reason); assert.equal(cancel.receiver, mode === "foreign-body" ? foreign : body);
+    if (mode === "rejected-undefined" || mode === "cancel-and-release") { assert.equal(cancel.state, "rejected"); assert.equal(cancel.error, undefined); }
+    if (mode === "cancel-and-release") { assert.equal(rows.filter(row => row.state === "rejected").length, 2); assert.equal(rows.find(row => row.kind === "release").error, reason); }
+  }
+});
+

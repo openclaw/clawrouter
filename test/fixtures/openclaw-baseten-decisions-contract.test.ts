@@ -50,7 +50,11 @@ function installAcquisition(result: { response: Response; release: () => Promise
   };
   const body = result.response.body;
   if (!body) return;
-  const getReader = body.getReader;
+  const getReader = body.getReader, cancelBody = body.cancel;
+  body.cancel = function (...args) {
+    if (this !== body) faults.push(new Error("foreign cancellation body receiver"));
+    return call("body.cancel", cancelBody, this, args);
+  };
   body.getReader = function (...readerArgs: []) {
     if (this !== body) faults.push(new Error("foreign body receiver"));
     const reader = Reflect.apply(getReader, this, readerArgs) as ReadableStreamDefaultReader<Uint8Array>;
