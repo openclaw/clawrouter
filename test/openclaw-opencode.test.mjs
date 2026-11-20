@@ -70,6 +70,12 @@ function assertSessionRelations(calls) {
   assert.notEqual(first.session, conversation.session, "another conversation must not share the derived session");
   assert.notEqual(first.session, credential.session, "another selected credential must not share the derived session");
 }
+function assertGoKimiThinkingOff(body) {
+  // The pinned native K3 hook omits both fields; disabled-thinking objects are
+  // the DeepSeek contract, not Kimi's OpenAI-compatible payload contract.
+  assert.equal(Object.hasOwn(body, "thinking"), false);
+  assert.equal(Object.hasOwn(body, "reasoning_effort"), false);
+}
 function assertGoMessagesThinking(row, body) {
   assert.equal(row.model, "qwen3.8-max", "thinking policy is specific to the selected Qwen card");
   const replay = ["first", "replay"].includes(row.id);
@@ -77,6 +83,12 @@ function assertGoMessagesThinking(row, body) {
   assert.equal(body.max_tokens, replay ? 2048 : row.hook === "simple" ? 16512 : 128, row.id);
   assert.deepEqual(body.thinking, budget === undefined ? undefined : { type: "enabled", budget_tokens: budget, display: "summarized" }, row.id);
   assert.equal(body.output_config, undefined, "Qwen uses a manual budget, not Claude adaptive effort");
+}
+function assertConsoleSignedThinking(body) {
+  assert.equal(body.model, "claude-opus-5");
+  assert.equal(body.max_tokens, 128);
+  assert.deepEqual(body.thinking, { type: "adaptive", display: "summarized" });
+  assert.deepEqual(body.output_config, { effort: "high" });
 }
 function assertMessagesPrefill(provider, body) {
   if (provider !== "opencode") {
@@ -243,13 +255,14 @@ export default { fetch(request, env, context) {
       else assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, 128, row.id);
       if (provider === "opencode-go" && protocol === "chat") {
         if (row.model.startsWith("deepseek-")) { assert.deepEqual(call.body.thinking, { type: "enabled" }, row.id + " native Go thinking contract"); assert.equal(call.body.reasoning_effort, row.model === "deepseek-v4-pro" ? "high" : "low", row.id + " native Go effort contract"); }
-        if (row.model === "kimi-k3") { assert.deepEqual(call.body.thinking, { type: "disabled" }, row.id + " native Go K3 thinking-off contract"); assert.equal(call.body.reasoning_effort, undefined); }
+        if (row.model === "kimi-k3") assertGoKimiThinkingOff(call.body);
       }
       if (row.id === "dynamic" || row.id === "dynamic_replay") {
         const tool = call.body.tools.find(tool => tool.name === "openclaw_web_search"); assert.ok(tool, "actual Console web_search alias");
         assert.equal(tool.parameters.properties.labels.type, "array", "actual Console dynamic-record rewrite");
         if (row.id === "dynamic_replay") { const callItem = call.body.input.find(item => item.type === "function_call"); assert.equal(callItem.name, "openclaw_web_search"); assert.deepEqual(JSON.parse(callItem.arguments), { labels: [{ key: "topic", value: "synthetic" }] }); }
       }
+      if (provider === "opencode" && protocol === "messages" && ["first", "replay"].includes(row.id)) assertConsoleSignedThinking(call.body);
       if (row.id === "prefill") assertMessagesPrefill(provider, call.body);
       if (row.id === "replay") {
         if (protocol === "messages") {
@@ -509,4 +522,24 @@ test("OpenCode Qwen wire assertions distinguish enabled replay, simple budgets a
   for (const wrong of [{ ...body, thinking: undefined }, { ...body, max_tokens: 1024 }, { ...body, thinking: { ...body.thinking, budget_tokens: 512 } }, { ...body, thinking: { ...body.thinking, budget_tokens: 2048 } }, { ...body, thinking: { type: "adaptive" } }, { ...body, output_config: { effort: "high" } }]) assert.throws(() => assertGoMessagesThinking(replay, wrong));
   assert.throws(() => assertGoMessagesThinking({ ...replay, id: "prefill" }, body));
   assert.throws(() => assertGoMessagesThinking({ ...replay, model: "minimax-m2.7" }, body));
+});
+
+
+test("OpenCode Go K3 thinking-off omits fields instead of borrowing DeepSeek's payload", () => {
+  assertGoKimiThinkingOff({ model: "kimi-k3", messages: [], stream: true });
+  for (const wrong of [{ thinking: { type: "disabled" } }, { thinking: { type: "enabled" } }, { thinking: undefined }, { reasoning_effort: "low" }, { reasoning_effort: "none" }, { reasoning_effort: undefined }]) assert.throws(() => assertGoKimiThinkingOff(wrong));
+});
+
+
+test("OpenCode Console signed replay explicitly enables its own adaptive thinking mode", () => {
+  const text = fixtureText.slice(fixtureText.indexOf("function signedMessagesReplayOptions("), fixtureText.indexOf("// END OPENCODE SIGNED MESSAGES OPTIONS"));
+  const build = new Function("contract", stripTypeScriptTypes(text) + "; return signedMessagesReplayOptions;");
+  const options = build({ provider: "opencode", protocol: "messages" });
+  for (const id of ["first", "replay"]) assert.deepEqual(options(Object.freeze({ id, model: "claude-opus-5", hook: "stream" })), { thinkingEnabled: true, effort: "high" });
+  const row = { id: "replay", model: "claude-opus-5", hook: "stream" };
+  for (const changed of [{ ...row, id: "prefill" }, { ...row, id: "cancel" }, { ...row, id: "card0_stream" }, { ...row, hook: "simple" }, { ...row, model: "qwen3.8-max" }]) assert.deepEqual(options(changed), {});
+  for (const contract of [{ provider: "opencode-go", protocol: "messages" }, { provider: "opencode", protocol: "chat" }]) assert.deepEqual(build(contract)(row), {});
+  const wire = { model: "claude-opus-5", max_tokens: 128, thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "high" } };
+  assertConsoleSignedThinking(wire);
+  for (const wrong of [{ ...wire, model: "qwen3.8-max" }, { ...wire, thinking: undefined }, { ...wire, thinking: { type: "disabled" } }, { ...wire, thinking: { type: "enabled", budget_tokens: 1024 } }, { ...wire, output_config: undefined }, { ...wire, output_config: { effort: "low" } }]) assert.throws(() => assertConsoleSignedThinking(wrong));
 });
