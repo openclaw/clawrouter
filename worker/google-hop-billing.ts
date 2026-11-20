@@ -1,4 +1,4 @@
-import { googleField } from "./google-protocol.ts";
+import { googleField, googleInt32 } from "./google-protocol.ts";
 import { extractUsageTokens, type SseUsageEvidence, type UsageInspection, type UsageTokenContext, type UsageTokens } from "./token-usage.ts";
 
 // https://aistudio.google.com/docs/long-decode?generate-content=true#understand-billing
@@ -10,40 +10,52 @@ export function gemini4Hop(context?: Readonly<UsageTokenContext>): boolean {
 }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
-// The existing bounded SSE parser feeds complete frames. Do not retain text,
-// a checkpoint token, or one entry per checkpoint. Each receipt is cumulative.
-export function googleStreamBilling() {
-  let checkpoint: UsageTokens | null | undefined, uncertain = false, terminal = false;
+export function googleCandidateCount(body: unknown): number | null {
+  const config = googleField(body, "generationConfig", "generation_config");
+  return googleInt32(googleField(config, "candidateCount", "candidate_count") ?? 1);
+}
+function receipt(root: Record<string, unknown>): UsageTokens | null {
+  const usage = googleField(root, "usageMetadata", "usage_metadata");
+  if (!object(usage) || googleInt32(googleField(usage, "totalTokenCount", "total_token_count")) === null) return null;
+  const tokens = extractUsageTokens({ usageMetadata: usage });
+  return tokens && tokens.input !== null && tokens.output !== null && tokens.total === tokens.input + tokens.output
+    && (tokens.cached ?? 0) <= tokens.input ? tokens : null;
+}
+// Keep only cumulative receipts and one bit per requested candidate, never text
+// or replay tokens. A delivered terminal receipt commits the hop without EOF.
+export function googleStreamBilling(count: number | null = 1) {
+  const all = count && count <= 8 ? (1 << count) - 1 : 0;
+  let finished = 0, checkpoint: UsageTokens | null | undefined, terminal: UsageTokens | null | undefined;
   return {
     accept(frame: SseUsageEvidence) {
-      if (frame.kind === "invalid" || frame.kind === "unavailable") { uncertain = true; return; }
-      if (frame.kind !== "data") return;
-      const root = frame.value;
-      if (!object(root)) { uncertain = true; return; }
-      if (root.error != null) return;
-      if (object(googleField(root, "promptFeedback", "prompt_feedback")) && !root.candidates) terminal = true;
-      if (!Array.isArray(root.candidates) || !root.candidates.length) return;
-      // Multiple candidates share cumulative usage; one candidate's finish
-      // cannot certify completion of the others.
-      terminal = root.candidates.every(c => {
-        const reason = googleField(c, "finishReason", "finish_reason");
-        return typeof reason === "string" && !!reason && reason !== "FINISH_REASON_UNSPECIFIED";
-      });
-      if (root.candidates.some(c => {
-        const token = googleField(c, "continuationToken", "continuation_token");
-        return typeof token === "string" && token.length > 0;
-      })) {
-        const usage = googleField(root, "usageMetadata", "usage_metadata");
-        const tokens = object(usage) ? extractUsageTokens({ usageMetadata: usage }) : null;
-        checkpoint = tokens && tokens.input !== null && tokens.output !== null && tokens.output > 0
-          && tokens.total === tokens.input + tokens.output && (tokens.cached ?? 0) <= tokens.input ? tokens : null;
-        uncertain = checkpoint === null;
+      if (frame.kind === "invalid" || frame.kind === "unavailable" || frame.kind === "data" && !object(frame.value)) {
+        checkpoint = null; terminal = undefined; finished = 0; return;
       }
+      if (frame.kind !== "data" || !object(frame.value) || frame.value.error != null) return;
+      const root = frame.value;
+      if (!Array.isArray(root.candidates) || !root.candidates.length) {
+        const feedback = googleField(root, "promptFeedback", "prompt_feedback");
+        if (googleField(feedback, "blockReason", "block_reason") || terminal !== undefined && googleField(root, "usageMetadata", "usage_metadata") != null) terminal = receipt(root);
+        return;
+      }
+      const counters = receipt(root);
+      for (const candidate of root.candidates) {
+        const token = googleField(candidate, "continuationToken", "continuation_token");
+        if (typeof token === "string" && token.length) {
+          checkpoint = counters?.output ? counters : null;
+        }
+        const reason = googleField(candidate, "finishReason", "finish_reason");
+        const index = object(candidate) ? googleInt32(candidate.index ?? 0) : null;
+        if (index === null || index >= (count ?? 0) || index >= 8) continue;
+        if (typeof reason === "string" && reason && reason !== "FINISH_REASON_UNSPECIFIED") finished |= 1 << index;
+        else finished &= ~(1 << index);
+      }
+      terminal = all && finished === all ? counters : undefined;
     },
-    finish(inspection: UsageInspection, ended: boolean): (UsageInspection & { nonbillable?: true }) | undefined {
-      if (ended && terminal && inspection.outcome !== "provider_error" && !uncertain) return;
-      if (uncertain) return { outcome: "provider_error", tokens: null }; // no qualified receipt
-      return { outcome: "provider_error", tokens: checkpoint ?? null, ...(checkpoint === undefined ? { nonbillable: true as const } : {}) };
+    finish(inspection: UsageInspection): UsageInspection & { nonbillable?: true } {
+      if (terminal !== undefined) return { outcome: inspection.outcome, tokens: terminal };
+      // With an unsupported candidate count we cannot certify a missing receipt.
+      return { outcome: "provider_error", tokens: checkpoint ?? null, ...(all && checkpoint === undefined ? { nonbillable: true as const } : {}) };
     },
   };
 }

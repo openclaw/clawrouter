@@ -30,7 +30,10 @@ Google does not charge for a dropped unary response or a stream interrupted
 before its first checkpoint. After a streaming checkpoint, only the usage
 committed at that checkpoint is billable, not later uncommitted output. The
 router uses the last complete checkpoint's cumulative usage; it does not infer
-counts from text length. If a checkpoint lacks usable counters, the existing
+counts from text length. Once all requested candidates finish, the delivered
+terminal usage receipt supersedes earlier checkpoints, even if the client stops
+reading before transport EOF. This settles billing, not continuation ownership.
+If the applicable receipt lacks usable counters, the existing
 hard-budget fallback retains the labeled reservation rather than claiming a
 measured provider charge. Explicit fixed-price policies are independent of Google's
 per-token billing.
