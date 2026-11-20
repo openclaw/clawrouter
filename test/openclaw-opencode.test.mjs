@@ -28,7 +28,47 @@ assert.equal(sha(outcomeSource), "1fa00c16a3121d66dc8eb131e8e95432fd26d555199b91
 const { bundleResponsesOutcome } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", outcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
 const fixtureText = readFileSync(new URL("./fixtures/openclaw-opencode-contract.test.ts", import.meta.url), "utf8");
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);
-const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", observerSource);
+// Each request still gets a distinct private owner. Repeated transport credentials
+// are serial fixture expectations, verified against an authored wire marker below;
+// their position alone is never sufficient to accept the request or its receipt.
+function createOpenCodeBindings() {
+  const bindings = [], seen = new WeakSet();
+  return {
+    bindings,
+    expect(...args) {
+      if (bindings.some(row => row.id === args[0] && row.kind === args[1])) throw new Error("duplicate OpenCode expectation");
+      const single = createRequestBindings(), row = single.expect(...args); row.binding = single; bindings.push(row); return row;
+    },
+    claim(input, init, kind) {
+      const request = input instanceof Request ? input : undefined;
+      const url = new URL(request?.url ?? String(input)).href, method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+      const headers = new Headers(init?.headers !== undefined ? init.headers : request?.headers);
+      const identity = request ?? init;
+      if (!identity || typeof identity !== "object" || seen.has(identity)) throw new Error("duplicate or unbound OpenCode original input");
+      const row = bindings.find(row => !row.claimed && row.kind === kind && row.url === url && row.method === method && headers.get("authorization") === "Bearer " + row.credential);
+      if (!row) throw new Error("unbound OpenCode transport");
+      const claimed = row.binding.claim(input, init, kind); seen.add(identity); claimed.input = identity; return claimed;
+    },
+    verify() { for (const row of bindings) row.binding.verify(); },
+  };
+}
+const bindingCode = createOpenCodeBindings.toString();
+const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", observerSource + "\n" + bindingCode);
+function credentialFor(id) { return ["replay", "session_conversation"].includes(id) ? "first" : id; }
+function assertSessionRelations(calls) {
+  const get = id => { const rows = calls.filter(row => row.id === id); assert.equal(rows.length, 1, id); return rows[0]; };
+  const first = get("first"), replay = get("replay"), conversation = get("session_conversation"), credential = get("session_credential");
+  assert.equal(first.authorization, replay.authorization); assert.equal(first.authorization, conversation.authorization);
+  assert.notEqual(first.authorization, credential.authorization);
+  assert.equal(first.session, replay.session, "same credential and conversation must retain the derived session");
+  assert.notEqual(first.session, conversation.session, "another conversation must not share the derived session");
+  assert.notEqual(first.session, credential.session, "another selected credential must not share the derived session");
+}
+function assertReasoningReplay(input) {
+  const reasons = input.filter(item => item.type === "reasoning"); assert.equal(reasons.length, 1);
+  assert.equal(reasons[0].encrypted_content, "synthetic-encrypted");
+  assert.equal(reasons[0].id, undefined); assert.deepEqual(reasons[0].summary, []);
+}
 const formats = { chat: "openai-completions", responses: "openai-responses", messages: "anthropic-messages" };
 const suffixes = { chat: "/chat/completions", responses: "/v1/responses", messages: "/v1/messages" };
 const models = {
@@ -85,11 +125,12 @@ for (const [provider, protocols] of Object.entries(models)) for (const [protocol
     ...(provider === "opencode" && protocol === "responses" ? [{ id: "dynamic", model: cards[0], hook: "stream" }, { id: "dynamic_replay", model: cards[0], hook: "stream" }] : []),
     ...(protocol === "messages" ? [{ id: "prefill", model: cards[0], hook: "stream" }] : []),
     ...cards.flatMap((model, i) => ["stream", "simple"].map(hook => ({ id: `card${i}_${hook}`, model, hook }))),
-    ...["first", "replay", "error", "cancel"].map(id => ({ id, model: protocol === "chat" ? "kimi-k3" : cards[0], hook: "stream" })),
+    ...["first", "replay", "session_conversation", "session_credential", "error", "cancel"].map(id => ({ id, model: protocol === "chat" ? "kimi-k3" : cards[0], hook: "stream" })),
     ...(protocol === "messages" ? [] : ["stream", "simple"].map(hook => ({ id: "unified_" + hook, model: cards[0], hook, unified: true }))),
     ...["invalid", "foreign", "budget", "unpriced", "closed"].map(id => ({ id, model: cards[0], hook: "stream", denied: true })),
   ];
-  const charged = cases.filter(row => !row.denied), token = id => "clawrouter-live-opencode_" + id + "-fixture-secret";
+  const charged = cases.filter(row => !row.denied), token = id => "clawrouter-live-opencode_" + credentialFor(id) + "-fixture-secret";
+  const credentials = cases.filter(row => credentialFor(row.id) === row.id);
   const unifiedPath = protocol === "chat" ? "/v1/chat/completions" : "/v1/responses";
   const payload = JSON.stringify({ phase, provider, protocol, api: formats[protocol], nativePath, unifiedPath, cards, cases });
   function routerFixture() {
@@ -98,16 +139,19 @@ import { putGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
 import { qianfanOutcome } from "qianfan-outcome-witness";
 ${observerCode}
-const cases = ${JSON.stringify(cases)}, ingress = createRequestBindings(), outbound = createRequestBindings();
+${bindingCode}
+const credentialFor = ${credentialFor.toString()};
+const cases = ${JSON.stringify(cases)}, ingress = createOpenCodeBindings(), outbound = createOpenCodeBindings(), receipts = [];
 let sourceCancellation, acceptedConsumer = false;
 const lifetime = createLifetimeObserver(undefined, { ownerId: "opencode_cancel", source: () => acceptedConsumer ? sourceCancellation : undefined, outcome: op => qianfanOutcome.current.matches(op) });
 qianfanOutcome.current = createWorkerOutcomeWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation);
-for (const row of cases) if (!row.denied) { ingress.expect("opencode_" + row.id, "chat", row.unified ? ${JSON.stringify(unifiedPath)} : ${JSON.stringify(nativePath)}, "POST", "clawrouter-live-opencode_" + row.id + "-fixture-secret"); outbound.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + row.id); }
+for (const row of cases) if (!row.denied) { ingress.expect("opencode_" + row.id, "chat", row.unified ? ${JSON.stringify(unifiedPath)} : ${JSON.stringify(nativePath)}, "POST", "clawrouter-live-opencode_" + credentialFor(row.id) + "-fixture-secret"); outbound.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + credentialFor(row.id)); }
 const originalFetch = globalThis.fetch;
 lifetime.patch(globalThis, "fetch", function (...args) { const owner = outbound.claim(args[0], args[1], "chat"); owner.ingress = ingress.bindings.find(row => row.id === owner.id && row.claimed); if (!owner.ingress) throw new Error("unbound OpenCode outbound"); lifetime.signal(owner, args[1]?.signal ?? args[0]?.signal); return lifetime.invoke("fetch", originalFetch, this, args, owner, response => lifetime.response(response, owner)); });
 export default { ...handler, fetch(request, env, context) {
   const path = new URL(request.url).pathname;
-  if (path === "/fixture/grants") return (async () => { for (const row of cases) if (row.id !== "invalid") await putGrantCredentials(env, "oauth/opencode_" + row.id + "/${provider}", { provider: "${provider}", kind: "api_key", enabled: true, credential: "synthetic-opencode-" + row.id }); return new Response(null, { status: 204 }); })();
+  if (path === "/fixture/grants") return (async () => { for (const row of cases) if (row.id !== "invalid" && credentialFor(row.id) === row.id) await putGrantCredentials(env, "oauth/opencode_" + row.id + "/${provider}", { provider: "${provider}", kind: "api_key", enabled: true, credential: "synthetic-opencode-" + row.id }); return new Response(null, { status: 204 }); })();
+  if (path === "/fixture/receipts") return Response.json(receipts);
   if (path === "/fixture/retire") return (async () => { let accepted = false; try { await preserveFailures(async () => { const proof = await request.json(); sourceCancellation = proof.sourceCancellation; acceptedConsumer = proof.acceptedConsumer === true; await lifetime.join(); ingress.verify(); outbound.verify(); }, [() => lifetime.restore()]); accepted = true; } catch (error) { lifetime.errors.push(error); } return Response.json({ ...lifetime.summary(), accepted, join: lifetime.joinDiagnostic() }); })();
   const poisoned = { ...env, OPENCODE_API_KEY: "must-not-fallback", OPENCODE_GO_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" };
   if (path === "/v1/catalog" && /opencode_unified_/.test(request.headers.get("authorization") ?? "")) return (async () => {
@@ -122,15 +166,18 @@ export default { ...handler, fetch(request, env, context) {
   for (const row of ingress.bindings) if (row.url.startsWith("/")) row.url = new URL(request.url).origin + row.url;
   const owner = ingress.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil; lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
-  return lifetime.invoke("handler", handler.fetch, handler, [request, poisoned, context], owner);
+  return lifetime.invoke("handler", handler.fetch, handler, [request, poisoned, context], owner, response => { const requestId = response.headers.get("x-clawrouter-request-id"); if (!requestId || receipts.some(row => row.requestId === requestId)) throw new Error("missing or duplicate original request identity"); receipts.push({ id: owner.id.slice(9), requestId }); });
 } };`;
   }
   function upstreamFixture() {
     return `${observerCode}
-const wireFor = ${wireFor.toString()}, lifetime = createLifetimeObserver(), bindings = createRequestBindings(), calls = [], owners = new Map();
-for (const row of ${JSON.stringify(charged)}) bindings.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + row.id);
+${bindingCode}
+const credentialFor = ${credentialFor.toString()};
+const wireFor = ${wireFor.toString()}, lifetime = createLifetimeObserver(), bindings = createOpenCodeBindings(), calls = [], owners = new Map();
+for (const row of ${JSON.stringify(charged)}) bindings.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + credentialFor(row.id));
 async function serve(request, context, owner) {
   const body = await lifetime.invoke("request.json", request.json, request, [], owner), id = owner.id.slice(9), row = ${JSON.stringify(charged)}.find(row => row.id === id);
+  if (!JSON.stringify(body).includes("Synthetic instructions opencode_case=" + id + ";")) throw new Error("OpenCode wire invocation mismatch: " + id);
   const call = { id, url: request.url, authorization: request.headers.get("authorization"), session: request.headers.get("x-opencode-session"), routerSession: request.headers.get("x-clawrouter-session-id"), body, cancelled: false, expired: false }; calls.push(call); owners.set(owner, call);
   const bytes = new TextEncoder().encode(wireFor(${JSON.stringify(protocol)}, row, body.model)); let offset = 0, timer, heartbeat, wake, controller, complete = false, resolveProducer, rejectProducer;
   const producer = new Promise((resolve, reject) => { resolveProducer = resolve; rejectProducer = reject; }); lifetime.watch("source.completion", producer, owner); context.waitUntil(producer);
@@ -148,7 +195,7 @@ export default { fetch(request, env, context) {
   }
   async function setup(mf) {
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
-    for (const row of cases.filter(row => row.id !== "invalid")) {
+    for (const row of credentials.filter(row => row.id !== "invalid")) {
       const id = "opencode_" + row.id;
       await kv.put("policies/" + id, JSON.stringify({ enabled: true, generation: "fixture", providers: [row.id === "foreign" ? "google" : provider], models: [provider + "/" + (row.id === "closed" ? provider === "opencode" ? "big-pickle" : "kimi-k2.6" : row.model)], grantRouting: { eligibleGrants: { [provider]: [provider] }, environmentFallback: false }, tenantId: "fixture", monthlyBudgetMicros: row.id === "budget" ? 0 : 1000, budgetMode: "reserve", requestCostMicros: row.id === "unpriced" ? null : 7, retainRequestContent: false }));
       await kv.put("credentials/" + id, JSON.stringify({ enabled: true, secretSha256: sha("fixture-secret"), policyId: id, policyGeneration: "fixture" }));
@@ -160,7 +207,7 @@ export default { fetch(request, env, context) {
     const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
     assert.deepEqual(calls.map(row => row.id).sort(), charged.map(row => row.id).sort(), phase + " exact original dispatches");
     for (const call of calls) {
-      const row = cases.find(row => row.id === call.id); assert.equal(call.url, upstreamUrl); assert.equal(call.authorization, "Bearer synthetic-opencode-" + row.id);
+      const row = cases.find(row => row.id === call.id); assert.equal(call.url, upstreamUrl); assert.equal(call.authorization, "Bearer synthetic-opencode-" + credentialFor(row.id));
       assert.equal(call.body.model, row.model); assert.equal(call.body.stream, true); assert.equal(call.expired, false);
       assert.match(call.session, /^crs_[a-f0-9]{64}$/); assert.equal(call.routerSession, null);
       if (protocol === "responses") { assert.equal(call.body.store, false); assert.equal(call.body.previous_response_id, undefined); assert.equal(call.body.max_output_tokens, 128); }
@@ -181,20 +228,29 @@ export default { fetch(request, env, context) {
           const blocks = call.body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
           assert.ok(blocks.some(block => block.type === "thinking" && block.signature === "synthetic-signed-thinking"));
           const use = blocks.find(block => block.type === "tool_use"), result = blocks.find(block => block.type === "tool_result"); assert.ok(use && result); assert.equal(result.tool_use_id, use.id);
-        } else if (protocol === "responses") { const use = call.body.input.find(item => item.type === "function_call"), result = call.body.input.find(item => item.type === "function_call_output"); assert.ok(use && result); assert.equal(use.call_id, result.call_id); }
+        } else if (protocol === "responses") { assertReasoningReplay(call.body.input); const use = call.body.input.find(item => item.type === "function_call"), result = call.body.input.find(item => item.type === "function_call_output"); assert.ok(use && result); assert.equal(use.call_id, result.call_id); }
         else { const assistant = call.body.messages.find(message => message.tool_calls?.length), result = call.body.messages.find(message => message.role === "tool"); assert.ok(assistant && result); assert.equal(assistant.tool_calls[0].id, result.tool_call_id); if (provider === "opencode-go") for (const message of call.body.messages) for (const key of ["reasoning", "reasoning_content", "reasoning_details", "reasoning_text"]) assert.equal(message[key], undefined, "native Go Kimi replay stripping"); }
       }
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback|raw-private-session/);
     }
-    for (const row of cases.filter(row => row.id !== "invalid")) {
+    assertSessionRelations(calls);
+    const receipts = await (await fetch(origin + "/fixture/receipts")).json();
+    assert.deepEqual(receipts.map(row => row.id).sort(), charged.map(row => row.id).sort());
+    assert.equal(new Set(receipts.map(row => row.requestId)).size, charged.length);
+    for (const row of credentials.filter(row => row.id !== "invalid")) {
+      const expected = charged.filter(call => credentialFor(call.id) === row.id);
       let result;
-      for (let n = 0; n < 150; n++) { result = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json(); if (row.denied || result.usage.events.length === 1 && result.budget.spentMicros === 7) break; await new Promise(resolve => setTimeout(resolve, 20)); }
-      assert.equal(result.usage.events.length, row.denied ? 0 : 1, phase + "/" + row.id);
-      assert.equal(result.budget.spentMicros, row.denied ? 0 : 7, row.id);
+      for (let n = 0; n < 150; n++) { result = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json(); if (row.denied || result.usage.events.length === expected.length && result.budget.spentMicros === 7 * expected.length) break; await new Promise(resolve => setTimeout(resolve, 20)); }
+      assert.equal(result.usage.events.length, expected.length, phase + "/" + row.id);
+      assert.equal(result.budget.spentMicros, 7 * expected.length, row.id);
       if (row.denied) continue;
-      const [event] = result.usage.events; assert.equal(event.credential_id, "opencode_" + row.id); assert.equal(event.policy_id, "opencode_" + row.id); assert.equal(event.model, provider + "/" + row.model); assert.equal(event.provider, provider);
-      assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.status, row.id === "cancel" ? "client_error" : row.id === "error" ? "provider_error" : "success", row.id);
-      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], ["error", "cancel"].includes(row.id) ? [null, null, null] : [11, 3, 14], row.id);
+      for (const request of expected) {
+        const receipt = receipts.find(receipt => receipt.id === request.id);
+        const matching = result.usage.events.filter(event => event.request_id === receipt.requestId); assert.equal(matching.length, 1, request.id);
+        const [event] = matching; assert.equal(event.credential_id, "opencode_" + row.id); assert.equal(event.policy_id, "opencode_" + row.id); assert.equal(event.model, provider + "/" + row.model); assert.equal(event.provider, provider);
+        assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.status, request.id === "cancel" ? "client_error" : request.id === "error" ? "provider_error" : "success", request.id);
+        assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], ["error", "cancel"].includes(request.id) ? [null, null, null] : [11, 3, 14], request.id);
+      }
     }
   }
   async function retire(mf, acceptedConsumer) {
@@ -220,13 +276,18 @@ export default { fetch(request, env, context) {
   test(phase + " bundles actual Worker owners and joins original source cancellation", { timeout: 20_000 }, async () => {
     assert.ok((await bundleResponsesOutcome(routerFixture())).length > 0);
     const upstream = new Function(upstreamFixture().replace("export default", "return"))(), tails = [];
-    const response = await upstream.fetch(new Request(upstreamUrl, { method: "POST", headers: { authorization: "Bearer synthetic-opencode-cancel" }, body: JSON.stringify({ model: cards[0], stream: true }) }), {}, { waitUntil(promise) { tails.push(promise); } });
+    const response = await upstream.fetch(new Request(upstreamUrl, { method: "POST", headers: { authorization: "Bearer synthetic-opencode-cancel" }, body: JSON.stringify({ model: cards[0], stream: true, messages: [{ role: "system", content: "Synthetic instructions opencode_case=cancel;" }] }) }), {}, { waitUntil(promise) { tails.push(promise); } });
     assert.equal(tails.length, 1); let completed = false; void tails[0].then(() => { completed = true; });
     const reader = response.body.getReader(); assert.equal((await reader.read()).done, false); assert.equal(completed, false);
     await reader.cancel(); await reader.closed; reader.releaseLock(); await Promise.all(tails);
     const proof = await (await upstream.fetch(new Request("https://fixture.example/retire"))).json();
     assert.deepEqual(proof.sourceCancellation, { ownerId: "opencode_cancel", claimed: true, cancelled: true, expired: false, cancelCalls: 1, cancelReturned: 1, pending: 0, failed: 0 });
     assert.equal(proof.accepted, false, "other original invocations remain missing, never manufactured by retirement");
+  });
+  test(phase + " shared transport cannot substitute another invocation's wire", async () => {
+    const upstream = new Function(upstreamFixture().replace("export default", "return"))();
+    await assert.rejects(upstream.fetch(new Request(upstreamUrl, { method: "POST", headers: { authorization: "Bearer synthetic-opencode-first" }, body: JSON.stringify({ model: protocol === "chat" ? "kimi-k3" : cards[0], messages: [{ role: "system", content: "Synthetic instructions opencode_case=replay;" }] }) }), {}, { waitUntil() { throw new Error("no producer should start"); } }), /wire invocation mismatch: first/);
+    const proof = await (await upstream.fetch(new Request("https://fixture.example/retire"))).json(); assert.equal(proof.accepted, false); assert.ok(proof.rejected > 0);
   });
   test(phase + " actual registered OpenCode SDK through Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
     const temporary = await mkdtemp(join(tmpdir(), "clawrouter-opencode-sdk-")); let mf, accepted = false;
@@ -257,6 +318,15 @@ test("OpenCode unexpected SDK claims survive wrapping, including undefined failu
   }
 });
 
+test("OpenCode successful transport claims still require the exact current invocation", () => {
+  const body = fixtureText.slice(fixtureText.indexOf("function claimOwned("), fixtureText.indexOf("// END OPENCODE CLAIM"));
+  const owner = {}, lifetime = { errors: [] }, bindings = { claim() { return owner; } }; let current = owner;
+  const claim = new Function("lifetime", "bindings", "invocation", stripTypeScriptTypes(body) + "; return claimOwned;")(lifetime, bindings, { getStore() { return current; } });
+  assert.equal(claim("https://fixture.example", {}, "chat"), owner);
+  for (current of [undefined, {}]) assert.throws(() => claim("https://fixture.example", {}, "chat"), /foreign OpenCode invocation/);
+  assert.equal(lifetime.errors.length, 2);
+});
+
 test("OpenCode original acquisition and detached release preserve independent failures", async () => {
   for (const failed of [false, true]) {
     const life = createLifetimeObserver(), owner = {}, receiver = {}, input = {};
@@ -269,4 +339,38 @@ test("OpenCode original acquisition and detached release preserve independent fa
     if (failed) await assert.rejects(life.join(), error => error.errors.includes(undefined)); else await life.join();
     await life.restore(); assert.equal(result.release, release);
   }
+});
+
+
+test("OpenCode serial repeated credentials keep distinct original request owners", () => {
+  const bindings = createOpenCodeBindings(), url = "https://fixture.example/chat";
+  const first = bindings.expect("first", "chat", url, "POST", "synthetic-key"), replay = bindings.expect("replay", "chat", url, "POST", "synthetic-key");
+  assert.throws(() => bindings.expect("first", "chat", url, "POST", "synthetic-key"));
+  const request = () => new Request(url, { method: "POST", headers: { authorization: "Bearer synthetic-key" } });
+  const one = request(), two = request();
+  assert.equal(bindings.claim(one, undefined, "chat"), first);
+  assert.throws(() => bindings.claim(one, undefined, "chat"));
+  assert.throws(() => bindings.claim(new Request(url, { method: "POST", headers: { authorization: "Bearer foreign" } }), undefined, "chat"));
+  assert.throws(() => bindings.verify());
+  assert.equal(bindings.claim(two, undefined, "chat"), replay); assert.notEqual(first.input, replay.input);
+  bindings.verify(); assert.throws(() => bindings.claim(request(), undefined, "chat"));
+});
+
+test("OpenCode session witness rejects broken continuity and collapsed isolation", () => {
+  const rows = [
+    { id: "first", authorization: "same-key", session: "one" }, { id: "replay", authorization: "same-key", session: "one" },
+    { id: "session_conversation", authorization: "same-key", session: "two" }, { id: "session_credential", authorization: "other-key", session: "three" },
+  ];
+  assertSessionRelations(rows);
+  for (const [index, field, value] of [[1, "session", "different"], [2, "session", "one"], [3, "session", "one"], [1, "authorization", "foreign"], [2, "authorization", "foreign"], [3, "authorization", "same-key"]]) {
+    const changed = structuredClone(rows); changed[index][field] = value; assert.throws(() => assertSessionRelations(changed));
+  }
+  assert.throws(() => assertSessionRelations(rows.slice(1)));
+  assert.throws(() => assertSessionRelations([...rows, rows[0]]));
+});
+
+test("OpenCode Responses replay requires preserved ciphertext and canonical item metadata", () => {
+  const item = { type: "reasoning", encrypted_content: "synthetic-encrypted", summary: [] };
+  assertReasoningReplay([item]);
+  for (const bad of [[], [item, item], [{ ...item, encrypted_content: undefined }], [{ ...item, encrypted_content: "foreign" }], [{ ...item, id: "rs_synthetic" }], [{ ...item, summary: [{ type: "summary_text", text: "stale" }] }]]) assert.throws(() => assertReasoningReplay(bad));
 });

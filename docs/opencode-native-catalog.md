@@ -81,9 +81,14 @@ production discovery. No SDK manifest-route execution is claimed.
 
 The harness requires fragmented protocol events, actual tool/signed-thinking
 replay through the captured provider registry, selected Router/upstream keys,
-opaque session derivation, strict denial/accounting and original guard, reader,
+same-credential/same-conversation session continuity, changed-conversation and
+changed-credential separation, strict denial/accounting and original guard, reader,
 closed, release, source and handler retirement. Policy-fixed seven-micro charges
 are synthetic transport controls, not vendor tariffs or subscription entitlement.
+Responses replay preserves the actual ciphertext while checking SDK canonicalization
+(removal of reasoning item IDs and clear summaries); it does not require whole-item
+byte identity. Shared-credential requests retain distinct original request owners
+and match SQLite events to the request IDs returned by those original handlers.
 Post-content cancellation does not qualify physical pre-response propagation.
 
 Client hook composition is a separate acceptance boundary. At this pin the

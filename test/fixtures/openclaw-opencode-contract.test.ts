@@ -25,16 +25,16 @@ assert.ok(["opencode", "opencode-go"].includes(contract.provider));
 assert.ok(["chat", "responses", "messages"].includes(contract.protocol));
 assert.equal(contract.phase, contract.provider + ":" + contract.protocol);
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
-const key = (id: string) => "clawrouter-live-opencode_" + id + "-fixture-secret";
+const key = (id: string) => "clawrouter-live-opencode_" + (["replay", "session_conversation"].includes(id) ? "first" : id) + "-fixture-secret";
 const invocation = new AsyncLocalStorage<any>();
 const originalGuard = guardedTransport.fetchWithProviderHttpGuard;
 const originalCatalogGuard = catalogTransport.fetchWithSsrFGuard;
 const originalFailure = transportStream.failTransportStream;
-let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, bodySucceeded: boolean;
+let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createOpenCodeBindings>, bodySucceeded: boolean;
 
 // BEGIN OPENCODE CLAIM
 function claimOwned(url: any, init: any, kind: string) {
-  try { return bindings.claim(url, init, kind); }
+  try { const owner = bindings.claim(url, init, kind); if (owner !== invocation.getStore()) throw new Error("foreign OpenCode invocation"); return owner; }
   catch (error) { lifetime.errors.push(error); throw error; }
 }
 // END OPENCODE CLAIM
@@ -54,6 +54,7 @@ const it = Object.assign((name: string, body: () => unknown) => nativeIt(name, (
 });
 
 async function select(id: string) {
+  clearLiveCatalogCacheForTests();
   const row = contract.cases.find((row: any) => row.id === id); assert.ok(row);
   const provider = await registerSingleProviderPlugin(plugin); expect(provider.id).toBe("clawrouter");
   const config = { models: { providers: { clawrouter: { baseUrl: origin + "/v1", auth: "api-key" as const, apiKey: key(id), models: [] } } } };
@@ -73,6 +74,7 @@ async function select(id: string) {
 
 async function start(id: string, history?: AgentMessage[], signal?: AbortSignal) {
   const { provider, model, modelId, config, row } = await select(id);
+  const sessionId = id === "session_conversation" ? "raw-private-session-other" : "raw-private-session";
   const input: AgentMessage[] = history ?? [{ role: "user", content: [{ type: "text", text: "synthetic OpenCode " + id }], timestamp: 1 }];
   if (id === "prefill") input.push({ role: "assistant", content: [{ type: "text", text: "Synthetic prefill" }], api: model.api, provider: "clawrouter", model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 2 } as any);
   const messages = await withOpenClawTestState({ label: "opencode-replay" }, async state => {
@@ -80,11 +82,11 @@ async function start(id: string, history?: AgentMessage[], signal?: AbortSignal)
     const registry = createEmptyPluginRegistry(); registry.providers.push({ pluginId: "clawrouter", provider, source: "test" });
     return withPluginRuntimeGenerationRegistryScope(registry, async () => {
       await Promise.resolve();
-      return sanitizeSessionHistory({ provider: "clawrouter", modelId, modelApi: model.api, model, policy, config, env: {}, workspaceDir: state.workspaceDir, sessionId: "raw-private-session",
+      return sanitizeSessionHistory({ provider: "clawrouter", modelId, modelApi: model.api, model, policy, config, env: {}, workspaceDir: state.workspaceDir, sessionId,
         sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "clawrouter", modelApi: model.api, modelId })]), messages: input });
     });
   });
-  const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
+  const context: Context = { systemPrompt: "Synthetic instructions opencode_case=" + id + ";", messages: convertToLlm(messages),
     ...(row.hook === "simple" ? {} : { tools: [{ name: id.startsWith("dynamic") ? "web_search" : "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: id.startsWith("dynamic") ? { labels: { type: "object", patternProperties: { "^.*$": { type: "string" } } } } : {} } }] }) };
   const thinkingLevel = row.model.startsWith("deepseek-") ? "low" : row.model.startsWith("kimi-") ? "off" : "high";
   const wrap = row.hook === "simple" ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
@@ -93,14 +95,14 @@ async function start(id: string, history?: AgentMessage[], signal?: AbortSignal)
   expect(wrapped).toBeDefined();
   const owner = bindings.expect(id, "chat", origin + (row.unified ? contract.unifiedPath : contract.nativePath), "POST", key(id), signal);
   owner.callerObservation = {}; lifetime.signal(owner.callerObservation, signal);
-  return invocation.run(owner, () => wrapped!(model, context, { apiKey: key(id), maxTokens: 128, signal, sessionId: "raw-private-session", maxRetries: 0,
+  return invocation.run(owner, () => wrapped!(model, context, { apiKey: key(id), maxTokens: 128, signal, sessionId, maxRetries: 0,
     ...(row.hook === "simple" ? { reasoning: thinkingLevel } : { reasoningEffort: thinkingLevel === "off" ? undefined : thinkingLevel }),
   } as any));
 }
 
 describe(contract.phase + " registered catalog and stream ownership", { concurrent: false }, () => {
   beforeEach(() => {
-    clearLiveCatalogCacheForTests(); bodySucceeded = false; bindings = createRequestBindings();
+    clearLiveCatalogCacheForTests(); bodySucceeded = false; bindings = createOpenCodeBindings();
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore(), apiPrototype: APIError.prototype, isProxy: types.isProxy });
     vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (...args) {
       const options = args[0]; if (options.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalogGuard, this, args);
@@ -122,6 +124,9 @@ describe(contract.phase + " registered catalog and stream ownership", { concurre
       { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: first.timestamp + 1 },
       { role: "user", content: "synthetic follow-up", timestamp: first.timestamp + 2 }];
     const second = await (await start("replay", history)).result(); expect(second.stopReason, second.errorMessage).toBe("stop");
+    for (const id of ["session_conversation", "session_credential"]) {
+      const result = await (await start(id)).result(); expect(result.stopReason, result.errorMessage).toBe("stop");
+    }
     console.log("OPENCODE_REPLAY_RETIRED " + contract.phase);
   });
   if (contract.provider === "opencode" && contract.protocol === "responses") it("restores actual Console dynamic tools and replays their arguments", async () => {
