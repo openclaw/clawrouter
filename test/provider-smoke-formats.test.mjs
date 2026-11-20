@@ -25,7 +25,7 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", levanto: "decisions", "liquid-ai": "decisions", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", typesafe: "decisions", voyage: "embeddings", vydra: "job" };
+  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", levanto: "decisions", "liquid-ai": "decisions", parallel: "search", pixverse: "video", radius: "config", replicate: "prediction", runway: "text_task", tavily: "search", typesafe: "decisions", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);

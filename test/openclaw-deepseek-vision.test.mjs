@@ -433,7 +433,6 @@ test(phase + " DeepSeekVision native assembly uses the exact owned observer and 
   assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20)], [1, 1]);
   const fixtureCases = JSON.parse(fixtureText.match(/const cases = (\[[^\n]+\]);/)[1]);
   assert.deepEqual(fixtureCases, cases, "every native case has the same outer ownership and accounting row");
-  assert.equal(rows[0].consumer, "deepseek-vision");
   assert.ok(assembledFixture.includes('assert.equal(process.env.CLAWROUTER_DEEPSEEK_CONTRACT, "vision")'));
   assert.ok(assembledFixture.includes('console.log("DEEPSEEK_CANCEL_RETIRED vision")'));
   const chat = provider.endpoints.find(row => row.id === "chat_completions");

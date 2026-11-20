@@ -16,7 +16,7 @@ export async function prepareModelDiscoveryOwner(request: Request, env: Env, aut
   selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers): Promise<(signal: AbortSignal) => Promise<AccessPolicy>> {
   const { provider, endpoint } = selection, { grant, grantKey } = upstream;
   const requesty = endpoint.request_format === REQUESTY_MODELS_FORMAT;
-  if ((!requesty && endpoint.request_format !== "openai.models") || endpoint.response_format !== endpoint.request_format
+  if ((!requesty && !["openai.models", "radius.config"].includes(endpoint.request_format)) || endpoint.response_format !== endpoint.request_format
     || selection.capability !== "models.list" || selection.model !== null || selection.method !== "GET" || endpoint.method !== "GET"
     || endpoint.path_params.length || Object.keys(selection.pathParams).length || Object.keys(selection.body).length
     || endpoint.auth || endpoint.streaming || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle

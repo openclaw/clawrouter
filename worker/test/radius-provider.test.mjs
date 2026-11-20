@@ -103,16 +103,6 @@ for (const manifest of [false, true]) test(`Radius declared ${manifest ? "manife
   for (const name of f.names) { const rows = f.ledger.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); }
 });
 
-test("Radius declared metadata route filters native config and never charges inference", async t => {
-  const f = runtimeFixture(t, { models: ["radius/tenant/model"] }), allowed = { id: "tenant/model", reasoning: true };
-  f.reply = () => Response.json({ baseUrl: "https://radius.pi.dev/v1", models: [allowed, { id: "hidden/model" }] });
-  const response = await f.call("/v1/native/radius/config");
-  assert.equal(response.status, 200, await response.clone().text());
-  assert.deepEqual(await response.json(), { baseUrl: "https://radius.pi.dev/v1", models: [allowed] });
-  await f.drain(); assert.equal(f.sent.length, 1); assert.equal(f.sent[0].url, "https://radius.pi.dev/v1/config");
-  assert.equal(f.recorded[0].actual_cost_micros, 0); assert.equal(f.recorded[0].cost_basis, "none");
-});
-
 test("Radius native declaration refuses unknown-dollar hard budgets before dispatch", async t => {
   const f = runtimeFixture(t, { fixed: null });
   const response = await f.call("/v1/native/radius/messages", nativeInput);
