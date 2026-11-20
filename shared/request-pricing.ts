@@ -1,3 +1,5 @@
+export type { SuccessfulRequestPricing, OutcomeRequestPricing, ImageRequestPricing, DeepSeekSearchRequestPricing, RequestPricing } from "../packages/provider-plugin-contract/src/pricing.ts";
+
 /** Capability tariffs override the legacy policy-wide tariff, including zero. */
 export interface RequestPricingPolicy {
   requestCostMicros?: number | null;

@@ -1,4 +1,5 @@
 import type { FusionConfig } from "../shared/contracts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { DEFAULT_FUSION_CONFIG, FUSION_MODEL_ID, normalizeFusionConfig } from "./fusion";
 import { endpointForPath, modelRoute } from "./providers";
 import type { Env } from "./types";
@@ -25,7 +26,7 @@ export async function storeFusionConfig(env: Env, input: unknown): Promise<Fusio
 }
 
 export function assertFusionModels(config: FusionConfig): void {
-  for (const model of [...config.adviserModels, config.aggregatorModel]) {
+  for (const model of [...fusionAdviserModels(config), config.aggregatorModel]) {
     if (model === FUSION_MODEL_ID) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");
     const route = modelRoute(model, "llm.chat");
     if (!route) throw new HttpError(400, "fusion_model_not_found", `fusion model ${model} is not registered`);

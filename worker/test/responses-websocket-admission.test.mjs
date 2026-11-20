@@ -2,6 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { overrideHotCacheConfig, pendingBackgroundWork, setHotCacheClock } from "../hot-cache.ts";
 import { invalidateAdmissions } from "../admission-cache.ts";
@@ -437,6 +438,48 @@ test("retention-required WebSocket keeps reserve, retention, dispatch, send orde
   assert.deepEqual(order, ["reserve", "retention", "dispatch", "send"]);
 });
 
+for (const pinned of [false, true]) test(`accounting archive admission precedes ${pinned ? "pinned" : "unpinned"} reserve and send`, async t => {
+  const f = await websocketFixture(t, { budgets: 1, retain: true });
+  let reserves = 0, puts = 0;
+  const get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.BUDGET_LEDGER.get = name => ({ fetch(url, init) {
+    if (new URL(url).pathname === "/reserve") reserves++;
+    return get(name).fetch(url, init);
+  } });
+  f.env.CONTENT_ARCHIVE = { async put() { puts++; } };
+  if (pinned) assert.equal((await f.create()).type, "response.completed");
+  const before = { reserves, puts, frames: f.frames.length, events: f.events.length };
+  const denied = await f.create({ archive_extension: Array(32769).fill(0) });
+  assert.equal(denied.type, "error"); assert.equal(denied.error.code, "accounting_preflight_unavailable");
+  assert.deepEqual({ reserves, puts, frames: f.frames.length }, { reserves: before.reserves, puts: before.puts, frames: before.frames });
+  assert.equal(f.events.length, before.events + 1);
+  assert.equal(f.events.at(-1).actual_cost_micros, 0);
+  assert.equal(f.events.at(-1).reserved_cost_micros, 0);
+});
+
+async function syntheticIdentityJson(response) {
+  const body = response.body, decoder = new TextDecoder(), cleanup = [];
+  let reader, text = "", value, hasPrimary = false, primary;
+  try {
+    reader = body.getReader({ mode: "byob" });
+    for (;;) {
+      const next = await reader.read(new Uint8Array(16 * 1024));
+      if (next.value?.byteLength) text += decoder.decode(next.value, { stream: true });
+      if (next.done) break;
+    }
+    value = JSON.parse(text + decoder.decode());
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    if (hasPrimary) {
+      try { await (reader ? reader.cancel(primary) : body?.cancel(primary)); } catch (error) { cleanup.push(error); }
+    }
+    try { reader?.releaseLock(); } catch (error) { cleanup.push(error); }
+  }
+  if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, "synthetic identity reply cleanup failed");
+  if (hasPrimary) throw primary;
+  return value;
+}
+
 for (const budgetMode of ["soft", "reserve"]) test(`first-turn failover uses refreshed ${budgetMode} policy for reservation and dispatch`, async t => {
   const f = await websocketFixture(t, { budgets: 1, budgetMode: budgetMode === "soft" ? "reserve" : "soft" });
   const getGrant = f.env.GRANT_CREDENTIALS.get.bind(f.env.GRANT_CREDENTIALS);
@@ -444,20 +487,19 @@ for (const budgetMode of ["soft", "reserve"]) test(`first-turn failover uses ref
   f.env.GRANT_CREDENTIALS.get = name => ({ fetch: async (url, init) => {
     if (!failed && new URL(url).pathname === "/materialize") {
       failed = true;
-      return Response.json({ error: { code: "grant_credential_missing", message: "fixture failover" } }, { status: 503 });
+      return accessBytesResponse(JSON.stringify({ error: { code: "grant_credential_missing", message: "fixture failover" } }), "", { status: 503 });
     }
     return getGrant(name).fetch(url, init);
   } });
   const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
   let refreshed = false;
   f.env.ACCESS_CONTROL.get = name => ({ fetch: async (url, init) => {
-    const request = url instanceof Request ? url : new Request(url, init);
-    const response = await getAuthority(name).fetch(request);
-    if (new URL(request.url).pathname === "/admission/resolve" && failed) {
-      const body = await response.json();
+    const response = await getAuthority(name).fetch(url, init);
+    if (new URL(url instanceof Request ? url.url : url).pathname === "/admission/resolve" && failed) {
+      const body = await syntheticIdentityJson(response);
       body.policy.policy.budgetMode = budgetMode;
       refreshed = true;
-      return Response.json(body);
+      return accessBytesResponse(JSON.stringify(body), response.url, { status: response.status, headers: response.headers });
     }
     return response;
   } });

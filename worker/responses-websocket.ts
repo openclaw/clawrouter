@@ -1,16 +1,16 @@
 import { correlationMetadata } from "./correlation";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
-import { retainRequestContent, retentionRequired } from "./content-retention";
+import { emptyReservation, planBudgetReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
+import { prepareContentRetention, type PreparedContentRetention, retentionRequired } from "./content-retention";
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
-import { createProxyAccounting, estimateCost } from "./proxy-accounting";
+import { admitAccountingFacts, createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess, providerById } from "./providers";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
-import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
+import { prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
@@ -64,7 +64,9 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       headers.set("x-request-id", requestId);
       const operationRequest = new Request(request.url, { method: "POST", headers, signal });
       const accountingContext = { env, context, auth, selection, request: operationRequest, startedAtMs: Date.now() };
+      const failureAccounting = createProxyAccounting(accountingContext);
       let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+      let retention: PreparedContentRetention | null = null;
       let reservation = emptyReservation(), content: string | null = null;
       let continuation: HttpContinuation | undefined;
       let useSoft = softBudgetPolicy(auth.policy);
@@ -80,7 +82,11 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
           const connection = await assertProviderAccess(selection.provider, auth, env);
           signal.throwIfAborted();
-          return reserveBudget(env, auth, selection.capability, cost, connection, undefined, reserveOptions());
+          accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: pinned!.key });
+          const preparedPlan = planBudgetReservation(auth, selection.capability, cost, connection);
+          admitAccountingFacts(accounting.facts, preparedPlan);
+          retention = prepareContentRetention(env, auth, selection, accounting.requestId);
+          return reserveBudget(env, auth, selection.capability, cost, connection, undefined, { ...reserveOptions(), preparedPlan });
         }) : Promise.resolve(undefined);
         const [resolved, prepared, reserved] = await Promise.allSettled([resolve, preparing, reserving]);
         if (reserved.status === "fulfilled" && reserved.value) reservation = reserved.value;
@@ -97,21 +103,25 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         if (pinned && continuation?.pinned && (continuation.pinned.key !== pinned.key || "revision" in continuation.pinned && continuation.pinned.revision !== pinned.revision)) throw continuationRestart();
         if (upstream.continuation) continuation?.bind(upstream.continuation);
         cost ??= estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools);
-        accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: upstream.grantKey, grantLane: upstream.grantLane });
+        accounting ??= createProxyAccounting({ ...accountingContext, cost, grantKey: upstream.grantKey, grantLane: upstream.grantLane });
+        accounting.setGrant(upstream.grantKey, upstream.grantLane);
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         if (reserved.status === "rejected") throw reserved.reason;
+        const softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, upstream.connection, accounting.facts.event.id) : undefined;
+        const preparedPlan = !useSoft && !pinned ? planBudgetReservation(auth, selection.capability, cost, upstream.connection) : undefined;
+        admitAccountingFacts(accounting.facts, softPlan?.reservation ?? preparedPlan ?? reservation);
+        retention ??= prepareContentRetention(env, auth, selection, accounting.requestId);
         if (useSoft) {
           const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
           if (denial) throw denial;
           reservation = { reservations: [], reservedMicros: 0, charges: [] };
-        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection, undefined, reserveOptions());
-        try { content = await retainRequestContent(env, auth, selection, requestId); }
+        } else if (!pinned) reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection, undefined, { ...reserveOptions(), preparedPlan });
+        try { await retention?.write(); content = retention?.contentRef ?? null; }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
         await markBudgetDispatched(env, reservation);
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
-        const usageId = accounting.facts.event.id;
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
@@ -120,7 +130,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           beforeSend: useSoft ? () => {
             const denial = softBudgetPreflight(env, auth, selection.capability, upstream.connection);
             if (denial) throw denial;
-            const soft = softBudget(env, auth, selection.capability, upstream.connection, usageId);
+            const soft = startSoftBudget(env, softPlan!);
             Object.assign(reservation, soft.reservation);
             context.waitUntil(soft.check);
           } : undefined,
@@ -138,7 +148,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           statusCode: failure.status,
           status: failure.status === 402 || failure.status === 403 ? "denied" as const : failure.status < 500 ? "client_error" as const : "provider_error" as const,
         };
-        await requireAccounting((accounting ?? createProxyAccounting(accountingContext)).settle(outcome.statusCode, outcome.status, false, null, reservation, content));
+        await requireAccounting((accounting ?? failureAccounting).settle(outcome.statusCode, outcome.status, false, null, reservation, content));
         if (aborted) throw aborted;
         throw failure;
       }

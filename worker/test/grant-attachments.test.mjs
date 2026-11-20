@@ -4,6 +4,7 @@ import { PolicyBindingIndexObject } from "../authority.ts";
 import { GrantCredentialObject, materializeGrantCredentials, putGrantCredentials, reconcileGrantAttachment, revokeGrantCredentials } from "../grant-credentials.ts";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const key = "oauth/policy/account";
 const grant = (provider = "openai") => ({ provider, kind: "api_key", credential: "credential-fixture", enabled: true });
@@ -541,6 +542,7 @@ function fixture() {
   return attachGrantCredentialNamespace({ values, POLICY_KV: {
     async get(key, type) {
       const value = values.get(key) ?? null;
+      if (!Array.isArray(key) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
       return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : structuredClone(value);
     },
     async put(key, value) { values.set(key, JSON.parse(value)); },

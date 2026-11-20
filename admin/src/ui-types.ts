@@ -34,7 +34,7 @@ export type {
   UsageSummary,
 } from "../../shared/contracts";
 
-export type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage" | "subscriptions";
+export type View = "my-usage" | "home" | "catalog" | "playground" | "policies" | "users" | "usage" | "subscriptions";
 export type Theme = "light" | "dark";
 export type RefreshOptions = { background?: boolean };
 export type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;

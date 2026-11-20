@@ -6,11 +6,15 @@ import { mergePrincipalUsage, usageCutoffs } from "../usage-sharding.ts";
 
 // Pre-attribution schema and snapshot SQL from 2163d3f, retained as an independent
 // correctness/performance reference. Fixtures contain synthetic metadata only.
-export function usageFixture() {
-  const db = new DatabaseSync(":memory:");
+export function usageFixture(path = ":memory:", attributed = false) {
+  const db = new DatabaseSync(path);
   db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
   db.exec("CREATE INDEX usage_events_occurred_at ON usage_events (occurred_at_ms DESC); CREATE INDEX usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
-  const insert = db.prepare("INSERT INTO usage_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  if (attributed) {
+    for (const column of ["principal_id", "principal_key", "credential_id", "cost_basis"]) db.exec(`ALTER TABLE usage_events ADD COLUMN ${column} TEXT`);
+    db.exec("ALTER TABLE usage_events ADD COLUMN principal_nontext INTEGER NOT NULL DEFAULT 0");
+  }
+  const insert = db.prepare(`INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json${attributed ? ", principal_id, principal_key, credential_id, cost_basis, principal_nontext" : ""}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${attributed ? ", ?, ?, ?, ?, ?" : ""})`);
   const queries = [];
   let alarm = null;
   const { sql, transactionSync } = sqliteStorage(db);
@@ -23,7 +27,11 @@ export function usageFixture() {
   } };
   return {
     db, queries, state,
-    insert(event) { insert.run(event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code, event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event)); },
+    insert(event) {
+      const principal = typeof event.principal_id === "string" ? event.principal_id : null;
+      insert.run(event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code, event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event),
+        ...(attributed ? [principal, principal === null ? null : normalizeEmail(principal), typeof event.credential_id === "string" ? event.credential_id : null, typeof event.cost_basis === "string" ? event.cost_basis : null, event.principal_id != null && principal === null ? 1 : 0] : []));
+    },
     open: () => new UsageLedgerObject(state),
     alarm: () => alarm,
   };

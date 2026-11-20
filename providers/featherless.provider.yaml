@@ -1,0 +1,78 @@
+# Hosted Chat API; frozen native card and boundaries: docs/featherless-native-chat.md.
+# Endpoint/model source checked 2026-11-03: https://featherless.ai/docs/completions
+schema: clawrouter.service-provider.v1
+id: featherless
+displayName: Featherless
+status: experimental
+class: openai_compatible
+service:
+  platform: featherless
+  kind: model_provider
+  upstreamService: featherless
+  configKeys: [FEATHERLESS_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.featherless.ai/v1
+routing:
+  nativePrefixes: [clawrouter-featherless, featherless]
+  modelPrefixes: [featherless/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: models.list
+    endpoint: catalog
+    methods: [GET]
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  catalog:
+    method: GET
+    path: /models
+    nativeProxy: false
+    requestFormat: featherless.catalog
+    responseFormat: featherless.catalog
+    headers:
+      accept: application/json
+    timeoutMs: 10000
+models:
+  entries:
+    - id: featherless/GalrionSoftworks/Margnum-12B-v1
+      displayName: "Margnum 12B v1"
+      upstream: GalrionSoftworks/Margnum-12B-v1
+      capabilities: [llm.chat]
+    - id: featherless/Qwen/Qwen3-32B
+      displayName: "Qwen3 32B"
+      upstream: Qwen/Qwen3-32B
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://featherless.ai/docs/tool-calling, https://api.featherless.ai/v1/models/Qwen/Qwen3-32B]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://api.featherless.ai/v1/models/Qwen/Qwen3-32B, https://featherless.ai/docs/models-model-compatibility]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 32768
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

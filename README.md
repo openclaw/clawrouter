@@ -99,3 +99,11 @@ MIT. See [LICENSE](LICENSE).
 
 OpenAI [image generation](docs/openai-images.md) is available through the standard
 Images API, native and manifest proxy routes with modality-specific accounting.
+
+### Deploy production
+
+Start **Deploy ClawRouter** in GitHub Actions on `main`. No release inputs or
+preparation scripts. The same action handles ordinary Worker, native payload and
+compatible contract changes, including isolated qualification and recovery.
+See [deployment compatibility](docs/deployment-compatibility.md) for developer
+requirements, standing credentials and failure recovery.

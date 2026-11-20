@@ -1,0 +1,58 @@
+schema: clawrouter.service-provider.v1
+id: pixverse
+displayName: PixVerse
+status: experimental
+class: rest_json
+service:
+  platform: pixverse
+  kind: tool_provider
+  upstreamService: pixverse
+  configKeys: [PIXVERSE_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: API-KEY
+      secretKind: api_key
+baseUrls:
+  default: https://app-api.pixverse.ai
+  cn: https://app-api.pixverseai.cn
+routing:
+  nativePrefixes: [clawrouter-pixverse, pixverse]
+  modelPrefixes: [pixverse/]
+adapter:
+  request: pixverse
+  response: pixverse
+  error: pixverse_error
+capabilities:
+  - id: media.predict
+    endpoint: text_video
+    methods: [POST]
+endpoints:
+  text_video:
+    path: /openapi/v2/video/text/generate
+    requestFormat: pixverse.text_video
+    responseFormat: pixverse.video
+    lifecycle:
+      protocol: pixverse.video
+      retrieve: video
+    timeoutMs: 120000
+  video:
+    method: GET
+    path: /openapi/v2/video/result/${video_id}
+    pathParams: [video_id]
+    requestFormat: pixverse.video_get
+    responseFormat: pixverse.video
+    timeoutMs: 120000
+models:
+  entries:
+    - id: pixverse/v6
+      displayName: "PixVerse v6"
+      upstream: v6
+      capabilities: [media.predict]
+    - id: pixverse/c1
+      displayName: "PixVerse C1"
+      upstream: c1
+      capabilities: [media.predict]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, model, endpoint, key, service, subject]

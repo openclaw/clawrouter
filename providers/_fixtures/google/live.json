@@ -1,0 +1,32 @@
+{
+  "sourceRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "sourcePaths": ["extensions/google/realtime-voice-provider.ts", "extensions/google/realtime-voice-model-contract.ts"],
+  "protocol": "google.live",
+  "path": "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+  "setup": {
+    "setup": {
+      "model": "models/gemini-3.8-live",
+      "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}},
+      "systemInstruction": {"parts": [{"text": "Answer briefly."}]},
+      "inputAudioTranscription": {},
+      "outputAudioTranscription": {},
+      "sessionResumption": {},
+      "contextWindowCompression": {"slidingWindow": {}},
+      "tools": [{"functionDeclarations": [{"name": "openclaw_agent_consult", "description": "Consult the configured agent.", "parameters": {"type": "OBJECT", "properties": {"question": {"type": "STRING"}}}, "behavior": "NON_BLOCKING"}]}]
+    }
+  },
+  "ready": {"setupComplete": {}},
+  "input": {"realtimeInput": {"audio": {"mimeType": "audio/pcm;rate=16000", "data": "AAAAAA=="}}},
+  "output": {"serverContent": {"modelTurn": {"role": "model", "parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": "AAECAw=="}}]}, "inputTranscription": {"text": "Hello."}, "outputTranscription": {"text": "Hello back.", "finished": true}}},
+  "call": {"toolCall": {"functionCalls": [{"id": "fixture-call-1", "name": "openclaw_agent_consult", "args": {"question": "What time is it?"}}]}},
+  "interim": {"toolResponse": {"functionResponses": [{"id": "fixture-call-1", "name": "openclaw_agent_consult", "response": {"output": "Checking."}, "willContinue": true, "scheduling": "WHEN_IDLE"}]}},
+  "result": {"toolResponse": {"functionResponses": [{"id": "fixture-call-1", "name": "openclaw_agent_consult", "response": {"output": "Use the configured clock."}, "scheduling": "WHEN_IDLE"}]}},
+  "cancellation": {"toolCallCancellation": {"ids": ["fixture-call-1"]}},
+  "interrupted": {"serverContent": {"interrupted": true}},
+  "turnComplete": {"serverContent": {"turnComplete": true, "interactionStatus": "IDLE"}, "usageMetadata": {"promptTokenCount": 12, "responseTokenCount": 4, "totalTokenCount": 16, "promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 8}, {"modality": "TEXT", "tokenCount": 4}], "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 4}]}},
+  "goAway": {"goAway": {"timeLeft": "10s"}},
+  "resumable": {"sessionResumptionUpdate": {"resumable": true, "newHandle": "synthetic-original-session-handle"}},
+  "resumptionLost": {"sessionResumptionUpdate": {"resumable": false, "newHandle": ""}},
+  "billing": {"upstreamCost": "unknown", "usageAggregation": "unqualified", "interruptionProvesRefund": false, "socketCloseProvesFree": false, "replayUncertainInput": false},
+  "qualification": {"audio": "synthetic aligned PCM bytes, not playback evidence", "browserEphemeralTokenBridge": "not activated", "runtimeIntegration": "required"}
+}

@@ -397,7 +397,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
   const ledgerBefore = await until(budget, value => settled(value["tenant:fixture"], 2) && settled(value["provider:openai"], 3));
   const usageBefore = await until(usageLedgers, value => value[shards[0]].usage_events?.length === 2 && value[shards[1]].usage_events?.length === 1);
   const settings = await f.dump("policy-bindings"), grantsBefore = await grantRecords();
-  const headOnlyAuthority = ["upstream_grant_pool_identity", "upstream_grant_pool_pending", "upstream_grant_pool_versions", "upstream_grant_projections"];
+  const headOnlyAuthority = ["upstream_grant_pool_identity", "upstream_grant_pool_pending", "upstream_grant_pool_versions", "upstream_grant_projections", "usage_inventory_delete_v1", "usage_inventory_insert_v1", "usage_inventory_state", "usage_inventory_update_v1", "usage_retired_time", "usage_shard_retired"];
   assert.deepEqual(settings.schema.map(row => row.name).filter(name => headOnlyAuthority.includes(name)), [], "release storage predates these");
   assert.deepEqual(settings.tables.upstream_grant_pool_members.map(row => Object.keys(JSON.parse(row))), [["scope", "scope_id", "provider_id", "token_ref"], ["scope", "scope_id", "provider_id", "token_ref"]]);
   assert.deepEqual(Object.values(grantsBefore).map(record => [record.accountId, record.lineage]), [["account-policy", undefined], ["account-pool", undefined]], "release grant records predate lineage");
@@ -410,6 +410,7 @@ test("real workerd v0.4.0 release storage opens and behaves unchanged on head", 
   for (const [table, rows] of Object.entries(settings.tables)) assert.deepEqual(opened.tables[table], table === "upstream_grant_pool_members" ? withColumns(rows, { status: "legacy", pending_previous_status: null }) : rows, table);
   assert.deepEqual(opened.schema.map(row => row.name).sort(), [...settings.schema.map(row => row.name), ...headOnlyAuthority].sort());
   assert.deepEqual([opened.tables.upstream_grant_pool_versions, opened.tables.upstream_grant_projections], [[], []], "head-only authority tables start empty");
+  assert.deepEqual(opened.tables.usage_shard_retired, [], "opening does not invent former usage locations");
   assert.deepEqual(await grantRecords(), grantsBefore, "opening never rewrites a release grant record");
   const openedLedgers = await budget();
   for (const name of legs) {

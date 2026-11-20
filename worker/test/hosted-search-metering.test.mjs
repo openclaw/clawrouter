@@ -2,11 +2,9 @@ import { perRequestAuthority } from './typescript-setup.mjs';
 perRequestAuthority();
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
+import { compileProviderSnapshot } from '../../scripts/compile-providers.mjs';
 import { proxyKey, sse, usageEnv } from './usage-budget-fixture.mjs';
 import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
 import { continuationAuthority } from './continuation-authority.mjs';
@@ -22,14 +20,10 @@ const done = item => ({ type: 'response.output_item.done', output_index: 0, item
 const streamed = output => sse({ type: 'response.created', response: { id: 'resp_fixture', status: 'in_progress' } }, added(search('ws_fixture', null, 'in_progress')), done(output[0]), done(output[0]), frame(terminal(output)), '[DONE]');
 
 function setup(t, { mode = 'soft', limit = 1_000_000, fixedCost = null, tool = 'web_search', model = 'openai/gpt-4.1-mini' } = {}) {
-  const env = usageEnv([], { limit, providerLimit: limit, fixedCost, retainContent: false });
+  const env = usageEnv([], { limit, providerLimit: limit, fixedCost, retainContent: false, budgetMode: mode });
   env.OPENAI_API_KEY = 'fixture-openai-key';
   const authority = env.ACCESS_CONTROL.get(), continuation = continuationAuthority(t, env);
-  env.ACCESS_CONTROL.get = name => name.startsWith('http-continuations:') ? continuation.get(name) : ({ fetch: async (...args) => {
-    const value = await (await authority.fetch(...args)).json();
-    if (value.policy) value.policy.policy.budgetMode = mode;
-    return Response.json(value);
-  } });
+  env.ACCESS_CONTROL.get = name => name.startsWith('http-continuations:') ? continuation.get(name) : ({ fetch: (...args) => authority.fetch(...args) });
   const ledger = sqlBudgetNamespace(t), calls = [], events = [], pending = [];
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => { calls.push({ path: new URL(url).pathname, name, body: init?.body && JSON.parse(init.body) }); return ledger.get(name).fetch(url, init); } }) };
   env.USAGE_QUEUE = { send: async event => events.push(event) };
@@ -360,10 +354,9 @@ test('upstream authorization rejection stays a rejection, not invented hosted sp
   assert.equal(f.events[0].hosted_tool_calls, undefined); assert.equal(await spent(f), 0);
 });
 
-test('compiler preserves the versioned price card and rejects malformed or incompatible cards', t => {
-  const root = mkdtempSync(join(tmpdir(), 'clawrouter-search-prices-')); t.after(() => rmSync(root, { recursive: true, force: true }));
-  const manifest = parse(readFileSync('providers/openai.provider.yaml', 'utf8')), path = join(root, 'provider.json');
-  const compile = value => { writeFileSync(path, JSON.stringify(value)); return JSON.parse(execFileSync(process.execPath, ['scripts/compile-providers.mjs', path], { encoding: 'utf8', stdio: 'pipe' })); };
+test('compiler preserves the versioned price card and rejects malformed or incompatible cards', () => {
+  const manifest = parse(readFileSync('providers/openai.provider.yaml', 'utf8'));
+  const compile = value => compileProviderSnapshot([structuredClone(value)]);
   const price = manifest.endpoints.responses.toolPricing;
   assert.equal(price.version, 'openai-web-search-2026-10-20');
   assert.deepEqual(compile(manifest).providers[0].endpoints.find(e => e.id === 'responses').toolPricing, price);

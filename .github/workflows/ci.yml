@@ -17,6 +17,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  edge-offline-packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      # ONLINE setup happens inside the pinned Bookworm image. No host
+      # node_modules, Git config, home, proxy or Docker config enters it.
+      # This is a separate private PID/NET/MNT container route, not a claim
+      # that the earlier unprivileged USER namespace attempt qualified.
+      # No secrets, OIDC, environments, cache, artifacts or SDK execution.
+      - name: Isolated offline packaging (no SDK or cloud execution)
+        run: node scripts/edge-proof.mjs container-ci
+
   native-codex:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -32,6 +52,8 @@ jobs:
             sha256: "aff46539a83aff86e3c62c592bce2c50d95391f9df289afaf03a50c01d14533d"
           - version: "0.164.0"
             sha256: "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4"
+          - version: "0.169.0"
+            sha256: "9af4d751fce183faedea629437d5252dbf458eeb04130cf4f97be844621ea985"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -63,11 +85,27 @@ jobs:
           fi
           echo "CLAWROUTER_CODEX_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
           echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-$producer_version/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          if [ "$CODEX_VERSION" = 0.169.0 ]; then
+            echo "CLAWROUTER_CODEX_REMOTE_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          fi
           if [ "$CODEX_VERSION" = 0.155.0 ]; then
             echo "CLAWROUTER_DESKTOP_FIXTURE_OUTPUT=$RUNNER_TEMP/codex-desktop-fixture" >> "$GITHUB_ENV"
           fi
+      - name: Fetch released Codex connection writer for upgrade proof
+        if: matrix.version == '0.169.0'
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 608050e4e4dae5ebc93919e0759ffb4bf0664528
       - name: Native client through real router and ledgers
-        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs test/codex-remote-upgrade.test.mjs
+      - name: Synthetic native rehearsal saved-client contract
+        if: matrix.version == '0.164.0'
+        run: node --test test/native-rehearsal.test.mjs
+      - name: Exact unattended release entrypoint (loopback, synthetic only)
+        if: matrix.version == '0.164.0'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 741e18c16200c57c009ac402f58053a77294f5b9
+          pnpm --dir admin install --frozen-lockfile
+          pnpm --dir admin build
+          node scripts/proof-deploy-release.mjs "$RUNNER_TEMP/deploy-release-proof"
       - name: Native steering and completion-race regression
         if: matrix.version == '0.164.0'
         run: node --test test/codex-interrupt.test.mjs
@@ -158,11 +196,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin build
       - run: pnpm --dir admin exec playwright install --only-shell chromium
-      - name: Check Fusion mobile screenshot and accessibility
+      - name: Check Fusion screenshots and accessibility
         id: browser
         run: >-
           pnpm --dir admin exec playwright test dashboard.spec.ts
-          --project mobile --workers 1 --retries 0
+          --workers 1 --retries 0
           --grep 'Fusion preflight is WCAG AA clean and visually stable$'
       - name: Upload Fusion screenshot differences
         if: failure() && steps.browser.outcome == 'failure' && hashFiles('admin/test-results/**/fusion-readiness-actual.png') != ''
@@ -181,12 +219,33 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch exact launch native source for synthetic compatibility
+        # Preserve the full DAG used by deployment compatibility below.
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 434a526a37fff4d91e04cc1caa5cd6aa2eff2d82
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:scripts
+      - name: Validate deployment compatibility in the feature PR
+        env:
+          DEPLOYMENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/check-deployment-compatibility.mjs
+      - name: Script tests with bounded failure identities
+        run: node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs
+      - name: Validate native preflight workflow expression contexts
+        run: |
+          set -euo pipefail
+          validator="$(mktemp -d "$RUNNER_TEMP/preflight-actionlint.XXXXXX")"
+          trap 'rm -rf "$validator"' EXIT
+          curl --fail --location --retry 2 --output "$validator/actionlint.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          printf '%s  %s\n' 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 "$validator/actionlint.tar.gz" | sha256sum --check --status
+          tar -xzf "$validator/actionlint.tar.gz" -C "$validator" actionlint
+          ACTIONLINT_BIN="$validator/actionlint" node --test test/preflight-workflow.validation.mjs
 
   worker-package:
     runs-on: ubuntu-latest
@@ -212,7 +271,40 @@ jobs:
           path: ${{ runner.temp }}/provider-snapshot.json
           if-no-files-found: error
           retention-days: 3
-      - run: pnpm worker:check
+      - name: Check committed provider snapshot
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { isDeepStrictEqual } from "node:util";
+          let failure;
+          try {
+            const compiled = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/provider-snapshot.json`, "utf8"));
+            const committed = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
+            if (!isDeepStrictEqual(compiled, committed)) failure = "stale content";
+          } catch {
+            failure = "missing or invalid JSON";
+          }
+          if (failure) {
+            console.error(`::error file=worker/generated/provider-snapshot.json::Provider snapshot check failed (${failure}). Run pnpm provider:compile -- --output worker/generated/provider-snapshot.json and commit the result. The compiled snapshot is available in this run's provider-snapshot artifact.`);
+            process.exitCode = 1;
+          }
+          NODE
+      # Native personal-usage upgrade/rollback tests run the released baseline
+      # and fail (not skip) in CI when it is missing.
+      - name: Fetch personal-usage baseline
+        run: |
+          baseline="$(sed -n 's/^export const personalUsageBaseline = "\([0-9a-f]\{40\}\)";$/\1/p' test/helpers/personal-usage-upgrade.mjs)"
+          test -n "$baseline"
+          git fetch --no-tags --depth=1 origin "$baseline"
+          git cat-file -e "$baseline^{commit}"
+      - name: Fetch pinned inventory upgrade baseline
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin df8c3800fbb413fbe7db6833387a1e885d1379cb
+          git cat-file -e 'df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}'
+      - name: Worker typecheck
+        run: pnpm exec tsc -p worker/tsconfig.json --noEmit
+      - name: Worker tests with bounded failure identities
+        run: node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout worker/test/*.test.mjs
       - run: pnpm worker:e2e
       - run: pnpm provider:smoke-plan
       - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config
