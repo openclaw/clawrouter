@@ -77,7 +77,7 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
     assert.strictEqual(getPluginRuntimeGenerationRegistry(), previous);
     succeeded = true;
   }, [() => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => state?.cleanup()]);
-  } finally { if (id === "cancel") console.log("PERPLEXITY_SEARCH_CANCEL_OBSERVATION " + JSON.stringify({ v: 1, summary: lifetime.summary(), join: lifetime.joinDiagnostic() })); }
+  } finally { if (id === "cancel") console.error("PERPLEXITY_SEARCH_CANCEL_OBSERVATION " + JSON.stringify({ v: 1, summary: lifetime.summary(), join: lifetime.joinDiagnostic() })); }
   if (id === "cancel") console.log("PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind);
 }
 
