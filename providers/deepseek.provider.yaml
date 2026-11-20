@@ -40,6 +40,7 @@ endpoints:
 models:
   entries:
     - id: deepseek/deepseek-v4-pro
+      displayName: "DeepSeek V4 Pro"
       upstream: deepseek-v4-pro
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -73,6 +74,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -106,6 +108,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-flash
+      displayName: "DeepSeek Flash"
       upstream: deepseek-flash
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -139,6 +142,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash-vision-exp
+      displayName: "DeepSeek V4 Flash Vision Exp"
       upstream: deepseek-v4-flash-vision-exp
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]

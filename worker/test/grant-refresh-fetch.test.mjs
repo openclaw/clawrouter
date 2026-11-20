@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
+import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import { createServer } from "node:http";
 import test from "node:test";
 import { refreshStoredGrant } from "../providers.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 function grantEnv(key, grant, stored = {}) {
   return attachGrantCredentialNamespace({
     stored,
     POLICY_KV: {
-      async get(requested) {
-        return requested === key ? structuredClone(stored[requested] ?? grant) : null;
+      async get(requested, type) {
+        const value = requested === key ? stored[requested] ?? grant : null;
+        if (!Array.isArray(requested) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
+        return value === null ? null : structuredClone(value);
       },
       async put(requested, value) {
         stored[requested] = JSON.parse(value);
@@ -40,12 +44,7 @@ test("grant refresh aborts a hung tokenUrl and maps it to grant_refresh_failed",
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address();
   const tokenUrl = `http://127.0.0.1:${port}/oauth/token`;
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  const timeouts = [];
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(40);
-  });
+  const timeouts = captureTimeouts(context, 40);
 
   const key = "oauth/policy/openai";
   const env = grantEnv(key, expiredGrant(tokenUrl));
@@ -76,12 +75,7 @@ test("grant refresh timeout uses the existing grant_refresh_failed path", async 
 });
 
 test("grant refresh attaches a 30s AbortSignal and stores a successful token response", async (context) => {
-  const timeouts = [];
-  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-  context.mock.method(AbortSignal, "timeout", (ms) => {
-    timeouts.push(ms);
-    return nativeTimeout(ms);
-  });
+  const timeouts = captureTimeouts(context);
   let tokenInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), "https://token.example/oauth/token");

@@ -1,9 +1,7 @@
 import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { legacyCredential, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
+import { readFileSync } from "node:fs";
+import { legacyCredential, putLocalKeyRecords, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
 import { parseArgs } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 import { deploymentTarget } from "./deployment-profile.mjs";
@@ -113,31 +111,7 @@ function putLocalBootstrapRecords(request) {
     [`policies/${kid}`, writeKeyJson(policy, "policy.json")],
   ];
 
-  try {
-    for (const [key, path] of records) {
-      run("pnpm", [
-        "exec",
-        "wrangler",
-        "kv",
-        "key",
-        "put",
-        key,
-        "--path",
-        path,
-        "--binding",
-        binding,
-        "--config",
-        config,
-        "--preview",
-        "false",
-      ]);
-    }
-  } finally {
-    for (const [, path] of records) {
-      rmSync(path, { force: true });
-      rmSync(join(path, ".."), { force: true, recursive: true });
-    }
-  }
+  putLocalKeyRecords(records, { binding, config, stdio: "inherit" });
 }
 
 function required(value, name) {
@@ -174,13 +148,6 @@ function parseNonNegativeInteger(value, name) {
     throw new Error(`${name} must be less than or equal to Number.MAX_SAFE_INTEGER`);
   }
   return parsed;
-}
-
-function run(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
-  if (result.status !== 0) {
-    throw new Error(`${command} failed`);
-  }
 }
 
 function policyChanged(existing, next) {

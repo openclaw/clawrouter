@@ -66,6 +66,15 @@ tools are assessed again at dispatch. A form without a selected model remains
 request-dependent when an eligible declared model is available; it does not
 make a model-less or opaque request priced.
 
+When a provider declares products, an eligible offer can also include
+`productOffers: [{ id, productId }]`. These references identify compatible
+declarations for that exact operation and the selected policy's active grant
+candidates. They do not select an account or prove a subscription entitlement.
+The provider's optional `products` array supplies each referenced product's
+`id`, `displayName`, `commercialModel`, and `authenticationMethod`. Missing
+fields mean no product annotation, not that the existing offer is unsupported.
+Blocked offers do not carry these references; dispatch remains authoritative.
+
 The projection observes the actual principal's policy ledger and the provider
 ledger without reserving budget, selecting credentials, refreshing accounts, or
 probing upstream. Observations are advisory; HTTP dispatch and every WebSocket
@@ -561,7 +570,9 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | --- | --- | --- |
 | `GET` | `/v1/session` | Verified Access identity, entitlements, and readiness |
 | `GET` | `/v1/session/avatar` | Proxied user avatar |
-| `GET` | `/v1/session/usage` | Session quota and usage summary |
+| `GET` | `/v1/session/usage` | Session quota and legacy shared-policy usage summary; `?budgets_only=true` skips usage ledger reads |
+| `GET` | `/v1/session/usage/report` | Bounded personal-only tokens, price coverage, daily trend and model/provider/key groups |
+| `GET` | `/v1/session/usage/events` | Metadata-only personal event pages with a query-bound cursor |
 | `GET` | `/v1/entitlements` | Compatibility entitlement response |
 | `GET` | `/v1/session/credentials` | Credentials owned by the signed-in user |
 | `POST` | `/v1/session/credentials` | Create a caller-owned credential; reject an existing ID |
@@ -688,16 +699,21 @@ enabled and credential status, plan, account (`email`, `rateLimitTier`,
 `subscriptionStatus`), quota `windows` (`id`, `window`, `models`,
 `remainingPercent`, `resetAt`, `observedAt`), extra usage (`enabled`,
 `usedCredits`, `monthlyLimit`, `currency`, `spendLimitReached`), per-model
-`eligibility`, `lastSelectedAt`, and `selectedCount`. Unknown facts are null.
+`eligibility`, additive per-model `exclusionReasons`, `lastSelectedAt`, and
+`selectedCount`. Unknown facts are null.
 Account emails are intentionally visible to holders when the administrator opts
 in. No access/refresh tokens, credential fields, raw provider payloads, or full
 storage keys are returned.
 
-Inventory includes the selected policy's grants and shared tenant grants,
+Inventory includes the selected policy's grants, shared tenant grants and explicit
+`grantRouting.sharedGrants` subscription owners authorized by an administrator,
 filtered by its provider and eligible-grant restrictions. It is bounded to
-1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit).
+1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit), plus at
+most 32 explicitly shared owners. Foreign-scope owners use stable opaque
+`shared-<digest>` keys in both inventory and usage, so equal token references do
+not collide and source policy names remain private.
 `usage` contains `days: 7` and the policy's aggregate `lanes` and `grants` from
-the existing grant usage ledger, with token references replacing storage keys;
+the existing grant usage ledger, with token references or opaque shared IDs replacing storage keys;
 it contains no individual request events. These are policy-wide totals, including
 other credentials on the same policy, and retain historical attribution.
 
@@ -710,6 +726,13 @@ usable capacity); disabled grants are never eligible, and missing or invalid
 credentials use `reauth_required`. Eligibility reports quota/credential availability, not priority
 selection, transport readiness or a budget reservation. Observations and usage
 are advisory snapshots, not an atomic upstream quota guarantee.
+`exclusionReasons` retains that eligibility enum while distinguishing
+`provider_mismatch`, `policy_disabled`, `grant_disabled`, `reauth_required`,
+`credential_unavailable`, `cooldown`, `shared_quota_exhausted`,
+`model_quota_exhausted`, `shared_quota_reserve`, `model_quota_reserve`,
+`stale_quota`, and `quota_unknown`; eligible entries have a null reason.
+An eligible unknown/stale observation under `staleState: "allow"` is not
+confirmed headroom. A model-only exhausted window does not exhaust other models.
 
 ### Subscription routing and quota
 
@@ -726,7 +749,7 @@ Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
 occurs in the requested upstream model ID; an absent scope applies to all
 models. Exhausted unscoped windows cool down the whole grant. Scoped exhaustion
 excludes only matching models. `most_remaining` and `threshold` compare only
-applicable live windows. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
+applicable live windows. `threshold` keeps the last reading of each open window regardless of `staleAfterSeconds`; a grant with no open-window reading is an unmeasured replacement of last resort. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
 against extra-usage billing but cannot prevent one in-flight request crossing the
 boundary. It does not turn polling into an atomic upstream quota reservation.
 
@@ -739,14 +762,24 @@ payloads are excluded. A probe HTTP 429 keeps the last reading and honors
 `Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
 
 When a configured pool has no eligible grant, HTTP requests fail with
-`upstream_grant_pool_unavailable`. If every grant that could serve the operation
-is excluded only by an active rate-limit or quota cooldown or by quota windows
-with published resets, the status is HTTP 429 with `Retry-After` set to the
-whole seconds until the earliest such grant becomes eligible. Otherwise (for
+`upstream_grant_pool_unavailable`. If at least one otherwise usable grant has
+a possible recovery from a rate-limit cooldown or published quota reset, the
+status is HTTP 429 with `Retry-After` set to the whole seconds until the earliest
+such recovery. If no candidate has a known recovery (for
 example eligibility restrictions, unsupported transports, exhausted windows
 without a reset, stale observations under `staleState: "deny"`, or grants whose
 credentials failed with HTTP 401/403) it remains HTTP 503 without
-`Retry-After`. The JSON error body is the same in both cases.
+`Retry-After`. The error envelope and code are unchanged. The message names
+the requested upstream model (bounded to 256 characters) only when it matches
+a literal catalog model; resolved operator templates and uncatalogued values
+are omitted. It labels any deadline as the **earliest possible retry**, with eligibility
+rechecked on retry. It is not a confirmed upstream reset.
+For `poolStatus: "visible"`, an already-authorized admission snapshot can also
+supply observed scoped exclusion counts. These count one observed primary
+quota/health exclusion per configured, policy-eligible candidate, not every
+possible failure or total account inventory. Hidden pools and paths without an
+existing snapshot omit counts; no extra inventory read or auth/private response
+fields are introduced. Keys, account IDs and shared-owner identities are absent.
 
 `Retry-After` is ClawRouter's own re-admission time, not a provider promise.
 A provider 429 without timing cools a grant for ClawRouter's 60-second
@@ -915,7 +948,7 @@ only routing metadata and credential-presence flags.
 
 Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, consume-until-threshold, or weighted random choice. Threshold routing owns pool affinity; other modes may use identity or session stickiness.
 
-Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
+Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger same-provider alternates when policy allows failover, within one budget of four distinct eligible grants shared with credential preparation and Fusion reservation. Anthropic's explicit credit-balance HTTP 400 also excludes that grant for five minutes and can trigger the same bounded pre-delivery failover. Healthy grants retain stickiness; unrelated 400s and errors after streaming begins do not trigger credit failover. Exclusions use the full scoped grant key, including explicitly shared owners. If no further attempt is available, the last upstream rejection is returned; subsequent requests with no eligible grant return the pool-unavailable error with the earliest `Retry-After`.
 
 Unified, native, and manifest HTTP proxy routes refuse upstream 3xx redirects on both initial and alternate-grant dispatch. They cancel the redirect body and return a nonbillable `502 provider_unavailable` without `Location`; configure the final API endpoint rather than a redirect-dependent URL.
 

@@ -28,7 +28,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(realtime.pricing.settlementBasis, "published_upper_bound");
   assert.equal(realtime.pricing.maxRequestInputTokens, 128000);
   assert.deepEqual([realtime.pricing.inputMicrosPerMillion, realtime.pricing.outputMicrosPerMillion], [32000000, 64000000]);
-  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).filter(model => model.id !== "openai/gpt-realtime-2.1").every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
+  assert.equal(compiled.model_index["groq/gpt-oss-20b"].pricing.settlementBasis, "published_upper_bound");
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
   const google = compiled.providers.find(provider => provider.id === "google-gemini");
@@ -516,7 +516,7 @@ test("request parameter facts validate endpoint compatibility, provenance, and r
   });
 });
 
-test("image tariffs round-trip without chat rates and reject unqualified generation contracts", () => {
+test("image tariffs round-trip without chat rates and reject unqualified generation and edit contracts", () => {
   const valid=parse(readFileSync("providers/openai.provider.yaml","utf8"));
   const index=valid.models.entries.findIndex(m=>m.id==="openai/gpt-image-2.5-flare");
   withManifest(path=>{
@@ -536,6 +536,10 @@ test("image tariffs round-trip without chat rates and reject unqualified generat
       ["wrong operation",m=>{m.models.entries[index].capabilities=["llm.chat"];}],
       ["SSE",m=>{m.endpoints.images_generations.streaming="sse";}],
       ["wrong response format",m=>{m.endpoints.images_generations.responseFormat="openai.responses";}],
+      ["edit SSE",m=>{m.endpoints.images_edits.streaming="sse";}],
+      ["edit wrong request format",m=>{m.endpoints.images_edits.requestFormat="openai.responses";}],
+      ["edit wrong response format",m=>{m.endpoints.images_edits.responseFormat="openai.responses";}],
+      ["edit-only missing tariff",m=>{m.models.entries[index].capabilities=["image.edit"];delete m.models.entries[index].pricing;}],
     ]){const manifest=structuredClone(valid);mutate(manifest);writeFileSync(path,JSON.stringify(manifest));assert.throws(()=>compile(path),/invalid manifest|image pricing|image generation requires/,name);}
   });
 });

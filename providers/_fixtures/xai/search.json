@@ -1,0 +1,43 @@
+{
+  "webRequest": {
+    "model": "grok-4.7",
+    "input": [{ "role": "user", "content": "Summarize the example project documentation." }],
+    "tools": [{ "type": "web_search" }],
+    "store": false,
+    "reasoning": { "effort": "low" }
+  },
+  "xRequest": {
+    "model": "grok-4.7",
+    "input": [{ "role": "user", "content": "Summarize posts from the example account." }],
+    "tools": [{ "type": "x_search", "allowed_x_handles": ["example"], "from_date": "2026-10-01", "to_date": "2026-11-01", "enable_image_understanding": true }],
+    "store": false,
+    "max_turns": 2
+  },
+  "completed": {
+    "id": "resp_synthetic_search",
+    "model": "grok-4.7",
+    "status": "completed",
+    "error": null,
+    "incomplete_details": null,
+    "output": [
+      { "type": "web_search_call", "status": "completed", "id": "search_synthetic" },
+      { "type": "message", "role": "assistant", "content": [
+        { "type": "output_text", "text": "Example ", "annotations": [] },
+        { "type": "output_text", "text": "answer.", "annotations": [{ "type": "url_citation", "url": "https://example.com/source", "title": "Synthetic source", "start_index": 0, "end_index": 7 }] }
+      ] }
+    ],
+    "usage": { "input_tokens": 120, "output_tokens": 40, "total_tokens": 160,
+      "server_side_tool_usage_details": { "web_search_calls": 1, "x_search_calls": 2, "x_posts_fetched": 44, "x_users_fetched": 3 }
+    }
+  },
+  "incomplete": {
+    "id": "resp_synthetic_partial", "model": "grok-4.7", "status": "incomplete",
+    "incomplete_details": { "reason": "max_output_tokens" },
+    "output": [{ "type": "message", "content": [{ "type": "output_text", "text": "Partial answer" }] }],
+    "usage": { "input_tokens": 120, "output_tokens": 10, "server_side_tool_usage_details": { "x_search_calls": 1, "x_posts_fetched": 19, "x_users_fetched": 0 } }
+  },
+  "failed": {
+    "id": "resp_synthetic_failed", "model": "grok-4.7", "status": "failed", "output": [],
+    "error": { "code": "server_error", "message": "Synthetic upstream failure" }
+  }
+}

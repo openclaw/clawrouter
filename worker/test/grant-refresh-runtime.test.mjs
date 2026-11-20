@@ -224,13 +224,13 @@ test("workerd admin diagnosis reads the owner after a failed KV projection, incl
   assert.deepEqual((await f.row()).refreshDiagnosis, row.refreshDiagnosis);
 });
 
-test("workerd a failed rotation write fences replay instead of scheduling the consumed token", { timeout: 60000 }, async t => {
+test("workerd a failed rotation write schedules local settlement while fencing consumed-token replay", { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.configure({});
   await f.request("/fixture/fail-rotation-write", "POST");
   assert.equal((await f.request(`${f.base}?mode=replace`, "PUT", { ...f.grant, expiresAt: "2020-01-01T00:00:00Z" })).status, 200);
   assert.equal((await f.request(`${f.base}/refresh`, "POST")).status, 502);
   const { alarm, nextRefreshAttemptAt } = await (await f.request("/fixture/alarm-state")).json();
-  assert.equal(nextRefreshAttemptAt, null, "a possibly consumed refresh token cannot be replayed on a timer");
+  assert.ok(Date.parse(nextRefreshAttemptAt) > Date.now(), "retained replacement schedules local-only settlement");
   assert.ok(alarm > Date.now() + 10000, "the shared quota alarm must not turn the retry delay into a one-second refresh loop");
   assert.equal((await f.row()).credentialStatus, "active");
   assert.equal((await f.row()).refreshDiagnosis.lastSuccessfulRefreshAt, null, "uncommitted rotation is not a successful refresh");

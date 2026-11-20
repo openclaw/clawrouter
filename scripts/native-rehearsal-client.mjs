@@ -1,0 +1,275 @@
+// Finite coordinator-run client. Never deploys, dispatches Actions, reads Cloudflare
+// credentials, changes production or turns these observations into qualification.
+import assert from 'node:assert/strict';
+import {createHash,randomBytes} from 'node:crypto';
+import {mkdir,readFile,writeFile,rm,rename} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {setTimeout as sleep} from 'node:timers/promises';
+import {nativeCodexClient} from '../test/helpers/native-codex.mjs';
+import {readCodexCatalog} from './codex-catalog.mjs';
+import {isolatedNativeTarget} from './deploy-native-target.mjs';
+import {createNativeControl,nativeWarm,nativeDrained,observeNativeControl} from './deploy-native-cutover.mjs';
+import {nativeControlDigest} from './deploy-native-qualification.mjs';
+import {assertContextAnswer,observeInterruptedTurn} from './native-session-continuity.mjs';
+import {versionId} from './deploy-train-policy.mjs';
+const hash=x=>createHash('sha256').update(x).digest('hex'),id=()=>randomBytes(16).toString('hex');
+const caseText=(caseId,mode,direction)=>'NATIVE_REHEARSAL_CASE:'+caseId+':'+mode+':'+direction;
+const clientStages=new Set(['client_inputs','native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','held_active','admission_close','held_release','native_after_readiness','followup_start','followup_complete','fixture_verification','evidence_save','client_close']);
+function clientFailure(error){
+ const status=error?.status;
+ if(Number.isInteger(status)&&status>=400&&status<=599)return {kind:'http',status};
+ if(error?.name==='AssertionError')return {kind:'assertion'};
+ if(['AbortError','TimeoutError'].includes(error?.name))return {kind:'timeout'};
+ if(['ENOENT','EEXIST','EACCES','ENOSPC','EIO'].includes(error?.code))return {kind:'filesystem',code:error.code};
+ if(error instanceof TypeError&&['UND_ERR_SOCKET','ECONNRESET','EPIPE','UND_ERR_RES_CONTENT_LENGTH_MISMATCH'].includes(error.cause?.code))return {kind:'transport',code:error.cause.code};
+ return {kind:'unexpected'};
+}
+function clientDiagnostic(root,command,args){
+ const direction=['overlap','followup'].includes(command)?args[0]:undefined;
+ if(command!=='seed'&&(!['overlap','followup'].includes(command)||!['forward','recovery'].includes(direction)))return null;
+ const path=join(root,[command,direction,'diagnostic.json'].filter(Boolean).join('-')),next=path+'.next';
+ const receipt={schema:1,command,...(direction?{direction}:{}),startedAt:Date.now(),stage:'client_inputs',outcome:'running'};
+ let created=false;
+ const persist=async()=>{
+  receipt.updatedAt=Date.now();const text=JSON.stringify(receipt,null,2)+'\n';
+  if(!created){await writeFile(path,text,{mode:0o600,flag:'wx'});created=true;}
+  else{await writeFile(next,text,{mode:0o600,flag:'wx'});await rename(next,path);}
+ };
+ return {
+  async stage(stage){assert(clientStages.has(stage));receipt.stage=stage;await persist();},
+  async complete(){receipt.outcome='completed';await persist();},
+  async failed(error){if(!created)return;receipt.outcome='failed';receipt.failure=clientFailure(error);await persist();},
+ };
+}
+export function workloadBody({caseId,mode,seed}){
+ const text='NATIVE_REHEARSAL_SEED:'+seed+'\n'+caseText(caseId,mode==='overflow'?'max':mode,'baseline');
+ let body=JSON.stringify({model:'openai/gpt-6-astra',stream:false,max_output_tokens:32,input:[{role:'user',content:[{type:'input_text',text},{type:'input_text',text:''}]}]});
+ if(['max','overflow'].includes(mode)){const size=64*1024*1024+(mode==='overflow'?1:0),at=body.lastIndexOf('"}');body=body.slice(0,at)+'x'.repeat(size-Buffer.byteLength(body))+body.slice(at);}
+ return body;
+}
+export async function until(fn,ms=120000){const deadline=Date.now()+ms;do{const value=await fn();if(value)return value;await sleep(500);}while(Date.now()<deadline);throw Error('Rehearsal observation deadline; do not replay uncertain work');}
+export function projectPool(s){return {accepting:s.accepting,phase:s.phase,control:s.control&&{schema:s.control.schema,revision:s.control.revision,runtimeSha:s.control.runtimeSha,fingerprint:s.control.fingerprint},grants:s.pool.grants.map(g=>({idHash:hash(g.id),slot:g.slot,generation:g.generation,stage:g.stage})),slots:s.slots.map((m,slot)=>({slot,phase:m.phase,generation:m.generation,ids:m.ids.length})),inspection:s.inspection?.map(x=>({slot:x.slot,qualified:x.qualified,protocol:x.protocol,phase:x.phase,generation:x.generation,boot:x.boot,fingerprint:x.fingerprint,runtimeSha:x.runtimeSha}))};}
+export async function openSavedCodex({binary,home,key,threadId,env={},onStage=async()=>{}}){
+ const client=nativeCodexClient({signal:AbortSignal.timeout(20*60000)},binary,home,{PATH:process.env.PATH,HOME:home,CODEX_HOME:home,RUST_LOG:'off',CLAWROUTER_API_KEY:key,...env});
+ try{
+  await onStage('codex_initialize');
+  await client.rpc('initialize',{clientInfo:{name:'native_rehearsal',version:'1'},capabilities:{experimentalApi:true}});client.child.stdin.write('{"method":"initialized"}\n');
+  await onStage('codex_thread');
+  const {thread}=await client.rpc(threadId?'thread/resume':'thread/start',threadId?{threadId,model:'gpt-6-astra',modelProvider:'rehearsal',cwd:home,approvalPolicy:'never',sandbox:'read-only'}:{model:'gpt-6-astra',modelProvider:'rehearsal',cwd:home,ephemeral:false,approvalPolicy:'never',sandbox:'read-only'});
+  if(threadId)assert.equal(thread.id,threadId,'resumption must retain the saved thread');
+  return {client,threadId:thread.id};
+ }catch(error){await client.close();throw error;}
+}
+export async function finishTurn(client,started,expected){
+ const completed=await until(()=>{if(client.errors.length)throw Error('Native client transport failed');return client.notifications.find(n=>n.method==='turn/completed'&&n.params.turn.id===started.turn.id);});
+ return assertContextAnswer(client,started,expected);
+}
+export async function runClient(command,preparation,directory,args=[],env=process.env){
+ const root=resolve(directory);if(command==='setup')await mkdir(root,{mode:0o700});
+ if(command==='inspect')return runClientOwned(command,preparation,root,args,env);
+ const lock=join(root,'owner');await mkdir(lock,{mode:0o700});
+ const diagnostic=clientDiagnostic(root,command,args);
+ const onStage=stage=>diagnostic?.stage(stage);
+ try{
+  await onStage('client_inputs');
+  const result=await runClientOwned(command,preparation,root,args,env,onStage);
+  await diagnostic?.complete();return result;
+ }catch(error){
+  // Keep only fixed stages and bounded values. Never persist native exception
+  // text, stderr, request/response bodies, prompts, credentials or RPC payloads.
+  try{await diagnostic?.failed(error);}catch{ /* Preserve the original failure if evidence storage also fails. */ }
+  throw error;
+ }finally{await rm(lock,{recursive:true});}
+}
+async function runClientOwned(command,preparation,directory,args,env,onStage=async()=>{}){
+ const p=JSON.parse(await readFile(preparation,'utf8'));
+ if(p.schema!==1||p.qualified!==false||p.controlSha256!==nativeControlDigest())throw Error('Preparation/control source mismatch');
+ const target=isolatedNativeTarget({worker:p.worker,origin:p.origin,account:env.NATIVE_REHEARSAL_ACCOUNT_ID});
+ const root=resolve(directory),localPath=join(root,'session.json'),evidencePath=join(root,'evidence.json');
+ const headers={authorization:'Bearer '+env.NATIVE_REHEARSAL_ADMIN_TOKEN,'content-type':'application/json'};
+ if(!env.NATIVE_REHEARSAL_ADMIN_TOKEN)throw Error('Scoped fixture admin token is required');
+ if(Boolean(env.CF_ACCESS_CLIENT_ID)!==Boolean(env.CF_ACCESS_CLIENT_SECRET))throw Error('Incomplete Access pair');
+ if(env.CF_ACCESS_CLIENT_ID)Object.assign(headers,{'CF-Access-Client-Id':env.CF_ACCESS_CLIENT_ID,'CF-Access-Client-Secret':env.CF_ACCESS_CLIENT_SECRET});
+ const api=async(op,body={})=>{
+  const r=await fetch(target.origin+'/__native_rehearsal/'+op,{method:'POST',headers,body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(20000)});
+  if(!r.ok){await r.body?.cancel();throw Error('Fixture '+op+' HTTP '+r.status+'; do not replay a mutation');}return r.json();
+ };
+ const control=createNativeControl({target,env:{CLOUDFLARE_ACCOUNT_ID:target.account,CLAWROUTER_NATIVE_ADMIN_TOKEN:env.NATIVE_REHEARSAL_ADMIN_TOKEN,CF_ACCESS_CLIENT_ID:env.CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET:env.CF_ACCESS_CLIENT_SECRET}});
+ let local,evidence;
+ const atomic=async(path,value)=>{const next=path+'.next';await writeFile(next,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);};
+ const save=async()=>{await atomic(localPath,local);await atomic(evidencePath,evidence);};
+ if(command==='setup'){
+  await mkdir(join(root,'codex'),{mode:0o700});
+  local={schema:1,origin:target.origin,seed:randomBytes(32).toString('hex'),secret:randomBytes(32).toString('hex'),pending:'setup',threadId:null,producer:null};
+  evidence={schema:1,qualified:false,source:p.source,controlSha256:p.controlSha256,blueRuntimeSha:p.blueRuntimeSha,greenRuntimeSha:p.greenRuntimeSha,origin:p.origin,steps:[]};
+  await save();await api('setup',{seedHash:hash(local.seed),credentialHash:hash(local.secret)});local.pending=null;await save();return {initialized:true,qualified:false};
+ }
+ local=JSON.parse(await readFile(localPath,'utf8'));evidence=JSON.parse(await readFile(evidencePath,'utf8'));
+ if(local.schema!==1||local.origin!==target.origin||evidence.controlSha256!==p.controlSha256)throw Error('Foreign client directory');
+ if(command==='inspect'){const snapshot=await api('snapshot');return {qualified:false,pending:local.pending,workloadPending:local.workloadPending,threadId:local.threadId,snapshot,pool:projectPool(await control.snapshot())};}
+ if(command==='cleanup'){
+  await api('close');await until(async()=>nativeDrained(await control.snapshot()),10*60000);
+  evidence.cleanup={at:Date.now(),nativeAbsent:true,hostedResourcesDeleted:false};await writeFile(evidencePath,JSON.stringify(evidence,null,2)+'\n',{mode:0o600});
+  await rm(join(root,'codex'),{recursive:true,force:true});await rm(localPath);return {qualified:false,nativeAbsent:true,clientRemoved:true,hostedResourcesDeleted:false};
+ }
+ if(local.pending&&command!=='workloads')throw Error('Prior client mutation is uncertain; inspect, do not replay');
+ const key='clawrouter-live-rehearsal-'+local.secret,home=join(root,'codex'),binary=env.CLAWROUTER_CODEX_BINARY;
+ const accessHeaders=env.CF_ACCESS_CLIENT_ID?{'CF-Access-Client-Id':env.CF_ACCESS_CLIENT_ID,'CF-Access-Client-Secret':env.CF_ACCESS_CLIENT_SECRET}:{};
+ const clientEnv=env.CF_ACCESS_CLIENT_ID?{CF_ACCESS_CLIENT_ID:env.CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET:env.CF_ACCESS_CLIENT_SECRET}:{};
+ if(!binary)throw Error('Explicit official Codex binary required');
+ const turn=async(client,text)=>client.rpc('turn/start',{threadId:local.threadId,input:[{type:'text',text}],serviceTier:'default'});
+ if(command==='seed'){
+  const [version]=args;versionId(version);if(local.threadId)throw Error('Saved thread already exists');
+  await onStage('native_readiness');
+  assert.ok(nativeWarm(await control.snapshot(version),p.blueRuntimeSha),'old native must be attested');
+  const {catalog,producer}=await readCodexCatalog({routerUrl:target.origin,providerId:'openai',codex:binary,headers:accessHeaders,env:{PATH:process.env.PATH,HOME:home,CODEX_HOME:home,CLAWROUTER_API_KEY:key},onStage});
+  await onStage('catalog_write');
+  await writeFile(join(home,'models.json'),JSON.stringify(catalog),{mode:0o600,flag:'wx'});
+  await writeFile(join(home,'config.toml'),['model = "gpt-6-astra"','model_provider = "rehearsal"','model_catalog_json = '+JSON.stringify(join(home,'models.json')),'web_search = "disabled"','approval_policy = "never"','sandbox_mode = "read-only"','cli_auth_credentials_store = "file"','[model_providers.rehearsal]','name = "Synthetic native rehearsal"','base_url = '+JSON.stringify(target.origin+'/v1/native/openai/v1'),'env_key = "CLAWROUTER_API_KEY"','wire_api = "responses"','requires_openai_auth = false','supports_websockets = false','request_max_retries = 0','stream_max_retries = 0','stream_idle_timeout_ms = 180000',...(env.CF_ACCESS_CLIENT_ID?['env_http_headers = { \"CF-Access-Client-Id\" = \"CF_ACCESS_CLIENT_ID\", \"CF-Access-Client-Secret\" = \"CF_ACCESS_CLIENT_SECRET\" }']:[])].join('\n')+'\n',{mode:0o600,flag:'wx'});
+  await onStage('codex_start');
+  const opened=await openSavedCodex({binary,home,key,env:clientEnv,onStage});
+  try{
+   await onStage('session_save');local.threadId=opened.threadId;local.producer=producer;local.pending={id:id(),mode:'seed'};await save();
+   await onStage('turn_start');const started=await turn(opened.client,'NATIVE_REHEARSAL_SEED:'+local.seed+'\n'+caseText(local.pending.id,'seed','baseline'));
+   await onStage('turn_complete');
+   evidence.steps.push({kind:'seed',threadId:local.threadId,producer,...await finishTurn(opened.client,started,hash(local.seed+':baseline:'+local.pending.id))});local.pending=null;await save();
+   await onStage('client_close');
+  }finally{await opened.client.close();}return {seeded:true,threadId:local.threadId,qualified:false};
+ }
+ if(command==='followup'){
+  const [direction,version]=args;if(!['forward','recovery'].includes(direction)||!local.threadId)throw Error('Expected saved thread and direction');versionId(version);
+  await onStage('native_readiness');
+  const runtime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha,snapshot=await control.snapshot(version);assert.ok(nativeWarm(snapshot,runtime));
+  await onStage('codex_start');
+  const {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
+  try{
+   await onStage('session_save');local.pending={id:id(),mode:'followup',direction};await save();
+   await onStage('turn_start');const started=await turn(client,caseText(local.pending.id,'recall',direction));
+   await onStage('turn_complete');const completed=await finishTurn(client,started,hash(local.seed+':'+direction+':'+local.pending.id));
+   await onStage('evidence_save');evidence.steps.push({kind:'followup',direction,version,threadId:local.threadId,pool:projectPool(snapshot),...completed});local.pending=null;await save();
+   await onStage('client_close');return {resumed:true,qualified:false};
+  }finally{await client.close();}
+ }
+ if(command==='overlap'){
+  const [direction,beforeVersion,afterVersion]=args;if(!['forward','recovery'].includes(direction)||!local.threadId)throw Error('Expected saved thread and direction');versionId(beforeVersion);versionId(afterVersion);
+  if(evidence.steps.some(s=>s.kind==='overlap'&&s.direction===direction))throw Error('Direction already observed');
+  const beforeRuntime=direction==='forward'||args[3]==='old-before'?p.blueRuntimeSha:p.greenRuntimeSha,afterRuntime=direction==='forward'?p.greenRuntimeSha:p.blueRuntimeSha;
+  await onStage('native_readiness');assert.ok(nativeWarm(await control.snapshot(beforeVersion),beforeRuntime));
+  await onStage('codex_start');
+  let {client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage});
+  try{
+   await onStage('session_save');const held=id();local.pending={id:held,mode:'overlap',direction};await save();
+   await onStage('turn_start');const startedAt=Date.now(),started=await turn(client,caseText(held,'hold',direction));
+   await onStage('held_active');const active=await until(async()=>{const s=await api('snapshot');return s.cases.find(x=>x.id===held&&x.outcome==='active');});
+   await onStage('admission_close');const closed=await until(async()=>{const s=await control.snapshot(beforeVersion);if(s.accepting)return false;
+    assert.ok(s.pool.grants.some(g=>g.slot===active.slot&&g.generation===active.generation&&g.stage==='intent'),'held request must still own dispatched capacity');
+    assert.equal(client.notifications.some(n=>n.method==='turn/completed'&&n.params.turn.id===started.turn.id),false,'native turn must be active at admission close');return {at:Date.now(),pool:projectPool(s)};});
+   await onStage('held_release');
+   // Release is single-shot even if its acknowledgement is lost.
+   local.pending.releaseIntentAt=Date.now();await save();
+   try{await api('release',{id:held});}catch{/* Reconcile accepted release by observation below. */}
+   await until(async()=>{const s=await api('snapshot');return s.cases.find(x=>x.id===held&&Number.isFinite(x.releasedAt));},20000);
+   await onStage('turn_complete');const completed=await observeInterruptedTurn(client,started);
+   local.pending.interrupted=completed;await save();
+   // Close the old app-server before resuming the SAME saved thread. Never
+   // resend the uncertain held challenge, even if Codex reported a failed turn.
+   await client.close();
+   await until(async()=>{const s=await api('snapshot');assert.equal(s.replays,0);return s.cases.find(x=>x.id===held&&x.outcome!=='active')&&s.accounting.events.length===s.cases.length;});
+   await onStage('native_after_readiness');
+   const after=await observeNativeControl({control,version:afterVersion,previousVersions:[beforeVersion],timeoutMs:10*60000,pollMs:500,
+    assertOwnership:async()=>{const s=await api('snapshot');assert.equal(s.phase,'ready');assert.equal(s.replays,0);},
+    validate:s=>assert(!s.slots.some(x=>x.phase==='blocked'),'blocked native slot'),isReady:s=>nativeWarm(s,afterRuntime)});
+   // A DISTINCT follow-up, without repeating the seed, after durable resumption.
+   await onStage('followup_start');({client}=await openSavedCodex({binary,home,key,threadId:local.threadId,env:clientEnv,onStage}));
+   const followup=id(),followupStartedAt=Date.now();local.pending.followup={id:followup,startedAt:followupStartedAt};await save();
+   const followupTurn=await turn(client,caseText(followup,'recall',direction));
+   await onStage('followup_complete');const recalled=await finishTurn(client,followupTurn,hash(local.seed+':'+direction+':'+followup));
+   await onStage('fixture_verification');const snap=await api('snapshot');assert.equal(snap.cases.filter(x=>[held,followup].includes(x.id)).length,2);assert.equal(snap.replays,0);
+   assert.equal(active.runtimeSha,beforeRuntime);assert.equal(snap.cases.find(x=>x.id===followup).runtimeSha,afterRuntime);
+   assert.ok(snap.callbacks.some(x=>x.op==='finish'&&x.runtimeSha===beforeRuntime&&x.at>=closed.at&&x.status===200),'old callback must settle after admission closes');
+   await onStage('evidence_save');evidence.steps.push({kind:'overlap',direction,threadId:local.threadId,beforeVersion,afterVersion,resumedAppServer:true,heldCaseId:held,followupCaseId:followup,startedAt,closed,after:projectPool(after),...completed,followupStartedAt,followup:recalled});
+   local.pending=null;await save();await onStage('client_close');return {observed:direction,qualified:false};
+  }finally{await client.close();}
+ }
+ if(command==='workloads'){
+  if(local.workloadPending)throw Error('Prior workload outcome is uncertain; inspect, do not replay');
+  const [version]=args;versionId(version);const initial=await control.snapshot(version);assert.ok([p.blueRuntimeSha,p.greenRuntimeSha].includes(initial.control.runtimeSha)&&nativeWarm(initial,initial.control.runtimeSha));
+  local.workloadPending={id:id(),mode:'workloads'};await save();const outcomes=[];
+  // Leave delivery uncertainty last; an expected quarantine must not hide
+  // otherwise independent envelope observations behind a transport assertion.
+  for(const mode of ['success','reject','max','overflow','lost']){
+   const caseId=id(),trace='prf_'+id();
+   const body=workloadBody({caseId,mode,seed:local.seed});
+   const path=join(root,'workload-'+mode+'-diagnostic.json');
+   const receipt={schema:1,command:'workloads',mode,caseId,traceHash:hash(trace),version,startedAt:Date.now(),stage:'fixture_before',outcome:'running'};
+   await writeFile(path,JSON.stringify(receipt,null,2)+'\n',{mode:0o600,flag:'wx'});
+   const persist=async()=>{receipt.updatedAt=Date.now();await atomic(path,receipt);};
+   try{
+    local.workloadPending={...local.workloadPending,caseId,workloadMode:mode,traceHash:hash(trace)};await save();
+    const before=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length===s.cases.length&&s;});
+    assert.equal(before.requests,before.cases.length);assert.equal(before.replays,0);
+    receipt.stage='request';await persist();
+    const r=await fetch(target.origin+'/v1/responses',{method:'POST',headers:{...accessHeaders,authorization:'Bearer '+key,'content-type':'application/json','x-canary-trace-id':trace},body,redirect:'error',signal:AbortSignal.timeout(180000)});
+    const status=r.status,selected=r.headers.get('x-clawrouter-version-id');
+    receipt.response={status,version:/^[a-f0-9-]{36}$/.test(selected??'')?selected:selected===null?null:'invalid',bodyComplete:false};
+    receipt.stage='response_body';await persist();
+    // A body error after headers cannot become a new HTTP 424. Only the
+    // deliberate lost case may accept this bounded transport failure, and
+    // only after independent ownership/fixture/accounting verification below.
+    try{
+     const bytes=await r.arrayBuffer();receipt.response.bodyComplete=true;
+     if(mode==='lost'&&status===200){
+      // HTTP intermediaries can end a truncated JSON body without a socket
+      // error. Record protocol validity only, never body content. The fixture,
+      // quarantine and exact accounting checks below remain mandatory.
+      try{JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));receipt.response.jsonValid=true;}
+      catch{receipt.response.jsonValid=false;}
+     }
+    }
+    catch(error){receipt.response.failure=clientFailure(error);if(mode!=='lost'||status!==200||receipt.response.failure.kind!=='transport')throw error;}
+    await persist();
+    assert.equal(selected,version,'workload response selected version');
+    if(mode==='lost')assert.ok(status===424&&receipt.response.bodyComplete||status===200&&(!receipt.response.bodyComplete||receipt.response.jsonValid===false),'lost response must be 424 or an incomplete 200 response');
+    else assert.equal(status,mode==='reject'?400:mode==='overflow'?413:200);
+    receipt.stage='pool_settlement';await persist();
+    const pool=await until(async()=>{const s=await control.snapshot(version);return (mode==='overflow'?s.pool.seen[trace]===undefined:s.pool.seen[trace]===(mode==='lost'?'quarantined':'complete'))&&s;});
+    assert.equal(pool.control.runtimeSha,initial.control.runtimeSha);
+    receipt.stage='fixture_accounting';await persist();
+    const delta=mode==='overflow'?0:1,cost=['reject','overflow'].includes(mode)?0:7;
+    const snapshot=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length>=before.accounting.events.length+delta&&(delta===0||s.callbacks.some(c=>c.op==='finish'&&c.idHash===hash(trace)))&&s;});
+    assert.equal(snapshot.requests,before.requests+delta);assert.equal(snapshot.cases.length,before.cases.length+delta);assert.equal(snapshot.replays,0);
+    const cases=snapshot.cases.filter(x=>x.id===caseId);assert.equal(cases.length,delta,'exactly one provider attempt, none for overflow');
+    if(delta){
+     const x=cases[0];assert.equal(x.runtimeSha,initial.control.runtimeSha);assert.equal(x.mode,mode);assert.equal(x.outcome,mode==='lost'?'delivery_unknown':mode==='reject'?'rejected':'completed');
+     const finishes=snapshot.callbacks.filter(c=>c.op==='finish'&&c.idHash===hash(trace));assert.equal(finishes.length,1);
+     const finish=finishes[0];assert.equal(finish.clean,mode!=='lost');assert.equal(finish.status,200);assert.equal(finish.slot,x.slot);assert.equal(finish.generation,x.generation);assert.equal(finish.runtimeSha,x.runtimeSha);
+     if(mode==='lost'){
+      assert.ok(pool.pool.members[x.slot]?.quarantined);assert.equal(pool.slots[x.slot].generation,x.generation);
+      assert.ok(pool.pool.grants.some(g=>g.id===trace&&g.slot===x.slot&&g.generation===x.generation&&g.stage==='intent'));
+      assert.equal(pool.slots.filter((m,i)=>i!==x.slot&&m.phase==='ready'&&pool.pool.members[i]?.quarantined===false).length,7,'uncertainty must not evict unaffected members');
+     }
+    }
+    const previous=new Set(before.accounting.events.map(x=>x.idHash)),events=snapshot.accounting.events.filter(x=>!previous.has(x.idHash));
+    assert.equal(snapshot.accounting.events.length,before.accounting.events.length+delta);assert.equal(events.length,delta);
+    assert.equal(snapshot.accounting.policySpentMicros,before.accounting.policySpentMicros+cost);assert.equal(snapshot.accounting.providerSpentMicros,before.accounting.providerSpentMicros+cost);
+    if(delta){assert.equal(events[0].actualCostMicros,cost);assert.equal(events[0].reservedCostMicros,7);assert.equal(events[0].contentRetained,false);assert.equal(events[0].status,mode==='lost'?'provider_error':mode==='reject'?'client_error':'success');}
+    const result={mode,caseId,traceHash:hash(trace),status,response:receipt.response,bytes:Buffer.byteLength(body),at:Date.now(),pool:projectPool(pool)};
+    receipt.stage='evidence_save';await persist();outcomes.push(result);evidence.steps.push({kind:'workload-case',...result});await save();
+    receipt.outcome='completed';await persist();
+   }catch(error){receipt.outcome='failed';receipt.failure=clientFailure(error);await persist();throw error;}
+  }
+  const snapshot=await until(async()=>{const s=await api('snapshot');return s.cases.every(x=>x.outcome!=='active')&&s.accounting.events.length>=s.cases.length?s:false;});
+  assert.equal(snapshot.replays,0);assert.ok(snapshot.callbacks.some(x=>x.op==='finish'&&x.clean===false),'uncertain attempt must remain quarantined');
+  const expected=snapshot.cases.reduce((sum,x)=>sum+(x.mode==='reject'?0:7),0);
+  assert.equal(snapshot.accounting.policySpentMicros,expected);assert.equal(snapshot.accounting.providerSpentMicros,expected);
+  assert.equal(snapshot.accounting.events.reduce((sum,x)=>sum+x.actualCostMicros,0),expected);
+  assert.ok(snapshot.accounting.events.every(x=>x.contentRetained===false));
+  evidence.steps.push({kind:'workloads',version,outcomes,snapshot});local.workloadPending=null;await save();return {outcomes,qualified:false};
+ }
+ throw Error('Commands: setup, seed <blue-version>, overlap <forward|recovery> <before-version> <after-version>, followup <forward|recovery> <version>, workloads <version>, inspect, cleanup');
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
+ const [command,preparation,directory,...args]=process.argv.slice(2);
+ try{console.log(JSON.stringify(await runClient(command,preparation,directory,args)));}catch{console.error('Native rehearsal client failed; inspect its retained intent and content-free evidence. No inference was retried.');process.exitCode=1;}
+}

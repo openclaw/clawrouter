@@ -10,14 +10,44 @@ The compiler accepts these closed protocol/provider/format pairs:
 | --- | --- | --- |
 | `openai-decisions` | `openai` | `openai.decisions` |
 | `levanto-sage` | `levanto` | `levanto.sage` |
+| `levanto-sage` | `levanto` | `levanto.sage_batch` |
 | `liquid-ai-systemone` | `liquid-ai` | `liquid.systemone` |
 | `typesafe-systemone` | `typesafe` | `typesafe.systemone` |
 | `subq-decisions` | `subq` | `subq.decisions` |
 
 Every pair requires a nonstreaming POST endpoint and the model's `llm.decisions`
-capability. Passthrough models, lifecycle links, WebSockets and mismatched wire
+capability, except Sage batch, which requires `llm.decisions.batch`.
+Passthrough models, lifecycle links, WebSockets and mismatched wire
 formats cannot qualify decision metadata. Existing OpenAI metadata keeps its
 original shape.
+
+Sage batch reuses the existing closed `levanto-sage` decision record and the
+typed `SageDecisionCapabilities`; the paired wire format identifies the batch
+operation. Its finite contract is provider `levanto`, model
+`levanto/levanto-sage-2` (upstream `levanto-sage-2`), endpoint `decisions_batch`,
+and POST `https://sage.levanto.ai/decide/batch`. Both request and response formats
+are `levanto.sage_batch`. The first qualification exposes `input: [text, json]`
+for text and list content. It excludes image facts, query/path overrides,
+passthrough models and streaming. Singular Sage and SystemOne mappings do not
+change.
+
+Support metadata remains optional. An existing declaration that omits it stays
+without batch support facts; the compiler does not synthesize a profile or infer
+execution from an endpoint alone. When present, the batch profile must satisfy
+the finite text/list contract above.
+
+The existing `prepareSageRequest(body, true)` codec accepts grouped `requests`
+and optional `reasoning`. Sage selects the model upstream: native bodies must
+not contain a `model` field. Batch question/reasoning facts retain their existing
+meaning; no batch discriminator is added to the metadata. Unknown batch and
+token limits remain omitted. Router byte, group or deadline caps are operational
+safeguards and must not be presented as vendor limits or tariffs. Aggregate usage
+comes from the codec's top-level `meta.usage`, not a sum of answer objects.
+
+This foundation adds no provider declaration, price, dispatch or client
+implementation. The singular Sage wrapper rejects batch requests. A batch
+wrapper, shared admission and actual DecisionV2 consumer proof remain required
+before an offer can claim executable batch support.
 
 Hosted protocols require `protocol` and at least one typed `questions` member.
 Boolean questions expose boolean probabilities. Option questions require
