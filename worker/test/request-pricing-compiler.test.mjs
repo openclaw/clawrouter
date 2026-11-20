@@ -6,7 +6,7 @@ import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 const source = parse(readFileSync(new URL("../../providers/perplexity.provider.yaml", import.meta.url), "utf8"));
 function fixture() {
   const manifest = structuredClone(source);
-  manifest.capabilities.push({ id: "web.search", endpoint: "search", methods: ["POST"] });
+  assert.equal(manifest.capabilities.filter(capability => capability.endpoint === "search").length, 1);
   manifest.endpoints.search = { path: "/search", requestFormat: "perplexity.search", responseFormat: "perplexity.search", requestPricing: {
     unit: "request", version: "perplexity-search-2026-11-03", effectiveAt: "2026-11-03", source: "https://docs.perplexity.ai/docs/getting-started/pricing",
     successfulResponseMicros: 5000, parameterRates: { parameter: "search_type", rates: { web: 5000, fast: 1000 } },
@@ -23,7 +23,9 @@ test("successful-request rates preserve units, provenance and native selection s
   assert.equal(search.modelPassthrough, undefined);
   tariff(manifest).parameterRates.rates.fast = 0;
   assert.equal(search.requestPricing.parameterRates.rates.fast, 1000, "compiled tariff must not alias mutable source");
-  assert.ok(compile(source).providers[0].endpoints.every(e => e.requestPricing === undefined), "the contract alone activates no tariff");
+  const endpoints = compile(source).providers[0].endpoints;
+  assert.deepEqual(endpoints.find(e => e.id === "search").requestPricing, source.endpoints.search.requestPricing);
+  assert.ok(endpoints.filter(e => e.id !== "search").every(e => e.requestPricing === undefined), "Search activation cannot mint tariffs for other protocols");
 });
 
 test("request tariffs reject unknown units, incomplete provenance and unsafe amounts", () => {
@@ -42,8 +44,8 @@ test("request tariffs cannot borrow a token, async, streaming or unqualified pro
   for (const change of [
     m => { m.id = "other-provider"; }, m => { m.endpoints.search.path = "/other"; },
     m => { m.endpoints.search.requestFormat = "openai.responses"; }, m => { m.endpoints.search.responseFormat = "openai.responses"; },
-    m => { m.endpoints.search.method = "GET"; }, m => { m.capabilities.at(-1).methods.push("GET"); },
-    m => { m.capabilities.at(-1).id = "llm.chat"; }, m => { m.endpoints.search.streaming = "sse"; },
+    m => { m.endpoints.search.method = "GET"; }, m => { m.capabilities.find(capability => capability.endpoint === "search").methods.push("GET"); },
+    m => { m.capabilities.find(capability => capability.endpoint === "search").id = "llm.chat"; }, m => { m.endpoints.search.streaming = "sse"; },
     m => { m.endpoints.search.modelPassthrough = {}; }, m => { m.endpoints.search.responsesLifecycle = { retrieve: "get", cancel: "cancel" }; },
     m => { m.endpoints.search.websocket = "openai.responses"; }, m => { m.endpoints.search.query = { search_type: "fast" }; },
     m => { tariff(m).parameterRates.parameter = "model"; }, m => { tariff(m).parameterRates.rates.future = 0; },
