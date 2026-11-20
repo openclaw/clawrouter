@@ -36,6 +36,43 @@ inference. Neither old DeepSeek rates nor another provider's card qualifies this
 router's unknown selected provider.
 
 A caller/provider dollar budget rejects these rows before dispatch unless a
-separate explicit `policy_fixed` tariff supplies the policy price. Synthetic
-compiler/selection tests check this boundary and exact wire model names; they
-do not certify the native client or a provider account.
+separate explicit `policy_fixed` tariff supplies the policy price. Compiler and selection tests check this boundary and exact wire model names.
+The controlled native route below is separate from provider-account entitlement.
+
+## Registered client qualification
+
+The dedicated `huggingface-frozen` consumer pins OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. It registers the real Hugging Face
+plugin, reads its unauthenticated static catalog, and uses the public
+`openai-completions` stream and simple-stream entrypoints at a configured Worker
+base URL. Authenticated live discovery is a different route and is not exercised.
+The SDK onboarding default is R1; ClawRouter keeps its existing fastest OSS default
+and display name. Static SDK prices and 131072/8192 limits do not qualify Router
+prices, selected-host capacity or entitlement.
+
+The 19 controlled cases cover all three identities, exact native routing at
+`/v1/native/huggingface/v1/chat/completions`, and unchanged fastest/cheapest/
+preferred/provider suffixes. Captured registered-provider scope surrounds the
+actual sanitizer across its asynchronous work; matching synthetic tool history
+then passes through the real converter and public stream. This tests transport
+preservation, not live host tool capability. Distinct poisoned SDK environment
+tokens and Router fallback credentials must never replace the selected proxy
+credential or final upstream key.
+
+Unknown-tariff dollar-budget requests must fail before upstream dispatch.
+Successful transport cases explicitly use a synthetic seven-micro policy-fixed
+price, including error and cancellation reservations; this is not vendor pricing.
+Each authenticated attempt has a bound SQLite usage receipt and exact budget
+settlement. An invalid unauthenticated proxy token does not claim a usage event.
+
+Fragmented EOF, controlled embedded provider error and real post-content caller
+cancellation retain original acquisitions, read/closed promises, release calls,
+Worker handlers and source producer/waitUntil joins. Independent failures,
+including falsey reasons, remain fatal. Cancellation uses the bound first logical
+Worker outcome and complete source retirement, not a native read-error causal
+claim. It does not qualify physical pre-header disconnect propagation.
+
+The snapshot adds only these three unpriced models. Existing provider records,
+credentials, defaults and pending-work contracts remain unchanged. Local controls
+are separate from exact-head hosted qualification; the PR records the actual
+hosted verdict. No deployment or account activation is performed.

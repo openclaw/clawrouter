@@ -15,6 +15,7 @@ const identities = ["deepseek-ai/DeepSeek-R1", "deepseek-ai/DeepSeek-V3.1", "ope
 
 test("Hugging Face frozen identities preserve the existing default and exact native Chat names", () => {
   assert.equal(provider.models[0].upstream, "openai/gpt-oss-120b:fastest");
+  assert.equal(provider.models[0].displayName, "GPT-OSS 120B (Fastest)");
   assert.deepEqual(provider.models.slice(1).map(model => model.upstream), identities);
   for (const upstream of identities) {
     const body = { model: `huggingface/${upstream}`, messages: [{ role: "user", content: "fixture" }], stream: true };
