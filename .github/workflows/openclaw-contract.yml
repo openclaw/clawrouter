@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - consumer: opencode
-            ref: 0bc78154386d7df5d07feefca13441cd582ab3d6
+            ref: e36384292943a6d968c84cafc432a40787074229
             test: test/openclaw-opencode.test.mjs
           - consumer: baseten-decisions
             ref: 761748e1824e2ee43e886fcce4376c3b20055015
