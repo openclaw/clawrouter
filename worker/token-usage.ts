@@ -18,7 +18,7 @@ export interface UsageTokens {
   billedTokens?: { input: number | null; output: number | null };
 }
 
-export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string }
+export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string; pricedModel?: string }
 
 export function extractUsageTokens(value: unknown, context?: Readonly<UsageTokenContext>): UsageTokens | null {
   const root = record(value);
@@ -156,7 +156,7 @@ function rejectionOnlyEvidence(evidence: SseUsageEvidence, context?: Readonly<Us
   return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
 }
 
-export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>) {
+export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>, observeFrame?: (frame: SseUsageEvidence) => void) {
   const accumulator = createSseUsageAccumulator(revokeRejection, context);
   function evidence(frame: string | null): SseUsageEvidence | null {
     if (frame === null) return { kind: "unavailable" };
@@ -174,14 +174,15 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
   }
   const frames = createSseFrames(frame => {
     const next = evidence(frame);
-    if (next) accumulator.accept(next);
+    if (next) { accumulator.accept(next); observeFrame?.(next); }
     if (next?.kind === "data") acceptJson?.(next.value);
     else if (next?.kind === "error" || next?.kind === "invalid" || next?.kind === "unavailable") acceptJson?.(undefined, true);
   });
   return {
     push: frames.push,
     end() {
-      if (!acceptJson) return;
+      if (!acceptJson && !observeFrame) return;
+      if (frames.overflowed()) observeFrame?.({ kind: "unavailable" });
       if (frames.overflowed() || frames.pending()?.split("\n").some(line => line.trim() && !line.startsWith(":"))) acceptJson?.(undefined, true);
     },
     result(ended = true): UsageInspection {

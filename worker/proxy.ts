@@ -946,7 +946,6 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   const searchOwner = admission?.search;
   const published = publishedMusicInput(selection);
   const music = inlineMusicInput(selection) ?? published;
-  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
@@ -1430,6 +1429,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
+  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format,
+    pricedModel: cost.basis === "manifest_pricing" ? selection.model?.upstream : undefined });
   let observed!: ReturnType<typeof observeUsage>;
   const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
   if (completion) completion.start(() => { observed = observe(); return observed.retired; });
