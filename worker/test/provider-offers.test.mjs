@@ -3,6 +3,13 @@ import test from "node:test";
 import snapshot from "../generated/provider-snapshot.json" with { type: "json" };
 import { resolveProviderOffer } from "../provider-offers.ts";
 import { bindingSupportsOperation, productSupportsBinding, transportForGrant } from "../../shared/provider-bindings.ts";
+import * as portableBindings from "../../packages/provider-plugin-contract/src/bindings.ts";
+
+test("shared binding checks retain the portable implementation identity", () => {
+  assert.equal(bindingSupportsOperation, portableBindings.bindingSupportsOperation);
+  assert.equal(productSupportsBinding, portableBindings.productSupportsBinding);
+  assert.equal(transportForGrant, portableBindings.transportForGrant);
+});
 
 function fixture() {
   const provider = structuredClone(snapshot.providers.find(provider => provider.id === "openai"));

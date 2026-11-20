@@ -1,5 +1,7 @@
 # Changelog
 
+- Export static product and transport compatibility checks from the portable provider plugin contract. Preserve existing shared imports and Worker admission behavior.
+
 - Preserve optional, explicit catalogue references on compiled provider models. Router aliases and upstream slugs remain separate; references do not import model facts, prices, or permissions.
 
 - Preserve full CI checkout ancestry when fetching the pinned native baseline so deployment compatibility does not misclassify already-landed migrations as new feature changes.

@@ -133,6 +133,15 @@ including on other providers so reserved formats cannot bypass qualification. Pr
 they cannot load validation code or register a protocol as qualified. Runtime
 adapters and lifecycle validation retain their existing owners.
 
+### Static binding compatibility ownership
+
+`packages/provider-plugin-contract/src/bindings.ts` owns the existing pure
+transport selection and product/operation compatibility checks.
+`shared/provider-bindings.ts` preserves existing imports through re-exports.
+The package can inspect endpoint allowlists and lifecycle dependencies without
+I/O. It does not own credential admission or provider-specific qualification;
+`worker/provider-auth.ts` and `worker/provider-offers.ts` retain those decisions.
+
 ### Model contract ownership
 
 `packages/provider-plugin-contract/src/models.ts` owns `ProviderModelDefinition`.
