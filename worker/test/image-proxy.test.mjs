@@ -81,10 +81,11 @@ for(const limited of ["policy","provider","daily","weekly"])test("image "+limite
  const response=await f.call();assert.equal(response.status,402);await response.text();await Promise.all(f.pending);assert.equal(upstream.mock.callCount(),0);assert.equal(f.retained.length,0);
 });
 for(const scenario of ["bad-key","revoked","model-policy","tier-policy"])test("image preserves "+scenario+" admission",async t=>{
- const f=fixture(t,{serviceTiers:scenario==="tier-policy"?{allowed:["flex"]}:undefined});
- if(["revoked","model-policy"].includes(scenario)){
-  const original=f.env.ACCESS_CONTROL.get;f.env.ACCESS_CONTROL.get=(...args)=>{const obj=original(...args);return{fetch:async url=>{const r=await obj.fetch(url),v=await r.json();if(v.credential&&scenario==="revoked")v.credential.credential.enabled=false;if(v.policy&&scenario==="model-policy")v.policy.policy.models=["openai/gpt-6-astra"];return Response.json(v);}};};
- }
+ const f=fixture(t,{serviceTiers:scenario==="tier-policy"?{allowed:["flex"]}:undefined,admissionReply:["revoked","model-policy"].includes(scenario)?value=>{
+  if(value.credential&&scenario==="revoked")value.credential.credential.enabled=false;
+  if(value.policy&&scenario==="model-policy")value.policy.policy.models=["openai/gpt-6-astra"];
+  return value;
+ }:undefined});
  const upstream=t.mock.method(globalThis,"fetch",async()=>{throw Error("denied image dispatched");});
  const response=await f.call(routes[0],{prompt},undefined,scenario==="bad-key"?"invalid":proxyKey());assert.ok([400,401,403].includes(response.status));await response.text();await Promise.all(f.pending);assert.equal(upstream.mock.callCount(),0);
 });
@@ -96,8 +97,7 @@ test("image subscription transport is ineligible; API keys only and no websocket
 });
 
 for(const scenario of ["measured","missing","cancel","rejection","denied"])test("soft-budget image "+scenario+" retains actual or conservative charge",async t=>{
- const f=fixture(t,{limit:scenario==="denied"?0:20_000_000});
- const original=f.env.ACCESS_CONTROL.get;f.env.ACCESS_CONTROL.get=(...args)=>{const obj=original(...args);return{fetch:async url=>{const v=await(await obj.fetch(url)).json();if(v.policy)v.policy.policy.budgetMode="soft";return Response.json(v);}};};
+ const f=fixture(t,{limit:scenario==="denied"?0:20_000_000,budgetMode:"soft"});
  let cancels=0;
  const upstream=t.mock.method(globalThis,"fetch",async()=>{
   if(scenario==="rejection")return Response.json({error:"fixture"},{status:400});

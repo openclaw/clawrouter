@@ -1,0 +1,13 @@
+{
+  "qualification": "Synthetic transport fixtures; no live generation, playable-media or cost proof.",
+  "id": "video_fixture_01",
+  "create": { "model": "google/veo-3.1-fast", "prompt": "A paper boat drifting across a pond.", "duration": 4, "resolution": "720p", "aspect_ratio": "16:9", "generate_audio": false, "seed": 7 },
+  "image": { "model": "google/veo-3.1-fast", "prompt": "Animate the scene.", "frame_images": [{ "type": "image_url", "image_url": { "url": "https://example.com/frame.png" }, "frame_type": "first_frame" }] },
+  "accepted": { "id": "video_fixture_01", "status": "pending", "polling_url": "https://openrouter.ai/api/v1/videos/video_fixture_01" },
+  "running": { "id": "video_fixture_01", "status": "in_progress" },
+  "completed": { "id": "video_fixture_01", "status": "completed", "model": "google/veo-3.1-fast", "generation_id": "gen_fixture_01", "unsigned_urls": ["https://openrouter.ai/api/v1/videos/video_fixture_01/content?index=0"], "usage": { "cost": 0.32, "is_byok": false } },
+  "failed": { "id": "video_fixture_01", "status": "failed", "model": null, "generation_id": null, "error": "Synthetic early validation failure" },
+  "cancelled": { "id": "video_fixture_01", "status": "cancelled", "error": "Synthetic cancellation observation" },
+  "expired": { "id": "video_fixture_01", "status": "expired", "error": "Job exceeded maximum time to live" },
+  "content": { "path": "/api/v1/videos/video_fixture_01/content", "query": "index=0", "mimeType": "video/mp4", "base64": "AAAAFGZ0eXBpc29tAAAAAGlzb20=" }
+}

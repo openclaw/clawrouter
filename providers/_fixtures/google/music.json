@@ -1,0 +1,23 @@
+{
+  "synthetic": true,
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "source": "extensions/google/music-generation-provider.ts",
+  "request": {
+    "model": "lyria-3-clip-preview",
+    "path": "/v1beta/models/lyria-3-clip-preview:generateContent",
+    "body": {
+      "contents": [{ "role": "user", "parts": [{ "text": "Synthetic instrumental melody.\n\nInstrumental only. No vocals, no sung lyrics, no spoken word." }] }],
+      "generationConfig": { "responseModalities": ["AUDIO", "TEXT"] }
+    }
+  },
+  "response": {
+    "candidates": [{ "finishReason": "STOP", "content": { "role": "model", "parts": [
+      { "text": "Synthetic structure: intro, verse, outro." },
+      { "inlineData": { "mimeType": "audio/mpeg", "data": "AAECAw==" } }
+    ] } }],
+    "usageMetadata": { "promptTokenCount": 12, "candidatesTokenCount": 100, "totalTokenCount": 112 }
+  },
+  "fixturePayloadScope": "Synthetic binary encoding sample, not playback or duration proof",
+  "billing": { "actualProviderCostMicrousd": null, "bytesAreSecondsOrTokens": false, "policyFixedIsSeparate": true },
+  "delivery": { "tracks": 1, "partialTrackPublished": false, "textOnlyReplayAllowed": false, "unknownCreateReplayAllowed": false }
+}

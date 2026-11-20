@@ -9,6 +9,140 @@
     "schema": { "const": "clawrouter.service-provider.v1" },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
     "displayName": { "type": "string" },
+    "products": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "commercialModel",
+          "authenticationMethod",
+          "binding",
+          "endpoints"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "commercialModel": {
+            "enum": [
+              "metered",
+              "subscription",
+              "prepaid",
+              "unbilled",
+              "unknown"
+            ]
+          },
+          "authenticationMethod": {
+            "enum": [
+              "api-key",
+              "oauth2",
+              "aws-sigv4",
+              "binding",
+              "none",
+              "unknown"
+            ]
+          },
+          "binding": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "provider-default"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type",
+                  "grantKind"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "grant-transport"
+                  },
+                  "grantKind": {
+                    "enum": [
+                      "api_key",
+                      "oauth",
+                      "subscription"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "offers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "required": [
+                "endpoint",
+                "capability",
+                "models"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "capability": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "models": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 4096,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "endpoints": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
     "description": { "type": "string" },
     "tags": { "type": "array", "items": { "type": "string" } },
     "status": { "enum": ["experimental", "stable", "deprecated", "disabled"] },
@@ -233,8 +367,7 @@
                 "additionalProperties": false,
                 "required": [
                   "pointer",
-                  "filter",
-                  "modelPointer"
+                  "filter"
                 ],
                 "properties": {
                   "pointer": {
@@ -605,6 +738,12 @@
     },
     "endpoint": {
       "allOf": [{
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "oneOf": [{ "$ref": "#/$defs/bedrockConverseEndpoint" }, { "$ref": "#/$defs/bedrockConverseStreamEndpoint" }] }
+      }, {
         "if": { "properties": { "requestFormat": { "const": "openai.responses_compact" } }, "required": ["requestFormat"] },
         "then": {
           "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
@@ -613,17 +752,201 @@
       }, {
         "if": {
           "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.systemone" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenSystemOneEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/sageBatchEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^gradium\\." } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/gradiumSpeechEndpoint" }
+      },
+      {
+        "if": { "anyOf": [
+          { "required": ["requestFormat"], "properties": { "requestFormat": { "pattern": "^xai\\.tts" } } },
+          { "required": ["responseFormat"], "properties": { "responseFormat": { "pattern": "^xai\\.tts" } } }
+        ] },
+        "then": { "$ref": "#/$defs/xaiSpeechEndpoint" }
+      },
+      {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^deepseek\\.search" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^deepseek\\.search" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/deepseekSearchEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
             { "properties": { "requestFormat": { "const": "deepgram.prerecorded" } }, "required": ["requestFormat"] },
             { "properties": { "responseFormat": { "const": "deepgram.prerecorded" } }, "required": ["responseFormat"] }
           ]
         },
         "then": { "$ref": "#/$defs/deepgramPrerecordedEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^openrouter\\.audio_transcription" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/openRouterTranscriptionEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^(groq|mistral)\\.transcription" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^(groq|mistral)\\.transcription" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/groqMistralTranscriptionEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^xai\\.stt" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^xai\\.stt" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/xaiTranscriptionEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "enum": ["google.embed_content", "google.batch_embed_contents"] } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleEmbeddingEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^google\\.image" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^google\\.image" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleImageEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^google\\.music" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^google\\.music" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/googleMusicEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.speech" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.speech" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleSpeechEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.grounded_search" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.grounded_search" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleGroundedSearchEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^google\\.(audio|video)_understanding" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^google\\.(audio|video)_understanding" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/googleUnderstandingEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "enum": ["xai.images_generations", "xai.images_edits"] } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "const": "xai.images" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/xaiImagesEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^synthetic\\." } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^synthetic\\." } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/syntheticModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^baseten\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^baseten\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/basetenModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^arcee\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^arcee\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/arceeModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^novita\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^novita\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/novitaModelsEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^requesty\\.models" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^requesty\\.models" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/requestyManagedModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^chutes\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^chutes\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/chutesModelsEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^featherless\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^featherless\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/featherlessModelsEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^featherless\\.catalog" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^featherless\\.catalog" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/featherlessCatalogEndpoint" }
+      }, {
+        "if": {
+          "anyOf": [
+            { "properties": { "requestFormat": { "pattern": "^venice\\.models" } }, "required": ["requestFormat"] },
+            { "properties": { "responseFormat": { "pattern": "^venice\\.models" } }, "required": ["responseFormat"] }
+          ]
+        },
+        "then": { "$ref": "#/$defs/veniceModelsEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/publicCatalogEndpoint" }
+      }, {
+        "if": { "required": ["inputProfile"] },
+        "then": { "$ref": "#/$defs/pixVerseImageInputEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "pattern": "^/" },
+        "upstreamPath": { "$ref": "#/$defs/literalUpstreamPath" },
         "method": { "type": "string" },
         "nativeProxy": { "type": "boolean" },
         "auth": { "type": "string" },
@@ -638,9 +961,103 @@
         },
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
         "streaming": { "type": "string" },
         "lifecycle": {
           "oneOf": [
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "openrouter.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["mode", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "download_only" },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "xai.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "together.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "cancel"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "runway.tasks" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "cancel": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "pixverse.video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["protocol", "retrieve", "cancel", "files"],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": { "const": "google.omni_video" },
+                "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "cancel": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "files": {
+                  "type": "object",
+                  "required": ["metadata", "download"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": { "const": "metadata" },
+                    "metadata": { "type": "string", "minLength": 1, "maxLength": 64 },
+                    "download": { "type": "string", "minLength": 1, "maxLength": 64 }
+                  }
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "protocol",
+                "retrieve"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "protocol": {
+                  "const": "dashscope.video"
+                },
+                "retrieve": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              }
+            },
             {
               "type": "object",
               "required": [
@@ -783,6 +1200,203 @@
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
     },
+    "basetenModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "baseten.models" },
+        "responseFormat": { "const": "baseten.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "arceeModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "arcee.models" },
+        "responseFormat": { "const": "arcee.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "novitaModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "novita.models" },
+        "responseFormat": { "const": "novita.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "requestyManagedModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models/managed" },
+        "requestFormat": { "const": "requesty.models_managed" },
+        "responseFormat": { "const": "requesty.models_managed" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "publicCatalogEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat", "nativeProxy"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "nativeProxy": { "const": false },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "headers": { "type": "object", "additionalProperties": false, "properties": { "accept": { "const": "application/json" } } }
+      },
+      "oneOf": [
+        { "properties": { "requestFormat": { "const": "cerebras.public_catalog" }, "responseFormat": { "const": "cerebras.public_catalog" } } },
+        { "properties": { "requestFormat": { "const": "nvidia.public_catalog" }, "responseFormat": { "const": "nvidia.public_catalog" } } }
+      ],
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "chutesModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "chutes.models" },
+        "responseFormat": { "const": "chutes.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "featherlessCatalogEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat", "nativeProxy"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "featherless.catalog" },
+        "responseFormat": { "const": "featherless.catalog" },
+        "nativeProxy": { "const": false },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "headers": { "type": "object", "additionalProperties": false, "properties": { "accept": { "const": "application/json" } } }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "featherlessModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "featherless.models" },
+        "responseFormat": { "const": "featherless.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "veniceModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "venice.models" },
+        "responseFormat": { "const": "venice.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["upstreamPath"] }, { "required": ["streaming"] },
+        { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "syntheticModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "upstreamPath", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" },
+        "path": { "const": "/models" },
+        "upstreamPath": { "const": "/openai/v1/models" },
+        "requestFormat": { "const": "synthetic.models" },
+        "responseFormat": { "const": "synthetic.models" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["requestPricing"] },
+        { "required": ["toolPricing"] }, { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "literalUpstreamPath": {
+      "type": "string", "maxLength": 2048,
+      "pattern": "^(/[A-Za-z0-9._~-]+)+$(?![\\s\\S])",
+      "not": { "pattern": "(^|/)\\.{1,2}(/|$)" }
+    },
     "model": {
       "type": "object",
       "required": ["id", "upstream"],
@@ -790,6 +1404,8 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "availability": { "$ref": "#/$defs/modelAvailability" },
         "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },
         "supportedReasoningEfforts": {
@@ -816,11 +1432,32 @@
             "additionalProperties": false,
             "properties": {
               "pricingRef": { "type": "string", "minLength": 1 },
-              "pricing": { "$ref": "#/$defs/tokenPricing" }
+              "pricing": { "oneOf": [{ "$ref": "#/$defs/tokenPricing" }, { "type": "null" }] }
             }
           }
         }
       }
+    },
+    "modelAvailability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "status", "effectiveAt", "checkedAt", "sources"],
+      "properties": {
+        "version": { "const": "clawrouter.model-availability.v1" },
+        "status": { "enum": ["stopped", "deprecated", "upstream_alias"] },
+        "effectiveAt": { "type": "string", "format": "date" },
+        "checkedAt": { "type": "string", "format": "date" },
+        "sources": {
+          "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+          "items": { "type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048 }
+        },
+        "servingModel": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$" }
+      },
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "upstream_alias" } } },
+        "then": { "required": ["servingModel"] },
+        "else": { "not": { "required": ["servingModel"] } }
+      }]
     },
     "nativeModelCapabilities": {
       "type": "object",
@@ -847,6 +1484,119 @@
         }
       }
     },
+    "inlineMusicReferenceImage": {
+      "type": "object",
+      "required": ["required", "count", "encoding", "mimeTypes", "maxDecodedBytes", "maxJsonBytes", "https", "assetHandles"],
+      "additionalProperties": false,
+      "properties": {
+        "required": { "const": false },
+        "count": { "const": 1 },
+        "encoding": { "const": "base64_data_url" },
+        "mimeTypes": { "const": ["image/png", "image/jpeg", "image/webp"] },
+        "maxDecodedBytes": { "const": 8388608 },
+        "maxJsonBytes": { "const": 12582912 },
+        "https": { "const": false },
+        "assetHandles": { "const": false }
+      }
+    },
+    "publishedMusicInputSupport": {
+      "type": "object",
+      "required": [
+        "version",
+        "publication",
+        "slot",
+        "count",
+        "encoding",
+        "mimeTypes",
+        "maxDecodedBytes",
+        "maxJsonBytes",
+        "maxForwardJsonBytes",
+        "maxLifetimeSeconds",
+        "renewable",
+        "destinationAttempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "clawrouter.published-input.v1"
+        },
+        "publication": {
+          "type": "object",
+          "required": [
+            "method",
+            "path",
+            "query",
+            "body",
+            "idempotencyKey"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/v1/input-assets/openrouter/music"
+            },
+            "query": {
+              "const": false
+            },
+            "body": {
+              "const": "native_plan"
+            },
+            "idempotencyKey": {
+              "type": "object",
+              "required": [
+                "header",
+                "pattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "header": {
+                  "const": "Idempotency-Key"
+                },
+                "pattern": {
+                  "const": "^[A-Za-z0-9._:-]{1,128}$"
+                }
+              }
+            }
+          }
+        },
+        "slot": {
+          "const": "messages[0].content[1].image_url.url"
+        },
+        "count": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "base64_data_url"
+        },
+        "mimeTypes": {
+          "const": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "maxDecodedBytes": {
+          "const": 8388608
+        },
+        "maxJsonBytes": {
+          "const": 12582912
+        },
+        "maxForwardJsonBytes": {
+          "const": 262144
+        },
+        "maxLifetimeSeconds": {
+          "const": 900
+        },
+        "renewable": {
+          "const": false
+        },
+        "destinationAttempts": {
+          "const": 1
+        }
+      }
+    },
     "nativeEndpointCapabilities": {
       "type": "object",
       "required": [
@@ -856,6 +1606,9 @@
       "minProperties": 3,
       "additionalProperties": false,
       "properties": {
+        "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
+        "referenceImage": { "$ref": "#/$defs/inlineMusicReferenceImage" },
+        "publishedInput": { "$ref": "#/$defs/publishedMusicInputSupport" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },
@@ -919,8 +1672,29 @@
         }
       }
     },
+    "opaquePcmSpeechProfile": {
+      "type": "object",
+      "required": ["voiceRequired", "responseFormat", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "voiceRequired": { "const": true },
+        "responseFormat": { "const": "pcm" },
+        "output": {
+          "type": "object",
+          "required": ["kind", "mimeType", "sampleRate", "voiceCompatible"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "opaque" },
+            "mimeType": { "const": "audio/pcm" },
+            "sampleRate": { "const": null },
+            "voiceCompatible": { "const": false }
+          }
+        }
+      }
+    },
     "nativeDecisionCapabilities": {
       "oneOf": [
+        { "$ref": "#/$defs/nativeBasetenDecisionCapabilities" },
         {
           "$ref": "#/$defs/nativeOpenAiDecisionCapabilities"
         },
@@ -928,6 +1702,46 @@
           "$ref": "#/$defs/nativeHostedDecisionCapabilities"
         }
       ]
+    },
+    "nativeBasetenDecisionCapabilities": {
+      "type": "object",
+      "required": ["protocol", "questions", "limits", "outputTokensPerQuestion"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": { "const": "baseten-systemone" },
+        "questions": {
+          "type": "object", "required": ["boolean", "choice", "score"], "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "allOf": [{ "$ref": "#/$defs/nativeBooleanQuestion" }, { "properties": { "abstention": { "const": false } } }]
+            },
+            "choice": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 255 }, "maxImageOptions": false }
+              }]
+            },
+            "score": {
+              "allOf": [{ "$ref": "#/$defs/nativeDecisionOptionQuestion" }, {
+                "required": ["maxOptions"],
+                "properties": { "probabilities": { "const": "provider-defined" }, "abstention": { "const": false },
+                  "minOptions": { "const": 2 }, "maxOptions": { "const": 10 }, "maxImageOptions": false }
+              }]
+            }
+          }
+        },
+        "reasoning": {
+          "type": "object", "required": ["modes"], "additionalProperties": false,
+          "properties": { "modes": { "const": ["auto"] }, "default": { "const": "auto" }, "metadata": { "const": false } }
+        },
+        "confidence": { "const": "provider-specific" },
+        "outputTokensPerQuestion": { "const": 1 },
+        "limits": {
+          "type": "object", "required": ["maxTotalOptions", "maxStateAndQuestionTokens"], "additionalProperties": false,
+          "properties": { "maxTotalOptions": { "const": 512 }, "maxStateAndQuestionTokens": { "const": 16384 } }
+        }
+      }
     },
     "nativeHostedDecisionCapabilities": {
       "type": "object",
@@ -1607,6 +2421,331 @@
         }
       }
     },
+    "googleImageEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.image_generate" }, "responseFormat": { "const": "google.image" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleMusicEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.music_generate" }, "responseFormat": { "const": "google.music" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleSpeechEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "oneOf": [
+        { "properties": {
+          "path": { "const": "/v1beta/models/${model}:generateContent" }, "pathParams": { "const": ["model"] },
+          "requestFormat": { "const": "google.speech_generate_content" }, "responseFormat": { "const": "google.speech_generate_content" }
+        } },
+        { "required": ["nativeProxy"], "properties": {
+          "path": { "const": "/v1beta/interactions" }, "pathParams": { "const": [] }, "nativeProxy": { "const": false },
+          "requestFormat": { "const": "google.speech_interactions" }, "responseFormat": { "const": "google.speech_interactions" }
+        } }
+      ],
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleGroundedSearchEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "nativeProxy"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": false },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "const": "google.grounded_search" }, "responseFormat": { "const": "google.grounded_search" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleUnderstandingEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "nativeProxy"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": false },
+        "path": { "const": "/v1beta/models/${model}:generateContent" },
+        "pathParams": { "const": ["model"] },
+        "requestFormat": { "enum": ["google.audio_understanding", "google.video_understanding"] },
+        "responseFormat": { "const": "google.generate_content" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "googleEmbeddingEndpoint": {
+      "type": "object",
+      "required": ["pathParams"],
+      "properties": {
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "const": ["model"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:embedContent" },
+            "requestFormat": { "const": "google.embed_content" },
+            "responseFormat": { "const": "google.embed_content" }
+          }
+        },
+        {
+          "properties": {
+            "path": { "const": "/v1beta/models/${model}:batchEmbedContents" },
+            "requestFormat": { "const": "google.batch_embed_contents" },
+            "responseFormat": { "const": "google.batch_embed_contents" }
+          }
+        }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+          { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+        ]
+      }
+    },
+    "sageBatchEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/decide/batch" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "levanto.sage_batch" }, "responseFormat": { "const": "levanto.sage_batch" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["inputProfile"] }
+      ] }
+    },
+    "basetenSystemOneEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/systemone" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "baseten.systemone" }, "responseFormat": { "const": "baseten.systemone" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
+      ] }
+    },
+    "bedrockConverseEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "pathParamStyles"],
+      "properties": {
+        "path": { "const": "/model/${model}/converse" }, "method": { "const": "POST" },
+        "requestFormat": { "const": "aws_bedrock.converse" }, "responseFormat": { "const": "aws_bedrock.converse" },
+        "nativeProxy": { "const": true }, "pathParams": { "const": ["model"] },
+        "pathParamStyles": { "const": { "model": "opaque_segment" } },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "bedrockConverseStreamEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "pathParamStyles"],
+      "properties": {
+        "path": { "const": "/model/${model}/converse-stream" }, "method": { "const": "POST" },
+        "requestFormat": { "const": "aws_bedrock.converse_stream" }, "responseFormat": { "const": "aws_bedrock.converse_eventstream" },
+        "nativeProxy": { "const": true }, "pathParams": { "const": ["model"] },
+        "pathParamStyles": { "const": { "model": "opaque_segment" } },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "pixVerseImageInputEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "inputProfile", "lifecycle"],
+      "properties": {
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
+        "path": { "const": "/openapi/v2/video/img/generate" }, "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "pixverse.image_video" }, "responseFormat": { "const": "pixverse.video" },
+        "pathParams": { "const": [] }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "headers": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "lifecycle": { "required": ["protocol", "retrieve"], "properties": { "protocol": { "const": "pixverse.video" } } }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] },
+        { "required": ["outputTokenLimit"] }, { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "deepseekSearchEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/tools/search" }, "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "deepseek.search" }, "responseFormat": { "const": "deepseek.search" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "xaiSpeechEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/tts" }, "pathParams": { "const": [] },
+        "requestFormat": { "const": "xai.tts" }, "responseFormat": { "const": "audio.binary" },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "gradiumSpeechEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/api/post/speech/tts" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "gradium.speech" },
+        "responseFormat": { "const": "audio.binary" },
+        "query": { "maxProperties": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["upstreamPath"] }
+      ] }
+    },
+    "xaiTranscriptionEndpoint": {
+      "type": "object", "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/stt" }, "pathParams": { "const": [] },
+        "requestFormat": { "const": "xai.stt" }, "responseFormat": { "const": "xai.stt" },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "groqMistralTranscriptionEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/audio/transcriptions" }, "pathParams": { "const": [] },
+        "requestFormat": { "enum": ["groq.transcription", "mistral.transcription"] },
+        "responseFormat": { "enum": ["groq.transcription", "mistral.transcription"] },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "openRouterTranscriptionEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/v1/audio/transcriptions" },
+        "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "openrouter.audio_transcription" },
+        "responseFormat": { "const": "openrouter.audio_transcription" },
+        "query": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 },
+        "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
     "deepgramPrerecordedEndpoint": {
       "type": "object",
       "properties": {
@@ -1650,7 +2789,88 @@
         "toolCalling": { "$ref": "#/$defs/parameterSupport" }
       }
     },
+    "xaiImagesEndpoint": {
+      "type": "object",
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "responseFormat": { "const": "xai.images" },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestPricing": { "$ref": "#/$defs/imageRequestPricing" }
+      },
+      "oneOf": [
+        { "properties": { "path": { "const": "/v1/images/generations" }, "requestFormat": { "const": "xai.images_generations" } } },
+        { "properties": { "path": { "const": "/v1/images/edits" }, "requestFormat": { "const": "xai.images_edits" } } }
+      ],
+      "not": {
+        "anyOf": [
+          { "required": ["auth"] }, { "required": ["streaming"] }, { "required": ["websocket"] },
+          { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+          { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }, { "required": ["toolPricing"] }
+        ]
+      }
+    },
+    "imageRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "receipt", "alias", "rates"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "image" }, "protocol": { "const": "xai.images" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "format": "date" },
+        "source": { "const": "https://docs.x.ai/developers/pricing" },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" },
+        "alias": {
+          "const": {
+            "selectedModel": "grok-imagine-image-quality", "servingModel": "grok-imagine-image-2.0", "quality": "low",
+            "effectiveAt": "2026-11-02", "source": "https://docs.x.ai/developers/migration/imagine-image-quality-nov-2"
+          }
+        },
+        "rates": {
+          "const": {
+            "grok-imagine-image": { "inputMicrosPerImage": 2000, "outputMicrosPerImage": { "1k": 20000, "2k": 20000 } },
+            "grok-imagine-image-2.0": {
+              "inputMicrosPerImage": 10000,
+              "outputMicrosPerImage": { "low": { "1k": 40000, "2k": 60000 }, "medium": { "1k": 60000, "2k": 80000 } }
+            }
+          }
+        }
+      }
+    },
+    "deepSeekSearchRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "successfulNonemptyRequestMicros", "emptyRequestMicros"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" }, "protocol": { "const": "deepseek.search" },
+        "version": { "type": "string", "pattern": "^[a-zA-Z0-9._:-]{1,128}$" },
+        "effectiveAt": { "const": "2026-11-01T00:00:00+08:00" },
+        "source": { "const": "https://api-docs.deepseek.com/guides/search/" },
+        "successfulNonemptyRequestMicros": { "const": 750 }, "emptyRequestMicros": { "const": 0 }
+      }
+    },
     "requestPricing": {
+      "oneOf": [
+        { "$ref": "#/$defs/successfulRequestPricing" },
+        { "$ref": "#/$defs/outcomeRequestPricing" },
+        { "$ref": "#/$defs/imageRequestPricing" }
+      ]
+    },
+    "outcomeRequestPricing": {
+      "type": "object",
+      "required": ["unit", "version", "effectiveAt", "source", "outcome", "maximumAdditionalMicros", "receipt"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" },
+        "version": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "effectiveAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        "source": { "const": "https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee" },
+        "outcome": { "const": "xai.responses_violation" },
+        "maximumAdditionalMicros": { "const": 50000 },
+        "receipt": { "const": "xai.usage.cost_in_usd_ticks" }
+      }
+    },
+    "successfulRequestPricing": {
       "type": "object",
       "required": [
         "unit",
@@ -1927,6 +3147,7 @@
         "inputTokenOverhead": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "unpricedCosts": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "enum": ["request_fee"] } },
         "settlementBasis": { "enum": ["published_upper_bound"] },
+        "autoServiceTier": { "const": "unpriced" },
         "anthropicModifiers": { "$ref": "#/$defs/anthropicPriceModifiers" },
         "longContext": { "$ref": "#/$defs/longContextPricing" },
         "serviceTiers": {

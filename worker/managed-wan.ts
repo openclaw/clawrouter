@@ -1,4 +1,4 @@
-import type { ManagedLifecycleAdapter, ManagedObservation, ManagedReadContext } from "./managed-lifecycle-types.ts";
+import type { ManagedLifecycleAdapter, ManagedObservation } from "./managed-lifecycle-types.ts";
 import { dropMediaControlUrls, exactMediaParams, mediaObject, noMediaQuery, readMediaJson } from "./managed-media-json.ts";
 
 export const wanModels = ["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v", "wan2.6-r2v-flash", "wan2.7-r2v"] as const;
@@ -12,14 +12,6 @@ export interface WanObservation extends ManagedObservation {
   // claiming upstream failure, success or refund. Never poll this state again.
   observationUnavailable?: "expired_or_unknown";
 }
-
-// The protocol discriminator and explicit observation-loss signal are pending
-// shared type/controller qualification. All methods use the existing contract.
-// Do not register this adapter until those two integration gates are implemented.
-type WanAdapter = Omit<ManagedLifecycleAdapter, "protocol" | "read"> & {
-  protocol: "dashscope.video";
-  read(response: Response, context: ManagedReadContext): Promise<WanObservation>;
-};
 
 export function validateWanTaskId(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new Error("invalid_wan_task_id");
@@ -37,9 +29,15 @@ export function assertWanStandardCredential(secret: string, baseUrl: string): vo
   if (!secret.trim() || secret.trim().startsWith("sk-sp-") || !origin || url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash || !["", "/"].includes(url.pathname)) throw new Error("wan_requires_same_region_standard_api_credential");
 }
 
-export const wanManagedAdapter: WanAdapter = {
+export const wanManagedAdapter: ManagedLifecycleAdapter = {
   protocol: "dashscope.video", requestFormats: ["dashscope.video_create"], supportsResult: false, supportsCancel: false,
   validateId: validateWanTaskId,
+  assertDispatch(request) {
+    const authorization = request.headers.get("authorization");
+    const bearer = authorization === null ? null : /^Bearer ([^\s,]+)$/i.exec(authorization);
+    if (!bearer) throw new Error("wan_requires_same_region_standard_api_credential");
+    assertWanStandardCredential(bearer[1], new URL(request.url).origin);
+  },
   prepare(body, _headers, pathParams, query) {
     noMediaQuery(query); exactMediaParams(pathParams, []);
     if (!mediaObject(body) || Object.keys(body).some(key => !["model", "input", "parameters"].includes(key))
@@ -73,6 +71,9 @@ export const wanManagedAdapter: WanAdapter = {
     if (parameters.resolution !== undefined && !["720P", "1080P"].includes(String(parameters.resolution))) throw new Error("invalid_wan_resolution");
     if (parameters.ratio !== undefined && !ratios.has(String(parameters.ratio))) throw new Error("invalid_wan_ratio");
     for (const name of ["audio", "watermark"]) if (parameters[name] !== undefined && typeof parameters[name] !== "boolean") throw new Error("invalid_wan_boolean");
+    // Wire-valid URLs or inline bytes do not establish input-asset ownership.
+    // Keep new asset creates closed without changing existing job controls.
+    if (image || reference) throw new Error("wan_input_asset_binding_required");
     return { body, headers: new Headers({ "content-type": "application/json", "x-dashscope-async": "enable" }), requestedVersion: body.model, pathParams: {} };
   },
   identify(action, pathParams, query) {
@@ -87,7 +88,9 @@ export const wanManagedAdapter: WanAdapter = {
   },
   async read(response, context) {
     if (!["create", "retrieve"].includes(context.action)) throw new Error("unsupported_wan_control");
-    const { body } = await readMediaJson(response), output = body.output;
+    if (context.registerInput && !context.signal) throw new Error("wan_operation_signal_required");
+    const { body } = await readMediaJson(response, undefined, context.registerInput
+      ? { signal: context.signal!, registerInput: context.registerInput } : undefined), output = body.output;
     if (!mediaObject(output) || body.code !== undefined && body.code !== "") throw new Error("invalid_wan_response");
     const id = validateWanTaskId(output.task_id), status = output.task_status;
     if (context.action !== "create" && id !== validateWanTaskId(context.expectedId)) throw new Error("wan_identity_mismatch");

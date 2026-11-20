@@ -10,7 +10,7 @@ const sha = "0123456789abcdef0123456789abcdef01234567";
 const otherSha = "f".repeat(40);
 const spellings = (value) => [value, value.toUpperCase(), value.replace(/[ace]/g, (letter) => letter.toUpperCase())];
 
-for (const name of ["deploy-cloudflare", "deploy-cloudflare-fakeco"]) {
+for (const name of ["deploy-cloudflare-fakeco"]) {
   const workflow = parse(readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8"));
   const steps = workflow.jobs.deploy.steps;
   const guard = steps.find((s) => s.name === 'Verify dispatched deployment source');

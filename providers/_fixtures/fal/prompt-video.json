@@ -1,0 +1,15 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://queue.fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null },
+  "requests": [
+    { "model": "fal-ai/minimax/video-01-live", "pathParams": { "owner": "fal-ai", "app": "minimax", "variant": "video-01-live" }, "body": { "prompt": "Animate a blue paper boat drifting downstream" } },
+    { "model": "fal-ai/heygen/v2/video-agent", "pathParams": { "owner": "fal-ai", "app": "heygen", "variant": "v2", "subvariant": "video-agent" }, "body": { "prompt": "Explain how a paper boat floats" } }
+  ],
+  "requestId": "synthetic_fal_video_job",
+  "submit": { "request_id": "synthetic_fal_video_job", "status": "IN_QUEUE", "status_url": "https://untrusted.example/control", "response_url": "https://untrusted.example/result" },
+  "running": { "request_id": "synthetic_fal_video_job", "status": "IN_PROGRESS", "video": { "url": "https://assets.example/partial.mp4" } },
+  "completed": { "request_id": "synthetic_fal_video_job", "status": "COMPLETED", "metrics": { "inference_time": 12.5 } },
+  "result": { "video": { "url": "https://assets.example/boat.mp4", "content_type": "video/mp4", "file_size": 1024 } },
+  "cancelRequested": { "status": "CANCELLATION_REQUESTED" },
+  "cancelRemoved": { "status": "OK" },
+  "failure": { "detail": [{ "msg": "Synthetic invalid input" }] }
+}

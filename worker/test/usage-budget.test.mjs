@@ -226,7 +226,8 @@ test("Together full-context requests require headroom in both budgets and settle
 const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
 const largeResponsesOutput = [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }];
 test("live HTTP and native streams keep both reservations past 15 minutes until completion", async (t) => {
-  let now = Date.now();
+  // Mid-month: advancing past lease expiry must never cross a budget window.
+  let now = Date.parse("2026-10-10T12:00:00Z");
   t.mock.method(Date, "now", () => now);
   for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) {
     const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
@@ -373,7 +374,8 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
 });
 
 test("dispatched pre-header HTTP and native failures retain estimates through independent ledger recovery", async (t) => {
-  let now = Date.now();
+  // Mid-month: advancing past lease expiry must never cross a budget window.
+  let now = Date.parse("2026-10-10T12:00:00Z");
   t.mock.method(Date, "now", () => now);
   const { modelRoute } = await import("../providers.ts");
   const endpointTimeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;

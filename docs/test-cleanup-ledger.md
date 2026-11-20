@@ -11,8 +11,20 @@ scripts normalized as string literals. These are candidate-screening results,
 not a claim that a clone score measures correctness. Concurrent feature additions
 after the frozen inventory need their own review.
 
+The continuation at frozen revision `ed4bc0e` parsed 385 test/support files
+without failures and screened nine newly reported clone groups. Consolidate the
+four hosted-provider contract suites below. Keep small adapter override helpers,
+compiler rejection loops, codec-specific assertions and usage receipt polls
+local: their surrounding contracts differ. OpenClaw search and embedding
+consumer tests have a dedicated pinned-source workflow; their ordinary-CI skips
+are intentional. The chat transport matrix exercises Worker/SQL boundaries,
+while the hosted contract table checks manifest configuration and local helpers.
+
 | Change | Evidence and retained coverage | Validation |
 | --- | --- | --- |
+| Fold hosted gateway contracts into the shared provider table | At frozen `7b5108c`, five gateway providers repeat the shared assertions. Move their ten cases into the existing table, preserving all 58 cases across 29 providers and every binding, URL and model literal. Expand foreign-credential isolation across all rows and preserve the lab-key, OIDC and unbound OpenCode alias guards. Removes one compiler subprocess, one test file and 41 net test source lines. | Crabbox: all 58 original cases passed; 1,101 focused contract, compiler, chat transport and smoke tests passed afterward, zero skips. Bundled snapshot equality, strict smoke plan and Worker typechecking passed. |
+| Fold platform and specialist suites into the shared hosted contract table | At frozen `526e2048`, two additional suites duplicate the same assertions. Move their nine provider rows into the existing table, preserving all 48 cases across 24 providers and Particle’s distinct catalog/upstream IDs. Add their foreign product bindings to the shared isolation check. Removes two compiler subprocesses and 83 net test source lines. | Crabbox: all 48 original cases passed; 738 focused contract, compiler, chat transport and smoke tests passed after consolidation, zero skips. Bundled snapshot equality, strict smoke plan and Worker typechecking passed. Autoreview clean through P2. |
+| Consolidate four hosted-provider contract suites | One 15-provider table preserves all 30 named cases, explicit model/URL/binding facts, aliases, opaque model handling and tool/reasoning replay. Test each provider against the union of foreign product credentials. Compile in process; dedicated CLI tests retain process/output contracts. Removes four compiler subprocesses and 124 source lines. | Crabbox: all 30 original cases passed before consolidation; 576 focused compiler, contract, transport and smoke tests passed afterward, zero skips. Bundled snapshot equality, strict smoke plan and Worker typechecking passed. Autoreview clean through P2. |
 | Measure realtime revocation after the authority mutation is acknowledged | A hosted run failed at 339 ms; its 250 ms check included the mutation RPC and host polling wake-up. The exact cause of that excess is unproven. Start the enforcement interval after acknowledgement and timestamp the close event itself. Preserve the 250 ms ceiling, egress bound, expected errors and no-egress-after-close checks; report mutation latency separately. | Crabbox: a 300 ms simulated mutation ACK delay fails the old measurement and passes the corrected one (19 ms close). Four concurrent authority-matrix runs passed; all 20 cadence/runtime tests passed with no skips. Autoreview clean through P2. Landed in [#451](https://github.com/openclaw/clawrouter/pull/451). |
 | Finish moving Worker manifest mutations in process | The shared compiler helper already ran directly, but quota, reasoning, tier, grant-endpoint, Codex alias and pricing cases still forked the CLI. Keep every mutation and error match through the imported compiler; remove JSON round-trips. The dedicated CLI suite owns stdout/file equality and no-output failure behavior. | Crabbox: 75 focused compiler and smoke-plan/format tests passed, no skips; bundled snapshot equality and strict smoke plan passed. Autoreview clean through P2. Landed in [#441](https://github.com/openclaw/clawrouter/pull/441). |
 | Gate transcription disconnect on an explicitly held provider response | The 500 ms provider delay could expire before the caller abort on a slow runner. Hold completion in the existing fixture Durable Object, observe the gate, assert AbortError, then release and verify accounting. Add phase context to transport failures. | Eight unchanged fixture runs passed in Crabbox (four concurrent); the prior CI EPIPE did not reproduce. All eight gated runs also passed, with four concurrent and no skips. Autoreview clean through P2; the EPIPE cause remains unknown. Landed in [#437](https://github.com/openclaw/clawrouter/pull/437). |
@@ -68,7 +80,32 @@ real local runtime/stores with synthetic upstreams. Protocol fixtures qualify
 codecs; none of these proves live provider compatibility or a deployed service.
 No release or deployment was invoked for this audit.
 
-Residual observation: an earlier transcription CI EPIPE did not reproduce in
-eight unchanged or eight gated Crabbox runs. Its root cause remains unproven;
-the gate change fixes an independent ordering flaw. Revisit that exact transport
-failure if it recurs, without adding retries or claiming it is resolved.
+The transcription disconnect gate fixed an independent ordering flaw. The
+original EPIPE did not reproduce in eight unchanged or eight gated Crabbox runs.
+A later [CI recurrence](https://github.com/openclaw/clawrouter/actions/runs/41647646499/job/125957107176)
+failed during grant selection/request validation, without identifying the call.
+Sixty-four unchanged fixture runs and 300 ordinary unauthenticated uploads passed.
+Amplifying that early-rejected upload with 1,000 synthetic multipart fields
+reproduced EPIPE in 40/40 requests with the same Undici write stack. Encoding the
+same multipart body first passed 40/40 requests. This identifies a reproducible
+transport race, but does not prove which call failed in the historical CI run.
+
+The fixture now buffers only the finite unauthenticated upload, keeps the
+amplified case, and labels individual requests and upstream counter reads.
+Successful uploads and the explicitly gated caller disconnect still use real
+TCP and FormData. No retry or production request-body drain was added.
+
+A separate pinned Linux CI run (Node 24.22.1, Miniflare 5.20261023.3-beta,
+workerd 1.20261021.1) reproduced the small, unamplified fixture failure:
+[5 of 24 independent runs failed](https://github.com/openclaw/clawrouter/actions/runs/41661086524),
+all labeled `unauthenticated transcription rejection` with EPIPE. Pre-encoding
+only that tiny upload passed [24/24](https://github.com/openclaw/clawrouter/actions/runs/41661785170)
+and another [24/24](https://github.com/openclaw/clawrouter/actions/runs/41661865146).
+These observations locate a current CI failure without amplifying the payload;
+they do not establish which request failed in the earlier historical run.
+
+Run `node test/diagnostics/transcription-transport.mjs` with the checkout's
+qualified dependencies to repeat the current fixture 24 times, four processes
+at a time. The manual diagnostic has a 90-second global deadline, captures
+bounded subprocess output, reports every result and fails on any failed run.
+It does not retry failed requests or run automatically in ordinary CI.

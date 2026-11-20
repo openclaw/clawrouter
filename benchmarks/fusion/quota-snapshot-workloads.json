@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "quota-snapshot-watermarks",
+      "split": "development",
+      "base": "79d6e7002bd17ba93d9f9c577b666b5d3318bc0f",
+      "oracle": "626ee0f79d8d983f99c4ee3ce4c57f29885b9ddd",
+      "editPaths": [
+        "worker/grant-runtime.ts",
+        "worker/types.ts"
+      ],
+      "visibleTests": [
+        "worker/test/grant-quota.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-runtime.test.mjs"
+      ],
+      "instruction": "Preserve successful quota-probe replacement snapshots across runtime normalization and merging. Add the optional GrantRuntimeState.windowSnapshots field with type Record<string, { observedAt: string; ids: string[] }>. Each record key names an exact window scope or a prefix ending in -*; observedAt is a valid timestamp, and ids lists the reported window IDs belonging to that scope. Allow at most 128 scopes and 128 IDs per scope. Scope base names and window IDs use lowercase alphanumerics, underscores and hyphens, start with an alphanumeric character, and are at most 64 characters; only scope keys may add the trailing -*. Deduplicate IDs when normalizing. Preserve legitimate object-property names such as constructor. Remove omitted windows in that scope only when their observations are no newer than the snapshot, and retain scope watermarks so delayed observations cannot resurrect them in either arrival order. Preserve unrelated windows, newer observations, partial response updates, independent rejection cooldowns and credential-revision fences. Validate bounded snapshot metadata and reject malformed scope, timestamp and member IDs. Do not change provider parsing, network behavior or request routing."
+    }
+  ]
+}

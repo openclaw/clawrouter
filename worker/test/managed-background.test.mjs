@@ -151,8 +151,67 @@ test("unknown prices, malformed metadata and raw idempotency keys fail before re
   const bad = [input => { input.facts.fixed = null; input.facts.cost = { ...cost, basis: "flat_fallback", reserveMicros: 1 }; },
     input => { input.managed.idempotencyKey = "raw-caller-key"; }, input => { input.managed.input = "private-input"; },
     input => { input.managed.requestedVersion = "x".repeat(257); }, input => { input.plan.reservedMicros = 1; }];
-  for (const mutate of bad) { const input = f.admission(); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
+  // Corrupt a synthetic wire payload, never the admitted immutable facts.
+  for (const mutate of bad) { const input = JSON.parse(JSON.stringify(f.admission())); mutate(input); await assert.rejects(f.call({ action: "managed_admit", admission: input })); }
   assert.equal(f.db.prepare("SELECT count(*) AS n FROM responses_background").get().n, 0);
   assert.deepEqual(f.reserveCalls, []);
   for (const id of ["", "../escape", "a".repeat(129), "query?x=1"]) assert.throws(() => managedPredictionKey(id));
+});
+
+test("managed protocols and configured providers keep distinct keys, bindings and compacted routes", async t => {
+  const f = fixture(t), rows = [];
+  for (const protocol of ["fal.queue", "kie.jobs", "vydra.jobs", "openrouter.video"]) for (const providerId of ["first", "second"]) {
+    const input = f.admission(); input.owner = { ...input.owner, providerId };
+    input.managed = { ...input.managed, protocol, providerId };
+    input.route.pathParams = protocol === "fal.queue" ? { owner: "fal-ai", app: "flux", variant: "schnell" } : {};
+    assert.equal(f.store.admitManaged(input).created, true); dispatch(f, input.id);
+    assert.equal((await (await f.call({ action: "managed_bind", id: input.id, responseId: "11111111-2222-4333-8444-555555555555" })).json()).bound, true);
+    f.store.observeManaged(input.id, "11111111-2222-4333-8444-555555555555", "succeeded", 200);
+    const frozen = f.store.get(input.id);
+    for (let index = 0; index < frozen.legs.length; index++) f.store.acknowledge(input.id, frozen.eventId, index, "settled");
+    f.store.acknowledge(input.id, frozen.eventId, "usage", "stored");
+    rows.push(input);
+  }
+  f.restart(); assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM http_continuations").get().n, rows.length);
+  for (const input of rows) {
+    const retry = f.store.managedRetry(input.managed, "g1");
+    assert.equal(retry.id, input.id); assert.equal(retry.phase, "complete");
+    assert.deepEqual(retry.managed.route, input.route);
+  }
+});
+
+for (const loss of ["expired_or_unknown", "deleted", "canceled_or_deleted"]) test(`${loss} is one durable uncertainty receipt, never an execution terminal or refund`, async t => {
+  const f = fixture(t), input = f.admission(); f.store.admitManaged(input); dispatch(f, input.id);
+  await f.call({ action: "managed_bind", id: input.id, responseId: "prediction_fixture" });
+  f.advance(5000); const [claim] = f.store.claim(Date.now());
+  f.store.observeManaged(input.id, "prediction_fixture", "processing", 200, claim.attempts - 1, loss);
+  assert.equal(f.store.get(input.id).event, null, "stale collectors cannot freeze observation loss");
+  const observe = { action: "managed_observe", id: input.id, responseId: "prediction_fixture", predictionStatus: "processing", statusCode: 200, observationUnavailable: loss };
+  for (const bad of [{ ...observe, responseId: "different" }, { ...observe, observationUnavailable: "failed" }, { ...observe, predictionStatus: "succeeded" }]) await assert.rejects(f.call(bad));
+  // Both the visibility marker and immutable receipt roll back together.
+  f.db.exec("CREATE TRIGGER reject_receipt BEFORE UPDATE ON responses_background WHEN json_extract(NEW.job_json, '$.phase') = 'outbox' BEGIN SELECT RAISE(ABORT, 'fixture receipt refusal'); END");
+  await assert.rejects(f.call(observe), /fixture receipt refusal/);
+  assert.equal(f.store.get(input.id).managed.observationUnavailable, undefined); assert.equal(f.store.get(input.id).event, null);
+  f.db.exec("DROP TRIGGER reject_receipt");
+  await f.call(observe); f.restart();
+  const frozen = f.store.get(input.id);
+  assert.equal(frozen.phase, "outbox"); assert.equal(frozen.managed.observationUnavailable, loss); assert.equal(frozen.managed.terminal, null);
+  assert.equal(frozen.lastError, "observation_unavailable"); assert.equal(frozen.responseId, null); assert.equal(frozen.route, null);
+  assert.equal(frozen.event.actual_cost_micros, 700); assert.equal(frozen.event.cost_basis, "policy_fixed"); assert.equal(frozen.event.total_tokens, null);
+  assert.equal(f.db.prepare("SELECT background_closed FROM http_continuations").get().background_closed, 1);
+  await f.call(observe); f.store.observeManaged(input.id, "prediction_fixture", "succeeded", 200);
+  assert.deepEqual(f.store.get(input.id).event, frozen.event, "late outcomes cannot rewrite a frozen receipt");
+  f.store.acknowledge(input.id, frozen.event.id, 0, "settled"); f.store.acknowledge(input.id, frozen.event.id, 1, "unavailable"); f.store.acknowledge(input.id, frozen.event.id, "usage", "stored");
+  f.restart(); f.store.acknowledge(input.id, frozen.event.id, 1, "settled");
+  const done = f.store.get(input.id); assert.equal(done.phase, "complete"); assert.equal(done.managed.observationUnavailable, loss); assert.equal(done.managed.terminal, null);
+  assert.equal(f.store.admitManaged(f.admission()).created, false); assert.deepEqual(f.store.claim(Date.now()), []);
+});
+
+test("a qualified terminal wins before late observation loss without erasing its evidence", async t => {
+  const f = fixture(t), input = f.admission(); f.store.admitManaged(input); dispatch(f, input.id);
+  await f.call({ action: "managed_bind", id: input.id, responseId: "prediction_fixture" });
+  f.store.observeManaged(input.id, "prediction_fixture", "aborted", 200);
+  const frozen = f.store.get(input.id);
+  await f.call({ action: "managed_observe", id: input.id, responseId: "prediction_fixture", predictionStatus: "processing", statusCode: 200, observationUnavailable: "deleted" });
+  assert.deepEqual(f.store.get(input.id), frozen); assert.equal(frozen.managed.terminal, "aborted"); assert.equal(frozen.managed.observationUnavailable, undefined);
 });

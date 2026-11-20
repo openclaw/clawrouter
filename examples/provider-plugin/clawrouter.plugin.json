@@ -1,0 +1,10 @@
+{
+  "schema": "clawrouter.provider-plugin.v1",
+  "id": "example",
+  "version": "1.0.0",
+  "manifest": "example.provider.yaml",
+  "documentation": "README.md",
+  "license": "LICENSE",
+  "assets": { "logo": { "light": "assets/logo.svg" } },
+  "fixtures": ["fixtures/request.json"]
+}

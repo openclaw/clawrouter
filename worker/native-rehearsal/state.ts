@@ -1,0 +1,146 @@
+import {DurableObject} from 'cloudflare:workers';
+import {readJson,sha256Hex} from '../utils.ts';
+import {budgetStatus,providerBudgetStatus,usageSnapshots} from '../ledgers.ts';
+import {putGrantCredentials} from '../grant-credentials.ts';
+import {lifecycleCall} from '../large-http/lifecycle-client.ts';
+import {rehearsalConfig,caseId,upstreamKey,type RehearsalEnv} from './contract.ts';
+import {inspectSyntheticInput} from './input.ts';
+import {startupStages,startupErrors,readinessValid,monitorValid,type StartupDiagnostics,type StartupStage,type StartupError} from './startup.ts';
+import {bootstrapReceiptValid,closedBootstrapFailure} from './bootstrap.ts';
+import {egressEvent} from './egress.ts';
+interface Case {id:string;mode:string;direction:string;slot:number;generation:number;runtimeSha:string;startedAt:number;finishedAt?:number;releasedAt?:number;contextSha256:string;answerSha256:string;bytes:number;outcome:string}
+interface State {schema:1;phase:'initializing'|'ready'|'closed';seedHash:string;starts:{slot:number;generation:number;runtimeSha:string;at:number;diagnostics?:StartupDiagnostics}[];requests:number;cases:Case[];callbacks:unknown[];replays:number;createdAt:number;expiresAt:number}
+const digest=/^[a-f0-9]{64}$/;
+export class NativeRehearsalState extends DurableObject<RehearsalEnv>{
+ private async update<T>(fn:(s:State)=>T){return this.ctx.storage.transaction(async tx=>{const s=await tx.get<State>('rehearsal');if(!s)throw Error('fixture_not_initialized');const result=fn(s);await tx.put('rehearsal',s);return result;});}
+ private async close(){
+  await this.update(s=>{s.phase='closed';});
+  const before=await lifecycleCall(this.env,'snapshot',{});
+  if(before.state.accepting===false)return;
+  const result=await lifecycleCall(this.env,'admission',{accepting:false,expectedRevision:before.control.revision,operationId:'fixture-expire-'+rehearsalConfig(this.env,Date.now(),true).createdAt});
+  if(result.status!==200)throw Error('fixture_close_unknown');
+ }
+ async alarm(){await this.close();}
+ async fetch(r:Request):Promise<Response>{
+  const p=new URL(r.url).pathname,c=rehearsalConfig(this.env,Date.now(),['/snapshot','/close','/callback','/release','/startup','/readiness','/monitor','/bootstrap','/egress'].includes(p));
+  if(r.method!=='POST')return new Response(null,{status:405});
+  if(p==='/upstream')return this.upstream(r);
+  const v=await readJson<any>(r,undefined,8192);
+  if(p==='/setup'){
+   if(!digest.test(v.seedHash)||!digest.test(v.credentialHash))return new Response(null,{status:400});
+   const created=await this.ctx.storage.transaction(async tx=>{if(await tx.get('rehearsal'))return false;
+    await tx.put('rehearsal',{schema:1,phase:'initializing',seedHash:v.seedHash,starts:[],requests:0,cases:[],callbacks:[],replays:0,createdAt:c.createdAt,expiresAt:c.expiresAt} satisfies State);return true;});
+   if(!created)return new Response(null,{status:409});
+   // Actual old-format persistent inputs, materialized by the unmodified router.
+   // One-shot setup only on coordinator-owned empty namespaces.
+   await this.env.POLICY_KV.put('policies/rehearsal',JSON.stringify({enabled:true,generation:'rehearsal-v1',providers:['openai'],models:['openai/gpt-6-astra'],tenantId:'rehearsal',budgetMode:'reserve',monthlyBudgetMicros:10000,requestCostMicros:7,retainRequestContent:false,grantRouting:{strategy:'priority',stickiness:'none',failover:true,environmentFallback:false}}));
+   await this.env.POLICY_KV.put('credentials/rehearsal',JSON.stringify({enabled:true,secretSha256:v.credentialHash,policyId:'rehearsal',policyGeneration:'rehearsal-v1'}));
+   await this.env.POLICY_KV.put('connections/openai',JSON.stringify({providerId:'openai',enabled:true,monthlyBudgetMicros:10000}));
+   for(const id of ['primary','alternate'])await putGrantCredentials(this.env,'oauth/rehearsal/'+id,{provider:'openai',kind:'api_key',enabled:true,credential:upstreamKey});
+   await this.update(s=>{s.phase='ready';});await this.ctx.storage.setAlarm(c.expiresAt);
+   return Response.json({initialized:true,qualified:false});
+  }
+  if(p==='/snapshot'){
+   const s=await this.ctx.storage.get<State>('rehearsal');
+   if(!s)return new Response(null,{status:404});const {seedHash:_,...visible}=s;
+   const [policy,provider,usage]=await Promise.all([budgetStatus(this.env,'rehearsal',{tenantId:'rehearsal',monthlyBudgetMicros:10000}),providerBudgetStatus(this.env,'openai',10000),usageSnapshots(this.env,[{policyId:'rehearsal',tenantId:'rehearsal'}],{kind:'admin'},100)]);
+   const events=await Promise.all(usage.events.map(async x=>({idHash:await sha256Hex(String(x.id)),requestIdHash:await sha256Hex(String(x.request_id)),actualCostMicros:x.actual_cost_micros,reservedCostMicros:x.reserved_cost_micros,status:x.status,statusCode:x.status_code,contentRetained:x.content_retained})));
+   return Response.json({...visible,accounting:{policySpentMicros:policy.spentMicros,providerSpentMicros:provider.spentMicros,events},qualified:false});
+  }
+  if(p==='/close'){await this.close();return Response.json({closed:true,qualified:false});}
+  if(p==='/egress'){
+   const event=egressEvent(v);
+   if(!event||!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||!digest.test(v.runtimeSha))return new Response(null,{status:400});
+   const recorded=await this.update(s=>{
+    const start=s.starts.find(x=>x.slot===v.slot&&x.generation===v.generation&&x.runtimeSha===v.runtimeSha);
+    if(!start)return false;
+    const rows=(start.diagnostics??={stages:[]}).egress??=[],previous=rows.at(-1)?.event;
+    if(event.event==='entered'?rows.length!==0:!previous||['response','rejected'].includes(previous)||event.event==='forwarding'&&previous!=='entered')return false;
+    if(rows.length>=4)return false;
+    rows.push({...event,at:Date.now()});start.diagnostics!.egress=rows;return true;
+   });
+   return Response.json({recorded});
+  }
+  if(p==='/startup'||p==='/readiness'||p==='/monitor'||p==='/bootstrap'){
+   if(!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||(p==='/startup'||v.runtimeSha!==undefined)&&!digest.test(v.runtimeSha))return new Response(null,{status:400});
+   if(p==='/startup'&&(!startupStages.includes(v.stage)||!['started','completed','failed'].includes(v.outcome)||(v.outcome==='failed'?!startupErrors.includes(v.error):v.error!==undefined)))return new Response(null,{status:400});
+   if(p==='/readiness'&&!readinessValid(v))return new Response(null,{status:400});
+   if(p==='/monitor'&&(!digest.test(v.runtimeSha)||!monitorValid(v)))return new Response(null,{status:400});
+   if(p==='/bootstrap'&&(!digest.test(v.runtimeSha)||!bootstrapReceiptValid({event:v.event,diagnostic:v.diagnostic,fetchCode:v.fetchCode})))return new Response(null,{status:400});
+   const accepted=await this.update(s=>{
+    const start=s.starts.find(x=>x.slot===v.slot&&x.generation===v.generation);
+    // prepare acknowledges persisted intent before its async start override
+    // reaches this fixture. Early polling must not turn that normal race into
+    // a controller error or invent a start; the observer will try again.
+    if(!start)return p==='/readiness'?'pending-start':false;
+    if(v.runtimeSha!==undefined&&start.runtimeSha!==v.runtimeSha)return false;
+    const d=start.diagnostics??={stages:[]},at=Date.now();
+    if(p==='/bootstrap'){
+     const rows=d.bootstrap??=[];
+     if(rows.length>=2||v.event!==(rows.length===0?'entered':'exit'))return false;
+     rows.push({event:v.event,diagnostic:v.diagnostic===null?null:closedBootstrapFailure(v.diagnostic),fetchCode:v.fetchCode,at});
+    }else if(p==='/monitor'){
+     if(d.monitor)return false;
+     d.monitor={outcome:v.outcome,category:v.category,name:v.name,exitCode:v.exitCode,at};
+    }else if(p==='/startup'){
+     const n=d.stages.length;
+     if(n>=startupStages.length*2||d.stages.at(-1)?.outcome==='failed'||v.stage!==startupStages[Math.floor(n/2)]||(n%2===0?v.outcome!=='started':v.outcome==='started'))return false;
+     d.stages.push({stage:v.stage as StartupStage,outcome:v.outcome,at,...(v.outcome==='failed'?{error:v.error as StartupError}:{})});
+    }else{
+     if(d.readiness?.phase===v.phase&&d.readiness?.reason===v.reason)return true;
+     d.readiness={phase:v.phase,reason:v.reason,at};
+     if(v.phase==='ready')d.readyAt??=at;
+     if(['failed','blocked'].includes(v.phase))d.firstFailure??=d.readiness;
+    }
+    return true;
+   });
+   return Response.json({recorded:accepted===true,...(accepted==='pending-start'?{pendingStart:true}:{})},{status:accepted?200:409});
+  }
+  if(p==='/start'){
+   if(!Number.isSafeInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isSafeInteger(v.generation)||v.generation<1||!digest.test(v.runtimeSha))return new Response(null,{status:400});
+   const accepted=await this.update(s=>{if(s.phase!=='ready'||s.starts.length>=c.maxStarts||s.starts.some(x=>x.slot===v.slot&&x.generation===v.generation))return false;
+    s.starts.push({slot:v.slot,generation:v.generation,runtimeSha:v.runtimeSha,at:Date.now()});return true;});
+   return Response.json({accepted},{status:accepted?200:409});
+  }
+  if(p==='/release'){
+   if(!caseId.test(v.id))return new Response(null,{status:400});
+   const released=await this.update(s=>{const x=s.cases.find(x=>x.id===v.id);if(!x||x.mode!=='hold'||x.finishedAt)return false;x.releasedAt??=Date.now();return true;});
+   return Response.json({released},{status:released?200:409});
+  }
+  if(p==='/callback'){
+   // This route is reachable only from the bound egress entrypoint, not HTTP.
+   if(!['dispatch','finish','queue','do'].includes(v.op)||!Number.isInteger(v.slot)||v.slot<0||v.slot>=8||!Number.isInteger(v.generation)||!digest.test(v.runtimeSha)||!Number.isInteger(v.status))return new Response(null,{status:400});
+   await this.update(s=>{if(s.callbacks.length>=1024)throw Error('fixture_evidence_full');s.callbacks.push({op:v.op,slot:v.slot,generation:v.generation,runtimeSha:v.runtimeSha,status:v.status,at:Date.now(),...(v.idHash?{idHash:v.idHash}:{}),...(typeof v.clean==='boolean'?{clean:v.clean}:{}),...(v.usage?{usage:v.usage}:{})});});
+   return Response.json({recorded:true});
+  }
+  return new Response(null,{status:404});
+ }
+ private async upstream(r:Request):Promise<Response>{
+  const c=rehearsalConfig(this.env),slot=Number(r.headers.get('x-rehearsal-slot')),generation=Number(r.headers.get('x-rehearsal-generation')),runtimeSha=r.headers.get('x-rehearsal-runtime')??'';
+  if(r.headers.get('authorization')!=='Bearer '+upstreamKey||!Number.isInteger(slot)||slot<0||slot>=8||!Number.isInteger(generation)||generation<1||!digest.test(runtimeSha))return new Response(null,{status:403});
+  const admitted=await this.update(s=>{if(s.phase!=='ready'||s.requests>=c.maxRequests)return false;s.requests++;return true;});
+  if(!admitted)return new Response(null,{status:429});
+  let input;try{input=await inspectSyntheticInput(r);}catch{return new Response(null,{status:400});}
+  const contextSha256=await sha256Hex(input.seed),answer=await sha256Hex(input.seed+':'+input.direction+':'+input.id);
+  const accepted=await this.update(s=>{
+   if(s.phase!=='ready'||contextSha256!==s.seedHash)return false;
+   if(s.cases.some(x=>x.id===input.id)){s.replays++;return false;}
+   s.cases.push({id:input.id,mode:input.mode,direction:input.direction,slot,generation,runtimeSha,startedAt:Date.now(),contextSha256,answerSha256:answer,bytes:input.bytes,outcome:'active'});return true;
+  });
+  if(!accepted)return new Response(null,{status:409});
+  const finish=async(outcome:string)=>this.update(s=>{const x=s.cases.find(x=>x.id===input.id)!;x.outcome=outcome;x.finishedAt=Date.now();});
+  if(input.mode==='hold'){
+   const until=Math.min(c.expiresAt,Date.now()+120000);let released=false;
+   while(Date.now()<until&&!r.signal.aborted){const s=await this.ctx.storage.get<State>('rehearsal');if(s?.phase!=='ready')break;if(s.cases.find(x=>x.id===input.id)?.releasedAt){released=true;break;}await new Promise(resolve=>setTimeout(resolve,250));}
+   if(!released){await finish('hold_timeout');return new Response(null,{status:504});}
+  }
+  if(input.mode==='reject'){await finish('rejected');return Response.json({error:{code:'synthetic_rejection'}},{status:400});}
+  if(input.mode==='lost'){await finish('delivery_unknown');let sent=false;return new Response(new ReadableStream({async pull(controller){if(!sent){sent=true;controller.enqueue(new TextEncoder().encode('{\"id\":'));return;}await new Promise(resolve=>setTimeout(resolve,50));controller.error(Error('synthetic_disconnect'));}}),{headers:{'content-type':'application/json'}});}
+  const message={id:'msg_'+input.id,type:'message',role:'assistant',status:'completed',content:[{type:'output_text',text:answer,annotations:[]}]};
+  const result={id:'resp_'+input.id,object:'response',status:'completed',model:input.model,service_tier:'default',output:[message],usage:{input_tokens:10,input_tokens_details:{cached_tokens:0},output_tokens:2,total_tokens:12}};
+  await finish('completed');
+  if(!input.stream)return Response.json(result);
+  const events=[{type:'response.created',response:{...result,status:'in_progress',output:[]}},{type:'response.output_item.done',output_index:0,item:message},{type:'response.completed',response:result}];
+  return new Response(events.map(e=>'event: '+e.type+'\ndata: '+JSON.stringify(e)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});
+ }
+}

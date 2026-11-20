@@ -196,7 +196,10 @@ test("FakeCo Wrangler render isolates Worker, KV, queues, R2, route, DO namespac
     assert.match(config, /^CLAWROUTER_CONTENT_RETENTION_DEFAULT = "false"$/m);
     assert.match(config, /^CLAWROUTER_ACCESS_DEFAULT_TENANT = "fakeco"$/m);
     assert.match(config, /^CLAWROUTER_ACCESS_AUD = "fakeco-access-audience"$/m);
-    assert.equal(config.match(/^\[\[durable_objects\.bindings\]\]$/gm)?.length, 5);
+    assert.equal(config.match(/^\[\[durable_objects\.bindings\]\]$/gm)?.length, 7);
+    assert.match(config, /^name = "clawrouter-edge-fakeco-large-http"$/m);
+    assert.match(config, /^LARGE_HTTP_ORIGIN = "https:\/\/clawrouter-fakeco\.openclaw\.ai"$/m);
+    assert.doesNotMatch(config, /^max_instances\s*=/m);
     assert.doesNotMatch(config, /^name = "clawrouter-edge"$/m);
     assert.doesNotMatch(config, /^pattern = "clawrouter\.openclaw\.ai"$/m);
   } finally {
@@ -440,8 +443,7 @@ test("FakeCo deploy workflow is hard-bound to its GitHub Environment and secret 
   assert.ok(bootstrap < smoke);
   assert.match(workflow, /CLAWROUTER_SMOKE_READINESS_TIMEOUT_MS: "180000"/);
   const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  assert.match(pkg.scripts["cf:deploy"], /cf:target -- --deploy/);
-  assert.ok(pkg.scripts["cf:deploy"].indexOf("--deploy") < pkg.scripts["cf:deploy"].indexOf("wrangler deploy"));
+  assert.equal(pkg.scripts["cf:deploy"], "node scripts/deploy-action.mjs");
 });
 
 function cleanEnv(values) {
