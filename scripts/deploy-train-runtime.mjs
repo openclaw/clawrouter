@@ -63,10 +63,17 @@ export function assertRuntimePair(blue, green, state) {
     throw new Error('Different native runtime fingerprints require a separately rehearsed cutover');
   assertNativeOwners(blue, green);
 }
-export function assertNativeOwners(blue, green) {
+// Versioned admission limits can change through an ordered, automatically
+// rehearsed replacement. Capacity/owners, credentials and origins stay fixed.
+export function versionedSetting(name, value) {
+  const ranges = {LARGE_HTTP_TENANT_LIMIT:[1,8],LARGE_HTTP_SLOT_STARTS_PER_HOUR:[1,60]};
+  const range = ranges[name];
+  return !!range && /^(?:0|[1-9][0-9]*)$/.test(value ?? '') && Number(value) >= range[0] && Number(value) <= range[1];
+}
+export function assertNativeOwners(blue, green, {allowVersionedSettings=false} = {}) {
   // Include all fields, not just actor names: namespace IDs, vars, queue/bucket
   // ownership, extra bindings and secret names must survive the version upload.
-  const ordered = v => nativeBindings(v).toSorted((a, b) => a.name.localeCompare(b.name));
+  const ordered = v => nativeBindings(v).map(b => allowVersionedSettings && b.type === 'plain_text' && versionedSetting(b.name,b.text) ? {...b,text:'<qualified-versioned-setting>'} : b).toSorted((a, b) => a.name.localeCompare(b.name));
   if (!isDeepStrictEqual(ordered(blue), ordered(green))) throw new Error('Native owner, configuration or secret bindings changed');
 }
 export function assertCutoverReceipt(state) {
@@ -86,7 +93,7 @@ export function assertCutoverPair(blue, green, state) {
       green.annotations?.['workers/message'] !== uploadMessage(state) ||
       nativeReceipt(blue).runtimeSha !== c.blueRuntimeSha || nativeSource(blue) !== c.nativeSource || nativeReceipt(green).runtimeSha !== state.native.runtimeSha)
     throw new Error('Native cutover artifact lineage differs from train');
-  assertNativeOwners(blue, green);
+  assertNativeOwners(blue, green, {allowVersionedSettings:true});
   const bindings = new Map(nativeBindings(blue).map(b => [b.name,b]));
   if (['LARGE_HTTP_RUNTIME_SHA','LARGE_HTTP_RUNTIME_BYTES','LARGE_HTTP_DEADLINE'].some(name => bindings.has(name)) ||
       bindings.get('LARGE_HTTP_CAPACITY')?.text !== '8') throw new Error('Native cutover requires the bundled runtime and continuous eight-slot capacity');
@@ -98,7 +105,7 @@ export async function verifyCutoverRecovery(api, state) {
   if (recovery.id !== state.cutover.recovery || recovery.annotations?.['workers/tag'] !== state.sha ||
       nativeReceipt(recovery).runtimeSha !== state.cutover.blueRuntimeSha ||
       recovery.annotations?.['workers/message'] !== uploadMessage({ ...state, nativeSource: state.cutover.nativeSource, native: { schema: 1, runtimeSha: state.cutover.blueRuntimeSha } })) throw new Error('Compatible recovery artifact is not bound to current source');
-  assertNativeOwners(blue,recovery);
+  assertNativeOwners(blue,recovery,{allowVersionedSettings:true});
   assertSecretLineage(versions, state.blue);
 }
 export async function verifyRuntimeRecovery(api, state) {

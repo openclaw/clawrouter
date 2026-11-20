@@ -443,8 +443,7 @@ test("FakeCo deploy workflow is hard-bound to its GitHub Environment and secret 
   assert.ok(bootstrap < smoke);
   assert.match(workflow, /CLAWROUTER_SMOKE_READINESS_TIMEOUT_MS: "180000"/);
   const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  assert.match(pkg.scripts["cf:deploy"], /cf:target -- --deploy/);
-  assert.ok(pkg.scripts["cf:deploy"].indexOf("--deploy") < pkg.scripts["cf:deploy"].indexOf("wrangler deploy"));
+  assert.equal(pkg.scripts["cf:deploy"], "node scripts/deploy-action.mjs");
 });
 
 function cleanEnv(values) {

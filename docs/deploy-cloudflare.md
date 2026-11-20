@@ -1,3 +1,8 @@
+> Production deployment: use **Deploy ClawRouter** on `main`, with no inputs.
+> [Deployment compatibility](deployment-compatibility.md) is the canonical operator
+> and developer contract. Older train/qualification instructions below describe
+> historical releases and diagnostic tools, not required deployment steps.
+
 # Deploy ClawRouter on Cloudflare
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime

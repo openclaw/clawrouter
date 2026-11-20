@@ -2,10 +2,10 @@ import { runDeployCli } from './deploy-cli.mjs';
 import assert from 'node:assert/strict';
 import { waitForHealth } from './smoke-readiness.mjs';
 import { createVersionFetch } from './smoke-version.mjs';
-import { spawn } from 'node:child_process';
 import { appendFileSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { resolve, join } from 'node:path';
 import { createApi, observeAnalytics } from './deploy-train-api.mjs';
 import { analyticsDecision, LEGACY_DEPLOYMENT, deploymentMessage, deploymentState, POLL_MS, recoveryDecision, splitVersions, stableVersion, TRAIN_STEPS, versionId } from './deploy-train-policy.mjs';
 import { inspectSource } from './deploy-train-source.mjs';
@@ -13,41 +13,15 @@ import { verifyObservability } from './deploy-train-observability.mjs';
 import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
-import { assertNoDeploymentHold } from './deploy-release-hold.mjs';
+import { assertDeploymentAction } from './deploy-authorization.mjs';
 import { nativeReceipt, assertRuntimePair, verifyRuntimeRecovery } from './deploy-train-runtime.mjs';
 import { prepareNativeUpload, nativeUploadConfig } from './deploy-train-artifacts.mjs';
 import { runNativeCutover, recoverNativeCutover, createNativeControl } from './deploy-native-cutover.mjs';
-import { assertNativeQualification } from './deploy-native-qualification.mjs';
+import { executeRelease } from './deploy-release-plan.mjs';
 import { smokeNativeCutover } from './smoke-native-cutover.mjs';
 
-export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('pnpm', args, { env: { ...env, CI: 'true', WRANGLER_SEND_METRICS: 'false' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '', bytes = 0, stopped = false, force;
-    const killGroup = (signal) => { try { process.kill(-child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
-    const stop = () => {
-      if (stopped) return;
-      stopped = true;
-      killGroup('SIGTERM');
-      force = setTimeout(() => killGroup('SIGKILL'), 5_000);
-    };
-    const timer = setTimeout(stop, timeout);
-    child.stdout.on('data', (chunk) => {
-      bytes += chunk.length;
-      if (bytes > 8 * 1024 * 1024) return stop();
-      stdout += chunk.toString(); process.stdout.write(chunk);
-    });
-    child.stderr.on('data', (chunk) => { bytes += chunk.length; if (bytes > 8 * 1024 * 1024) return stop(); process.stderr.write(chunk); });
-    child.on('error', () => { clearTimeout(timer); clearTimeout(force); reject(new Error('Could not start deployment command')); });
-    child.on('close', (code) => {
-      clearTimeout(timer); clearTimeout(force);
-      // Ensure a timed-out pnpm cannot leave Wrangler running after rollback.
-      if (stopped) killGroup('SIGKILL');
-      if (stopped || code !== 0) reject(new Error(`Deployment command ${args.slice(0, 3).join(' ')} failed or timed out`));
-      else resolve(stdout);
-    });
-  });
-}
+export { command } from './deploy-command.mjs';
+import { command } from './deploy-command.mjs';
 export async function uploadVersion(state, env = process.env, recovery = false) {
   if (env.CONFIGURE_PROVIDER_SECRETS === 'true') throw new Error('Secret changes are excluded from the unattended train');
   if (state.migration) throw new Error('Native lifecycle migrations require a separately authorized release');
@@ -184,10 +158,12 @@ function saveState(path, state) {
   renameSync(`${path}.tmp`, path);
 }
 export async function main(env = process.env) {
+  assertDeploymentAction(env);
   const state = JSON.parse(readFileSync(env.TRAIN_PLAN_PATH, 'utf8'));
   if (state.noop) return;
-  assertNoDeploymentHold(state.sha);
-  Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha, nativeCutover: env.TRAIN_MODE === 'native-cutover', nativeControl: env.TRAIN_MODE === 'native-control' }));
+  assertDeploymentAction(env,state.sha);
+  Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha }));
+  if(state.migration||state.unsafe)throw new Error('Development error: release needs an automated forward-compatible transition before it can deploy');
   assertAssetBootstrap(state.deployedSha);
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);
   const api = createApi({ env });
@@ -195,10 +171,10 @@ export async function main(env = process.env) {
   // Build once, verify against deployed blue, then upload a build-hook-free
   // immutable config. This precedes even console publication and queue tails.
   await command(['exec', 'node', 'scripts/build-default-worker.mjs'], { env });
-  const mode = env.TRAIN_MODE || 'rollout';
-  if (['native-cutover','native-control'].includes(mode) && env.GITHUB_EVENT_NAME !== 'workflow_dispatch') throw new Error('Native cutover requires explicit manual dispatch');
-  await prepareNativeUpload({ state, blue: await api.version(state.blue), directory: `.wrangler/train-release-${state.run}`, mode });
-  if (state.cutover) assertNativeQualification(state);
+  await prepareNativeUpload({ state, blue: await api.version(state.blue), directory: `.wrangler/train-release-${state.run}`, mode:'auto' });
+  if (state.sha===state.deployedSha && state.mode==='rollout') {
+    state.status='done';state.noop=true;state.reason='Exact source and native artifact already deployed';save(state);return;
+  }
   const control = state.cutover ? createNativeControl({ env }) : undefined;
   if (control) await control.snapshot(state.blue); // credential/readback preflight before publication or upload
   save(state);
@@ -210,14 +186,26 @@ export async function main(env = process.env) {
   });
   let stopObservation = async () => {};
   try {
-    state.assets = await publishConsoleAssets({ sha: state.sha, env }); save(state);
-    stopObservation = await startQueueObservation({ api, state, save, queue: env.CLAWROUTER_USAGE_QUEUE || 'clawrouter-usage' });
-    await runTrain({ state, api, save, upload: (s) => uploadVersion(s, env), uploadRecovery: (s) => uploadVersion(s, env, true), mode, control,
+    await executeRelease({state,control,save,
+      qualify:async(s,stage)=>{
+        const plan=resolve(`.wrangler/qualification-${stage}.json`);saveState(plan,s);
+        // Both checkouts have the same frozen SHA; dependencies live only in
+        // candidate/. Run its packaging/client entrypoint from that checkout.
+        await command(['exec','node',resolve('scripts/deploy-release-qualification.mjs')],{env:{...env,QUALIFICATION_PLAN_PATH:plan,QUALIFICATION_STAGE:stage},timeout:40*60_000});
+        return JSON.parse(readFileSync(join(resolve(env.TRAIN_EVIDENCE_DIRECTORY),'public',`qualification-${stage}.json`),'utf8'));
+      },
+      run:async(s)=>{
+      if(!state.assets){
+        state.assets = await publishConsoleAssets({ sha: state.sha, env }); save(state);
+        stopObservation = await startQueueObservation({ api, state, save, queue: env.CLAWROUTER_USAGE_QUEUE || 'clawrouter-usage' });
+      }
+      s.assets=state.assets;
+      return runTrain({ state:s, api, save, upload: (s) => uploadVersion(s, env), uploadRecovery: (s) => uploadVersion(s, env, true), mode:s.mode, control,
       smoke: async (green) => {
         await ready(green);
         await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: green });
-        if (!state.migration && !state.cutover) await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: state.blue, legacy: state.blue === LEGACY_DEPLOYMENT.version });
-        if (state.cutover) await smokeNativeCutover({ version: green, env });
+        if (!s.migration && !s.cutover) await verifyConsoleAssets({ assets: s.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: s.blue, legacy: s.blue === LEGACY_DEPLOYMENT.version });
+        if (s.cutover) await smokeNativeCutover({ version: green, env });
         else await command(['cf:smoke'], { env: { ...env, CLAWROUTER_SMOKE_VERSION_ID: green }, timeout: 5 * 60_000 });
       },
       negativeSmoke: async (green) => {
@@ -226,10 +214,10 @@ export async function main(env = process.env) {
         if (health.versionId !== '00000000-0000-0000-0000-000000000000') throw new Error('Deliberate green 0% version-assertion breach');
         throw new Error('Negative rehearsal unexpectedly matched impossible version');
       },
-    });
+    });}});
   } finally {
     await stopObservation();
-    const summary = `## Production train\n- Candidate: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Lifecycle migration: ${state.migration}; rollback-unsafe range: ${state.unsafe}\n- Observability reconciliation: ${state.observabilityReconciliation || 'not needed'}; last live readback: ${state.observabilityVerifiedAt || 'not needed'}\n- Analytics: ${state.analyticsDisabled ? `DISABLED — ${state.analyticsDisabled}; mandatory smoke-only gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Queue observation: ${state.queueObservationStatus || 'not started'}; ${JSON.stringify(state.queueObservations || [])}\n- Mode: ${env.TRAIN_MODE || 'rollout'}\n`;
+    const summary = `## Deploy ClawRouter\n- Frozen main: \`${state.sha}\`\n- Blue: \`${state.blue}\`\n- Green: \`${state.green || 'not uploaded'}\`\n- Result: ${state.status || 'preflight'}; recovery: ${state.recovery || 'not needed'}\n- Automatic path: ${state.mode}\n- Qualification: ${state.qualification?.reused ? state.qualification.reason : state.qualification?.qualified ? 'isolated cases passed and resources removed' : 'not completed'}\n- Analytics: ${state.analyticsDisabled ? `disabled: ${state.analyticsDisabled}; mandatory smoke gating` : state.analytics ? JSON.stringify(state.analytics) : 'no comparison sample'}\n- Cleanup has an independent job and artifact. A cleanup failure does not undo deployment.\n`;
     appendFileSync(env.GITHUB_STEP_SUMMARY, summary);
   }
 }

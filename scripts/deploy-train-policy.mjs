@@ -22,7 +22,10 @@ export function versionId(value) {
 export function verifyDispatch({ event, expected, sha, ref }) {
   if (!['schedule', 'workflow_dispatch'].includes(event)) throw new Error('Unsupported train trigger');
   if (ref !== 'refs/heads/main') throw new Error('Production train must run from main');
-  if (event === 'workflow_dispatch' && fullSha(expected) !== fullSha(sha)) throw new Error('Dispatched source differs from expected_sha');
+  fullSha(sha);
+  // Retain the optional assertion for internal/legacy callers. The canonical
+  // Action freezes its event SHA and has no operator-supplied source input.
+  if (expected !== undefined && fullSha(expected) !== fullSha(sha)) throw new Error('Dispatched source differs from expected_sha');
 }
 export function stableVersion(deployment) {
   const active = deployment?.versions?.filter((v) => v.percentage > 0);

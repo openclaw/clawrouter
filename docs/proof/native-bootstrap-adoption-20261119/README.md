@@ -1,3 +1,8 @@
+> Historical evidence, preserved unchanged below. Its registry checker must be
+> run at the original recorded source revision, where that registry/policy existed.
+> Current releases use automatic isolated evidence; see
+> [deployment compatibility](../../deployment-compatibility.md).
+
 # Native bootstrap/control adoption qualification
 
 This evidence supports two purpose-specific registry entries at tested source

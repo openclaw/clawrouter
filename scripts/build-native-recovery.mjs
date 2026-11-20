@@ -8,6 +8,7 @@ import { resolve, dirname } from 'node:path';
 import { nativeProviderSnapshotPlugin } from './large-http-provider-snapshot.mjs';
 import { prepareLargeHttpRelease } from './prepare-large-http-release.mjs';
 import { fullSha } from './deploy-train-policy.mjs';
+import { archiveDeploymentSource } from './archive-deployment-source.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 export async function prepareNativeRecovery({ state, configPath = '.wrangler.generated.toml', directory, syntheticRehearsal = false }) {
   const nativeSource = fullSha(state.cutover.nativeSource);
@@ -27,9 +28,8 @@ export async function prepareNativeRecovery({ state, configPath = '.wrangler.gen
     const contractPath = 'packages/provider-plugin-contract';
     const contract = execFileSync('git',['ls-tree','--name-only',nativeSource,'--',contractPath],{encoding:'utf8',timeout:30_000}).trim();
     const paths = ['worker','runtime','shared','package.json',...(contract === contractPath ? [contractPath] : [])];
-    const archive = execFileSync('git',['archive',nativeSource,...paths],{maxBuffer:32*1024*1024,timeout:30_000});
-    execFileSync('tar',['-x','-f','-','-C',source],{input:archive,timeout:30_000});
-    const old = await build({absWorkingDir:source,entryPoints:['runtime/large-http/main.ts'],bundle:true,write:false,minify:true,keepNames:true,
+    archiveDeploymentSource(nativeSource,source,paths);
+    const old = await build({absWorkingDir:source,nodePaths:[resolve('node_modules')],entryPoints:['runtime/large-http/main.ts'],bundle:true,write:false,minify:true,keepNames:true,
       format:'esm',platform:'node',target:'node24',define:{__CLAWROUTER_LARGE_RUNTIME__:'true'},plugins:[nativeProviderSnapshotPlugin()],logLevel:'silent'});
     runtime=old.outputFiles[0].contents;
   } finally { await rm(source,{recursive:true,force:true}); }

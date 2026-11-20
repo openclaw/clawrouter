@@ -1,3 +1,8 @@
+> Historical/manual diagnostic procedure. Production releases now prepare and
+> qualify themselves through **Deploy ClawRouter**; see
+> [deployment compatibility](deployment-compatibility.md). These steps are not
+> deployment prerequisites.
+
 # Isolated native controller qualification
 
 This is the controller execution path, **not a complete qualification harness**.

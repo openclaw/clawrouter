@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { posix } from 'node:path';
 
-export const nativeControlFiles = Object.freeze(['prepare-native-rehearsal.mjs','native-rehearsal-client.mjs','native-rehearsal-actions.mjs','../worker/native-rehearsal-entry.ts','../worker/native-rehearsal/contract.ts','../worker/native-rehearsal/input.ts','../worker/native-rehearsal/startup.ts','../worker/native-rehearsal/bootstrap.ts','../worker/native-rehearsal/egress.ts','../worker/native-rehearsal/state.ts','../test/helpers/native-codex.mjs','codex-catalog.mjs','deploy-train-select.mjs','deploy-release-hold.mjs','deploy-native-target.mjs','qualify-native-cutover.mjs','smoke-native-cutover.mjs','smoke-version.mjs','smoke-access-gate.mjs','../.github/workflows/qualify-native-cutover.yml','../.github/workflows/ci.yml','deploy-native-qualification.mjs','deploy-native-cutover.mjs','deploy-train.mjs','deploy-train-recover.mjs','deploy-train-api.mjs','deploy-train-artifacts.mjs','deploy-train-policy.mjs','deploy-train-runtime.mjs','deploy-train-secrets.mjs','deploy-train-source.mjs','deploy-train-observability.mjs','prepare-large-http-release.mjs','build-native-recovery.mjs','build-large-http.mjs','large-http-provider-snapshot.mjs','../worker/large-http/continuous.ts','../worker/large-http/lifecycle.ts','../worker/large-http/service.ts','../worker/large-http/native-slot.ts','../.github/workflows/deploy-cloudflare.yml']);
+export const nativeControlFiles = Object.freeze(['archive-deployment-source.mjs','deploy-command.mjs','check-deployment-compatibility.mjs','deploy-authorization.mjs','deploy-release-resources.mjs','deploy-release-qualification.mjs','deploy-release-plan.mjs','build-native-baseline.mjs','native-session-continuity.mjs','prepare-native-rehearsal.mjs','native-rehearsal-client.mjs','native-rehearsal-actions.mjs','../worker/native-rehearsal-entry.ts','../worker/native-rehearsal/contract.ts','../worker/native-rehearsal/input.ts','../worker/native-rehearsal/startup.ts','../worker/native-rehearsal/bootstrap.ts','../worker/native-rehearsal/egress.ts','../worker/native-rehearsal/state.ts','../test/helpers/native-codex.mjs','codex-catalog.mjs','deploy-train-select.mjs','deploy-native-target.mjs','qualify-native-cutover.mjs','smoke-native-cutover.mjs','smoke-version.mjs','smoke-access-gate.mjs','../.github/workflows/qualify-native-cutover.yml','../.github/workflows/ci.yml','deploy-native-qualification.mjs','deploy-native-cutover.mjs','deploy-train.mjs','deploy-train-recover.mjs','deploy-train-api.mjs','deploy-train-artifacts.mjs','deploy-train-policy.mjs','deploy-train-runtime.mjs','deploy-train-secrets.mjs','deploy-train-source.mjs','deploy-train-observability.mjs','prepare-large-http-release.mjs','build-native-recovery.mjs','build-large-http.mjs','large-http-provider-snapshot.mjs','../worker/large-http/config.ts','../worker/large-http/provider-config.ts','../worker/large-http/epoch.ts','../worker/large-http/pool-state.ts','../worker/large-http/lifecycle-client.ts','../worker/large-http/continuous.ts','../worker/large-http/lifecycle.ts','../worker/large-http/service.ts','../worker/large-http/native-slot.ts','../.github/workflows/deploy-cloudflare.yml']);
 
 export function nativeControlDigest({ source, cwd = process.cwd() } = {}) {
   if (source !== undefined && !/^[a-f0-9]{40}$/.test(source)) throw new Error('Invalid qualification source');
@@ -15,24 +15,17 @@ export function nativeControlDigest({ source, cwd = process.cwd() } = {}) {
 }
 import { assertCutoverReceipt } from './deploy-train-runtime.mjs';
 
-// Reviewed hosted evidence, not a flag that converts offline tests into a
-// rehearsal. Empty until the exact payload pair passes the documented gates.
-export function assertNativeQualification(state, receipt = JSON.parse(readFileSync(new URL('../config/native-cutovers.json', import.meta.url), 'utf8')), {cwd = process.cwd()} = {}) {
+// Produced by the canonical Action's isolated campaign. No source-controlled
+// approval registry, arbitrary path/URL, or operator waiver can authorize a pair.
+export function assertNativeQualification(state, receipt) {
   assertCutoverReceipt(state);
-  if (receipt?.schema !== 1 || !Array.isArray(receipt.qualified)) throw new Error('Invalid native qualification registry');
-  const rows = receipt.qualified.filter(q => q.kind === state.cutover.kind && q.blueRuntimeSha === state.cutover.blueRuntimeSha && q.greenRuntimeSha === state.native.runtimeSha);
-  if (rows.length !== 1 || !/^https:[/][/]github[.]com[/]openclaw[/]clawrouter[/]actions[/]runs[/][0-9]+$/.test(rows[0].evidence ?? '') ||
-      !/^[a-f0-9]{40}$/.test(rows[0].source ?? '') || rows[0].controlSha256 !== nativeControlDigest())
-    throw new Error('Exact native payload pair lacks reviewed hosted cutover/recovery qualification');
-  const qualified = rows[0];
-  if (!/^[a-f0-9]{40}$/.test(state.sha ?? '')) throw new Error('Invalid candidate source');
-  // The evidence commit predates the reviewed registry entry, so requiring
-  // self-reference to the registry commit would be impossible. Require ancestry
-  // and byte-identical determining code instead; native bytes are pinned above.
-  try {
-    execFileSync('git',['merge-base','--is-ancestor',qualified.source,state.sha],{cwd,timeout:30_000,stdio:'ignore'});
-    if (nativeControlDigest({source:qualified.source,cwd}) !== qualified.controlSha256 ||
-        nativeControlDigest({source:state.sha,cwd}) !== qualified.controlSha256) throw new Error('source drift');
-  } catch { throw new Error('Native qualification source is not an unchanged tested ancestor'); }
-  return qualified;
+  if (receipt?.schema !== 2 || receipt.qualified !== true || receipt.source !== state.sha ||
+      receipt.controlSha256 !== nativeControlDigest() || receipt.kind !== (state.cutover.kind ?? 'payload') ||
+      receipt.blueRuntimeSha !== state.cutover.blueRuntimeSha || receipt.greenRuntimeSha !== state.native.runtimeSha ||
+      receipt.nativeSource !== state.cutover.nativeSource || receipt.productionBlue !== state.blue ||
+      !/^[a-f0-9]{64}$/.test(receipt.releaseSha256 ?? '') || receipt.releaseSha256 !== state.releaseManifestSha256 ||
+      !/^[a-f0-9]{64}$/.test(receipt.recoverySha256 ?? '') || receipt.recoverySha256 !== state.recoveryReleaseManifestSha256 ||
+      !['deployment','continuity','payload','accounting','recovery','cleanup'].every(k => receipt.cases?.[k]?.outcome === 'passed'))
+    throw new Error('Exact release lacks automatic isolated deployment, continuity, payload, accounting, recovery or cleanup evidence');
+  return receipt;
 }

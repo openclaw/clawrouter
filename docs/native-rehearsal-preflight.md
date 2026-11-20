@@ -1,3 +1,8 @@
+> Historical/manual diagnostic procedure. Production releases now prepare and
+> qualify themselves through **Deploy ClawRouter**; see
+> [deployment compatibility](deployment-compatibility.md). These steps are not
+> deployment prerequisites.
+
 # Read-only native rehearsal preflight
 
 This is the missing secure runner entrypoint, not provisioning or qualification.

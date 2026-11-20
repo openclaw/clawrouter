@@ -33,3 +33,7 @@ Illustrative pair:
 ## Remaining risk
 
 <!-- Describe remaining risk or limitations, or explain why there is no runtime impact. -->
+
+<!-- If deployment/state/callback/credential/accounting contracts change: describe
+     the automatic transition, existing-state and pending-work proof, and recovery.
+     See docs/deployment-compatibility.md. No per-release operator preparation. -->

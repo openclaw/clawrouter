@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter, errorMonitor } from "node:events";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -4264,7 +4264,8 @@ test("wrangler census actual module imports and recorder wiring are explicit", a
 });
 // END attach diagnostic pure tests.
 
-// BEGIN current/frozen ownership pure tests. No container/installer/native calls.
+// BEGIN current/frozen ownership tests. Read pinned Git blobs; no container,
+// installer or native build calls.
 async function ownershipFixture(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const select = (from, to) => { const a = source.indexOf(from), b = source.indexOf(to, a); assert.ok(a >= 0 && b > a); return source.slice(a, b).replaceAll("export ", ""); };
@@ -4279,7 +4280,7 @@ async function ownershipFixture(overrides = {}) {
     readFile: async path => { reads.push(path); if (overrides.readFailure === path) throw overrides.reason; assert.ok(disk.has(path), "inert file missing"); return disk.get(path); },
     writeExclusive: async (root, path, bytes) => { assert.equal(root, "/proof/input"); assert.ok(!writes.some(row => row.path === path)); writes.push({ path, bytes }); },
   };
-  const api = new Function(...Object.keys(bindings), constants + helpers + "return { harnessInputs, currentInputInventory, currentWorkspaceMembers, installInputs, observeCurrentInputs, materializeOwnedInputs, validateContextPlan };")(...Object.values(bindings));
+  const api = new Function(...Object.keys(bindings), constants + helpers + "return { harnessInputs, currentInputInventory, currentWorkspaceMembers, installInputs, frozenInstallBlobs, observeCurrentInputs, materializeOwnedInputs, validateContextPlan };")(...Object.values(bindings));
   for (const path of new Set([...api.harnessInputs, ...api.currentInputInventory.map(row => row.path)])) {
     const bytes = await readFile(new URL("../" + path, import.meta.url));
     disk.set("/checkout/" + path, bytes); const blob = oid("blob", bytes); objects.set(blob, bytes); entries.set(path, { mode: "100644", blob });
@@ -4299,10 +4300,9 @@ async function ownershipFixture(overrides = {}) {
   };
   const frozenBlobs = new Map();
   for (const path of Object.keys(api.installInputs)) {
-    let bytes = disk.get("/checkout/" + path);
-    // Source-bound fixture removes exactly main143's sole workspace/importer delta.
-    if (path === "pnpm-workspace.yaml") bytes = Buffer.from(bytes.toString().replace("  - packages/provider-plugin-contract\n", ""));
-    if (path === "pnpm-lock.yaml") bytes = Buffer.from(bytes.toString().replace("  packages/provider-plugin-contract:\n    devDependencies:\n      typescript:\n        specifier: ^7.0.2\n        version: 7.0.2\n\n", ""));
+    // Historical install inputs belong to their pinned blobs, independently of
+    // today's package scripts and workspace layout. Keep both hash checks.
+    const bytes = execFileSync("git", ["cat-file", "blob", api.frozenInstallBlobs[path]], { cwd: new URL("..", import.meta.url), timeout: 30_000 });
     assert.equal(sha(bytes), api.installInputs[path]); frozenBlobs.set(path, { bytes, blob: oid("blob", bytes) });
   }
   const run = async () => {

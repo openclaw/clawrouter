@@ -35,7 +35,7 @@ async function fixture(t,mode){
   calls.push({mode:workload,bytes});
   // A journal must identify the CURRENT case before even the first byte is sent.
   const local=JSON.parse(await readFile(join(client,'session.json'),'utf8'));
-  assert.equal(local.pending.caseId,id);assert.equal(local.pending.workloadMode,workload);assert.equal(local.pending.traceHash,hash(trace));
+  assert.equal(local.workloadPending.caseId,id);assert.equal(local.workloadPending.workloadMode,workload);assert.equal(local.workloadPending.traceHash,hash(trace));
   const diagnostic=JSON.parse(await readFile(join(client,'workload-'+workload+'-diagnostic.json'),'utf8'));assert.equal(diagnostic.stage,'request');assert.equal(diagnostic.caseId,id);
   if(workload==='overflow'){s.statusCode=413;return s.end('{}');}
   const slot=state.requests++,lost=kind==='lost',cost=kind==='reject'?0:7;
@@ -52,6 +52,7 @@ async function fixture(t,mode){
   if(lost){
    if(mode==='pre-header'){s.statusCode=424;return s.end('{}');}
    if(mode==='complete-200')return s.end('{}');
+   if(mode==='json-truncated')return s.end('{"id":');
    if(mode==='unexpected-status'){s.statusCode=500;return s.end('{}');}
    if(mode==='timeout'){s.setHeader('x-fixture-body-fault','timeout');return s.end('{}');}
    s.writeHead(200);s.flushHeaders();s.write('{"id":');setTimeout(()=>s.destroy(),100);return;
@@ -71,8 +72,8 @@ async function fixture(t,mode){
  return {directory,client,calls,controls,state,run};
 }
 
-for(const mode of ['pre-header','partial','complete-200','unexpected-status','wrong-version','wrong-generation','wrong-finish','other-quarantine','wrong-accounting','timeout'])test('actual workload CLI: '+mode,{timeout:30000},async t=>{
- const f=await fixture(t,mode),result=await f.run('workloads'),passed=['pre-header','partial'].includes(mode),failedCase=mode==='wrong-version'?'success':'lost';
+for(const mode of ['pre-header','partial','json-truncated','complete-200','unexpected-status','wrong-version','wrong-generation','wrong-finish','other-quarantine','wrong-accounting','timeout'])test('actual workload CLI: '+mode,{timeout:30000},async t=>{
+ const f=await fixture(t,mode),result=await f.run('workloads'),passed=['pre-header','partial','json-truncated'].includes(mode),failedCase=mode==='wrong-version'?'success':'lost';
  assert.equal(result.code,passed?0:1,result.stderr);
  const modes=mode==='wrong-version'?['success']:['success','reject','max','overflow','lost'];assert.deepEqual(f.calls.map(x=>x.mode),modes);
  if(mode!=='wrong-version'){assert.equal(f.calls[2].bytes,64*1024**2);assert.equal(f.calls[3].bytes,64*1024**2+1);}
@@ -85,10 +86,11 @@ for(const mode of ['pre-header','partial','complete-200','unexpected-status','wr
  }
  if(passed){
   assert.equal(local.pending,null);assert.deepEqual(evidence.steps.filter(s=>s.kind==='workload-case').map(s=>s.mode),modes);assert.equal(evidence.steps.at(-1).kind,'workloads');
-  const lost=JSON.parse(original.at(-1));assert.equal(lost.response.status,mode==='partial'?200:424);assert.equal(lost.response.bodyComplete,mode!=='partial');
+  const lost=JSON.parse(original.at(-1));assert.equal(lost.response.status,mode==='pre-header'?424:200);assert.equal(lost.response.bodyComplete,mode!=='partial');
   if(mode==='partial')assert.equal(lost.response.failure.kind,'transport');
+  if(mode==='json-truncated')assert.equal(lost.response.jsonValid,false);
  }else{
-  assert.equal(local.pending.workloadMode,failedCase);assert.equal(evidence.steps.filter(s=>s.kind==='workloads').length,0);assert.equal(evidence.steps.filter(s=>s.kind==='workload-case').length,modes.length-1);
+  assert.equal(local.workloadPending.workloadMode,failedCase);assert.equal(evidence.steps.filter(s=>s.kind==='workloads').length,0);assert.equal(evidence.steps.filter(s=>s.kind==='workload-case').length,modes.length-1);
   const diagnostic=JSON.parse(original.at(-1));if(mode==='timeout')assert.deepEqual(diagnostic.failure,{kind:'timeout'});
   const count=f.calls.length,controlReads=f.controls.length;assert.equal((await f.run('workloads')).code,1);assert.equal(f.calls.length,count);assert.equal(f.controls.length,controlReads,'pending work is refused before any network request');
  }

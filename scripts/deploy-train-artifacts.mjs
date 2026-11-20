@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createRequire } from 'node:module';
-import { nativeBindings, nativeReceipt, nativeSource, NATIVE_CLASSES } from './deploy-train-runtime.mjs';
+import { nativeBindings, nativeReceipt, nativeSource, NATIVE_CLASSES, versionedSetting } from './deploy-train-runtime.mjs';
 import { prepareNativeRecovery } from './build-native-recovery.mjs';
 import { prepareLargeHttpRelease, verifyLargeHttpRelease } from './prepare-large-http-release.mjs';
 
@@ -18,9 +18,14 @@ export async function prepareNativeUpload({ state, blue, configPath = '.wrangler
   const settings = c => ({ containers: c.containers, triggers: c.triggers, consumers: c.queues?.consumers, migrations: c.migrations, exports: c.exports, metadata: c.version_metadata });
   if (!isDeepStrictEqual(settings(config), settings(source))) throw new Error('Rendered native lifecycle or non-versioned settings changed');
   const bindings = new Map(nativeBindings(blue).map(b => [b.name, b]));
+  state.baselineSettings=Object.fromEntries([...bindings.values()].filter(b=>b.type==='plain_text'&&versionedSetting(b.name,b.text)).map(b=>[b.name,b.text]));
+  state.candidateSettings=Object.fromEntries(Object.entries(config.vars??{}).filter(([name,value])=>versionedSetting(name,value)));
   for (const [name, value] of Object.entries(config.vars ?? {})) {
     const previous = bindings.get(name);
-    if (previous?.type !== 'plain_text' || previous.text !== value) throw new Error('Rendered vars change the native configuration; use a separately reviewed release');
+    if (previous?.type !== 'plain_text' || previous.text !== value) {
+      if (previous?.type === 'plain_text' && versionedSetting(name,previous.text) && versionedSetting(name,value)) state.nativeControlChanged=true;
+      else throw new Error('Development error: configuration change needs an automated compatible transition and proof in the feature PR');
+    }
   }
   const actors = config.durable_objects?.bindings ?? [];
   if (actors.length !== Object.keys(NATIVE_CLASSES).length || Object.entries(NATIVE_CLASSES).some(([name, className]) =>
@@ -40,6 +45,8 @@ export async function prepareNativeUpload({ state, blue, configPath = '.wrangler
   if (manifest.schema !== 1 || !/^[a-f0-9]{64}$/.test(runtimeSha ?? '') ||
       manifest.runtime.assetPath !== `__large_http/artifact/${runtimeSha}.mjs`) throw new Error('Invalid native runtime manifest');
   const changed = runtimeSha !== receipt.runtimeSha;
+  if (mode === 'auto') mode = changed ? 'native-cutover' : state.nativeControlChanged ? 'native-control' : 'rollout';
+  state.mode = mode;
   if (changed && !['native-cutover','native-control'].includes(mode)) throw new Error('Different native runtime fingerprint; use a separately rehearsed cutover');
   if (mode === 'native-cutover' && (!changed || state.unsafe || state.migration)) throw new Error('Native cutover requires a different, rollback-compatible payload');
   if (mode === 'native-control' && (state.unsafe || state.migration)) throw new Error('Native control adoption requires a rollback-compatible release');

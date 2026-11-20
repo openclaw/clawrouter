@@ -1,3 +1,8 @@
+> Historical/manual diagnostic procedure. Production releases now prepare and
+> qualify themselves through **Deploy ClawRouter**; see
+> [deployment compatibility](deployment-compatibility.md). These steps are not
+> deployment prerequisites.
+
 # Deployment train after the large HTTP launch
 
 The ordinary source hold is released. This follow-up does not authorize or

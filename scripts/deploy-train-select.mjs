@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createApi } from './deploy-train-api.mjs';
-import { deploymentHold } from './deploy-release-hold.mjs';
-import { fullSha, greenPushRun, LEGACY_DEPLOYMENT, stableVersion, verifyDispatch, versionSha, deploymentState } from './deploy-train-policy.mjs';
+import { assertDeploymentAction } from './deploy-authorization.mjs';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { fullSha, LEGACY_DEPLOYMENT, stableVersion, versionSha, deploymentState } from './deploy-train-policy.mjs';
 
 export function git(...args) { return execFileSync('git', args, { encoding: 'utf8', timeout: 30_000 }).trim(); }
 export async function successfulJobs(api, run) {
@@ -14,7 +15,7 @@ export async function successfulJobs(api, run) {
     if (jobs.length >= result.total_count) break;
     if (!result.jobs.length) throw new Error('Incomplete CI job listing');
   }
-  const required = ['native-codex', 'self-host', 'admin', 'admin-fusion-macos', 'worker-package'];
+  const required = ['native-codex', 'self-host', 'admin', 'admin-fusion-macos', 'worker-package', 'script-tests'];
   return jobs.length > 0 && jobs.every((j) => j.status === 'completed' && j.conclusion === 'success') &&
     required.every((name) => jobs.some((j) => j.name === name || j.name.startsWith(`${name} (`)));
 }
@@ -32,19 +33,22 @@ export async function deployedSource(api, deployment) {
   if (!deployedSha) throw new Error('Deployed version has no verified commit annotation; refusing to guess rollback lineage');
   return { blue, deployedSha };
 }
-export async function selectCandidate({ api, commits, deployedSha, manualSha, mode = 'rollout' }) {
-  const choices = manualSha ? [manualSha] : commits;
-  for (const sha of choices) {
-    // A control bridge tags current source while deliberately retaining the old
-    // native payload. Only an explicit payload cutover can revisit that source;
-    // packaging must still prove different bytes and exact-source CI below.
-    if (sha === deployedSha && !(manualSha && mode === 'native-cutover')) return { noop: true, reason: 'Candidate already deployed' };
-    const response = await api.github(`/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${fullSha(sha)}&per_page=100`);
-    const run = greenPushRun(response.workflow_runs, sha);
-    if (run && await successfulJobs(api, run)) return { noop: false, sha, ciRun: run.id };
+// Never fall back to an older green commit. A release means this event's main.
+export async function waitForSourceCI({ api, sha, now = Date.now, wait = sleep, timeoutMs = 15 * 60_000 }) {
+  fullSha(sha);
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const response = await api.github(`/actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=${sha}&per_page=100`);
+    const runs = response.workflow_runs.filter(r => r.head_sha === sha && r.event === 'push' && r.head_branch === 'main')
+      .sort((a,b) => Number(b.id) - Number(a.id) || b.run_attempt - a.run_attempt);
+    const latest = runs[0];
+    if (latest?.status === 'completed') {
+      if (latest.conclusion !== 'success' || !await successfulJobs(api, latest)) throw new Error('Frozen main source failed exact-source CI');
+      return latest.id;
+    }
+    if (now() >= deadline) throw new Error('Frozen main source CI did not finish within 15 minutes');
+    await wait(Math.min(15_000, deadline - now()));
   }
-  if (manualSha) throw new Error('Manual candidate lacks successful exact-SHA main push CI');
-  return { noop: true, reason: 'No newer main commit has successful push CI' };
 }
 export function candidateCommits(deployedSha, head, runGit = git) {
   try { runGit('merge-base', '--is-ancestor', deployedSha, head); }
@@ -58,26 +62,16 @@ export function candidateCommits(deployedSha, head, runGit = git) {
   return runGit('rev-list', '--first-parent', `${deployedSha}..${head}`).split('\n').filter(Boolean);
 }
 export async function main(env = process.env) {
-  verifyDispatch({ event: env.GITHUB_EVENT_NAME, expected: env.EXPECTED_SHA, sha: env.GITHUB_SHA, ref: env.GITHUB_REF });
-  const hold = deploymentHold(env.GITHUB_SHA);
-  if (hold) {
-    if (env.GITHUB_EVENT_NAME !== 'schedule') throw new Error('Selected source is held for a separately authorized staged release');
-    writeFileSync(env.TRAIN_PLAN_PATH, JSON.stringify({ noop: true, reason: hold }, null, 2));
-    appendFileSync(env.GITHUB_OUTPUT, 'noop=true\nsha=\nblue=\ndeployed_sha=\n');
-    appendFileSync(env.GITHUB_STEP_SUMMARY, '## Production train\nSuccessful no-op: source deployment hold.\n');
-    return;
-  }
+  assertDeploymentAction(env);
   const api = createApi({ env });
   const deployment = await api.latest();
   const source = await deployedSource(api, deployment);
   // Freeze the event's main snapshot, not a branch that can advance during selection.
   const head = fullSha(env.GITHUB_SHA);
   const commits = candidateCommits(source.deployedSha, head);
-  const manualSha = env.GITHUB_EVENT_NAME === 'workflow_dispatch' ? head : null;
-  const sameSourceCutover = manualSha === source.deployedSha && env.TRAIN_MODE === 'native-cutover';
-  const selection = commits.length === 0 && !sameSourceCutover
+  const selection = commits.length === 0 && source.deployedSha !== head
     ? { noop: true, reason: 'No main candidate newer than the deployed version' }
-    : await selectCandidate({ api, commits, deployedSha: source.deployedSha, manualSha, mode: env.TRAIN_MODE });
+    : { noop: false, sha: head, ciRun: await waitForSourceCI({ api, sha: head }) };
   const plan = { ...source, ...selection, deploymentId: deployment.id, run: env.GITHUB_RUN_ID };
   writeFileSync(env.TRAIN_PLAN_PATH, JSON.stringify(plan, null, 2));
   for (const [key, value] of Object.entries({ noop: plan.noop, sha: plan.sha || '', blue: plan.blue, deployed_sha: plan.deployedSha })) appendFileSync(env.GITHUB_OUTPUT, `${key}=${value}\n`);
