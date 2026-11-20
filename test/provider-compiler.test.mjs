@@ -49,6 +49,54 @@ for (const displayName of ["", " \t\n", null, 123]) test(`compiler rejects inval
   assert.throws(() => compileProviderSnapshot([manifest]), /invalid manifest/);
 });
 
+function catalogReferenceManifest() {
+  const manifest = parse(readFileSync("examples/provider-plugin/example.provider.yaml", "utf8"));
+  manifest.models = { entries: [{ id: "example/router-alias", upstream: "native-slug", capabilities: ["tool.invoke"] }] };
+  return manifest;
+}
+
+test("catalogue references preserve exact identities without changing execution metadata", () => {
+  const manifest = catalogReferenceManifest();
+  const baseline = compileProviderSnapshot([manifest]);
+  const entry = manifest.models.entries[0];
+  entry.catalogRef = { provider: "catalog-provider", modelId: "org/Model:revision" };
+  const snapshot = compileProviderSnapshot([manifest]);
+  const compiled = snapshot.providers[0].models[0], indexed = snapshot.model_index[entry.id];
+  assert.deepEqual(compiled.catalogRef, entry.catalogRef);
+  assert.deepEqual(indexed.catalogRef, entry.catalogRef);
+  assert.equal(compiled.id, "example/router-alias");
+  assert.equal(compiled.upstream, "native-slug");
+  entry.catalogRef.modelId = "changed-input";
+  assert.equal(compiled.catalogRef.modelId, "org/Model:revision");
+  compiled.catalogRef.modelId = "changed-provider-row";
+  assert.equal(indexed.catalogRef.modelId, "org/Model:revision");
+  delete compiled.catalogRef;
+  delete indexed.catalogRef;
+  assert.deepEqual(snapshot, baseline, "a reference supplies no prices, capabilities, or execution settings");
+  assert.equal(Object.hasOwn(baseline.providers[0].models[0], "catalogRef"), false);
+  assert.equal(Object.hasOwn(baseline.model_index[entry.id], "catalogRef"), false);
+});
+
+test("distinct router aliases may explicitly reference the same catalogue model", () => {
+  const manifest = catalogReferenceManifest();
+  const first = manifest.models.entries[0];
+  first.catalogRef = { provider: "catalog-provider", modelId: "org/Model" };
+  manifest.models.entries.push({ ...first, id: "example/second-alias" });
+  const snapshot = compileProviderSnapshot([manifest]);
+  assert.deepEqual(snapshot.model_index[first.id].catalogRef, snapshot.model_index["example/second-alias"].catalogRef);
+  assert.equal(Object.keys(snapshot.model_index).length, 2);
+});
+
+for (const catalogRef of [null, [], "provider/model", {}, { provider: "provider" }, { modelId: "model" },
+  { provider: "", modelId: "model" }, { provider: "provider", modelId: " \t" },
+  { provider: 1, modelId: "model" }, { provider: "provider", modelId: "model", capabilities: ["llm.chat"] }]) {
+  test(`compiler rejects invalid catalogue reference ${JSON.stringify(catalogRef)}`, () => {
+    const manifest = catalogReferenceManifest();
+    manifest.models.entries[0].catalogRef = catalogRef;
+    assert.throws(() => compileProviderSnapshot([manifest]), /invalid manifest/);
+  });
+}
+
 test("CLI still rejects missing manifests and invalid inputs without output", () => {
   const missing = spawnSync(process.execPath, ["scripts/compile-providers.mjs"], { encoding: "utf8" });
   assert.notEqual(missing.status, 0);

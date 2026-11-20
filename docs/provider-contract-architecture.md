@@ -166,6 +166,11 @@ contracts, without the client API or Worker environment.
 external consumer. Neither test turns the declarations into a runtime validator.
 OpenClaw compatibility selection includes the package sources and build configuration.
 
+Model declarations can include an explicit `catalogRef` with `provider` and
+`modelId` fields. This lookup target remains separate from router and upstream
+identities. It does not validate a catalogue row or import its facts.
+See [catalogue references](provider-plugins.md#catalogue-references).
+
 ## 3. Vocabulary and identities
 
 | Object | Meaning | Example |

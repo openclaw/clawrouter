@@ -69,9 +69,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/README.md",
-    "blob": "2432e2b5874b971faddd3a3312daf0ecea17266f",
-    "sha256": "aa57b2f45d7ad5ce9a096601bb43da6a9e314e43e26cdacafa4665759e5f7a6a",
-    "bytes": 3929
+    "blob": "3b424b61320263d583d4e3a5baced4f54ac562af",
+    "sha256": "b0f84ac4f4882e1c2e19db528bfe82e45f24f1f84617f626fee133b81512556b",
+    "bytes": 4203
   },
   {
     "path": "packages/provider-plugin-contract/package.json",
@@ -99,9 +99,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/src/index.ts",
-    "blob": "9509556a94dffb19299290844a6b88fb24e59f2d",
-    "sha256": "5acb7a001793867ff018b42d629c9eb98d3f9c970963ad07a3e4bf48e63d4eaa",
-    "bytes": 7104
+    "blob": "3a16e0996558c666933197fb91cc9f933d4a6d0c",
+    "sha256": "de1ab5b4377e4da82f1b99dc56b5ed5fb66990f3060af6113a78e2af75b2645b",
+    "bytes": 7129
   },
   {
     "path": "packages/provider-plugin-contract/src/model-availability.ts",
@@ -117,9 +117,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "packages/provider-plugin-contract/src/models.ts",
-    "blob": "b97d9b44d929281b4fed23290de1460cb5a46efa",
-    "sha256": "03df7f231c46345e2121d66e71dafdc38d92d8156911232f6854b5bc42ee0c63",
-    "bytes": 850
+    "blob": "8ebdd771f40bc4a943a03679ce99ea455a1d9b3f",
+    "sha256": "255f499908019811d6ff384f3f965467ea224418ceac9c790a04f72061bad36f",
+    "bytes": 1058
   },
   {
     "path": "packages/provider-plugin-contract/src/native-capabilities.ts",

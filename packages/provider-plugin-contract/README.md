@@ -40,6 +40,7 @@ import {
   type CompiledEndpoint,
   type CompiledQuotaConfig,
   type ProviderModelDefinition,
+  type ProviderModelCatalogRef,
   type NativeDecisionCapabilities,
   type ProviderSnapshot,
   type CompiledProvider,
@@ -79,6 +80,9 @@ entitlement, remaining budget, or an admission decision.
 `ProviderModelDefinition` includes availability, request-parameter support, and
 native endpoint capabilities, including decision protocols. These are compiled
 provider facts, not a generic model catalogue or account entitlement.
+An optional `catalogRef` names a catalogue provider and exact `modelId` separately
+from the router `id` and upstream slug. It is an authored lookup target, not a
+validated catalogue match. It supplies no capabilities, prices, or permissions.
 `isPublishedMusicInputSupport` checks the existing closed support record; it does
 not grant permission to publish input. Request assessment remains host-owned.
 

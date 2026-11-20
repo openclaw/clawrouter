@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve optional, explicit catalogue references on compiled provider models. Router aliases and upstream slugs remain separate; references do not import model facts, prices, or permissions.
+
 - Preserve full CI checkout ancestry when fetching the pinned native baseline so deployment compatibility does not misclassify already-landed migrations as new feature changes.
 
 - Exercise the five frozen Mistral Chat cards through the registered OpenClaw client, actual Worker and SQLite: selected credentials, replay IDs, typed reasoning, standard/Priority accounting, zero-egress denials, controlled provider errors and joined post-response cancellation. Put the new consumer first without reordering existing consumers; preserve independent cleanup failures and the separate pre-header physical-disconnect limitation.

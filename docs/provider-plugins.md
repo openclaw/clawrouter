@@ -411,6 +411,35 @@ Do not offer an unrestricted `handleRequest(env)` hook: it would bypass policy,
 tenant isolation, credential ownership, accounting, and output controls. Package
 metadata must never determine its own secret, network, or storage permissions.
 
+## Catalogue references
+
+A model entry can name its intended shared catalogue row:
+
+```yaml
+models:
+  entries:
+    - id: gateway/router-alias
+      upstream: native-slug
+      catalogRef:
+        provider: catalog-provider
+        modelId: org/Model:revision
+```
+
+`catalogRef` requires nonblank `provider` and `modelId` strings. The compiler
+preserves both values exactly, including case and slashes. It does not split
+the router ID, normalize the catalogue ID, or infer a provider mapping.
+Different router aliases can explicitly target the same catalogue row.
+
+The compiled provider model and model index retain detached copies of this
+reference. Omitting it preserves the existing snapshot shape. The portable
+`ProviderModelCatalogRef` type uses the catalogue core's `provider`/`modelId`
+field names without importing its unpublished package or copying its parser.
+
+This declaration does not fetch a catalogue or prove that the referenced row
+exists. It cannot add prices, capabilities, endpoints, or account entitlement.
+A future importer must validate the selected catalogue and record provenance
+before using its facts. Existing local declarations remain authoritative.
+
 ## Contributor contract tests
 
 The starter fixture uses the data-only `clawrouter.provider-conformance.v1`
