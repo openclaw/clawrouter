@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
 import { queue, UsageLedgerObject, usageSnapshot } from "../ledgers.ts";
+import { caughtResponse, HttpError } from "../utils.ts";
 
 const reservation = {
   reservations: [{ reservationId: "reservation", objectName: "tenant:policy" }],
@@ -201,6 +202,275 @@ for (const rollbackFails of [false, true]) test(`parallel denial waits for late 
   assert.deepEqual(settled, [calls[0], calls[3]]);
   assert.deepEqual(observations.filter(([, state]) => state === "denied").map(([kind]) => kind), ["weekly", "daily"]);
 });
+
+for (let failedLeg = 0; failedLeg < 4; failedLeg++) test(`reserve leg ${budgetKinds[failedLeg]} failure joins every reserve and acknowledged cleanup`, { timeout: 5_000 }, async t => {
+  const owner = accountingOwner(t);
+  await owner.run(async () => {
+    const original = new HttpError(402, "budget_exhausted", "synthetic reservation denial");
+    const reserves = budgetKinds.map(() => owner.gate()), cleanups = budgetKinds.map(() => owner.gate());
+    const cleanupEntered = owner.gate(), calls = [], settled = [], observations = [];
+    const env = mockEnv(async () => assert.fail("successful ledger cleanup needs no queue"));
+    env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (new URL(url).pathname === "/reserve") {
+        const index = calls.length;
+        calls.push({ name, id: body.reservationId });
+        assert.deepEqual(observations[index], [body.reservationId, "attempted"]);
+        await reserves[index].promise;
+        if (index === failedLeg) throw original;
+        return Response.json({ allowed: true, chargedMicros: 1 });
+      }
+      const index = calls.findIndex(item => item.id === body.reservationId);
+      settled.push({ name, ...body });
+      if (settled.length === 3) cleanupEntered.resolve();
+      await cleanups[index].promise;
+      return Response.json({ settled: true });
+    } });
+    const root = owner.start(reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection,
+      (leg, state) => observations.push([leg.request.reservationId, state])), result => result.failed && result.reason === original);
+    assert.equal(calls.length, 4);
+    reserves[failedLeg].resolve();
+    await accountingTurn();
+    assert.equal(root.settled, false);
+    assert.deepEqual(settled, [], "no rollback before all reserve outcomes");
+    for (const gate of reserves) gate.resolve();
+    await owner.arrival(cleanupEntered.promise, root);
+    const successes = calls.filter((_, index) => index !== failedLeg);
+    assert.deepEqual(settled, successes.map(({ name, id }) => ({ name, reservationId: id, actualCostMicros: 0 })));
+    assert.equal(root.settled, false, "all three cleanups started concurrently and remain held");
+    const last = calls.findLastIndex((_, index) => index !== failedLeg);
+    for (let index = 0; index < 4; index++) if (index !== last) cleanups[index].resolve();
+    await accountingTurn();
+    assert.equal(root.settled, false, "one held cleanup still owns completion");
+    cleanups[last].resolve();
+    const result = await root.outcome;
+    assert.equal(result.failed, true);
+    assert.equal(result.reason, original);
+    assert.deepEqual(observations.filter(([, state]) => state === "denied"), [[calls[failedLeg].id, "denied"]]);
+    assert.equal(calls.length, 4);
+    assert.equal(settled.length, 3);
+  });
+});
+
+for (const acknowledged of [false, true]) test(`plan-order undefined reservation rejection survives ${acknowledged ? "held cleanup" : "zero acknowledged successes"}`, { timeout: 5_000 }, async t => {
+  const owner = accountingOwner(t);
+  await owner.run(async () => {
+    const gates = budgetKinds.map(() => owner.gate()), cleanup = owner.gate(), entered = owner.gate();
+    const reasons = [undefined, new Error("second plan failure"), new Error("third plan failure"), new Error("fourth plan failure")];
+    const calls = [], completed = [], settled = [];
+    const env = mockEnv(async () => assert.fail("no queue needed"));
+    env.BUDGET_LEDGER.get = () => ({ fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (new URL(url).pathname === "/settle") {
+        settled.push(body); entered.resolve(); await cleanup.promise;
+        return Response.json({ settled: true });
+      }
+      const index = calls.length; calls.push(body.reservationId);
+      await gates[index].promise; completed.push(index);
+      if (acknowledged && index === 3) return Response.json({ allowed: true, chargedMicros: 1 });
+      throw reasons[index];
+    } });
+    const root = owner.start(reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection), result => result.failed && result.reason === undefined);
+    for (const index of [2, 1, 0]) { gates[index].resolve(); await accountingTurn(); assert.equal(root.settled, false); }
+    assert.deepEqual(settled, []);
+    gates[3].resolve();
+    if (acknowledged) {
+      await owner.arrival(entered.promise, root);
+      assert.deepEqual(settled, [{ reservationId: calls[3], actualCostMicros: 0 }]);
+      assert.equal(root.settled, false);
+      cleanup.resolve();
+    }
+    assert.deepEqual(await root.outcome, { failed: true, reason: undefined });
+    assert.deepEqual(completed, [2, 1, 0, 3]);
+    assert.equal(settled.length, acknowledged ? 1 : 0);
+  });
+});
+
+for (const serial of [false, true]) test(`${serial ? "Search" : "generic"} rollback retains every ordered ledger/queue failure privately`, { timeout: 5_000 }, async t => {
+  const owner = accountingOwner(t);
+  await owner.run(async () => {
+    const shared = new Error("synthetic-private-shared-reason"), original = serial ? new HttpError(402, "budget_exhausted", "synthetic-private-reserve-reason") : undefined;
+    const ledgerReasons = [undefined, null, shared, shared], queueReasons = [shared, null, undefined, shared];
+    const gates = budgetKinds.map(() => owner.gate()), entries = budgetKinds.map(() => owner.gate()), entered = owner.gate();
+    const calls = [], ledgerCalls = [], queueCalls = [], completed = [];
+    const env = mockEnv(async message => {
+      const index = calls.findIndex(item => item.id === message.request.reservationId);
+      queueCalls.push(message);
+      entries[index].resolve();
+      if (queueCalls.length === 3) entered.resolve();
+      await gates[index].promise; completed.push(index);
+      throw queueReasons[index];
+    });
+    env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (new URL(url).pathname === "/reserve") {
+        const index = calls.length; calls.push({ name, id: body.reservationId });
+        if (index === 1) throw original;
+        return Response.json({ allowed: true, chargedMicros: 1 });
+      }
+      ledgerCalls.push({ name, ...body });
+      throw ledgerReasons[calls.findIndex(item => item.id === body.reservationId)];
+    } });
+    const search = serial ? {
+      operation: { signal: new AbortController().signal },
+      controlJson: async (body, invoke, _required, signal) => (await invoke(JSON.stringify(body), signal)).json(),
+      task: async start => start(),
+    } : undefined;
+    const root = owner.start(reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection, undefined, { search }), result => result.failed && result.reason instanceof HttpError && result.reason.code === "accounting_unavailable");
+    if (serial) {
+      for (const index of [0, 2, 3]) {
+        await owner.arrival(entries[index].promise, root);
+        assert.equal(queueCalls.length, [0, 2, 3].indexOf(index) + 1);
+        assert.equal(ledgerCalls.length, queueCalls.length);
+        assert.equal(root.settled, false);
+        gates[index].resolve();
+      }
+    } else {
+      await owner.arrival(entered.promise, root);
+      assert.equal(root.settled, false);
+      for (const index of [3, 0]) { gates[index].resolve(); await accountingTurn(); assert.equal(root.settled, false); }
+      gates[2].resolve();
+    }
+    const result = await root.outcome;
+    assert.equal(result.failed, true);
+    const error = result.reason;
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.status, 503);
+    assert.equal(error.code, "accounting_unavailable");
+    assert.equal(error.message, "Budget reservation rollback could not finish; retry after accounting recovers.");
+    const symbols = Object.getOwnPropertySymbols(error);
+    assert.equal(symbols.length, 1);
+    const descriptor = Object.getOwnPropertyDescriptor(error, symbols[0]), diagnostics = descriptor.value;
+    assert.equal(descriptor.enumerable, false);
+    assert.equal(descriptor.writable, false);
+    assert.equal(descriptor.configurable, false);
+    assert.equal(Object.hasOwn(diagnostics, "reservationReason"), true);
+    assert.equal(diagnostics.reservationReason, original);
+    assert.equal(Object.isFrozen(diagnostics), true);
+    assert.equal(Object.isFrozen(diagnostics.cleanupFailures), true);
+    assert.deepEqual(diagnostics.cleanupFailures, [0, 2, 3].map(index => ({
+      reservationId: calls[index].id, objectName: calls[index].name,
+      ledgerReason: ledgerReasons[index], queueReason: queueReasons[index],
+    })));
+    for (const failure of diagnostics.cleanupFailures) {
+      assert.equal(Object.isFrozen(failure), true);
+      const index = calls.findIndex(item => item.id === failure.reservationId);
+      assert.equal(failure.ledgerReason, ledgerReasons[index]);
+      assert.equal(failure.queueReason, queueReasons[index]);
+      assert.equal(Object.hasOwn(failure, "ledgerReason"), true);
+      assert.equal(Object.hasOwn(failure, "queueReason"), true);
+    }
+    assert.deepEqual(completed, serial ? [0, 2, 3] : [3, 0, 2]);
+    assert.deepEqual(ledgerCalls, [0, 2, 3].map(index => ({ name: calls[index].name, reservationId: calls[index].id, actualCostMicros: 0 })));
+    assert.deepEqual(queueCalls, [0, 2, 3].map(index => ({ kind: "budget_settlement", ledger: { objectName: calls[index].name }, request: { reservationId: calls[index].id, actualCostMicros: 0 } })));
+    assert.deepEqual(JSON.parse(JSON.stringify(error)), { status: 503, code: "accounting_unavailable" });
+    const response = caughtResponse(error, "fixture-request");
+    const publicBody = await response.json();
+    assert.equal(response.status, 503);
+    assert.deepEqual(publicBody, { error: { code: error.code, message: error.message } });
+    assert.doesNotMatch(JSON.stringify(publicBody), /synthetic-private|reservationReason|cleanupFailures|ledgerReason|queueReason/);
+  });
+});
+
+for (const original of [new HttpError(402, "budget_exhausted", "synthetic denied budget"), new Error("synthetic reserve failure")]) test(`successful queue recovery preserves original ${original instanceof HttpError ? "402" : "Error"} identity`, { timeout: 5_000 }, async t => {
+  const owner = accountingOwner(t);
+  await owner.run(async () => {
+    const gate = owner.gate(), entered = owner.gate(), calls = [], queued = [], settled = [];
+    const env = mockEnv(async message => { queued.push(message); if (queued.length === 3) entered.resolve(); await gate.promise; });
+    env.BUDGET_LEDGER.get = name => ({ fetch: async (url, init) => {
+      const body = JSON.parse(init.body);
+      if (new URL(url).pathname === "/reserve") {
+        const index = calls.length; calls.push({ name, id: body.reservationId });
+        if (index === 0) throw original;
+        return Response.json({ allowed: true, chargedMicros: 1 });
+      }
+      settled.push(body); throw undefined;
+    } });
+    const root = owner.start(reserveBudget(env, fourLegAuth, "llm.responses", budgetCost, budgetConnection), result => result.failed && result.reason === original);
+    await owner.arrival(entered.promise, root);
+    assert.equal(root.settled, false);
+    gate.resolve();
+    const result = await root.outcome;
+    assert.equal(result.failed, true);
+    assert.equal(result.reason, original);
+    assert.deepEqual(settled, calls.slice(1).map(({ id }) => ({ reservationId: id, actualCostMicros: 0 })));
+    assert.deepEqual(queued, calls.slice(1).map(({ name, id }) => ({ kind: "budget_settlement", ledger: { objectName: name }, request: { reservationId: id, actualCostMicros: 0 } })));
+    assert.deepEqual(Object.getOwnPropertySymbols(original), []);
+  });
+});
+
+for (const serial of [false, true]) test(`exported settlement preserves first undefined failure and ${serial ? "Search serial" : "generic concurrent"} cleanup`, { timeout: 5_000 }, async t => {
+  const owner = accountingOwner(t);
+  await owner.run(async () => {
+    const items = [0, 1, 2].map(index => ({ reservationId: `fixture-${index}`, objectName: `fixture-ledger-${index}` }));
+    const gates = items.map(() => owner.gate()), entries = items.map(() => owner.gate()), ledgers = [], queues = [], mandatory = [];
+    const reasons = [undefined, new Error("second settlement failure"), new Error("third settlement failure")];
+    const env = mockEnv(async message => {
+      const index = items.findIndex(item => item.reservationId === message.request.reservationId);
+      queues.push(message); entries[index].resolve(); await gates[index].promise; throw reasons[index];
+    });
+    env.BUDGET_LEDGER.get = name => ({ fetch: async (_url, init) => { ledgers.push({ name, body: JSON.parse(init.body) }); throw new Error("synthetic ledger rejection"); } });
+    // Model the existing Search call interface; this is not a Search physical-owner proof.
+    const search = serial ? {
+      controlJson: async (body, invoke, required) => { mandatory.push(required); return (await invoke(JSON.stringify(body))).json(); },
+      task: async (start, required) => { mandatory.push(required); return start(); },
+    } : undefined;
+    const root = owner.start(settleBudget(env, { reservations: items, reservedMicros: 3 }, 7, search), result => result.failed && result.reason === undefined);
+    if (serial) {
+      for (let index = 0; index < 3; index++) {
+        await owner.arrival(entries[index].promise, root);
+        assert.equal(ledgers.length, index + 1);
+        assert.equal(queues.length, index + 1);
+        assert.equal(root.settled, false);
+        gates[index].resolve();
+      }
+      assert.deepEqual(mandatory, Array(6).fill(true));
+    } else {
+      await owner.arrival(Promise.all(entries.map(entry => entry.promise)), root);
+      assert.equal(ledgers.length, 3);
+      assert.equal(queues.length, 3);
+      for (const index of [2, 1]) { gates[index].resolve(); await accountingTurn(); assert.equal(root.settled, false); }
+      gates[0].resolve();
+    }
+    assert.deepEqual(await root.outcome, { failed: true, reason: undefined });
+    assert.deepEqual(ledgers, items.map(item => ({ name: item.objectName, body: { reservationId: item.reservationId, actualCostMicros: 7 } })));
+    assert.deepEqual(queues, items.map(item => ({ kind: "budget_settlement", ledger: { objectName: item.objectName }, request: { reservationId: item.reservationId, actualCostMicros: 7 } })));
+  });
+});
+
+function accountingOwner(t) {
+  const gates = [], roots = [];
+  let hasPrimary = false, primary;
+  t.after(async () => {
+    for (const gate of gates) gate.resolve();
+    const outcomes = await Promise.all(roots.map(root => root.outcome));
+    const errors = [];
+    for (let index = 0; index < roots.length; index++) {
+      const outcome = outcomes[index];
+      if (outcome.failed && (hasPrimary || !roots[index].expected(outcome))) errors.push(outcome.reason);
+      else if (!outcome.failed && !roots[index].expected(outcome)) errors.push(new Error("unexpected accounting root fulfillment"));
+    }
+    if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors, "accounting test and independent root outcomes");
+  });
+  return {
+    gate() { const gate = Promise.withResolvers(); gates.push(gate); return gate; },
+    start(promise, expected) {
+      const root = { settled: false, expected };
+      root.outcome = promise.then(value => { root.settled = true; return { failed: false, value }; }, reason => { root.settled = true; return { failed: true, reason }; });
+      roots.push(root); return root;
+    },
+    async run(body) { try { await body(); } catch (error) { hasPrimary = true; primary = error; throw error; } },
+    async arrival(promise, root) {
+      let timer;
+      try {
+        await Promise.race([promise, root.outcome.then(result => { if (result.failed) throw result.reason; throw new Error("accounting root completed before expected phase"); }),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("accounting phase did not arrive")), 1_000); })]);
+      } finally { clearTimeout(timer); }
+    },
+  };
+}
+
+function accountingTurn() { return new Promise(resolve => setImmediate(resolve)); }
 
 function mockEnv(send) {
   return {

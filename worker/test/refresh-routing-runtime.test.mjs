@@ -13,9 +13,9 @@ const router = `
   export * from "./worker/index.ts";
   import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
   import { GrantCredentialObject as Owner } from "./worker/grant-credentials.ts";
-  import { resolveGrantSelection, grantRoutingPolicy } from "./worker/grant-selection.ts";
+  import { resolveGrantSelection, grantRoutingPolicy, grantSelectionStats } from "./worker/grant-selection.ts";
   import { sha256Hex } from "./worker/utils.ts";
-  let clock = ${now}; Date.now = () => clock;
+  let clock = ${now}; Date.now = () => clock; const events = [];
   export class PolicyBindingIndexObject extends Authority {
     constructor(state, env) { super(state, env); this.sql = state.storage.sql; }
     async fetch(request) {
@@ -48,7 +48,7 @@ const router = `
         const value = target[name]; return typeof value === "function" ? value.bind(target) : value;
       }});
       super(new Proxy(state, { get(target, name) { if (name === "storage") return storage; const value = target[name]; return typeof value === "function" ? value.bind(target) : value; }}), env);
-      this.storage = state.storage;
+      this.storage = state.storage; this.fixtureEnv = env;
     }
     async fetch(request) {
       const path = new URL(request.url).pathname;
@@ -56,32 +56,51 @@ const router = `
         const record = await this.storage.get("credential"); delete record.refreshRoutingPublished; record.poolSyncPending = false;
         await this.storage.put("credential", record); return new Response("ok");
       }
+      if (path === "/fixture/revoke-after-materialize") { await this.storage.put("fixture/revoke-after-materialize", true); return new Response("ok"); }
+      if (path === "/fixture/lose-on-second") { await this.storage.put("fixture/reads-before-loss", 1); return new Response("ok"); }
       if (path === "/fixture/lose-owner") { await this.storage.put("fixture/lose-owner", true); return new Response("ok"); }
       if (path === "/fixture/abandoned") { await this.storage.put("fixture/abandoned", true); return new Response("ok"); }
+      if (path === "/materialize") {
+        const { key } = await request.clone().json();
+        await fetch("https://fixture/materialized", { method: "POST", body: JSON.stringify({ key }) });
+        const remaining = await this.storage.get("fixture/reads-before-loss");
+        if (remaining === 0) { await this.storage.delete("credential"); await this.storage.delete("fixture/reads-before-loss"); }
+        else if (remaining !== undefined) await this.storage.put("fixture/reads-before-loss", remaining - 1);
+      }
       if (path === "/materialize" && await this.storage.get("fixture/abandoned")) {
         const record = await this.storage.get("credential");
         await this.storage.put("credential", { ...record, refreshAttempt: { id: "fixture-abandoned", generation: record.generation } });
         await this.storage.delete("fixture/abandoned");
       }
       if (path === "/materialize" && await this.storage.get("fixture/lose-owner")) await this.storage.delete("credential");
-      return super.fetch(request);
+      const response = await super.fetch(request);
+      if (path === "/materialize" && response.ok && await this.storage.get("fixture/revoke-after-materialize")) {
+        await this.storage.delete("fixture/revoke-after-materialize");
+        const authority = this.fixtureEnv.ACCESS_CONTROL.get(this.fixtureEnv.ACCESS_CONTROL.idFromName("policy-bindings"));
+        const revoked = await authority.fetch("https://owner/credentials/mutate", { method: "POST", body: JSON.stringify({ operation: "revoke", credentialId: "fixture", scope: "admin", actor: { auth: "admin_token", email: "fixture-admin@example.com", role: "admin" } }) });
+        if ((await revoked.json()).outcome !== "updated") throw Error("fixture caller revocation failed");
+      }
+      return response;
     }
   }
   export default { ...worker, async fetch(request, env, ctx) {
     env.CLAWROUTER_LOCAL_AUTH = "enabled"; env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("fixture-admin");
     const path = new URL(request.url).pathname;
     if (path === "/fixture/setup") {
-      const routing = await request.json();
+      const { providerId = "openai", ...routing } = await request.json();
       const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
       for (const [path, body] of [
-        ["/policies/initialize-all", [{ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "tenant", monthlyBudgetMicros: 10000000, retainRequestContent: false, grantRouting: { strategy: "threshold", ...routing } } }]],
+        ["/policies/initialize-all", [{ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: [providerId], tenantId: "tenant", monthlyBudgetMicros: 10000000, retainRequestContent: false, grantRouting: { strategy: "threshold", ...routing } } }]],
         ["/credentials/initialize-all", [{ credentialId: "fixture", credential: { enabled: true, secretSha256: await sha256Hex("fixture-key"), policyId: "fixture", policyGeneration: "g1" } }]],
-        ["/connections/initialize-all", [{ providerId: "openai", enabled: true, monthlyBudgetMicros: 10000000 }]],
+        ["/connections/initialize-all", [{ providerId, enabled: true, monthlyBudgetMicros: 10000000 }]],
       ]) { const r = await stub.fetch("https://owner" + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) return r; }
       return new Response("ok");
     }
+    if (["/fixture/lose-on-second", "/fixture/revoke-after-materialize"].includes(path)) { const { key } = await request.clone().json(); return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch(request); }
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/provider") return fetch("https://fixture/control", request);
+    if (path === "/fixture/events") return Response.json(events);
+    if (path === "/fixture/selection-stats") return Response.json(await grantSelectionStats(env, ["a", "b", "c", "d", "e"].map(name => "oauth/fixture/" + name)));
     if (path === "/fixture/kv-selection") {
       const result = await resolveGrantSelection("openai", "fixture", "tenant", "openai", env, new Set(), grantRoutingPolicy({ strategy: "priority" }), null, false);
       return Response.json({ key: result.selected?.key ?? null });
@@ -95,36 +114,39 @@ const router = `
       return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings")).fetch(request);
     }
     if (["/fixture/lose-owner", "/fixture/abandoned"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/fixture/a")).fetch(request);
-    return worker.fetch(request, env, ctx);
+    return worker.fetch(request, { ...env, USAGE_QUEUE: { async send(event) { events.push(event); return env.USAGE_QUEUE.send(event); } } }, ctx);
   }};
 `;
 const upstream = `
-  let config = {}, refreshes = 0, dispatches = [];
+  let config = {}, refreshes = 0, dispatches = [], materializations = [];
   export default { async fetch(request) {
-    if (new URL(request.url).pathname === "/control") { if (request.method === "POST") config = await request.json(); return Response.json({ refreshes, dispatches }); }
+    if (new URL(request.url).pathname === "/control") { if (request.method === "POST") { config = await request.json(); if (config.reset) { refreshes = 0; dispatches = []; materializations = []; } } return Response.json({ refreshes, dispatches, materializations }); }
+    if (new URL(request.url).pathname === "/materialized") { materializations.push((await request.json()).key); return new Response("ok"); }
     if (new URL(request.url).pathname.endsWith("/token")) {
       refreshes++;
       if (config.malformed) return new Response("fixture-invalid-response");
       if (config.status) return Response.json({ error: config.code ?? "server_error" }, { status: config.status, headers: config.retry ? { "retry-after": config.retry } : {} });
       return Response.json({ access_token: "fixture-rotated", refresh_token: "fixture-next-refresh", expires_in: 3600 });
     }
-    const credential = request.headers.get("authorization"); dispatches.push(credential);
-    if (config.dispatchStatus) return Response.json({ error: { message: "fixture rejection" } }, { status: config.dispatchStatus });
+    const credential = request.headers.get("authorization") ?? "Bearer " + request.headers.get("x-api-key"); dispatches.push(credential);
+    const rejection = config.responses?.[credential];
+    if (rejection) return new Response(rejection.body, { status: rejection.status, headers: { "content-type": rejection.contentType ?? "application/json" } });
+    if (config.dispatchStatus && credential !== config.healthy) return Response.json({ error: { message: "fixture rejection" } }, { status: config.dispatchStatus });
     return Response.json({ id: "resp_fixture_" + dispatches.length, object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, servedBy: credential });
   }};
 `;
-async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000 } = {}) {
+async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000, hotCache = false, providerId = "openai" } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "clawrouter-refresh-routing-"));
-  const mf = await startWorkerdFixture(dir, router, upstream);
+  const mf = await startWorkerdFixture(dir, router, upstream, { hotCache });
   t.after(async () => { await mf.dispose(); await rm(dir, { recursive: true, force: true }); });
   const request = (path, method = "GET", body, proxy = false) => mf.dispatchFetch("https://router.example" + path, {
     method, headers: { authorization: proxy ? "Bearer clawrouter-live-fixture-fixture-key" : "Bearer fixture-admin", "content-type": "application/json", origin: "https://router.example" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  assert.equal((await request("/fixture/setup", "POST", routing)).status, 200);
+  assert.equal((await request("/fixture/setup", "POST", { ...routing, providerId })).status, 200);
   const base = "/v1/admin/upstream-grants/policies/fixture/";
-  const grant = { provider: "openai", kind: "oauth", accessToken: "fixture-a", refreshToken: "fixture-refresh-a", expiresAt: new Date(expiresAt).toISOString() };
+  const grant = providerId === "anthropic" ? { provider: providerId, kind: "api_key", credential: "fixture-a" } : { provider: "openai", kind: "oauth", accessToken: "fixture-a", refreshToken: "fixture-refresh-a", expiresAt: new Date(expiresAt).toISOString() };
   const put = await request(base + "a", "PUT", grant); assert.equal(put.status, 200, await put.clone().text());
-  if (second) assert.equal((await request(base + "b", "PUT", { ...grant, accessToken: "fixture-b", refreshToken: "fixture-refresh-b", expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
+  if (second) assert.equal((await request(base + "b", "PUT", { ...grant, ...(providerId === "anthropic" ? { credential: "fixture-b" } : { accessToken: "fixture-b", refreshToken: "fixture-refresh-b", expiresAt: new Date(now + 7200000).toISOString() }) })).status, 200);
   return { request, base, grant, configure: config => request("/fixture/provider", "POST", config), stats: async () => (await request("/fixture/provider")).json(),
     row: async () => (await (await request("/v1/admin/upstream-grants")).json()).grants.find(g => g.tokenRef === "a"),
     rotate: () => request(base + "a/refresh", "POST"),
@@ -170,11 +192,11 @@ for (const routing of [{}, { failover: false }]) test(`pre-dispatch failure pres
   assert.deepEqual((await f.stats()).dispatches, []);
 });
 
-test("pre-dispatch retry consumes the same single failover allowance as post-dispatch rejection", { timeout: 60000 }, async t => {
+test("pre-dispatch and response rejections share a bounded no-repeat grant budget", { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.configure({ status: 503, dispatchStatus: 429 });
   assert.equal((await f.request(f.base + "c", "PUT", { ...f.grant, accessToken: "fixture-c", refreshToken: "fixture-refresh-c", expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
   assert.equal((await f.proxy()).status, 429);
-  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b"]);
+  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b", "Bearer fixture-c"]);
   assert.equal((await f.row()).selectedCount, 1);
 });
 
@@ -232,7 +254,7 @@ test("fusion reservation carries consumed preflight failover into synthesizer di
   assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
   const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
   assert.equal(response.status, 429, await response.clone().text());
-  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b"]);
+  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b", "Bearer fixture-c"]);
 });
 
 for (const failure of ["ambiguous", "persist", "transient"]) test(`upgrade republishes previously settled ${failure} routing blocks even with failover disabled`, { timeout: 60000 }, async t => {
@@ -321,4 +343,166 @@ for (const failure of ["ambiguous", "permanent"]) test(`${failure} removal prese
   const updated = await f.request(f.base + "a", "PUT", { provider: "openai", kind: "oauth", accessToken: "fixture-fresh-incremental", expiresAt: new Date(now + 7200000).toISOString() });
   assert.equal(updated.status, 200); const recovered = await updated.json(); assert.equal(recovered.usable, true); assert.equal(recovered.credentialStatus, "active"); assert.equal(recovered.refreshDiagnosis, null);
   await served(await f.proxy(), "fixture-fresh-incremental");
+});
+
+for (const phase of ["preparation", "response", "mixed"]) test(`bounded pool traversal reaches the fourth eligible account after ${phase} failures`, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "priority" }, expiresAt: phase === "response" ? now + 7200000 : now - 1000 });
+  for (const [index, name] of ["b", "c", "d"].entries()) {
+    const expiresAt = phase === "preparation" && name !== "d" ? now - 1000 : now + 7200000;
+    assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name, priority: 101 + index, expiresAt: new Date(expiresAt).toISOString() })).status, 200);
+  }
+  await f.configure({ status: 503, dispatchStatus: 429, healthy: "Bearer fixture-d" });
+  await served(await f.proxy(), "fixture-d");
+  const stats = await f.stats();
+  assert.equal(stats.refreshes, phase === "preparation" ? 3 : phase === "mixed" ? 1 : 0);
+  assert.deepEqual(stats.dispatches, (phase === "preparation" ? ["d"] : phase === "mixed" ? ["b", "c", "d"] : ["a", "b", "c", "d"]).map(name => "Bearer fixture-" + name));
+});
+
+test("pool traversal stops after four distinct failed accounts without enabling environment fallback", { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "priority" }, expiresAt: now + 7200000 });
+  for (const [index, name] of ["b", "c", "d", "e"].entries()) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name, priority: 101 + index, expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
+  await f.configure({ dispatchStatus: 429, healthy: "Bearer fixture-e" });
+  const response = await f.proxy(); assert.equal(response.status, 429); assert.match(await response.text(), /fixture rejection/);
+  assert.deepEqual((await f.stats()).dispatches, ["a", "b", "c", "d"].map(name => "Bearer fixture-" + name));
+});
+
+for (const strategy of ["round_robin", "least_used"]) test("healthy fusion selects once at reservation using " + strategy, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy, stickiness: "none" }, expiresAt: now + 7200000 });
+  await served(await f.proxy(), "fixture-a"); // Real selection makes B the next policy choice, not first eligible A.
+  const counts = async () => (await (await f.request("/v1/admin/upstream-grants")).json()).grants
+    .map(({ tokenRef, selectedCount }) => [tokenRef, selectedCount]).sort();
+  assert.deepEqual(await counts(), [["a", 1], ["b", 0]]);
+  await f.configure({ reset: true });
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  const stats = await f.stats();
+  assert.equal(stats.materializations[0], "oauth/fixture/b", "reservation must apply the configured policy before materializing an owner");
+  await served(response, "fixture-b");
+  assert.deepEqual(stats.materializations, ["oauth/fixture/b", "oauth/fixture/b"], "dispatch revalidates the reserved owner without selecting another");
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-b"]);
+  assert.equal(stats.refreshes, 0);
+  assert.deepEqual(await counts(), [["a", 1], ["b", 1]], "reservation and dispatch record one selection, not two");
+  await served(await f.proxy(), "fixture-a");
+  assert.deepEqual(await counts(), [["a", 2], ["b", 1]], "subsequent routing sees the single completed selection");
+});
+
+for (const mode of ["divergent-response", "divergent-mixed", "reuse", "reuse-at-cap"]) test("fusion counts successful reservation materialization in its four-grant budget: " + mode, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "round_robin", stickiness: "none" }, expiresAt: mode === "reuse-at-cap" ? now - 1000 : now + 7200000 });
+  for (const name of ["b", "c", "d", "e"]) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name,
+    expiresAt: new Date((mode === "divergent-mixed" && name === "c" || mode === "reuse-at-cap" && ["b", "c"].includes(name)) ? now - 1000 : now + 7200000).toISOString() })).status, 200);
+  if (mode.startsWith("divergent")) await served(await f.proxy(), "fixture-a"); // real round-robin cursor advances to B
+  await f.configure({ reset: true, status: 503, dispatchStatus: 429, healthy: "Bearer fixture-" + (mode.startsWith("reuse") ? "d" : "a") });
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  const stats = await f.stats();
+  const attempted = mode.startsWith("divergent") ? ["b", "c", "d", "e"] : ["a", "b", "c", "d"];
+  assert.equal(stats.materializations[0], "oauth/fixture/" + attempted[0], "reservation follows the real routing cursor");
+  assert.deepEqual([...new Set(stats.materializations)], attempted.map(name => "oauth/fixture/" + name), "no fifth credential owner is touched, including wraparound to A");
+  assert.equal(response.status, mode.startsWith("reuse") ? 200 : 429, await response.clone().text());
+  assert.deepEqual(stats.dispatches, (mode === "reuse-at-cap" ? ["d"] : mode === "divergent-mixed" ? ["b", "d", "e"] : attempted).map(name => "Bearer fixture-" + name));
+  assert.equal(stats.refreshes, mode === "reuse-at-cap" ? 3 : mode === "divergent-mixed" ? 1 : 0);
+  const grants = (await (await f.request("/v1/admin/upstream-grants")).json()).grants;
+  for (const row of grants) assert.equal(row.selectedCount, attempted.includes(row.tokenRef) || mode.startsWith("divergent") && row.tokenRef === "a" ? 1 : 0, "each distinct attempted owner is recorded once: " + row.tokenRef);
+  if (mode === "reuse-at-cap") assert.deepEqual(stats.materializations.slice(-2), ["oauth/fixture/d", "oauth/fixture/d"], "a successful fourth owner is legitimately reused");
+});
+
+for (const hotCache of [false, true]) test("fusion reuse retains caller revocation checks after reservation failover, hotCache=" + hotCache, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { hotCache }); await f.configure({ status: 503 });
+  // A fails; successful reservation materialization of B revokes the caller.
+  assert.equal((await f.request("/fixture/revoke-after-materialize", "POST", { key: "oauth/fixture/b" })).status, 200);
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  assert.equal(response.status, 403, await response.clone().text());
+  assert.equal((await response.json()).error.code, "proxy_key_revoked");
+  const stats = await f.stats();
+  assert.deepEqual(stats.materializations, ["oauth/fixture/a", "oauth/fixture/b"], "caller is revalidated before reusing the reserved credential");
+  assert.deepEqual(stats.dispatches, []); assert.equal(stats.refreshes, 1);
+});
+
+for (const full of [false, true]) test("fusion reserved credential failure " + (full ? "cannot open a fifth account" : "uses the remaining failover budget"), { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "priority" }, expiresAt: full ? now - 1000 : now + 7200000 });
+  for (const [index, name] of ["b", "c", "d", "e"].entries()) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name,
+    priority: 101 + index, expiresAt: new Date(full && ["b", "c"].includes(name) ? now - 1000 : now + 7200000).toISOString() })).status, 200);
+  assert.equal((await f.request("/fixture/lose-on-second", "POST", { key: "oauth/fixture/" + (full ? "d" : "a") })).status, 200);
+  await f.configure({ status: 503 });
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  if (full) { assert.equal(response.status, 404); assert.equal((await response.json()).error.code, "grant_credential_missing"); }
+  else await served(response, "fixture-b");
+  const stats = await f.stats();
+  assert.deepEqual(stats.materializations, (full ? ["a", "b", "c", "d", "d"] : ["a", "a", "b"]).map(name => "oauth/fixture/" + name));
+  assert.deepEqual(stats.dispatches, full ? [] : ["Bearer fixture-b"]);
+  assert.equal(stats.refreshes, full ? 3 : 0);
+});
+
+const creditRejection = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } });
+async function settledEvents(f, count) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const events = await (await f.request("/fixture/events")).json();
+    if (events.length >= count) { assert.equal(events.length, count); return events; }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail("fixture accounting did not settle");
+}
+
+for (const mode of ["credit-to-fourth", "prep-credit-429", "four-failed"]) test("integrated credit400 and preparation/rejection traversal: " + mode, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: "anthropic", routing: { strategy: "priority", stickiness: "none" } });
+  for (const name of ["c", "d", "e"]) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, credential: "fixture-" + name })).status, 200);
+  if (mode !== "credit-to-fourth") assert.equal((await f.request("/fixture/lose-owner", "POST")).status, 200);
+  const responses = {};
+  for (const name of ["a", "b", "c", ...(mode === "four-failed" ? ["d"] : [])]) responses["Bearer fixture-" + name] = {
+    status: mode !== "credit-to-fourth" && name === "c" ? 429 : 400, body: JSON.stringify({ ...JSON.parse(creditRejection), request_id: "fixture-rejection-" + name }),
+  };
+  await f.configure({ responses });
+  const response = await f.request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  if (mode === "four-failed") { assert.equal(response.status, 400); assert.equal(await response.text(), responses["Bearer fixture-d"].body, "deliver the final owner rejection unchanged, not an earlier attempt"); }
+  else await served(response, "fixture-d");
+  const stats = await f.stats();
+  assert.deepEqual(stats.materializations, ["a", "b", "c", "d"].map(name => "oauth/fixture/" + name), "preparation and HTTP rejections share exactly four distinct owners");
+  assert.deepEqual(stats.dispatches, (mode === "credit-to-fourth" ? ["a", "b", "c", "d"] : ["b", "c", "d"]).map(name => "Bearer fixture-" + name));
+  assert.equal(stats.refreshes, 0);
+  const [event] = await settledEvents(f, 1);
+  assert.equal(event.status_code, mode === "four-failed" ? 400 : 200);
+  assert.equal(event.grant_key, "oauth/fixture/d", "one terminal event belongs to the final attempted owner");
+  if (mode === "four-failed") assert.equal(event.actual_cost_micros, 0, "all definite rejections remain nonbillable");
+  else assert.ok(event.actual_cost_micros > 0, "only the final delivered success is billed");
+  const statsByKey = await (await f.request("/fixture/selection-stats")).json();
+  for (const name of ["a", "b", "c", "d", "e"]) assert.equal(statsByKey["oauth/fixture/" + name].selectedCount, name === "e" ? 0 : 1, "no duplicate or fifth selection: " + name);
+});
+
+for (const fusion of [false, true]) test("integrated generic400 passthrough without credit exclusion: " + (fusion ? "non-Anthropic Fusion" : "Anthropic unrelated input error"), { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: fusion ? "openai" : "anthropic", expiresAt: now + 7200000, routing: { strategy: "priority", stickiness: "none" } });
+  const body = fusion ? creditRejection : JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "max_tokens is invalid" } });
+  await f.configure({ responses: { "Bearer fixture-a": { status: 400, body } } });
+  if (fusion) assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await f.request(fusion ? "/v1/chat/completions" : "/v1/messages", "POST", { model: fusion ? "clawrouter/fusion" : "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+    assert.equal(response.status, 400); assert.equal(await response.text(), body);
+  }
+  const stats = await f.stats();
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-a", "Bearer fixture-a"], "credit-shaped text cannot grant non-Anthropic retry authority, or exclude generic400");
+  assert.deepEqual(stats.materializations, Array(fusion ? 4 : 2).fill("oauth/fixture/a"));
+  const events = await settledEvents(f, fusion ? 4 : 2);
+  assert.ok(events.every(event => event.actual_cost_micros === 0));
+});
+
+for (const stream of [false, true]) test("integrated credit retry stops at accepted response, stream=" + stream, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: "anthropic", routing: { strategy: "priority", stickiness: "none" } });
+  assert.equal((await f.request(f.base + "c", "PUT", { ...f.grant, credential: "fixture-c" })).status, 200);
+  const body = stream
+    ? 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: error\ndata: ' + creditRejection + '\n\n'
+    : creditRejection;
+  await f.configure({ responses: {
+    "Bearer fixture-a": { status: 400, body: creditRejection },
+    "Bearer fixture-b": { status: 200, body, contentType: stream ? "text/event-stream" : "application/json" },
+  } });
+  const response = await f.request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16, stream }, true);
+  assert.equal(response.status, 200); assert.equal(await response.text(), body);
+  const stats = await f.stats();
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-a", "Bearer fixture-b"]);
+  assert.deepEqual(stats.materializations, ["oauth/fixture/a", "oauth/fixture/b"]);
+  assert.equal(stats.refreshes, 0);
+  const [event] = await settledEvents(f, 1);
+  assert.equal(event.status_code, 200); assert.equal(event.grant_key, "oauth/fixture/b");
+  assert.ok(event.actual_cost_micros > 0, "accepted or started generation is not refunded by a prior rejection or late credit-shaped error");
 });

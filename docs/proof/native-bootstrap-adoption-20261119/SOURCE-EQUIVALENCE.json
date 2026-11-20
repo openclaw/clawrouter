@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "fromSource": "25c972712d995070ffe0777a7888a749e433bdf4",
+  "toSource": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+  "byteIdenticalRelevantSourceSha256": {
+    "runtime/large-http/server.mjs": "553968cf33750ac31525ca21678629081afe490343ccf7728077afff9808f399",
+    "runtime/large-http/response-pump.mjs": "caa2cffab69492dd762d337b413c8b6761a62ca29b23862e573f2dca0ff343ae",
+    "runtime/large-http/spool.mjs": "a4fa3a51504be991627efe8ba869e509855c6567f39aac2dfa85e02afaebdf56",
+    "runtime/large-http/completed-sse.ts": "e0b1c8bf1f13471b34ee217252fcbe529c683b73fd581debac90d1dede0984f1",
+    "runtime/large-http/main.ts": "c9c83c7f6f11cb3384747170e2eedad2770dbffbec75f03b2fb4fbc00af35016",
+    "worker/native-rehearsal/state.ts": "f031af527f37758a6adcc84ee7e01585dd8dee3c4388b390b959832aeb5de253",
+    "worker/native-rehearsal/input.ts": "d83f079bb6dc7bde63c7e5802483561836961d0e879f03252f6831cdb1841c5c",
+    "worker/native-response.ts": "fe658004f8f244f3640d6b8245030d85a098cfcd0275aa5557fbd64837d1e8ac",
+    "worker/upstream-transport.ts": "d5caa57ff0606f521be20f3f43225ae0277dae41e33508b3bb71f82952ea45c8"
+  },
+  "reusedEvidence": "../native-cutover-20261119/QUALIFICATION-ACCEPTANCE.md",
+  "reusedLossBodySha256": "082027641f4532cec3b8585e1d86e6a9adf1dfb9cd2333de1aca7b1b35cc4ece",
+  "nativeBinaryIdentical": false,
+  "scope": "Reuse accepted non-streaming loss/SDK/once-only ownership behavior only. New hosted rows independently exercise changed bootstrap/control and payload selection. Does not turn this campaign\u2019s uncaptured body into a captured response or its old assertion into a pass."
+}

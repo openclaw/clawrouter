@@ -17,7 +17,7 @@
     "method": "POST", "path": "/openapi/v2/video/img/generate",
     "body": { "model": "c1", "prompt": "Synthetic image motion", "duration": 5, "quality": "720p", "img_id": 1000000000000002, "motion_mode": "normal" }
   },
-  "retrieve": { "method": "GET", "path": "/openapi/v2/video/result/${video_id}", "freshTraceIdPerRequest": true },
+  "retrieve": { "method": "GET", "path": "/openapi/v2/video/result/${video_id}", "freshTraceIdPerRequest": true, "transientHeaders": ["ai-trace-id"], "identityProbe": "1", "identityProbeIsCallerAuthority": false },
   "observations": [
     { "native": { "status": 5, "url": "https://media.example/partial.mp4" }, "terminal": null },
     { "native": { "status": 1, "url": "https://media.example/result.mp4" }, "terminal": "succeeded" },

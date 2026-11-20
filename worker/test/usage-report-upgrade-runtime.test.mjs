@@ -1,0 +1,22 @@
+import assert from "node:assert/strict";
+import { requireBaselineCommit } from "../../test/helpers/personal-usage-baseline.mjs";
+import test from "node:test";
+import { personalUsageBaseline, provePersonalUsageUpgrade } from "../../test/helpers/personal-usage-upgrade.mjs";
+test("workerd baseline upgrade preserves authenticated personal history, settings/debits and revocation without backfill", {timeout:120000},async t=>{
+ if (!requireBaselineCommit(t, personalUsageBaseline)) return;
+ const proof=await provePersonalUsageUpgrade();assert.equal(proof.actualShippedSessionAuthorization,true);assert.equal(proof.originalUsageSettingsAndDebitsPreserved,true);
+ const costs=proof.candidateCostRuntime;
+ assert.equal(costs.phase,"candidate-only post-baseline-upgrade");
+ assert.equal(costs.actualShippedQueueConsumerIdentity,true);assert.equal(costs.outboundProviderTransformsValidated,true);
+ assert.equal(costs.reportEventCsvReadOnly,true);assert.equal(costs.sameCandidatePersistedRestart,true);
+ const hard=costs.cases.proof_hard_cost,soft=costs.cases.proof_soft_cost;
+ assert.equal(hard.httpStatus,502);assert.ok(hard.reservationMicros>0);assert.equal(hard.costClass,"unknown");
+ assert.equal(hard.reportingKnownComponentMicros,null);assert.equal(hard.reportingAmountMicros,null);
+ assert.equal(hard.recordedChargeMicros,hard.reservationMicros);assert.equal(hard.budgetSpentMicros,hard.recordedChargeMicros);
+ assert.equal(hard.eventCsvReportingAmount,"");assert.equal(hard.rankCsvReportingAmountMicros,"");
+ assert.equal(soft.httpStatus,200);assert.equal(soft.costClass,"partial");assert.equal(soft.reportingKnownComponentMicros,56);
+ assert.equal(soft.reportingAmountMicros,soft.reportingKnownComponentMicros);assert.equal(soft.budgetSpentMicros,soft.recordedChargeMicros);
+ assert.equal(soft.hostedToolCallsComplete,false);assert.equal(soft.hostedToolCostMicros,null);
+ assert.equal(soft.eventCsvReportingAmount,"56");assert.equal(soft.rankCsvReportingAmountMicros,"56");
+ for(const path of ["worker/index.ts","worker/proxy.ts","worker/anthropic-price-response.ts","worker/proxy-accounting.ts","worker/accounting.ts","worker/ledgers.ts","worker/usage-report-store.ts","worker/usage-report.ts","admin/src/personal-usage.ts","test/helpers/personal-usage-cost-runtime.mjs"]) assert.match(proof.candidateSourceHashes[path],/^[a-f0-9]{64}$/);
+});

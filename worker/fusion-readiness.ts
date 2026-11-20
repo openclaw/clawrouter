@@ -1,4 +1,5 @@
 import { policyRequestCost } from "../shared/request-pricing.ts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
 import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals, prepareAdviserBody } from "./fusion.ts";
@@ -31,7 +32,7 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
     return selection.availability;
   };
   const synthesis = assess(synthesizer);
-  const advisers = config.adviserModels.map((model, index) => {
+  const advisers = fusionAdviserModels(config).map((model, index) => {
     const selected = resolve(buildAdviserBody({}, model, config, index));
     if (!selected) return { selection: null, availability: assess(null) };
     const selection = { ...selected, body: prepareAdviserBody(selected.body, selected.model, selected.endpoint, config.temperature) };
@@ -105,7 +106,7 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
   const routesByModel = new Map(routes.map((route) => [route.modelId, route]));
   // NUL has the maximum JSON escape expansion per UTF-16 code unit.
   const textEnvelope = { messages: [{ role: "user", content: "\0".repeat(config.maxInputChars) }] };
-  const calls: FusionReadinessCall[] = config.adviserModels.map((model, index) => readinessCall(
+  const calls: FusionReadinessCall[] = fusionAdviserModels(config).map((model, index) => readinessCall(
     "adviser",
     index + 1,
     model,
@@ -142,7 +143,7 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
     executable: synthesizer.executable,
     advertisable: config.enabled && synthesizer.executable,
     readyAdviserCount: calls.filter((call) => call.stage === "adviser" && call.executable).length,
-    adviserCount: config.adviserModels.length,
+    adviserCount: fusionAdviserModels(config).length,
     callCount: calls.length,
     estimatedReservationMicros,
     budgetConfigured: budget.configured,

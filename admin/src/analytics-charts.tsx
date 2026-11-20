@@ -124,3 +124,60 @@ function smoothPath(points: Array<{ x: number; y: number }>) {
 function formatChartDay(timestamp: number, long = false) {
   return new Intl.DateTimeFormat("en", long ? { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" } : { month: "short", day: "numeric", timeZone: "UTC" }).format(timestamp);
 }
+
+
+/** Bounded personal-report buckets, not a legacy pooled UsageSnapshot. Nulls break the line. */
+export function PersonalUsageTimeSeries({ points, label, formatValue, formatAxis = formatValue }: {
+  points: ReadonlyArray<{ start: number; end: number; label: string; value: number | null; partial: boolean }>;
+  label: string;
+  formatValue: (value: number | null) => string;
+  formatAxis?: (value: number) => string;
+}) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(600);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(260, entry.contentRect.width)));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => setActiveIndex(null), [points]);
+  const height = 226, inset = { left: 78, right: 14, top: 18, bottom: 32 };
+  const plotWidth = width - inset.left - inset.right, plotHeight = height - inset.top - inset.bottom;
+  const maximum = niceChartMaximum(Math.max(0, ...points.map(point => point.value ?? 0)));
+  const x = (index: number) => inset.left + (points.length === 1 ? 0.5 : index / Math.max(1, points.length - 1)) * plotWidth;
+  const y = (value: number) => inset.top + plotHeight * (1 - value / maximum);
+  let path = '', connected = false;
+  points.forEach((point, index) => {
+    if (point.value === null) { connected = false; return; }
+    path += `${connected ? " L" : " M"} ${x(index)} ${y(point.value)}`;
+    connected = true;
+  });
+  const ticks = [...new Set(Array.from({ length: Math.min(4, points.length) }, (_, index) => Math.round(index * (points.length - 1) / Math.max(1, Math.min(4, points.length) - 1))))];
+  const selected = activeIndex === null ? undefined : points[activeIndex];
+  function inspect(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!points.length || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    setActiveIndex(current => event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : event.key === 'ArrowLeft' ? Math.max(0, (current ?? points.length) - 1) : Math.min(points.length - 1, (current ?? -1) + 1));
+  }
+  return <div className="personalTimeSeries" ref={viewport}>
+    <div className="personalChartViewport" tabIndex={points.length ? 0 : undefined} role="group" aria-label={label + '. Use Left and Right arrows, Home or End to inspect daily values. Tap a day to inspect on touch screens.'} onKeyDown={inspect} onFocus={() => setActiveIndex(points.length ? points.length - 1 : null)}>
+      <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={label + '. Gaps mean no reported value; outlined points have partial coverage.'}>
+        {[0, 1, 2].map(tick => <g key={tick}><line className="chartGridLine" x1={inset.left} x2={width - inset.right} y1={y(maximum / 2 * tick)} y2={y(maximum / 2 * tick)} /><text className="chartAxisLabel" x={inset.left - 8} y={y(maximum / 2 * tick) + 4} textAnchor="end">{formatAxis(maximum / 2 * tick)}</text></g>)}
+        {ticks.map(index => <text key={index} className="chartAxisLabel" x={x(index)} y={height - 9} textAnchor={index === 0 ? 'start' : index === points.length - 1 ? 'end' : 'middle'}>{points[index].label.replace(/^\d{4}-/, '').replace('-', '/')}</text>)}
+        <path className="chartLine" d={path} />
+        {points.map((point, index) => point.value !== null ? <circle className={point.partial ? 'personalChartPoint partial' : 'personalChartPoint'} key={point.start} cx={x(index)} cy={y(point.value)} r={point.partial ? 3.5 : 2.5} /> : null)}
+        {selected ? <g className="chartFocus" pointerEvents="none"><line x1={x(activeIndex!)} x2={x(activeIndex!)} y1={inset.top} y2={inset.top + plotHeight} />{selected.value !== null ? <circle cx={x(activeIndex!)} cy={y(selected.value)} r="4" /> : null}</g> : null}
+        {points.map((point, index) => {
+          const left = index === 0 ? inset.left - 8 : (x(index - 1) + x(index)) / 2;
+          const right = index === points.length - 1 ? width - inset.right + 8 : (x(index) + x(index + 1)) / 2;
+          return <rect key={point.start} className="chartHitTarget" x={left} y={inset.top} width={right - left} height={plotHeight} onMouseEnter={() => setActiveIndex(index)} onClick={() => setActiveIndex(index)}><title>{point.label + ': ' + formatValue(point.value) + (point.partial ? ' · partial coverage' : '')}</title></rect>;
+        })}
+      </svg>
+      {!points.some(point => point.value !== null) ? <div className="personalChartEmpty"><strong>No reported values</strong><span>Missing values are not shown as zero.</span></div> : null}
+    </div>
+    <div className="personalChartReadout" role="status" aria-live="polite">{selected ? <><span>{selected.label}</span><strong>{formatValue(selected.value)}</strong>{selected.partial ? <span>Partial coverage</span> : null}<small>{new Date(selected.start).toISOString()} → {new Date(selected.end).toISOString()} (exclusive)</small></> : <span>Hover, tap, or use arrow keys to inspect a day.</span>}</div>
+  </div>;
+}

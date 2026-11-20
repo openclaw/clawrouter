@@ -10,19 +10,21 @@ const configPath = join(root, ".wrangler.self-host.toml");
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
 
 export function renderSelfHostConfig(source) {
-  const output = [];
-  let skippingSection = false;
-  for (const line of source.split(/\r?\n/)) {
-    if (/^\s*(?:\[build\]|\[\[routes\]\])\s*(?:#.*)?$/.test(line)) {
-      skippingSection = true;
-      continue;
-    }
-    if (skippingSection && /^\s*\[/.test(line)) {
-      skippingSection = false;
-    }
-    if (!skippingSection) output.push(line);
-  }
-  return `${output.join("\n").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "self-host-local"\n`;
+  // Self-host runs workerd inside one image; it has no managed container pool.
+  // Keep the canonical ordinary entry and the previous 32 MB request envelope.
+  const output = source.split(/(?=^\[)/m).filter(section => {
+    if (/^\s*(?:\[build\]|\[triggers\]|\[\[routes\]\]|\[\[containers\]\])\s*(?:#.*)?$/m.test(section.split("\n", 1)[0])) return false;
+    if (/^\[\[durable_objects\.bindings\]\]/.test(section) && /^class_name = "LargeHttp(?:Pool|Slot)"$/m.test(section)) return false;
+    if (/^\[\[migrations\]\]/.test(section) && /^tag = "v6-large-http"$/m.test(section)) return false;
+    return true;
+  }).join("")
+    .replace(/^main = .*$/m, 'main = "worker/index.ts"')
+    .replace(/^no_bundle = .*$/m, "no_bundle = false")
+    .replace(/^(\[assets\]\s*\n)directory = .*$/m, '$1directory = "./admin/dist"');
+  const disabled = /^\[vars\]/m.test(output)
+    ? output.replace(/^\[vars\]$/m, '[vars]\nLARGE_HTTP_ENABLED = "0"')
+    : `${output.trim()}\n\n[vars]\nLARGE_HTTP_ENABLED = "0"\n`;
+  return `${disabled.trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "self-host-local"\n`;
 }
 
 export function selfHostVariableNames(providerSnapshot, env) {

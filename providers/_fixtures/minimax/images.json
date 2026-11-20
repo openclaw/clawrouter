@@ -1,0 +1,79 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "request": {
+    "model": "image-01",
+    "prompt": "Synthetic paper boat",
+    "n": 2,
+    "response_format": "base64",
+    "aspect_ratio": "16:9"
+  },
+  "edit": {
+    "model": "image-01",
+    "prompt": "Synthetic character portrait",
+    "n": 1,
+    "response_format": "base64",
+    "subject_reference": [
+      {
+        "type": "character",
+        "image_file": "data:image/png;base64,AP+A"
+      }
+    ]
+  },
+  "complete": {
+    "base_resp": {
+      "status_code": 0,
+      "status_msg": "success"
+    },
+    "data": {
+      "image_base64": [
+        "AP+A",
+        "AQID"
+      ]
+    },
+    "metadata": {
+      "success_count": 2,
+      "failed_count": 0
+    }
+  },
+  "partial": {
+    "base_resp": {
+      "status_code": 0
+    },
+    "data": {
+      "image_base64": [
+        "AP+A"
+      ]
+    },
+    "metadata": {
+      "success_count": "1",
+      "failed_count": "1"
+    }
+  },
+  "filtered": {
+    "base_resp": {
+      "status_code": 0
+    },
+    "data": {
+      "image_base64": []
+    },
+    "metadata": {
+      "success_count": 0,
+      "failed_count": 2
+    }
+  },
+  "pricingEvidence": {
+    "source": "https://platform.minimax.io/docs/pricing/overview",
+    "publicPayAsYouGoOutputImageMicros": 3500,
+    "activatedTariff": false
+  },
+  "qualification": {
+    "syntheticBytesOnly": true,
+    "liveCall": false,
+    "unknownCostIsZero": false,
+    "policyFixedIsUpstreamCost": false,
+    "partialAllowsReplay": false,
+    "regionalGrantRequired": true
+  }
+}
+

@@ -1,0 +1,56 @@
+{
+  "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "checkedAt": "2026-11-03",
+  "primaryReference": "https://github.com/MiniMax-AI/MiniMax-Coding-Plan-MCP/blob/main/minimax_mcp/server.py",
+  "referenceBlob": "e2b295191787c02d0801242dcbc7293b98136bc8",
+  "request": {
+    "q": "Synthetic paper boat instructions"
+  },
+  "response": {
+    "base_resp": {
+      "status_code": 0,
+      "status_msg": "success"
+    },
+    "organic": [
+      {
+        "title": "Synthetic folding guide",
+        "link": "https://search.example/boat",
+        "snippet": "Untrusted source text",
+        "date": "2026-10-01"
+      },
+      {
+        "title": "Synthetic follow-up",
+        "link": "https://search.example/fold",
+        "snippet": "Another untrusted source"
+      }
+    ],
+    "related_searches": [
+      {
+        "query": "synthetic paper folding"
+      }
+    ]
+  },
+  "empty": {
+    "base_resp": {
+      "status_code": 0
+    },
+    "organic": []
+  },
+  "error": {
+    "base_resp": {
+      "status_code": 2013,
+      "status_msg": "Synthetic invalid parameter error"
+    },
+    "organic": []
+  },
+  "qualification": {
+    "liveCall": false,
+    "planEntitlementRequired": true,
+    "oauthSearchResourceQualified": false,
+    "regionalCredentialFallback": false,
+    "consumerCountSentUpstream": false,
+    "emptyMeansFree": false,
+    "policyFixedIsUpstreamCost": false
+  }
+}
+

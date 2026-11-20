@@ -34,18 +34,35 @@ MIME alone is not image validation. The router does not fetch remote URLs.
 
 ## Shared runtime prerequisites
 
-The adapter is unregistered. Add protocol `pixverse.video`, consume the
-non-secret `headers` returned by every `control` call, and retain the
-original credential on each poll. Caller trace IDs and credentials are never
-reused. The shared controller must generate a new adapter control request for
-each attempt, including restarts.
+The text adapter is registered against the shared `ManagedLifecycleAdapter`
+contract and the closed text/retrieve schema. `providers/pixverse.provider.yaml`
+declares only text creation plus scoped retrieval, with unpriced `v6` and `c1`
+models and server-owned `PIXVERSE_API_KEY`. Shared snapshots and actual Worker/client
+proof are required before claiming activation. Image/upload stays unregistered. Every
+control returns fresh non-secret `headers` plus `transientHeaders: ["ai-trace-id"]`.
+The route identity pins UUID volatility, not a random value. `identityProbe: "1"`
+is a valid synthetic decimal ID for route qualification, never caller authority.
+Original credentials remain bound on each poll. The shared controller generates
+a new control request for each attempt, including restarts; caller trace IDs and
+credentials are not reused.
 
 Image upload IDs require a durable caller/policy/provider/region/credential
 binding before image creation. The optional factory argument `boundImageId`
 must come from that trusted lookup, never from the caller's `img_id`.
 An unbound image adapter rejects create. Store only the necessary ownership
 metadata using the existing scoped machinery, not a global ID index.
-Upload timeout/uncertain response must not trigger automatic replay.
+Upload timeout/uncertain response must not trigger automatic replay. Text and image
+creation share the same native GET path. Before both can activate, control
+resolution must use the original caller/job/create-route binding, not the first
+matching endpoint. The current declaration has only one create route.
+
+The typed text/retrieve schema and PR493 managed header/credential contract are
+landed. This source update composes the text registry with the current ABI and
+preserves all existing provider registrations. There is no new generic runtime
+gap identified for this text-only declaration; source 6 still owns its committed
+snapshot and real Worker/client acceptance. Image/upload needs source 1's actual
+durable asset ownership before source 5 may register or declare it. Neither an
+`img_id`, a remote URL nor an upload codec fixture supplies that authority.
 
 The JSON response limit is 1 MiB, valid UTF-8 through EOF, with HTTP success
 and numeric `ErrCode=0`. IDs must be positive safe decimal integers; unsafe
@@ -57,8 +74,8 @@ Status 5 is pending even with a partial URL. Status 1 is terminal execution;
 missing or inaccessible media is a separate deliverable failure. Statuses 7
 and 8 are terminal errors. Status 6 is the frozen client's deleted-task case:
 return `observationUnavailable: "deleted"`, stop polling and freeze once
-without inventing an upstream execution outcome or refund. The shared owner
-must implement that observation-loss transition before registration. Unknown
+without inventing an upstream execution outcome or refund. This uses the shared
+observation-loss transition. Unknown
 status, transport errors, and malformed bodies are not terminal job proof.
 
 Use the established reservation/idempotency/outbox path for one frozen terminal
@@ -76,11 +93,10 @@ refund. Unknown whole-request upstream cost remains denied under dollar hard
 budgets. Explicit `policy_fixed` remains a different charging basis.
 
 Synthetic lifecycle, upload, and result fixtures:
-`providers/_fixtures/pixverse/lifecycle.json`. Eight dependency-free tests
-cover deterministic behavior. Activation additionally requires the shared
-protocol/header/asset/observation-loss contract, provider manifest and snapshot,
-real Worker tests and actual frozen-client consumption. No deployment or live
-model call has occurred.
+`providers/_fixtures/pixverse/lifecycle.json`. Focused codec and registry tests
+cover deterministic behavior. Text activation still requires the provider
+snapshot, real Worker tests and actual frozen-client consumption; asset modes
+remain closed separately. No deployment or live model call has occurred.
 
 Primary evidence checked 2026-11-03:
 

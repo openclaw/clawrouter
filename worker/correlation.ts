@@ -54,6 +54,17 @@ export function withBackgroundRecovery(response: Response, request: Request): Re
   return response;
 }
 
+// A body probe transfers one ingress stream rather than cloning/teeing it.
+// Preserve out-of-band attribution and propagate any later recovery locator.
+export function transferRequestContext(source: Request, target: Request): () => void {
+  const metadata = ingressMetadata.get(source);
+  if (metadata) ingressMetadata.set(target, metadata);
+  return () => {
+    const locator = backgroundRecovery.get(target);
+    if (locator) backgroundRecovery.set(source, locator);
+  };
+}
+
 export function correlateIngressRequest(input: Request): CorrelatedRequest {
   const suppliedRequestId = input.headers.get("x-request-id");
   const normalizedRequestId = suppliedRequestId == null

@@ -1,0 +1,17 @@
+{
+  "sourceRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "sourcePath": "extensions/mistral/realtime-transcription-provider-factory.ts",
+  "path": "/v1/audio/transcriptions/realtime",
+  "query": {"model": "voxtral-mini-transcribe-realtime-2602", "target_streaming_delay_ms": "800"},
+  "created": {"type": "session.created", "session": {"request_id": "synthetic-original-session", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_mulaw", "sample_rate": 8000}}},
+  "setup": {"type": "session.update", "session": {"audio_format": {"encoding": "pcm_mulaw", "sample_rate": 8000}}},
+  "updated": {"type": "session.updated", "session": {"request_id": "synthetic-original-session", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_mulaw", "sample_rate": 8000}}},
+  "audio": {"type": "input_audio.append", "audio": "AAECAw=="},
+  "flush": {"type": "input_audio.flush"},
+  "end": {"type": "input_audio.end"},
+  "delta": {"type": "transcription.text.delta", "text": "Synthetic "},
+  "segment": {"type": "transcription.segment", "text": "Synthetic transcript.", "start": 0, "end": 1},
+  "done": {"type": "transcription.done", "model": "voxtral-mini-transcribe-realtime-2602", "text": "Synthetic transcript.", "language": "en", "segments": [], "usage": {"prompt_audio_seconds": 1, "prompt_tokens": 0, "completion_tokens": 3, "total_tokens": 3}},
+  "error": {"type": "error", "error": {"code": 400, "message": "Synthetic rejection"}},
+  "qualification": {"bytes": "synthetic encoding/alignment only", "updatedAcknowledgmentRequired": true, "remoteCancelSupported": false, "uncertainAudioReplay": false, "upstreamCostMicros": null, "socketCloseProvesFree": false}
+}

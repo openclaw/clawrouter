@@ -1,0 +1,60 @@
+# Configured server transport: docs/local-engine-transports.md.
+# Endpoint/model source checked 2026-11-03: https://lmstudio.ai/docs/developer/openai-compat
+schema: clawrouter.service-provider.v1
+id: lmstudio
+displayName: LM Studio
+status: experimental
+class: openai_compatible
+service:
+  platform: lmstudio
+  kind: model_provider
+  upstreamService: lmstudio
+  configKeys: [LMSTUDIO_API_KEY, LMSTUDIO_BASE_URL, LMSTUDIO_MODEL]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: ${base_url}
+routing:
+  nativePrefixes: [clawrouter-lmstudio, lmstudio]
+  modelPrefixes: [lmstudio/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - { id: llm.messages, endpoint: messages, methods: [POST] }
+endpoints:
+  models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  messages:
+    modelPassthrough: {}
+    path: /messages
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: lmstudio/configured
+      upstream: ${model}
+      capabilities: [llm.chat, llm.messages]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

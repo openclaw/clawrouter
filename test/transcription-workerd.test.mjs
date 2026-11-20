@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 // A real workerd multipart -> upstream Worker -> SQL Durable Object boundary.
 test("multipart transcription traverses workerd with exact bytes, authority and durable fixed accounting", { timeout: 30_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-stt-"));
   let mf, phase = "workerd startup";
+  const primary = { failed: false, error: undefined };
   try {
     mf = await startWorkerdFixture(temporary, `
 import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
@@ -46,7 +48,7 @@ export default { async fetch(request,env) {
   await counter.fetch("https://fixture/"+(form.get("prompt") === "synthetic prompt é soft" ? "soft-calls" : "calls"),{method:"POST"});
   if(form.get("prompt") === "synthetic prompt é delayed") await counter.fetch("https://fixture/hold");
   return Response.json({text:"synthetic transcript",credentialSource:credential === "Bearer fixture-pool-upstream-key" ? "pool" : "environment",usage:{type:"tokens",input_tokens:14,input_token_details:{audio_tokens:12,text_tokens:2},output_tokens:45,total_tokens:59}});
-} };`, {upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
+} };`, {directRouter:true,upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
     phase = "authority setup";
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     const secret = "stt-fixture-secret";
@@ -63,7 +65,7 @@ export default { async fetch(request,env) {
     await kv.put("oauth/subscription/openai",JSON.stringify({provider:"openai",kind:"subscription",enabled:true,accessToken:"fixture-subscription-token",accountId:"fixture-account"}));
     const hardHeaders={authorization:"Bearer clawrouter-live-hard-"+secret};
     const headers = { authorization: "Bearer clawrouter-live-fixture-" + secret };
-    const origin = await mf.ready;
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     phase = "multipart routing and formats";
     for (const path of ["/v1/audio/transcriptions", "/v1/native/openai/v1/audio/transcriptions", "/v1/proxy/openai/transcriptions"]) {
       const body = new FormData();
@@ -89,23 +91,39 @@ export default { async fetch(request,env) {
       assert.equal(response.status,200,await response.clone().text());
     }
     assert.equal(await count(),6);
-    phase = "grant selection and request validation";
+    phase = "pooled grant upload";
     const pooled=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-pool-"+secret},body:makeForm()});
     assert.equal(pooled.status,200,await pooled.clone().text());assert.equal((await pooled.json()).credentialSource,"pool");assert.equal(pooled.headers.get("x-clawrouter-grant-lane"),"api_key");
+    phase = "incompatible subscription upload";
     const incompatible=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-subscription-"+secret},body:makeForm()});
     assert.equal(incompatible.status,503);assert.equal((await incompatible.json()).error.code,"upstream_grant_pool_unavailable");
+    phase = "post-subscription upstream count";
     assert.equal(await count(),7,"scoped subscription cannot borrow environment auth");
     for(const option of ["stream","chunking_strategy","known_speaker_names[]","timestamp_granularities[]"]) {
+      phase = `unsupported multipart option: ${option}`;
       const body=makeForm();body.set(option,"true");
       assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body})).status,400);
     }
+    phase = "duplicate multipart file";
     const duplicate=makeForm();duplicate.append("file",new File(["duplicate"],"second.wav",{type:"audio/wav"}));
     assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body:duplicate})).status,400);
-    assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",body:makeForm()})).status,401);
+    phase = "unauthenticated multipart upload";
+    const unauthenticated=makeForm();
+    // Authentication rejects before reading. Many parts amplify Undici's
+    // streaming FormData EPIPE race; send this finite fixture in one buffer.
+    for(let i=0;i<1000;i++) unauthenticated.set(`extra-${i}`,"synthetic");
+    const encoded=new Response(unauthenticated);
+    const unauthorized=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{"content-type":encoded.headers.get("content-type")},body:await encoded.arrayBuffer()});
+    assert.equal(unauthorized.status,401);assert.equal((await unauthorized.json()).error.code,"invalid_proxy_key");
     // A separate isolated policy: hard reserve must not turn a one-context
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
-    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
+    phase = "unqualified hard-budget upload";
+    // Pricing also rejects before reading. Preserve the complete multipart
+    // bytes without racing Undici's streaming writer against that rejection.
+    const hardUpload=new Response(makeForm());
+    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{...hardHeaders,"content-type":hardUpload.headers.get("content-type")},body:await hardUpload.arrayBuffer()});
     assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
+    phase = "post-validation upstream count";
     assert.equal(await count(),7,"invalid/hard-unqualified requests never reached real upstream Worker");
     phase = "successful-request accounting";
     const usageResponse = await fetch(new URL("/v1/usage",origin),{headers});
@@ -170,9 +188,10 @@ export default { async fetch(request,env) {
     assert.equal(await count(),8,"disconnect never replays the upload");
     assert.ok(await softCount()<=1,"denied soft upload is not replayed after terminal cleanup");
   } catch (error) {
-    throw new Error(`transcription fixture failed during ${phase}`, { cause: error });
+    primary.error = new Error(`transcription fixture failed during ${phase}`, { cause: error });
+    primary.failed = true;
+    throw primary.error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive:true, force:true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive:true, force:true })], primary);
   }
 });

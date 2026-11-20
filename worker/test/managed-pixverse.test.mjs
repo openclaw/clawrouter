@@ -70,6 +70,10 @@ test("PixVerse control construction cannot cancel, follow arbitrary URLs or reus
   assert.equal(first.path, "/openapi/v2/video/result/" + id);
   assert.equal(first.query.size, 0);
   assert.notEqual(first.headers.get("ai-trace-id"), next.headers.get("ai-trace-id"));
+  assert.deepEqual(first.transientHeaders, ["ai-trace-id"]);
+  assert.deepEqual(next.transientHeaders, first.transientHeaders);
+  assert.equal(adapter.validateId(adapter.identityProbe), "1");
+  for (const item of [first, next]) assert.match(item.headers.get("ai-trace-id"), /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
   assert.equal(first.headers.get("api-key"), null);
   assert.equal(adapter.supportsCancel, false); assert.equal(adapter.supportsResult, false);
   for (const action of ["cancel", "result"]) assert.throws(() => adapter.control(action, endpoint, id, {}));
