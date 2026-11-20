@@ -8,7 +8,7 @@ import { join, resolve } from 'node:path';
 import { parse } from 'yaml';
 import { assertDeploymentAction } from '../scripts/deploy-authorization.mjs';
 import { executeRelease } from '../scripts/deploy-release-plan.mjs';
-import { qualificationIdentity, createIsolatedResources } from '../scripts/deploy-release-resources.mjs';
+import { qualificationIdentity, createIsolatedResources, loadQueueCustody } from '../scripts/deploy-release-resources.mjs';
 import { nativeControlDigest } from '../scripts/deploy-native-qualification.mjs';
 import { assertNativeOwners } from '../scripts/deploy-train-runtime.mjs';
 import { nativeVersion } from './helpers/deploy-native-fixture.mjs';
@@ -27,7 +27,10 @@ test('one input-free canonical Action retains concurrency, recovery and independ
   assert.equal(workflow.concurrency['cancel-in-progress'],false);
   assert.deepEqual(workflow.on.schedule,[{cron:'7 10 * * 1-5',timezone:'America/Edmonton'}]);
   assert(workflow.jobs['recover-and-alert']);assert(workflow.jobs['clean-qualification']);
-  assert.equal(workflow.jobs['clean-qualification'].if,'always()');
+  const cleanup=workflow.jobs['clean-qualification'];
+  assert.equal(cleanup.if,'always()');assert.equal(cleanup.needs,'deploy');
+  assert.equal(cleanup.env.QUALIFICATION_HANDOFF_DIRECTORY,'${{ github.workspace }}/release-handoff/release-evidence/public');
+  assert(cleanup.steps.some(step=>step.run?.includes('production-train-$RELEASE_RUN-$RELEASE_ATTEMPT')));
   assert.equal(JSON.parse(await readFile('package.json','utf8')).scripts['cf:deploy'],'node scripts/deploy-action.mjs');
   assert.doesNotMatch(await readFile('scripts/deploy-action.mjs','utf8'),/wrangler|CLOUDFLARE_API_TOKEN/);
 });
@@ -86,8 +89,8 @@ test('interrupted turn may fail or retry; only a successful distinct context ans
   assert.equal(assertContextAnswer(client,{turn:{id:'new'}},'expected').answerSha256,'expected');
 });
 
-function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0,foreignConsumer=false,nonemptyDlq=false,usageBacklogReads=0,changeConsumerWhileDraining=false}={}){
-  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[];let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null,consumer=false;
+function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=false,containerResponse,containerDeleteReads=0,foreignConsumer=false,nonemptyDlq=false,usageBacklogReads=0,changeConsumerWhileDraining=false,hideQueueLists=false,queueReadDelays=0,loseQueueCreateAck=false,failQueueDelete=false}={}){
+  const identity=qualificationIdentity(actionEnv),calls=[],operations=[],queues=[],queueReads=new Map();let kv=foreign?{id:'f'.repeat(32),title:identity.kv}:null,owner=null,bucket=null,worker=null,app=null,time=0,pendingContainerDeleteReads=null,consumer=false;
   const consumerValue=q=>({consumer_id:'fixture-consumer',type:'worker',script:foreignConsumer?'foreign-worker':identity.worker,dead_letter_queue:identity.dlq,...(q?{queue_id:q.queue_id,queue_name:q.queue_name}: {})});
   const response=value=>Response.json({success:true,result:value});
   const fetchImpl=async(url,init)=>{
@@ -101,10 +104,10 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
       if(init.method==='PUT'){owner=JSON.stringify(body);return response(null);}
       return owner===null?new Response('',{status:404}):new Response(owner);
     }
-    if(p==='/storage/kv/namespaces/'+'f'.repeat(32)&&init.method==='DELETE'){kv=null;return response(null);}
+    if(p==='/storage/kv/namespaces/'+'f'.repeat(32)&&init.method==='DELETE'){kv=null;owner=null;return response(null);}
     if(p==='/queues'){
-      if(init.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:String(queues.length+1)});return response(queues.at(-1));}
-      return response(queues);
+      if(init.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:String(queues.length+1)});if(loseQueueCreateAck){loseQueueCreateAck=false;throw TypeError('lost queue ack');}return response(queues.at(-1));}
+      return response(hideQueueLists?[]:queues);
     }
     const item=queues.find(q=>p==='/queues/'+q.queue_id||p.startsWith('/queues/'+q.queue_id+'/'));
     if(item){
@@ -120,10 +123,13 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
         return response(consumerValue(item));
       }
       if(p===path){
-        if(init.method==='DELETE'){if(consumer||usage&&worker)return new Response('',{status:400});queues.splice(queues.indexOf(item),1);return response(null);}
+        if(init.method==='DELETE'){if(failQueueDelete)return new Response('',{status:403});if(consumer||usage&&worker)return new Response('',{status:400});queues.splice(queues.indexOf(item),1);return response(null);}
+        const reads=queueReads.get(item.queue_id)??0;queueReads.set(item.queue_id,reads+1);
+        if(reads<queueReadDelays)return new Response('',{status:404});
         return response({...item,producers:usage&&worker?[{type:'worker',script:identity.worker}]:[],consumers:usage&&consumer?[consumerValue()]:[]});
       }
     }
+    if(p.startsWith('/queues/'))return new Response('',{status:404});
     if(p==='/r2/buckets'&&init.method==='POST'){bucket={name:body.name};return response(bucket);}
     if(p==='/r2/buckets/'+identity.bucket){if(init.method==='DELETE'){bucket=null;return response(null);}return bucket?response(bucket):new Response('',{status:404});}
     if(p==='/workers/scripts/'+identity.worker+'/settings')return worker?response(worker):new Response('',{status:404});
@@ -137,8 +143,8 @@ function resourceFixture({loseCreate=false,foreign=false,failContainerDelete=fal
     if(p==='/containers/applications/owned-app'&&init.method==='DELETE'){if(failContainerDelete)return new Response('',{status:403});if(containerDeleteReads===0)app=null;else pendingContainerDeleteReads=containerDeleteReads;return response({message:'Application deletion started'});}
     throw Error('Unexpected test resource path '+p);
   };
-  const create=()=>createIsolatedResources({env:actionEnv,identity,fetchImpl,now:()=>time,wait:async ms=>{time+=ms;},save:async operation=>operations.push(operation)});
-  return {identity,calls,operations,create,get kv(){return kv;},addWorker(){worker={bindings:[]};app={id:'owned-app',name:identity.container};consumer=true;}};
+  const create=(options={})=>createIsolatedResources({env:actionEnv,identity,fetchImpl,now:()=>time,wait:async ms=>{time+=ms;},custody:operations.findLast(row=>row.custody)?.custody,save:async operation=>operations.push(operation),...options});
+  return {identity,calls,operations,create,get kv(){return kv;},revealQueues(){hideQueueLists=false;},finishQueueDeletes(){const j=operations.findLast(row=>row.custody).custody;for(let i=queues.length-1;i>=0;i--)if(j.queues[queues[i].queue_name]?.phase==='deleting')queues.splice(i,1);},setOwner(value){owner=value;},addWorker(){worker={bindings:[]};app={id:'owned-app',name:identity.container};consumer=true;}};
 }
 test('isolated resource writes reconcile lost acknowledgments without retry; fresh-runner cleanup proves ownership',async()=>{
   const f=resourceFixture({loseCreate:true}),resources=f.create();assert.equal((await resources.target()).isolated,true);
@@ -190,4 +196,81 @@ test('colliding resources are neither adopted nor deleted; partial cleanup retai
   const f=resourceFixture({failContainerDelete:true});await f.create().provision();f.addWorker();const result=await f.create().cleanup();assert.equal(result.complete,false);assert(f.kv,'owner marker must survive failed app deletion');
   assert.equal(f.calls.filter(x=>x.path==='/containers/applications/owned-app'&&x.method==='DELETE').length,1,'uncertain/failed delete is observed, never blindly retried');
   assert.throws(()=>createIsolatedResources({env:actionEnv,identity:{...f.identity,worker:'clawrouter-edge'}}),/Unowned/);
+});
+
+test('acknowledged queue IDs bypass stale list inventory in provisioning and fresh cleanup',async()=>{
+  const f=resourceFixture({hideQueueLists:true,queueReadDelays:2});
+  await f.create().provision();
+  assert.equal((await f.create().cleanup()).complete,true);
+  assert.equal(f.calls.filter(x=>x.path==='/queues'&&x.method==='POST').length,2);
+  assert.equal(f.calls.filter(x=>x.path.startsWith('/queues/')&&x.method==='DELETE').length,2);
+  assert.equal(f.kv,null);
+});
+test('an uncertain hidden queue retains durable custody until a fresh cleanup can observe it',async()=>{
+  const f=resourceFixture({hideQueueLists:true,loseQueueCreateAck:true}),resources=f.create();
+  await assert.rejects(resources.provision(),/observation deadline/);
+  assert.equal((await resources.cleanup()).complete,false);
+  assert(f.kv,'in-process cleanup must retain the owner of an uncertain create');
+  assert.equal((await f.create().cleanup()).complete,false);
+  assert(f.kv,'a fresh runner must retain the durable pending create');
+  f.revealQueues();
+  assert.equal((await f.create().cleanup()).complete,true);
+  assert.equal(f.calls.filter(x=>x.path==='/queues'&&x.method==='POST').length,1,'never replay the create');
+  assert.equal(f.calls.filter(x=>x.path.startsWith('/queues/')&&x.method==='DELETE').length,1);
+  assert.equal(f.kv,null);
+});
+test('a foreign queue custody handoff is rejected before any cleanup write',async()=>{
+  const f=resourceFixture();await f.create().provision();
+  const custody=structuredClone(f.operations.findLast(row=>row.custody).custody);custody.owner.run='foreign';
+  const before=f.calls.length;
+  assert.throws(()=>f.create({custody}),/Invalid queue custody handoff/);
+  assert.equal(f.calls.length,before);assert(f.kv);
+});
+test('a fresh cleanup observes an uncertain queue deletion without replaying it',async()=>{
+  const f=resourceFixture({failQueueDelete:true});await f.create().provision();
+  assert.equal((await f.create().cleanup()).complete,false);const deletes=f.calls.filter(x=>x.method==='DELETE').length;
+  assert.equal((await f.create().cleanup()).complete,false);
+  assert.equal(f.calls.filter(x=>x.method==='DELETE').length,deletes,'do not repeat queue deletes after unknown outcomes');
+  f.finishQueueDeletes();
+  assert.equal((await f.create().cleanup()).complete,true);assert.equal(f.kv,null);
+});
+
+test('malformed custody handoffs are rejected without cleanup writes',async()=>{
+  for(const custody of [{},{schema:1}, {schema:1,queues:[]}]){
+    const f=resourceFixture();await f.create().provision();const before=f.calls.length;
+    assert.throws(()=>f.create({custody}),/Invalid queue custody handoff/);
+    assert.equal(f.calls.length,before);assert(f.kv);
+  }
+});
+test('a foreign marker cannot be overridden by the process that created the namespace',async()=>{
+  const f=resourceFixture(),resources=f.create();await resources.provision();f.setOwner(JSON.stringify({foreign:true}));
+  const before=f.calls.length;
+  assert.equal((await resources.cleanup()).complete,false);
+  assert(f.calls.slice(before).every(x=>x.method==='GET'));assert(f.kv);
+});
+
+test('missing fresh-runner handoff retains custody without trusting list absence',async()=>{
+  const f=resourceFixture({hideQueueLists:true});await f.create().provision();
+  const before=f.calls.length;
+  assert.equal((await f.create({custody:undefined}).cleanup()).complete,false);
+  assert(f.calls.slice(before).every(x=>x.method==='GET'));assert(f.kv);
+});
+
+test('fresh-runner handoff reads the latest pending intent only from the matching attempt receipt',async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'queue-custody-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const env={...actionEnv,QUALIFICATION_HANDOFF_DIRECTORY:directory},identity=qualificationIdentity(env);
+  const path=join(directory,'qualification-release.json'),f=resourceFixture();await f.create().provision();
+  assert.equal(await loadQueueCustody(env,'release'),undefined);
+  const rows=f.operations.filter(row=>row.custody),latest=rows.at(-1).custody;
+  await writeFile(path,JSON.stringify({source:env.GITHUB_SHA,worker:identity.worker,operations:rows}));
+  assert.deepEqual(await loadQueueCustody(env,'release'),latest);
+  const other=structuredClone(latest);other.owner.attempt='2';
+  await writeFile(path,JSON.stringify({source:env.GITHUB_SHA,worker:identity.worker,operations:[{operation:'queue-custody',custody:other}]}));
+  assert.throws(()=>f.create({custody:other}),/Invalid queue custody handoff/);
+  for(const patch of [{source:'b'.repeat(40)},{worker:'foreign'},{operations:null}]){
+    await writeFile(path,JSON.stringify({source:env.GITHUB_SHA,worker:identity.worker,operations:rows,...patch}));
+    await assert.rejects(loadQueueCustody(env,'release'),/Foreign qualification cleanup handoff/);
+  }
+  await writeFile(path,JSON.stringify({source:env.GITHUB_SHA,worker:identity.worker,operations:[...rows,{operation:'queue-custody'}]}));
+  assert.equal(await loadQueueCustody(env,'release'),undefined,'a malformed latest entry must not revive an older snapshot');
 });

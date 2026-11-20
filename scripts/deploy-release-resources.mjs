@@ -1,6 +1,6 @@
 // Built-ins only: cleanup must work in a fresh runner without candidate installs.
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile, rename } from 'node:fs/promises';
+import { mkdir, writeFile, rename, readFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -30,12 +30,13 @@ export async function observeResource(read, { now = Date.now, wait = sleep, time
     await wait(Math.min(1000, deadline - now()));
   }
 }
-export function createIsolatedResources({ env = process.env, identity = qualificationIdentity(env), fetchImpl = fetch, wait = sleep, now = Date.now, save = async () => {} } = {}) {
+export function createIsolatedResources({ env = process.env, identity = qualificationIdentity(env), fetchImpl = fetch, wait = sleep, now = Date.now, save = async () => {}, custody } = {}) {
   const expected = ['release','bridge'].map(stage => qualificationIdentity(env, stage));
   if (!expected.some(row => JSON.stringify(row) === JSON.stringify(identity))) throw new Error('Unowned qualification resources');
   const base = '/accounts/' + identity.account;
   const owner={schema:1,repository:env.GITHUB_REPOSITORY,run:env.GITHUB_RUN_ID,attempt:env.GITHUB_RUN_ATTEMPT,source:env.GITHUB_SHA,worker:identity.worker};
-  let claimedKv;
+  let claimedKv, journal=custody&&structuredClone(custody), provisionStarted=false, provisionFinished=false;
+  const issuedQueues=new Set(), markedOwner={...owner,queueCustody:1};
   if (!env.CLOUDFLARE_API_TOKEN) throw new Error('Cloudflare API credential missing');
   // No generic mutation API escapes this owner-scoped adapter. Production paths
   // cannot be passed by a caller, even one holding broad deployment credentials.
@@ -70,7 +71,60 @@ export function createIsolatedResources({ env = process.env, identity = qualific
     return selected[0] ?? null;
   };
   const kv = async () => one(await rows('/storage/kv/namespaces'), x => x.title === identity.kv);
-  const queue = async name => one(await rows('/queues'), x => x.queue_name === name);
+  const queueNames = [identity.usage, identity.dlq];
+  const queueId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
+  const validJournal = value => value?.schema === 1 && JSON.stringify(value.owner) === JSON.stringify(owner) &&
+    Number.isSafeInteger(value.revision) && value.revision > 0 && value.queues && typeof value.queues === 'object' && !Array.isArray(value.queues) &&
+    Object.keys(value.queues).length === queueNames.length && Object.entries(value.queues).every(([name, entry]) => queueNames.includes(name) && entry &&
+      ['creating','deleting','skipped'].includes(entry.phase) &&
+      (entry.id === undefined ? entry.phase !== 'deleting' : entry.phase !== 'skipped' && queueId(entry.id)));
+  if(custody&&!validJournal(custody))throw new Error('Invalid queue custody handoff');
+  async function publishJournal() {
+    if (!claimedKv) throw new Error('Queue custody missing');
+    journal={...journal,revision:journal.revision+1};
+    // The job's existing public receipt is saved before any resource write.
+    // Its immutable Actions artifact supplies the next job's complete snapshot;
+    // mutable KV values cannot provide that freshness guarantee.
+    await save({operation:'queue-custody',state:'pending',custody:structuredClone(journal),at:now()});
+  }
+
+  async function rememberQueue(name, entry) {
+    if (!queueNames.includes(name)) throw new Error('Queue custody missing');
+    journal={...journal,queues:{...journal.queues,[name]:entry}};
+    await publishJournal();
+  }
+  const validateQueue = (value, name, id) => {
+    if (!queueId(value?.queue_id) || value.queue_name !== name || id !== undefined && value.queue_id !== id)
+      throw new Error('Isolated queue identity changed');
+    return value;
+  };
+  const queue = async name => {
+    const entry = journal?.queues[name];
+    if(entry?.phase==='skipped'){
+      if(one(await rows('/queues'),x=>x.queue_name===name))throw new Error('Queue appeared after closed creation intent');
+      return null;
+    }
+    if (entry?.id) {
+      const value = await request('/queues/' + encodeURIComponent(entry.id),{absent:true});
+      return value && validateQueue(value,name,entry.id);
+    }
+    return one(await rows('/queues'), x => x.queue_name === name);
+  };
+  async function reconcileQueue(name, acknowledgement) {
+    let entry = journal.queues[name];
+    if (acknowledgement !== undefined) {
+      validateQueue(acknowledgement,name,entry.id);
+      if (!entry.id) { await rememberQueue(name,{phase:'creating',id:acknowledgement.queue_id}); entry=journal.queues[name]; }
+    }
+    let value = await queue(name);
+    if (!value) return false;
+    validateQueue(value,name,entry.id);
+    if (!entry.id) {
+      await rememberQueue(name,{phase:'creating',id:value.queue_id});
+      value = await queue(name); if (!value) return false;
+    }
+    return value;
+  }
   const bucket = () => request('/r2/buckets/' + identity.bucket, {absent:true});
   const worker = () => request('/workers/scripts/' + identity.worker + '/settings', {absent:true});
   const application = async () => {
@@ -80,11 +134,11 @@ export function createIsolatedResources({ env = process.env, identity = qualific
   };
   async function mutation(label, write, observed) {
     await save({operation:label,state:'pending',at:now()});
-    let failed = false;
-    try { await write(); } catch { failed = true; }
+    let failed = false, acknowledgement;
+    try { acknowledgement = await write(); } catch { failed = true; }
     // Also reconcile HTTP errors: the server may have committed before a proxy
     // failed. No write is ever retried, even after a lost acknowledgement.
-    const value = await observeResource(observed, {now,wait});
+    const value = await observeResource(() => observed(acknowledgement), {now,wait});
     await save({operation:label,state:'observed',acknowledgementLost:failed,at:now()});
     return value;
   }
@@ -95,18 +149,30 @@ export function createIsolatedResources({ env = process.env, identity = qualific
       return isolatedNativeTarget({ worker:identity.worker, account:identity.account, origin:'https://' + identity.worker + '.' + subdomain + '.workers.dev' });
     },
     async provision() {
-      if (await kv() || await queue(identity.usage) || await queue(identity.dlq) || await bucket() || await worker() || await application())
-        throw new Error('Fresh qualification identity already exists; no resources were adopted');
-      const policy = await mutation('create-policy', () => request('/storage/kv/namespaces', {method:'POST',body:{title:identity.kv}}), kv);
-      claimedKv=policy.id;
-      const ownerPath='/storage/kv/namespaces/'+policy.id+'/values/release-owner';
-      await mutation('claim-policy',()=>request(ownerPath,{method:'PUT',body:owner}),async()=>{
-        const text=await request(ownerPath,{absent:true,raw:true});return text===JSON.stringify(owner);
-      });
-      for (const name of [identity.usage,identity.dlq]) await mutation('create-' + (name === identity.usage ? 'usage' : 'dlq'), () => request('/queues', {method:'POST',body:{queue_name:name}}), () => queue(name));
-      await mutation('create-bucket', () => request('/r2/buckets', {method:'POST',body:{name:identity.bucket}}), bucket);
-      if (!/^[a-f0-9]{32}$/.test(policy.id ?? '')) throw new Error('Invalid isolated policy namespace');
-      return {kvId:policy.id};
+      if(provisionStarted||custody)throw new Error('Provisioning may run only once without a cleanup handoff');
+      provisionStarted=true;
+      try {
+        if (await kv() || await queue(identity.usage) || await queue(identity.dlq) || await bucket() || await worker() || await application())
+          throw new Error('Fresh qualification identity already exists; no resources were adopted');
+        const policy = await mutation('create-policy', () => request('/storage/kv/namespaces', {method:'POST',body:{title:identity.kv}}), kv);
+        claimedKv=policy.id;
+        const ownerPath='/storage/kv/namespaces/'+policy.id+'/values/release-owner';
+        await mutation('claim-policy',()=>request(ownerPath,{method:'PUT',body:markedOwner}),async()=>{
+          const text=await request(ownerPath,{absent:true,raw:true});return text===JSON.stringify(markedOwner);
+        });
+        // Declare both possible creations before either POST. Fresh cleanup
+        // cannot infer an unattempted creation from an absent list entry.
+        journal={schema:1,owner,revision:0,queues:Object.fromEntries(queueNames.map(name=>[name,{phase:'creating'}]))};
+        await publishJournal();
+        for (const name of queueNames) {
+          issuedQueues.add(name);
+          await mutation('create-' + (name === identity.usage ? 'usage' : 'dlq'),
+            () => request('/queues',{method:'POST',body:{queue_name:name}}), ack => reconcileQueue(name,ack));
+        }
+        await mutation('create-bucket', () => request('/r2/buckets', {method:'POST',body:{name:identity.bucket}}), bucket);
+        if (!/^[a-f0-9]{32}$/.test(policy.id ?? '')) throw new Error('Invalid isolated policy namespace');
+        return {kvId:policy.id};
+      }finally{provisionFinished=true;}
     },
     async installSecret(secret) {
       const read = async () => {
@@ -118,12 +184,38 @@ export function createIsolatedResources({ env = process.env, identity = qualific
     },
     async cleanup() {
       const outcomes = [];
+      if(provisionStarted&&!provisionFinished)return {worker:identity.worker,complete:false,outcomes:[{resource:'provisioning',outcome:'unresolved'}]};
+      let requiredJournal=false;
       const policy=await kv();
       if(policy){
         const text=await request('/storage/kv/namespaces/'+policy.id+'/values/release-owner',{absent:true,raw:true});
-        if(text!==JSON.stringify(owner)&&claimedKv!==policy.id)return {worker:identity.worker,complete:false,outcomes:[{resource:'ownership',outcome:'unresolved'}]};
-      }else if(await worker()||await application()||await queue(identity.usage)||await queue(identity.dlq)||await bucket()){
+        requiredJournal=text===JSON.stringify(markedOwner)||!!journal;
+        if(text!==JSON.stringify(owner)&&text!==JSON.stringify(markedOwner)&&(text!==null||claimedKv!==policy.id))return {worker:identity.worker,complete:false,outcomes:[{resource:'ownership',outcome:'unresolved'}]};
+      }else if(journal&&Object.values(journal.queues).some(entry=>entry.phase==='creating')||await worker()||await application()||await queue(identity.usage)||await queue(identity.dlq)||await bucket()){
         return {worker:identity.worker,complete:false,outcomes:[{resource:'ownership',outcome:'unresolved'}]};
+      }
+      if(policy&&requiredJournal){
+        // The canonical cleanup job receives the prior job's last saved
+        // intent, published before each mutation. Missing handoff means observation only.
+        if(!journal)return {worker:identity.worker,complete:false,outcomes:[{resource:'queue-custody',outcome:'unresolved'}]};
+        claimedKv=policy.id;
+        try {
+          // Only the process that finished provisioning knows which POSTs were
+          // never issued. A fresh runner cannot infer that from absent lists.
+          if(provisionFinished){
+            const skipped=queueNames.filter(name=>!issuedQueues.has(name)&&journal.queues[name].phase!=='skipped');
+            if(skipped.length){
+              journal={...journal,queues:{...journal.queues,...Object.fromEntries(skipped.map(name=>[name,{phase:'skipped'}]))}};
+              await publishJournal();
+            }
+          }
+          for(const name of queueNames)await observeResource(async()=>{
+            const entry=journal.queues[name];
+            if(entry.phase==='skipped'){await queue(name);return true;}
+            if(entry.phase==='deleting')return !await queue(name);
+            return reconcileQueue(name);
+          },{now,wait});
+        }catch{return {worker:identity.worker,complete:false,outcomes:[{resource:'queue-custody',outcome:'unresolved'}]};}
       }
       // A Worker consumer prevents Worker deletion; its producer and dead-letter
       // references then prevent queue deletion. Verify every dependency before
@@ -186,7 +278,11 @@ export function createIsolatedResources({ env = process.env, identity = qualific
           // a fresh cleanup runner must retain authority after a partial failure.
           if(label==='policy'&&outcomes.some(x=>x.outcome==='unresolved')){outcomes.push({resource:label,outcome:'unresolved'});continue;}
           const item = await read();
-          if (item) await mutation('delete-' + label, () => request(path(item), {method:'DELETE'}), async () => !await read());
+          const name=label==='usage'?identity.usage:label==='dlq'?identity.dlq:null;
+          if (item) {
+            if(name&&journal)await rememberQueue(name,{phase:'deleting',id:item.queue_id});
+            await mutation('delete-' + label, () => request(path(item), {method:'DELETE'}), async () => !await read());
+          }
           outcomes.push({resource:label,outcome:item?'removed':'absent'});
         } catch { outcomes.push({resource:label,outcome:'unresolved'}); }
       }
@@ -194,12 +290,23 @@ export function createIsolatedResources({ env = process.env, identity = qualific
     },
   };
 }
+export async function loadQueueCustody(env, stage) {
+  if(!env.QUALIFICATION_HANDOFF_DIRECTORY)return;
+  const identity=qualificationIdentity(env,stage);
+  let receipt;
+  try{receipt=JSON.parse(await readFile(join(resolve(env.QUALIFICATION_HANDOFF_DIRECTORY),'qualification-'+stage+'.json'),'utf8'));}
+  catch(error){if(error.code!=='ENOENT')throw error;}
+  if(!receipt)return;
+  if(receipt.source!==env.GITHUB_SHA||receipt.worker!==identity.worker||!Array.isArray(receipt.operations))throw new Error('Foreign qualification cleanup handoff');
+  return receipt.operations.findLast(row=>row.operation==='queue-custody')?.custody;
+}
 export async function cleanupQualifications(env = process.env) {
   const directory = resolve(env.TRAIN_EVIDENCE_DIRECTORY || 'release-evidence','public');
   const results = [];
   for (const stage of ['release','bridge']) {
     const identity = qualificationIdentity(env,stage), operations = [];
-    const resources = createIsolatedResources({env,identity,save:async operation => {
+    const custody = await loadQueueCustody(env,stage);
+    const resources = createIsolatedResources({env,identity,custody,save:async operation => {
       operations.push(operation); await saveReceipt(join(directory,'cleanup-' + stage + '.json'), {identity,operations});
     }});
     const result = await resources.cleanup(); results.push(result);
