@@ -48,15 +48,21 @@ configuration. Router separately selects its upstream grant; neither SDK ambient
 
 This pin's default V4 Flash catalog row is **text only**. Its Flash alias and
 experimental vision row already declare images. V4 Flash image transport is
-therefore tested with an explicit model-input override; it does not close the
-default-catalog gap. The pinned SDK declares 1,000,000 context / 384,000 output
+therefore tested with an explicit model-input override; it does not change the
+default-catalog difference at this pin. The pinned SDK declares 1,000,000 context / 384,000 output
 and different catalog costs. None replace the Router's dated facts or pricing.
 
 The registered wrapper maps `off` to `thinking.type=disabled` and removes
 `reasoning_effort` and replay reasoning. It maps `max`/`xhigh` to wire `max`;
 `low`, `high` and omitted effort produce wire `high`. The supported configured
-route does **not** establish native `low` wire parity. A client correction and
-new default-config proof are separate follow-ups.
+route does **not** establish native `low` wire parity for D8.
+
+Newer OpenClaw `cd2ae192` source already declares V4 Flash text/image input and
+uses a provider-specific mapping: `minimal`/`low` to `low`,
+`medium`/`high`/`xhigh` to `high`, and `max` to `max`. Pro remains the default
+and text-only. These are source observations, not native results from this
+D8-pinned consumer. No new client fix is implied; default-config qualification
+at that newer pin and migration of persisted text-only overrides are separate.
 
 ## Proof boundary
 

@@ -68,7 +68,7 @@ async function start(id: string, options: { simple?: boolean; apiKey?: string; s
       api: model.api, provider: "deepseek", model: modelId,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "toolUse", timestamp: 2 },
     { role: "toolResult", toolCallId: "callfixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: 3 },
-    { role: "user", content: selected.image ? [{ type: "text", text: "fixture deepseek_" + id }, { type: "image", data: "aGVsbG8=", mimeType: "image/png" }] : "fixture deepseek_" + id, timestamp: 4 },
+    { role: "user", content: selected.image ? [{ type: "text", text: "fixture deepseek_" + id }, { type: "image", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", mimeType: "image/png" }] : "fixture deepseek_" + id, timestamp: 4 },
   ];
   const messages = await withOpenClawTestState({ label: "deepseek-fast-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: "deepseek", modelId, modelApi: model.api, model, runtimeHandle: { provider: "deepseek", plugin: provider } });
@@ -77,6 +77,9 @@ async function start(id: string, options: { simple?: boolean; apiKey?: string; s
       workspaceDir: state.workspaceDir, sessionId: "deepseek-" + id,
       sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: "deepseek", modelApi: model.api, modelId })]), messages: history }));
   });
+  const replayImages = messages.flatMap(message => Array.isArray(message.content)
+    ? message.content.filter(block => block.type === "image").map(block => block.data) : []);
+  expect(replayImages, "case " + id + " must retain its actual sanitized image").toEqual(selected.image ? ["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="] : []);
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
     tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   const apiKey = options.apiKey ?? key(id);

@@ -360,7 +360,7 @@ async function verifyCallsAndUsage(mf, origin, native) {
       assert.equal(call.body.temperature, disabled ? 0.2 : undefined);
       assert.equal(prior.reasoning_content, disabled ? undefined : "synthetic reasoning replay");
       const images = call.body.messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === "image_url").map(part => part.image_url.url) : []);
-      assert.deepEqual(images, row.image ? ["data:image/png;base64,aGVsbG8="] : []);
+      assert.deepEqual(images, row.image ? ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="] : []);
     }
     assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-/);
   }
@@ -427,6 +427,10 @@ test(phase + " DeepSeekVision native assembly uses the exact owned observer and 
   assert.equal(provider.models[0].displayName, "DeepSeek V4 Pro");
   for (const row of provider.models) assert.deepEqual(row.nativeCapabilities.endpoints.chat_completions.input, row.upstream === models[0] ? ["text"] : ["text", "image"]);
   assert.equal(cases.length, 23);
+  const image = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=", "base64");
+  assert.deepEqual([...image.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(image.subarray(12, 16).toString(), "IHDR");
+  assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20)], [1, 1]);
   const fixtureCases = JSON.parse(fixtureText.match(/const cases = (\[[^\n]+\]);/)[1]);
   assert.deepEqual(fixtureCases, cases, "every native case has the same outer ownership and accounting row");
   assert.equal(rows[0].consumer, "deepseek-vision");
@@ -514,7 +518,7 @@ test(phase + " DeepSeekVision real Worker pricing, denials, fragmented responses
     for (const row of cases) {
       const controller = new AbortController();
       const response = await fetch(origin + nativePath, { method: "POST", signal: controller.signal, headers: { authorization: "Bearer " + token(row.id), "content-type": "application/json" },
-        body: JSON.stringify({ model: row.model, messages: [{ role: "user", content: row.image ? [{ type: "text", text: "synthetic" }, { type: "image_url", image_url: { url: "data:image/png;base64,aGVsbG8=" } }] : "synthetic DeepSeekVision fixture" }], stream: true, max_tokens: row.max }) });
+        body: JSON.stringify({ model: row.model, messages: [{ role: "user", content: row.image ? [{ type: "text", text: "synthetic" }, { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=" } }] : "synthetic DeepSeekVision fixture" }], stream: true, max_tokens: row.max }) });
       if (row.denied) { assert.ok(response.status >= 400, row.id); await response.text(); continue; }
       assert.equal(response.status, 200, row.id);
       if (row.id === "cancel") {
