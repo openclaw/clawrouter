@@ -14,8 +14,13 @@ const models = [
   { name: "Neon", unaryLimit: 65536 },
   { name: "Carbon", unaryLimit: 32768 },
   { name: "Hydrogen", unaryLimit: 65536 },
-  { name: "Argon", unaryLimit: 32768 },
+
 ];
+
+test("Argon is not offered until the actual client qualifies continuation", () => {
+  assert.equal(google.models.some(row => row.upstream === "gemini-4-argon"), false);
+  assert.equal(createRouteCatalog([google]).manifestProxy.some(route => route.models.some(row => row.id === "google/gemini-4-argon")), false);
+});
 
 for (const { name, unaryLimit } of models) {
   const upstream = `gemini-4-${name.toLowerCase()}`;
@@ -56,7 +61,7 @@ test("media and continuation hops reserve the full unified input window", () => 
 // 4,000 prompt (2,000 cache hits) and 1,000 output tokens, including thoughts.
 const charges = {
   Neon: [21300, 10650, 38340], Hydrogen: [10650, 5325, 19170],
-  Carbon: [28400, 14200, 51120], Argon: [28400, 14200, 51120],
+  Carbon: [28400, 14200, 51120],
 };
 for (const { name } of models) for (const manifest of [false, true]) {
   const upstream = "gemini-4-" + name.toLowerCase();
@@ -94,7 +99,7 @@ for (const { name } of models) for (const manifest of [false, true]) {
         assert.equal(events.length, 1);
         assert.equal(events[0].actual_cost_micros, charges[name][i]);
         assert.equal(events[0].served_service_tier, serviceTier);
-        const promotional = name === "Carbon" || name === "Argon";
+        const promotional = name === "Carbon";
         assert.equal(events[0].cost_basis, promotional ? "manifest_rate_upper_bound" : "manifest_pricing");
       } finally { fetch.mock.restore(); }
     }

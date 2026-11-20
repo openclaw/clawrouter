@@ -6,7 +6,7 @@ import { extractUsageTokens, type SseUsageEvidence, type UsageInspection, type U
 export function gemini4Hop(context?: Readonly<UsageTokenContext>): boolean {
   return context?.providerId === "google-gemini" && context.requestFormat === "google.generate_content"
     && ["google.generate_content", "google.stream_generate_content"].includes(context.responseFormat)
-    && /^gemini-4-(neon|hydrogen|carbon|argon)$/.test(context.pricedModel ?? "");
+    && /^gemini-4-(neon|hydrogen|carbon)$/.test(context.pricedModel ?? "");
 }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 

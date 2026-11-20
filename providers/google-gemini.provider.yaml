@@ -451,7 +451,7 @@ models:
         outputMicrosPerMillion: 20000000
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 65536
-        serviceTiers: &gemini4CarbonArgonTiers
+        serviceTiers:
           - id: default
             aliases: [standard]
             inputMicrosPerMillion: 4000000
@@ -518,37 +518,6 @@ models:
             input: [text, image, video, audio]
             maxOutputTokens: 65536
           stream_generate_content: *gemini4HydrogenFacts
-    - id: google/gemini-4-argon
-      displayName: "Gemini 4 Argon"
-      upstream: gemini-4-argon
-      capabilities: [llm.generate, llm.stream]
-      pricingRef: google-gemini-4-argon-published-upper-bound-2026-11-20
-      pricing:
-        effectiveAt: "2026-11-20"
-        checkedAt: "2026-11-20"
-        source: https://aistudio.google.com/docs/pricing#gemini-4-argon
-        settlementBasis: published_upper_bound
-        inputMicrosPerMillion: 4000000
-        cachedInputMicrosPerMillion: 200000
-        outputMicrosPerMillion: 20000000
-        maxInputTokens: 1048576
-        defaultMaxOutputTokens: 65536
-        serviceTiers: *gemini4CarbonArgonTiers
-      nativeCapabilities:
-        version: clawrouter.native-capabilities.v1
-        endpoints:
-          generate_content:
-            checkedAt: "2026-11-20"
-            sources: &gemini4ArgonSources [https://aistudio.google.com/docs/models/gemini-4-argon, "https://aistudio.google.com/docs/long-decode?generate-content=true"]
-            contextWindow: 1048576
-            input: [text, image, video, audio]
-            maxOutputTokens: 32768
-          stream_generate_content:
-            checkedAt: "2026-11-20"
-            sources: *gemini4ArgonSources
-            contextWindow: 1048576
-            input: [text, image, video, audio]
-            maxOutputTokens: 65536
     - id: google/gemini-embedding-001
       displayName: "Gemini Embedding 001"
       upstream: gemini-embedding-001
