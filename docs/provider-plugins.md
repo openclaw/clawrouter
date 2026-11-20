@@ -67,6 +67,24 @@ Adjust the relative import to your checkout location. These functions validate
 the descriptor and enumerate its payload files; they do not load those files,
 validate the provider manifest, sanitize images, or certify upstream support.
 
+### Validate manifest structure outside the repository
+
+The packed contract includes the same service-provider v1 JSON Schema used by
+the compiler:
+
+```js
+import schema from "@clawrouter/provider-plugin-contract/service-provider.schema.json"
+  with { type: "json" };
+```
+
+Use a JSON Schema Draft 2020-12 validator after parsing YAML, or resolve this
+package export as the schema file for editor tooling. The build copies the
+canonical repository schema without maintaining a second authored version.
+The main JavaScript export does not load the schema.
+
+This checks structure only. Run the ClawRouter compiler to check semantic
+qualification and references; neither check grants runtime permission.
+
 ### Compile an explicitly selected package
 
 ```sh

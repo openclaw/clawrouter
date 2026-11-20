@@ -1,5 +1,7 @@
 # Changelog
 
+- Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
+
 - Export static product and transport compatibility checks from the portable provider plugin contract. Preserve existing shared imports and Worker admission behavior.
 
 - Preserve optional, explicit catalogue references on compiled provider models. Router aliases and upstream slugs remain separate; references do not import model facts, prices, or permissions.

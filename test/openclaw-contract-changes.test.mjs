@@ -13,6 +13,7 @@ const relevant = [
   "shared/contracts.ts", "providers/example.provider.yaml",
   "packages/provider-plugin-contract/src/snapshot.ts", "packages/provider-plugin-contract/src/native-capabilities.ts",
   "packages/provider-plugin-contract/src/nested/future.ts", "packages/provider-plugin-contract/tsconfig.json",
+  "packages/provider-plugin-contract/copy-manifest-schema.mjs",
   "test/openclaw-search.test.mjs", "test/openclaw-native-embeddings.test.mjs",
   "test/fixtures/openclaw-search-contract.test.ts", "test/helpers/openclaw-consumer.mjs",
   "test/helpers/workerd.mjs", ".github/workflows/openclaw-contract.yml",
@@ -75,6 +76,7 @@ for (const [name, changes, expected] of [
   ["new consumer fixture", [["test/fixtures/openclaw-future-contract.test.ts", "fixture\n"]], true],
   ["portable contract source only", [["packages/provider-plugin-contract/src/snapshot.ts", "changed contract\n"]], true],
   ["portable contract build configuration", [["packages/provider-plugin-contract/tsconfig.json", "{}\n"]], true],
+  ["portable schema packaging", [["packages/provider-plugin-contract/copy-manifest-schema.mjs", "// packaging\n"]], true],
   ["portable contract renamed into documentation", [["packages/provider-plugin-contract/src/snapshot.ts", null], ["packages/provider-plugin-contract/README.md", "original contract\n"]], true],
 ]) {
   test(`merge diff selects ${name}`, (t) => {
