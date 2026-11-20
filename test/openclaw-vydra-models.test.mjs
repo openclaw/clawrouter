@@ -9,6 +9,7 @@ import { runInNewContext } from "node:vm";
 import test from "node:test";
 import { parse } from "yaml";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { overlayVydraGuardSource, restoreVydraGuardSource, vydraGuardPin, vydraGuardPrelude, withVydraGuardObservation } from "./helpers/openclaw-vydra-guard-observer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "542958f2c02754de72361bfbdc016a724a4572f1";
@@ -20,12 +21,12 @@ const contract = "vydra.models.kling-veo3.v1";
 const key = id => "clawrouter-live-vydra_" + id + "-fixture-secret";
 const body = id => ({ prompt: "Synthetic " + id, ...(id === "veo3" ? {} : { image_url: "https://example.com/reference.png", video_url: "https://example.com/motion.mp4" }) });
 
-async function invokeNative(t, origin, invoke = runOpenClawConsumer) {
+async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = withVydraGuardObservation) {
   const diagnostics = [];
-  await invoke({ diagnostic(message) { diagnostics.push(String(message)); t.diagnostic(message); } }, {
+  await bind(source, createHash("sha256").update(readFileSync(fixture)).digest("hex"), guardContract => invoke({ diagnostic(message) { diagnostics.push(String(message)); t.diagnostic(message); } }, {
     source, sourceHead, fixture, testPath: "extensions/vydra/worker-models-contract.test.ts",
-    env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract },
-  });
+    env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract, CLAWROUTER_VYDRA_GUARD_CONTRACT: guardContract },
+  }));
   const lines = diagnostics.join("\n").split("\n").map(line => line.trim());
   for (const model of ["kling", "veo3"]) assert.equal(lines.filter(line => line === "VYDRA_MODELS_RETIRED " + model).length, 1, "exact original SDK completion receipt");
 }
@@ -36,14 +37,20 @@ test("Vydra native runner binds exact source, fixture, environment, receipt and 
   assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
   const fixtureText = readFileSync(fixture, "utf8"); assert.doesNotThrow(() => stripTypeScriptTypes(fixtureText));
   assert.match(fixtureText, /CLAWROUTER_VYDRA_MODELS_CONTRACT/); assert.match(fixtureText, /generateVideo/);
+  const guardContract = "a".repeat(64);
+  const bind = async (root, fixtureSHA, run) => {
+    assert.equal(root, source); assert.equal(fixtureSHA, createHash("sha256").update(readFileSync(fixture)).digest("hex"));
+    return run(guardContract);
+  };
+  assert.equal(vydraGuardPin, sourceHead);
   await invokeNative({ diagnostic() {} }, "https://router.example", async (t, options) => {
     assert.equal(options.sourceHead, sourceHead); assert.equal(options.fixture.href, fixture.href);
     assert.equal(options.testPath, "extensions/vydra/worker-models-contract.test.ts");
-    assert.deepEqual(options.env, { CLAWROUTER_CONTRACT_ORIGIN: "https://router.example", CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract });
+    assert.deepEqual(options.env, { CLAWROUTER_CONTRACT_ORIGIN: "https://router.example", CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract, CLAWROUTER_VYDRA_GUARD_CONTRACT: guardContract });
     t.diagnostic("VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED veo3");
-  });
+  }, bind);
   for (const wrong of ["", "MISTRAL_CANCEL_RETIRED", "VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED kling"]) {
-    await assert.rejects(invokeNative({ diagnostic() {} }, "https://router.example", async t => t.diagnostic(wrong)));
+    await assert.rejects(invokeNative({ diagnostic() {} }, "https://router.example", async t => t.diagnostic(wrong), bind));
   }
 });
 
@@ -175,7 +182,7 @@ test("actual SDK observer preserves original promise, receiver, arguments and fa
   const text = readFileSync(fixture, "utf8"), start = text.indexOf("function observe<T>"), end = text.indexOf("beforeEach(() =>", start);
   assert.ok(start > 0 && end > start);
   const rows = [], tails = [], faults = [], context = { rows, tails, faults };
-  runInNewContext(stripTypeScriptTypes(text.slice(start, end)) + ";globalThis.invoke = call;", context);
+  runInNewContext('"use strict";\n' + stripTypeScriptTypes(text.slice(start, end)) + ";globalThis.invoke = call;", context);
   const receiver = {}, argument = {}, result = {}, promise = Promise.resolve(result);
   const actual = context.invoke("release", function (value) { assert.equal(this, receiver); assert.equal(value, argument); return promise; }, receiver, [argument]);
   assert.equal(actual, promise); assert.equal(await actual, result); await Promise.all(tails.splice(0));
@@ -187,4 +194,96 @@ test("actual SDK observer preserves original promise, receiver, arguments and fa
   await Promise.all(tails.splice(0)); assert.equal(rows[2].state, "rejected"); assert.equal(rows[2].error, reason);
   const observed = context.invoke("guard", () => promise, receiver, [], () => { throw undefined; });
   assert.equal(observed, promise); await Promise.all(tails.splice(0)); assert.deepEqual(faults, [undefined]);
+});
+
+test("compiled Vydra callsite preserves operands, promise and falsey outcomes independently of observation", async () => {
+  const contract = "b".repeat(64), modules = new Set(), observed = [], context = {};
+  runInNewContext('"use strict";\n' + stripTypeScriptTypes(vydraGuardPrelude(contract)) + ";globalThis.invoke = __vydraGuardInvoke;", context);
+  context[Symbol.for("clawrouter.vydra.guard." + contract)] = { modules, observe(...args) { observed.push(args); } };
+  const order = [], input = {}, value = {}, promise = Promise.resolve(value);
+  context.operands = {
+    get callee() { order.push("callee"); return function (actual) { order.push("call"); assert.equal(this, undefined); assert.equal(actual.input, input); return promise; }; },
+    get input() { order.push("input"); return input; },
+  };
+  const returned = runInNewContext("invoke(operands.callee, {input: operands.input})", context);
+  assert.equal(returned, promise); assert.equal(await returned, value); assert.deepEqual(order, ["callee", "input", "call"]);
+  assert.equal(modules.size, 1); assert.equal(observed[0][2], undefined); assert.equal(observed[0][3][0].input, input);
+  assert.equal(observed[0][4], true); assert.equal(observed[0][5], promise);
+  const reason = {}, rejected = Promise.reject(reason);
+  assert.equal(context.invoke(() => rejected, input), rejected);
+  await rejected.catch(error => assert.equal(error, reason)); assert.equal(observed[1][5], rejected);
+  let threw = false;
+  try { context.invoke(() => { throw undefined; }, input); } catch (error) { threw = true; assert.equal(error, undefined); }
+  assert.equal(threw, true); assert.equal(observed[2][4], false); assert.equal(observed[2][5], undefined);
+  context[Symbol.for("clawrouter.vydra.guard." + contract)].observe = () => { throw undefined; };
+  assert.equal(context.invoke(() => promise, input), promise);
+  assert.deepEqual(Array.from([...modules][0].faults), [undefined]);
+  assert.throws(() => vydraGuardPrelude("wrong"));
+  assert.throws(() => overlayVydraGuardSource(Buffer.from("changed source"), contract), /source changed/);
+});
+
+test("executing Vydra guard identity binds original acquisitions and detached release without accepting foreign generations", async () => {
+  const text = readFileSync(fixture, "utf8"), start = text.indexOf("function observe<T>"), end = text.indexOf("beforeEach(() =>", start);
+  const rows = [], tails = [], faults = [], acquisitions = [], readers = [];
+  const context = { rows, tails, faults, acquisitions, readers, guardIdentity: undefined,
+    expect(value) { return { toBe: expected => assert.equal(value, expected), toHaveLength: expected => assert.equal(value.length, expected) }; } };
+  runInNewContext('"use strict";\n' + stripTypeScriptTypes(text.slice(start, end)) + ";globalThis.observeGuardCall = observeGuard;", context);
+  const module = { faults: [] }, callee = () => {}, input = {}, releaseResult = Promise.resolve();
+  const body = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); controller.close(); } });
+  let released = 0;
+  const result = { response: new Response(body), release: function (...args) { assert.equal(this, undefined); assert.deepEqual(args, []); released++; return releaseResult; } };
+  const original = Promise.resolve(result);
+  context.observeGuardCall(module, callee, undefined, [input], true, original);
+  await Promise.all(tails.splice(0));
+  assert.equal(rows[0].original, original); assert.equal(rows[0].result, result); assert.equal(rows[0].fn, callee); assert.equal(rows[0].args[0], input);
+  assert.equal(acquisitions[0].result, result);
+  const reader = result.response.body.getReader(); await reader.read(); await reader.read(); reader.releaseLock();
+  const detached = result.release; assert.equal(detached(), releaseResult);
+  await Promise.all(tails.splice(0));
+  assert.equal(released, 1); assert.equal(acquisitions[0].releases, 1); assert.equal(readers[0].unlocks, 1); assert.equal(body.locked, false);
+  assert.deepEqual(faults, []); assert.ok(rows.every(row => row.state === "fulfilled"));
+  for (const args of [[{ faults: [] }, callee, undefined, [input]], [module, () => {}, undefined, [input]], [module, callee, {}, [input]], [module, callee, undefined, []]]) {
+    assert.throws(() => context.observeGuardCall(...args, true, original));
+  }
+  context.observeGuardCall(module, callee, undefined, [input], false, undefined);
+  assert.equal(rows.at(-1).state, "rejected"); assert.equal(rows.at(-1).error, undefined);
+  assert.equal(rows.at(-1).args[0], input); assert.equal(acquisitions.length, 1);
+});
+
+test("Vydra restoration rejects a pathname replacement before or during the held-inode write", async () => {
+  const stat = { dev: 1, ino: 2, uid: 3, nlink: 1, mode: 0o100644 };
+  const original = Buffer.from("original"), output = Buffer.from("observed");
+  for (const replacement of ["none", "before", "during"]) {
+    let pathStat = replacement === "before" ? { ...stat, ino: 4 } : stat, held = output, writes = 0;
+    const file = { stat: async () => stat }, row = { file, path: "owned.ts", stat, bytes: original, output, changed: true, applied: true };
+    const restoration = restoreVydraGuardSource(row, async () => ({ bytes: held, stat }), async (target, bytes) => {
+      assert.equal(target, file); writes++; held = bytes;
+      if (replacement === "during") pathStat = { ...stat, ino: 4 };
+    }, async path => { assert.equal(path, row.path); return pathStat; });
+    if (replacement === "none") await restoration;
+    else await assert.rejects(restoration, replacement === "before" ? /source inode changed/ : /restored pathname changed/);
+    assert.equal(writes, replacement === "before" ? 0 : 1);
+    assert.equal(held, replacement === "before" ? output : original);
+  }
+  const row = { file: { stat: async () => stat }, path: "owned.ts", stat, bytes: original, output, changed: true, applied: false };
+  let restored;
+  await restoreVydraGuardSource(row, async () => ({ bytes: Buffer.from("partial"), stat }), async (_file, bytes) => { restored = bytes; }, async () => stat);
+  assert.equal(restored, original);
+});
+
+test("Vydra cleanup joins originals and restores mocks after observer admission fails, retaining undefined faults", async () => {
+  const text = readFileSync(fixture, "utf8"), start = text.indexOf("afterEach(async () =>"), end = text.indexOf("const environment =", start);
+  let cleanup, joined = false, restored = false;
+  const key = Symbol("foreign channel"), foreign = {}, context = {
+    tails: [Promise.reject(undefined), Promise.resolve().then(() => { joined = true; })],
+    faults: [], rows: [], acquisitions: [], readers: [], guardChannel: undefined, guardKey: key, retired: undefined,
+    afterEach(fn) { cleanup = fn; }, vi: { restoreAllMocks() { restored = true; throw undefined; } },
+    expect(value) { return { toBe: expected => assert.equal(value, expected), toEqual: expected => assert.equal(JSON.stringify(value), JSON.stringify(expected)) }; },
+  };
+  context[key] = foreign;
+  runInNewContext('"use strict";\n' + stripTypeScriptTypes(text.slice(start, end)), context);
+  await assert.rejects(cleanup(), error => {
+    assert.equal(error.errors.length, 3); assert.equal(error.errors[0], undefined); assert.equal(error.errors[2], undefined); return true;
+  });
+  assert.equal(joined, true); assert.equal(restored, true); assert.equal(context[key], foreign);
 });

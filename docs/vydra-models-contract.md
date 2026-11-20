@@ -93,6 +93,11 @@ to a foreign asset origin. This does not authorize a Router asset fetch.
 actual Worker/SQLite, fixed-policy charge, unknown-dollar denial, original job
 identity, pending-output behavior and asset bytes/MIME. The SDK fixture joins
 original guard, reader, closed and release outcomes before emitting completion.
+A pinned callsite observation is applied before native SDK compilation; a source
+namespace spy does not observe the native plugin graph. The observation retains
+the original guard promise, arguments, returned response and detached release.
+It requires one executing module/callee identity and restores both pinned source
+files with held-inode and pathname checks, including after restoration.
 Unit and Worker controls cover operation-signal cancellation and independent
 retirement failures; video generation has no separately qualified physical
 pre-header caller-disconnect claim. Hosted SDK proof is pending until the exact
