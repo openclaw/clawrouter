@@ -1,7 +1,7 @@
 import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
-import { createResponseReceiptInspection, type RequestTariff } from "./request-tariff.ts";
+import { createResponseReceiptInspection, perplexitySearchOutcome, type RequestTariffOutcome, type RequestTariff } from "./request-tariff.ts";
 import { createNativeEventObserver } from "./native-events.ts";
 import { createRadiusEventInspector } from "./provider-radius.ts";
 import { createOllamaChatInspector, ollamaChatFormat } from "./provider-ollama.ts";
@@ -53,7 +53,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
-  const decoder = new TextDecoder();
+  const searchTariff = responseFormat === "perplexity.search" && tariff?.kind === "successful_request";
+  const decoder = new TextDecoder("utf-8", { fatal: searchTariff });
+  let requestTariffOutcome: RequestTariffOutcome = "unknown";
   const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);
   const input = sourceRetired ? replayInputOwner(reader, sourceRetired) : inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
@@ -84,11 +86,14 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       try {
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
+        if (searchTariff && mime === "application/json") requestTariffOutcome = perplexitySearchOutcome(value, response.status);
         inspection = { tokens: responseFormat === "voyage.embeddings"
           ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
           : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
       } catch { inspection.outcome = "provider_error"; }
     }
+    if (responseFormat === "perplexity.search") inspection.tokens = null;
+    if (searchTariff && requestTariffOutcome === "failed") inspection.outcome = "provider_error";
     responses?.stop(); text = "";
     // Binary delivery supplies completion only, never synthetic token usage.
     // A partial, empty, or wrong-MIME response cannot discount the reservation.
@@ -97,7 +102,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
     const requestCostReceipt = receipt?.result(delivery === "complete") ?? validated?.requestCostReceipt;
     resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
-      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}) });
+      ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}),
+      ...(searchTariff ? { requestTariffOutcome: delivery === "complete" ? requestTariffOutcome : "unknown" as const } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
     const cleanup = input.retire(delivery === "complete" ? "eof" : "cancel", reason);

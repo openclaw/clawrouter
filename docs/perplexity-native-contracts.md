@@ -1,8 +1,9 @@
 # Perplexity Agent and Search contracts
 
-These synthetic fixtures qualify transport and observation behavior, not live
-provider access or a shipped client integration. The manifest owner activates the
-existing `perplexity` provider; there is no second provider ID.
+These synthetic fixtures qualify the bundled transport and observation behavior,
+not live provider access. The existing `perplexity` provider now declares these
+endpoints; there is no second provider ID. See [transport qualification](./perplexity-transports.md)
+for the distinct registered Responses proof and missing native Search client codec.
 
 Sonar support ended September 27, 2026. Its synchronous and streaming requests
 continue through Agent reformulation. Asynchronous Sonar requests are unsupported.
@@ -63,9 +64,10 @@ The current primary Search price card is more specific: each successful standard
 request costs 5,000 micro-USD, or 1,000 for `search_type: fast`. An array of up to
 five queries is one request, an empty successful result is billable, and rejected
 or failed requests are not billed. Extracted-content token limits do not change
-this price. These evidence values are fixtures, not an installed runtime tariff.
-11.1/11.3 own native success-qualified request pricing and its admission/settlement
-integration; until then the existing conservative guard remains.
+this price. The bundled Search declaration now activates these dated rates. Complete native
+results qualify success; recognized rejection qualifies zero, and unknown or
+interrupted delivery retains its original reservation. HTTP status alone is not
+a success receipt.
 
 ## Source-owner handoff and proof
 
@@ -88,10 +90,9 @@ integration; until then the existing conservative guard remains.
 
 `worker/test/perplexity-native-observation.test.mjs` executes existing usage
 observers without dependencies. `worker/test/perplexity-native-transport.test.mjs`
-executes the real Worker with candidate endpoints injected only into the test
-snapshot. It checks body/result/SSE preservation, credential substitution,
-policy-fixed charges and zero-egress hard-budget denial. This candidate injection
-does not activate the bundled manifest or certify the OpenClaw consumer.
+executes the real Worker with the bundled generated snapshot. It checks body/result/SSE preservation, credential substitution,
+policy-fixed charges and zero-egress hard-budget denial. This proves manifest activation, not an OpenClaw Search/Agent consumer. The
+Workerd Responses fixture also executes the native Agent route separately.
 
 ## Primary sources
 

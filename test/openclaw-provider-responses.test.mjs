@@ -14,17 +14,18 @@ import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
-for (const phase of ["xai", "openrouter"]) {
-const xai = phase === "xai", modelId = xai ? "grok-4.7" : "openai/gpt-6.1-terra";
+for (const phase of ["xai", "openrouter", "perplexity"]) {
+const xai = phase === "xai", perplexity = phase === "perplexity";
+const modelId = xai ? "grok-4.7" : perplexity ? "openai/gpt-5.6-sol" : "openai/gpt-6.1-terra";
 const cases = [
-  ...["stream", "replay", "no_effort", "image", "low", "error", "cancel", ...(xai ? ["priority", "long", "priority_long", "unknown_bill"] : ["chat"])].map(id => ({ id, model: modelId, image: id === "image", max: 128 })),
-  ...["invalid", "foreign", "budget", "model_denied", ...(xai ? ["stored", "hosted"] : ["unpriced"])].map(id => ({ id, model: modelId, max: 128, denied: true })),
+  ...["stream", "replay", "no_effort", ...(!perplexity ? ["image"] : []), "low", "error", "cancel", ...(xai ? ["priority", "long", "priority_long", "unknown_bill"] : perplexity ? [] : ["chat"])].map(id => ({ id, model: modelId, image: id === "image", max: 128 })),
+  ...["invalid", "foreign", "budget", "model_denied", ...(xai ? ["stored", "hosted"] : perplexity ? ["unpriced", "stored", "stale"] : ["unpriced"])].map(id => ({ id, model: modelId, max: 128, denied: true })),
 ];
 const charged = cases.filter(row => !row.denied), ownerId = id => "responses_" + id;
 const token = id => id === "invalid" ? "clawrouter-live-responses_stream-invalid" : `clawrouter-live-responses_${id}-fixture-secret`;
 const secret = id => "synthetic-responses-" + id;
-const upstreamBase = xai ? "https://api.x.ai/v1" : "https://openrouter.ai/api/v1";
-const upstreamUrl = upstreamBase + "/responses", nativeBase = "/v1/native/" + phase + "/v1";
+const upstreamBase = xai ? "https://api.x.ai/v1" : perplexity ? "https://api.perplexity.ai/v1" : "https://openrouter.ai/api/v1";
+const upstreamUrl = upstreamBase + "/responses", nativeBase = perplexity ? "/v1" : "/v1/native/" + phase + "/v1";
 const nativePath = nativeBase + "/responses";
 const pathFor = id => nativeBase + (id === "chat" ? "/chat/completions" : "/responses");
 const urlFor = id => upstreamBase + (id === "chat" ? "/chat/completions" : "/responses");
@@ -40,7 +41,7 @@ const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
 const assembledFixture = fixtureText.replace(marker, observerSource);
 
-const workerOutcomePins = {"proxy.ts": "b1a8d68993b406b5660ebff0cd3b94e6d11cd0dccbafb7a22d50ec5bec2d483f", "proxy-response.ts": "d612c0a2181c145c6cc4761b82053d04454bb009c872dd2996595a202c9b2b0f", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "b1a8d68993b406b5660ebff0cd3b94e6d11cd0dccbafb7a22d50ec5bec2d483f", "proxy-response.ts": "b938ae532df851af62d90c5cb0e8dfa68fb88ed2a15e75f384ff3ca336fb1227", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
@@ -96,9 +97,11 @@ function assertProof(proof) {
   assert.equal(proof.rejected, proof.qualifiedReadRejections ?? 0);
 }
 
-function routerFixture() {
+function routerFixture(native = false, agent = false) {
+  const ingressBase = agent ? "/v1/native/perplexity/v1" : nativeBase;
+  const ingressPath = agent ? ingressBase + "/agent" : nativePath;
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-import { putGrantCredentials } from "./worker/grant-credentials.ts";
+import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
 import { qianfanOutcome } from "qianfan-outcome-witness";
 ${observerCode}
@@ -108,8 +111,8 @@ const lifetime = createLifetimeObserver(undefined, { ownerId: "responses_cancel"
 qianfanOutcome.current = createWorkerOutcomeWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation);
 for (const row of cases) {
   const id = "responses_" + row.id;
-  ingress.expect(id, "chat", ${JSON.stringify(nativeBase)} + (row.id === "chat" ? "/chat/completions" : "/responses"), "POST", row.id === "invalid" ? "clawrouter-live-responses_stream-invalid" : "clawrouter-live-" + id + "-fixture-secret");
-  if (!row.denied) outbound.expect(id, "chat", ${JSON.stringify(upstreamBase)} + (row.id === "chat" ? "/chat/completions" : "/responses"), "POST", "synthetic-responses-" + row.id);
+  if (!(${perplexity && native} && row.denied && !["stored", "stale"].includes(row.id))) ingress.expect(id, "chat", ${JSON.stringify(ingressBase)} + (row.id === "chat" ? "/chat/completions" : ${JSON.stringify(agent ? "/agent" : "/responses")}), "POST", row.id === "invalid" ? "clawrouter-live-responses_stream-invalid" : "clawrouter-live-" + id + "-fixture-secret");
+  if (!row.denied) outbound.expect(id, "chat", ${JSON.stringify(upstreamBase)} + (row.id === "chat" ? "/chat/completions" : ${JSON.stringify(agent ? "/agent" : "/responses")}), "POST", "synthetic-responses-" + row.id);
 }
 const originalFetch = globalThis.fetch;
 lifetime.patch(globalThis, "fetch", function (...args) {
@@ -133,20 +136,24 @@ export default { ...handler, fetch(request, env, context) {
     for (const row of cases) if (row.id !== "invalid") await putGrantCredentials(env, "oauth/responses_" + row.id + "/${phase}", { provider: "${phase}", kind: "api_key", enabled: true, credential: "synthetic-responses-" + row.id });
     return new Response(null, { status: 204 });
   })();
+  if (path === "/fixture/revoke" && ${perplexity}) return (async () => {
+    await revokeGrantCredentials(env, "oauth/responses_stale/perplexity", { provider: "perplexity", kind: "api_key" });
+    return new Response(null, { status: 204 });
+  })();
   if (path === "/fixture/retire") return retire(request);
-  if (![${JSON.stringify(nativePath)}, ${JSON.stringify(nativeBase + "/chat/completions")}].includes(path)) return handler.fetch(request, { ...env, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback" }, context);
+  if (![${JSON.stringify(ingressPath)}, ${JSON.stringify(nativeBase + "/chat/completions")}].includes(path)) return handler.fetch(request, { ...env, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback", PERPLEXITY_API_KEY: "must-not-fallback" }, context);
   for (const row of ingress.bindings) if (row.url.startsWith("/")) row.url = new URL(request.url).origin + row.url;
   const owner = ingress.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
   lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
-  return lifetime.invoke("handler", handler.fetch, handler, [request, { ...env, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback" }, context], owner);
+  return lifetime.invoke("handler", handler.fetch, handler, [request, { ...env, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback", PERPLEXITY_API_KEY: "must-not-fallback" }, context], owner);
 } };`;
 }
 
-function upstreamFixture() {
+function upstreamFixture(agent = false) {
   return `${observerCode}
 const lifetime = createLifetimeObserver(), bindings = createRequestBindings(), calls = [], owners = new Map();
-for (const row of ${JSON.stringify(charged)}) bindings.expect("responses_" + row.id, "chat", ${JSON.stringify(upstreamBase)} + (row.id === "chat" ? "/chat/completions" : "/responses"), "POST", "synthetic-responses-" + row.id);
+for (const row of ${JSON.stringify(charged)}) bindings.expect("responses_" + row.id, "chat", ${JSON.stringify(upstreamBase)} + (row.id === "chat" ? "/chat/completions" : ${JSON.stringify(agent ? "/agent" : "/responses")}), "POST", "synthetic-responses-" + row.id);
 async function serve(request, context, owner) {
   const body = await lifetime.invoke("request.json", request.json, request, [], owner);
   const id = owner.id.slice("responses_".length), call = { id, url: request.url, authorization: request.headers.get("authorization"), body, cancelled: false, expired: false };
@@ -238,12 +245,12 @@ async function setup(mf) {
   return origin;
 }
 
-async function verifyCallsAndUsage(mf, origin, native) {
+async function verifyCallsAndUsage(mf, origin, native, agent = false) {
   const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
   assert.deepEqual(calls.map(call => call.id).sort(), charged.map(row => row.id).sort(), "actual dispatch count, including SDK recovery, must match original invocations");
   for (const call of calls) {
     const row = cases.find(row => row.id === call.id); assert.ok(row);
-    assert.equal(call.url, urlFor(row.id)); assert.equal(call.authorization, "Bearer " + secret(row.id));
+    assert.equal(call.url, agent ? upstreamBase + "/agent" : urlFor(row.id)); assert.equal(call.authorization, "Bearer " + secret(row.id));
     assert.equal(call.body.model, modelId); assert.equal(call.body.stream, true); assert.equal(call.expired, false);
     if (row.id === "chat") assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, 128);
     else {
@@ -271,9 +278,10 @@ async function verifyCallsAndUsage(mf, origin, native) {
     let usage;
     for (let attempt = 0; attempt < 150; attempt++) {
       usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json();
-      if (usage.usage.events.length === 1) break;
+      if (usage.usage.events.length === 1 || native && perplexity && row.denied && !["stored", "stale"].includes(row.id)) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
+    if (native && perplexity && row.denied && !["stored", "stale"].includes(row.id)) { assert.equal(usage.usage.events.length, 0, row.id + " catalog denial has no inference attempt"); continue; }
     assert.equal(usage.usage.events.length, 1, row.id + " authenticated attempt receipt");
     const [event] = usage.usage.events;
     assert.equal(event.credential_id, ownerId(row.id)); assert.equal(event.policy_id, ownerId(row.id));
@@ -309,6 +317,15 @@ test(phase + " Responses owned cleanup preserves falsey failures and attempts in
   assert.deepEqual(attempts, [1, 2]);
 });
 
+test(phase + " Responses cancellation selects the POST owner despite an earlier same-case catalog request", () => {
+  const begin = fixtureText.indexOf("function cancellationOwner("), end = fixtureText.indexOf("// END RESPONSES CANCELLATION OWNER");
+  assert.ok(begin >= 0 && end > begin);
+  const select = new Function("assert", stripTypeScriptTypes(fixtureText.slice(begin, end)) + "; return cancellationOwner;")(assert);
+  const catalog = { id: "cancel", kind: "catalog", method: "GET" }, post = { id: "cancel", kind: "chat", method: "POST" };
+  assert.equal(select([catalog, post]), post); assert.equal(select([post, catalog]), post);
+  for (const rows of [[], [catalog], [{ ...post, id: "foreign" }], [{ ...post, method: "GET" }], [post, { ...post }]]) assert.throws(() => select(rows));
+});
+
 test(phase + " Responses request bindings reject foreign credentials, duplicate claims and missing original calls", () => {
   const bindings = createRequestBindings(); bindings.expect("card", "chat", upstreamUrl, "POST", "synthetic");
   assert.throws(() => bindings.claim(upstreamUrl, { method: "POST", headers: { authorization: "Bearer foreign" } }, "chat"));
@@ -327,8 +344,8 @@ test(phase + " Responses native assembly uses the exact owned observer and a uni
   assert.equal(workflow.jobs.consumer.strategy["max-parallel"], 4);
   const provider = snapshot.providers.find(row => row.id === phase);
   assert.ok(provider.models.some(row => row.upstream === modelId));
-  assert.equal(provider.models[0].upstream, xai ? "grok-4.3" : "openrouter/auto");
-  assert.equal(cases.length, xai ? 17 : 13);
+  assert.equal(provider.models[0].upstream, xai ? "grok-4.3" : perplexity ? "sonar-pro" : "openrouter/auto");
+  assert.equal(cases.length, xai ? 17 : perplexity ? 13 : 13);
 });
 
 test(phase + " Responses original reader rejection and independent release errors remain fatal", async () => {
@@ -394,20 +411,25 @@ test(phase + " Responses source proof joins actual early and pending-pull cancel
 
 function requestBody(row) {
   const body = row.id === "chat" ? { model: modelId, messages: [{ role: "user", content: "synthetic Responses fixture" }], stream: true, max_tokens: 128 }
-    : { model: modelId, input: [{ role: "user", content: [{ type: "input_text", text: "synthetic Responses fixture" }] }], store: false, stream: true, max_output_tokens: 128,
+    : { model: perplexity ? phase + "/" + modelId : modelId, input: [{ role: "user", content: [{ type: "input_text", text: "synthetic Responses fixture" }] }], store: false, stream: true, max_output_tokens: 128,
       reasoning: { effort: row.id === "low" ? "low" : "high" }, ...(row.id === "priority" || row.id === "priority_long" ? { service_tier: "priority" } : {}) };
   if (row.id === "stored") body.previous_response_id = "resp_unknown_stored";
   if (row.id === "hosted") body.tools = [{ type: "web_search" }];
   return body;
 }
 
-test(phase + " Responses real Worker pricing, denials, fragmented responses and cancellation retire independently", { timeout: 120_000 }, async () => {
+for (const agent of perplexity ? [false, true] : [false]) test(phase + (agent ? " native Agent" : " Responses") + " real Worker pricing, denials, fragmented responses and cancellation retire independently", { timeout: 120_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-responses-worker-")); let mf, accepted = false;
   await preserveFailures(async () => {
-    mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture()), upstreamFixture()); const origin = await setup(mf);
+    mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture(false, agent)), upstreamFixture(agent)); const origin = await setup(mf);
     for (const row of cases) {
+      if (row.id === "stale") {
+        const catalog = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer " + token(row.id) } });
+        assert.equal(catalog.status, 200); assert.ok(JSON.stringify(await catalog.json()).includes(phase + "/" + modelId));
+        assert.equal((await fetch(origin + "/fixture/revoke")).status, 204);
+      }
       const controller = new AbortController();
-      const response = await fetch(origin + pathFor(row.id), { method: "POST", signal: controller.signal, headers: { authorization: "Bearer " + token(row.id), "content-type": "application/json" }, body: JSON.stringify(requestBody(row)) });
+      const response = await fetch(origin + (agent ? "/v1/native/perplexity/v1/agent" : pathFor(row.id)), { method: "POST", signal: controller.signal, headers: { authorization: "Bearer " + token(row.id), "content-type": "application/json" }, body: JSON.stringify(requestBody(row)) });
       if (row.denied) { assert.ok(response.status >= 400, row.id); await response.text(); continue; }
       assert.equal(response.status, 200, row.id);
       if (row.id === "cancel") {
@@ -416,7 +438,7 @@ test(phase + " Responses real Worker pricing, denials, fragmented responses and 
         const originalRead = reader.read(); controller.abort(); await Promise.allSettled([originalRead, reader.closed]); reader.releaseLock();
       } else assert.match(await response.text(), row.id === "stream" ? /synthetic-encrypted-reasoning/ : /synthetic-answer/);
     }
-    await verifyCallsAndUsage(mf, origin, false); accepted = true;
+    await verifyCallsAndUsage(mf, origin, false, agent); accepted = true;
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 
@@ -425,8 +447,8 @@ async function runNative(t, fixture, origin, invoke = runOpenClawConsumer) {
     const observed = new Proxy(t, { get(target, key, receiver) { if (key !== "diagnostic") return Reflect.get(target, key, receiver);
       return text => { receipts += text.split("\n").filter(line => line.trim() === "RESPONSES_CANCEL_RETIRED " + phase).length; replays += text.split("\n").filter(line => line.trim() === "RESPONSES_REPLAY_RETIRED " + phase).length; t.diagnostic(text); };
     } });
-    await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/" + phase + "/worker-responses-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_RESPONSES_PHASE: phase, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } });
+    await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/" + (perplexity ? "clawrouter" : phase) + "/worker-responses-contract.test.ts",
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_RESPONSES_PHASE: phase, XAI_API_KEY: "must-not-fallback", OPENROUTER_API_KEY: "must-not-fallback", PERPLEXITY_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } });
     assert.equal(receipts, 1, "actual native cancellation and independent SDK cleanup receipt");
     assert.equal(replays, 1, "actual two-turn registered replay receipt");
 }
@@ -435,7 +457,7 @@ test(phase + " Responses native runner binds its phase, credentials and exact ca
   const origin = "https://fixture.example";
   const invoke = lines => async (context, options) => {
     assert.equal(options.sourceHead, sourceHead);
-    assert.equal(options.testPath, "extensions/" + phase + "/worker-responses-contract.test.ts");
+    assert.equal(options.testPath, "extensions/" + (perplexity ? "clawrouter" : phase) + "/worker-responses-contract.test.ts");
     assert.equal(options.env.CLAWROUTER_RESPONSES_PHASE, phase);
     assert.equal(options.env.CLAWROUTER_CONTRACT_ORIGIN, origin);
     assert.equal(options.env.XAI_API_KEY, "must-not-fallback");
@@ -453,7 +475,7 @@ test(phase + " Responses native runner binds its phase, credentials and exact ca
 test(phase + " actual registered Responses native SDK through Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-responses-sdk-")); let mf, accepted = false;
   await preserveFailures(async () => {
-    mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture()), upstreamFixture()); const origin = await setup(mf);
+    mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture(true)), upstreamFixture()); const origin = await setup(mf);
     const fixture = join(temporary, "responses-contract.test.ts"); await writeFile(fixture, assembledFixture, { flag: "wx", mode: 0o600 });
     await runNative(t, fixture, origin);
     await verifyCallsAndUsage(mf, origin, true); accepted = true;
