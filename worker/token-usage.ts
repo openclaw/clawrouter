@@ -18,7 +18,7 @@ export interface UsageTokens {
   billedTokens?: { input: number | null; output: number | null };
 }
 
-export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string; pricedModel?: string }
+export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string; pricedModel?: string; googleCandidates?: number | null }
 
 export function extractUsageTokens(value: unknown, context?: Readonly<UsageTokenContext>): UsageTokens | null {
   const root = record(value);

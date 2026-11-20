@@ -1,3 +1,4 @@
+import { googleCandidateCount } from "./google-hop-billing.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure } from "./identity-admission.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
@@ -1430,6 +1431,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
   const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format,
+    googleCandidates: selection.endpoint.response_format === "google.stream_generate_content" ? googleCandidateCount(selection.body) : undefined,
     pricedModel: cost.basis === "manifest_pricing" ? selection.model?.upstream : undefined });
   let observed!: ReturnType<typeof observeUsage>;
   const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
