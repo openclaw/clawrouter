@@ -1,0 +1,30 @@
+{
+  "name": "@clawrouter/provider-plugin-contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./service-provider.schema.json": "./dist/service-provider.schema.json"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "description": "Data-only contracts for ClawRouter provider packages and conformance fixtures",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node copy-manifest-schema.mjs",
+    "prepack": "pnpm run build"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

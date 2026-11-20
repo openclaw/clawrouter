@@ -81,20 +81,74 @@ export function createRadiusEventInspector() {
   };
 }
 
-export interface RadiusCatalog extends JsonRecord { baseUrl: string; models: JsonRecord[] }
+// Only fields consumed by the native Radius catalog may cross this boundary.
+// Catalog prices remain metadata; they never become Router billing tariffs.
+function radiusCatalogModel(value: unknown): JsonRecord & { id: string } {
+  const row = record(value);
+  requireRadius(row && text(row.id) && row.id.length > 0 && row.id.length <= 512 && !/[\u0000-\u001f\u007f]/.test(row.id), "catalog_model");
+  const out: JsonRecord & { id: string } = { id: row.id };
+  for (const field of ["name", "enabled", "reasoning", "contextWindow", "maxTokens"] as const) {
+    if (row[field] === undefined) continue;
+    requireRadius(field === "name" ? text(row[field]) && row[field].length > 0 && row[field].length <= 1024
+      : field === "enabled" || field === "reasoning" ? typeof row[field] === "boolean"
+      : count(row[field]) && row[field] > 0, "catalog_" + field);
+    out[field] = row[field];
+  }
+  if (row.input !== undefined) {
+    requireRadius(Array.isArray(row.input) && row.input.length > 0 && row.input.length <= 2
+      && row.input.every(value => value === "text" || value === "image") && new Set(row.input).size === row.input.length, "catalog_input");
+    out.input = [...row.input];
+  }
+  if (row.thinkingLevelMap !== undefined) {
+    const levels = record(row.thinkingLevelMap); requireRadius(levels, "catalog_thinking");
+    const projected: JsonRecord = {};
+    for (const level of ["off", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+      const mapped = levels[level]; if (mapped === undefined) continue;
+      requireRadius(mapped === null || text(mapped) && mapped.length <= 128, "catalog_thinking");
+      projected[level] = mapped;
+    }
+    out.thinkingLevelMap = projected;
+  }
+  if (row.cost !== undefined) {
+    const cost = record(row.cost); requireRadius(cost, "catalog_cost");
+    const rates = (value: unknown): JsonRecord => {
+      const source = record(value); requireRadius(source, "catalog_cost");
+      const projected: JsonRecord = {};
+      for (const field of ["input", "output", "cacheRead", "cacheWrite"]) {
+        requireRadius(typeof source[field] === "number" && Number.isFinite(source[field]) && source[field] >= 0, "catalog_cost");
+        projected[field] = source[field];
+      }
+      return projected;
+    };
+    const projected = rates(cost);
+    if (cost.tiers !== undefined) {
+      requireRadius(Array.isArray(cost.tiers) && cost.tiers.length <= 1024, "catalog_tiers");
+      const thresholds = new Set<number>();
+      projected.tiers = cost.tiers.map(value => {
+        const tier = record(value), threshold = tier?.inputTokensAbove;
+        requireRadius(count(threshold) && Number.isSafeInteger(threshold + 1) && !thresholds.has(threshold), "catalog_tiers");
+        thresholds.add(threshold);
+        return { inputTokensAbove: threshold, ...rates(tier) };
+      });
+    }
+    out.cost = projected;
+  }
+  return out;
+}
+
+export interface RadiusCatalog { baseUrl: string; models: JsonRecord[] }
 export function filterRadiusCatalog(value: unknown, trustedBaseUrl: string, allowed: (model: string) => boolean): RadiusCatalog {
   const root = record(value);
-  requireRadius(root && text(root.baseUrl) && Array.isArray(root.models), "catalog");
+  requireRadius(root && text(root.baseUrl) && root.baseUrl.length <= 8192 && Array.isArray(root.models) && root.models.length <= 8192, "catalog");
   let trusted: URL, endpoint: URL;
   try { trusted = new URL(trustedBaseUrl); endpoint = new URL(root.baseUrl); }
   catch { throw new Error("invalid_radius_catalog_origin"); }
   requireRadius([trusted, endpoint].every(url => url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash) && endpoint.origin === trusted.origin, "catalog_origin");
-  const seen = new Set<string>();
-  const models = root.models.filter(value => {
-    const model = record(value);
-    requireRadius(model && text(model.id) && model.id.length && !seen.has(model.id), "catalog_model");
-    seen.add(model.id);
-    return model.enabled !== false && allowed(model.id);
-  });
-  return { ...root, baseUrl: endpoint.href.replace(/\/+$/, ""), models };
+  const seen = new Set<string>(), models: JsonRecord[] = [];
+  for (const value of root.models) {
+    const model = radiusCatalogModel(value);
+    requireRadius(!seen.has(model.id), "catalog_model"); seen.add(model.id);
+    if (model.enabled !== false && allowed(model.id)) models.push(model);
+  }
+  return { baseUrl: endpoint.href.replace(/\/+$/, ""), models };
 }

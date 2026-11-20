@@ -1,5 +1,5 @@
 {
-  "protocol": "kie.market-jobs",
+  "protocol": "kie.jobs",
   "synthetic": true,
   "request": {
     "method": "POST",

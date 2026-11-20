@@ -54,7 +54,7 @@ test('real source ranges permit the retained profile but keep unrelated settings
   git('init', '-q');
   const base = 'name="fixture"\n', logs = '\n[observability.logs]\nenabled=true\nhead_sampling_rate=1\ninvocation_logs=false\n';
   const blue = commit(base), green = commit(base + logs);
-  assert.deepEqual(inspectSource({ blueSha: blue, greenSha: green, cwd: directory }), { migration: false, unsafe: false, observabilityReconciliation: marker });
+  assert.deepEqual(inspectSource({ blueSha: blue, greenSha: green, cwd: directory }), { migration: false, unsafe: false, nativeControlChanged:true, observabilityReconciliation: marker });
   const migration = commit(base + '\n[[migrations]]\ntag="v1"\nnew_sqlite_classes=["Ledger"]\n' + logs);
   assert.throws(() => inspectSource({ blueSha: blue, greenSha: migration, cwd: directory }), /version-only candidate/, 'plain wrangler deploy can write settings, so lifecycle changes stay separate');
   // Even matching live logs cannot excuse a simultaneous change in these surfaces.
@@ -62,6 +62,6 @@ test('real source ranges permit the retained profile but keep unrelated settings
     '[[routes]]\npattern="fixture.example"\n', '[[tail_consumers]]\nservice="fixture"\n',
     '[triggers]\ncrons=["* * * * *"]\n', '[[queues.consumers]]\nqueue="fixture"\n']) {
     const changed = commit(base + other + logs);
-    assert.throws(() => inspectSource({ blueSha: blue, greenSha: changed, cwd: directory }), /Non-versioned Worker settings/);
+    assert.throws(() => inspectSource({ blueSha: blue, greenSha: changed, cwd: directory }), /non-versioned settings/i);
   }
 });

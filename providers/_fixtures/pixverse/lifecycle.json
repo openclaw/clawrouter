@@ -1,0 +1,34 @@
+{
+  "synthetic": true,
+  "openclawRevision": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7",
+  "protocol": "pixverse.video",
+  "text": {
+    "method": "POST", "path": "/openapi/v2/video/text/generate",
+    "body": { "model": "v6", "prompt": "Synthetic landscape", "duration": 5, "quality": "540p", "aspect_ratio": "16:9", "seed": 0, "generate_audio_switch": false },
+    "response": { "ErrCode": 0, "ErrMsg": "Success", "Resp": { "video_id": 1000000000000001, "credits": 35 } }
+  },
+  "upload": {
+    "method": "POST", "path": "/openapi/v2/image/upload",
+    "multipart": { "image_url": "https://media.example/input.png" },
+    "response": { "ErrCode": 0, "Resp": { "img_id": 1000000000000002, "img_url": "https://media.example/upload.png" } },
+    "requiredBinding": ["caller", "policy", "provider", "region", "credential"]
+  },
+  "image": {
+    "method": "POST", "path": "/openapi/v2/video/img/generate",
+    "body": { "model": "c1", "prompt": "Synthetic image motion", "duration": 5, "quality": "720p", "img_id": 1000000000000002, "motion_mode": "normal" }
+  },
+  "retrieve": { "method": "GET", "path": "/openapi/v2/video/result/${video_id}", "freshTraceIdPerRequest": true, "transientHeaders": ["ai-trace-id"], "identityProbe": "1", "identityProbeIsCallerAuthority": false },
+  "observations": [
+    { "native": { "status": 5, "url": "https://media.example/partial.mp4" }, "terminal": null },
+    { "native": { "status": 1, "url": "https://media.example/result.mp4" }, "terminal": "succeeded" },
+    { "native": { "status": 7 }, "terminal": "failed" },
+    { "native": { "status": 8 }, "terminal": "failed" },
+    { "native": { "status": 6 }, "terminal": null, "observationUnavailable": "deleted" }
+  ],
+  "cancel": { "supported": false },
+  "retention": { "taskSeconds": null, "assetSeconds": null },
+  "billing": {
+    "unit": "credits", "referenceCreditsPerUsd": 225, "actualProviderCostMicrousd": null,
+    "responseCreditsAreFinal": false, "refundRequiresLedgerEvidence": true, "policyFixedIsSeparate": true
+  }
+}

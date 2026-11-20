@@ -4,7 +4,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
-const router = [
+const router = edit => [
+ 'const edit = '+edit+';',
  'import worker from "./worker/index.ts";',
  'export * from "./worker/index.ts";',
  'import { BudgetLedgerObject as Budget, usageStub, ingestUsage } from "./worker/ledgers.ts";',
@@ -14,7 +15,7 @@ const router = [
  ' const path=new URL(request.url).pathname;',
  ' if(path==="/fixture/setup") {',
  '  const stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));',
- '  for(const [path,body] of [["/policies/initialize-all",[{policyId:"fixture",policy:{enabled:true,generation:"g1",providers:["openai"],tenantId:"tenant",monthlyBudgetMicros:20000000,retainRequestContent:false}}]],["/credentials/initialize-all",[{credentialId:"fixture",credential:{enabled:true,secretSha256:await sha256Hex("fixture-key"),policyId:"fixture",policyGeneration:"g1"}}]],["/connections/initialize-all",[{providerId:"openai",enabled:true,monthlyBudgetMicros:20000000}]]]) {const r=await stub.fetch("https://owner"+path,{method:"POST",body:JSON.stringify(body)});if(!r.ok)return r;}',
+ '  for(const [path,body] of [["/policies/initialize-all",[{policyId:"fixture",policy:{enabled:true,generation:"g1",providers:["openai"],tenantId:"tenant",monthlyBudgetMicros:20000000,...(edit?{budgetMode:"soft"}:{}),retainRequestContent:false}}]],["/credentials/initialize-all",[{credentialId:"fixture",credential:{enabled:true,secretSha256:await sha256Hex("fixture-key"),policyId:"fixture",policyGeneration:"g1"}}]],["/connections/initialize-all",[{providerId:"openai",enabled:true,monthlyBudgetMicros:20000000}]]]) {const r=await stub.fetch("https://owner"+path,{method:"POST",body:JSON.stringify(body)});if(!r.ok)return r;}',
  '  return Response.json({ok:true});',
  ' }',
  ' if(path==="/fixture/rows") return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(new URL(request.url).searchParams.get("name"))).fetch("https://budget/rows");',
@@ -23,37 +24,39 @@ const router = [
  ' return worker.fetch(request,{...env,USAGE_QUEUE:{send:event=>ingestUsage(env,event)}},context);',
  '}};',
 ].join("\n");
-const upstream = [
+const upstream = (operation, images) => [
+ 'const operation='+JSON.stringify(operation)+',images='+JSON.stringify(images??null)+';',
  'export default { async fetch(request) {',
- ' if(request.url!=="https://api.openai.com/v1/images/generations")throw Error("unexpected fixture upstream");',
- ' const body=await request.json();if(body.model!=="gpt-image-2.5-flare"||body.stream===true)throw Error("unexpected image contract");',
+ ' if(request.url!=="https://api.openai.com/v1/images/"+operation)throw Error("unexpected fixture upstream");',
+ ' const body=await request.json();if(body.model!=="gpt-image-2.5-flare"||body.stream===true||JSON.stringify(body.images??null)!==JSON.stringify(images))throw Error("unexpected image contract");',
  ' const prefix=JSON.stringify({created:1,data:[{b64_json:"A".repeat(3*1024*1024)}]}).slice(0,-1);',
- ' const suffix=",\\"usage\\":"+JSON.stringify({input_tokens:12,input_tokens_details:{text_tokens:12,image_tokens:0},output_tokens:100,total_tokens:112})+"}";',
+ ' const imageInput=images?100:0; const suffix=",\\"usage\\":"+JSON.stringify({input_tokens:12+imageInput,input_tokens_details:{text_tokens:12,image_tokens:imageInput},output_tokens:100,total_tokens:112+imageInput})+"}";',
  ' const bytes=new TextEncoder().encode(prefix+suffix);let offset=0;',
  ' return new Response(new ReadableStream({pull(c){if(offset===bytes.length)return c.close();const end=Math.min(bytes.length,offset+4096);c.enqueue(bytes.subarray(offset,end));offset=end;}},{highWaterMark:0}),{headers:{"content-type":"application/json"}});',
  '}};',
 ].join("\n");
 
-test("real workerd image routes deliver multi-megabyte base64 and settle both durable SQL ledgers",{timeout:60000},async()=>{
+for(const [operation,imageInput,cost] of [["generations",0,3060],["edits",100,3860]]) test("real workerd image "+operation+" delivers bytes and settles both durable SQL ledgers",{timeout:60000},async()=>{
  // Fresh checkouts do not contain the ignored evidence directory. Own its setup.
  const scratch=join(process.cwd(),".artifacts");
  await mkdir(scratch,{recursive:true});
  const temporary=await mkdtemp(join(scratch,"image-runtime-"));let worker;
  try{
-  worker=await startWorkerdFixture(temporary,router,upstream);
+  const images=operation==="edits"?[{image_url:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9i0AAAAASUVORK5CYII="}]:undefined;
+  worker=await startWorkerdFixture(temporary,router(operation==="edits"),upstream(operation,images));
   assert.equal((await worker.dispatchFetch("https://router.example/fixture/setup")).status,200);
-  for(const path of ["/v1/images/generations","/v1/native/openai/v1/images/generations","/v1/proxy/openai/images_generations"]){
-   const body={model:path.includes("/native/")?"gpt-image-2.5-flare":"openai/gpt-image-2.5-flare",prompt:"synthetic fixture",n:1,size:"1024x1024",quality:"low"};
+  for(const path of ["/v1/images/","/v1/native/openai/v1/images/","/v1/proxy/openai/images_"].map(prefix=>prefix+operation)){
+   const body={model:path.includes("/native/")?"gpt-image-2.5-flare":"openai/gpt-image-2.5-flare",prompt:"synthetic fixture",...(images?{images}:{}),n:1,size:"1024x1024",quality:"low"};
    const response=await worker.dispatchFetch("https://router.example"+path,{method:"POST",headers:{authorization:"Bearer clawrouter-live-fixture-fixture-key","content-type":"application/json"},body:JSON.stringify(path.includes("/proxy/")?{body}:body)});
    assert.equal(response.status,200,await errorBody(response));
-   const result=await response.json();assert.equal(result.data[0].b64_json,"A".repeat(3*1024*1024));assert.equal(result.usage.total_tokens,112);
+   const result=await response.json();assert.equal(result.data[0].b64_json,"A".repeat(3*1024*1024));assert.equal(result.usage.total_tokens,112+imageInput);
   }
   const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();
-  assert.equal(snapshot.summary.requestCount,3);assert.equal(snapshot.summary.actualCostMicros,9180);
-  for(const e of snapshot.events){assert.equal(e.actual_cost_micros,3060);assert.deepEqual(e.image_usage,{text_input_tokens:12,image_input_tokens:0,image_output_tokens:100});assert.equal(e.content_ref,null);}
+  assert.equal(snapshot.summary.requestCount,3);assert.equal(snapshot.summary.actualCostMicros,3*cost);
+  for(const e of snapshot.events){assert.equal(e.actual_cost_micros,cost);assert.deepEqual(e.image_usage,{text_input_tokens:12,image_input_tokens:imageInput,image_output_tokens:100});assert.equal(e.content_ref,null);}
   for(const name of ["tenant:fixture","provider:openai"]){
    const rows=await(await worker.dispatchFetch("https://router.example/fixture/rows?name="+name)).json();
-   assert.equal(rows.length,3);for(const row of rows){assert.equal(row.settled,1);assert.equal(row.reserved_micros,3060);}
+   assert.equal(rows.length,3);for(const row of rows){assert.equal(row.settled,1);assert.equal(row.reserved_micros,cost);}
   }
  }finally{await worker?.dispose();await rm(temporary,{recursive:true,force:true});}
 });

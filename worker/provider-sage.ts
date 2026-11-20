@@ -1,7 +1,8 @@
+import { decisionImageUri } from "./provider-decision-images.ts";
 import { decisionBody, decisionProbability, decisionRecord, decisionUsage, requireDecision } from "./provider-decision-wire.ts";
 import type { UsageInspection } from "./token-usage.ts";
 
-export type SageContent = string | { kind: "list"; value: Array<{ id: string; content: string }> };
+export type SageContent = string | { kind: "image"; media: string; text?: string } | { kind: "list"; value: Array<{ id: string; content: string }> };
 export type SageQuestion = { id: string } & (
   | { kind: "yesno"; instructions: string }
   | { kind: "choice"; instructions: string; options: Array<{ option: string; description?: string | null }> }
@@ -25,7 +26,12 @@ const nullableString = (value: unknown) => value == null || typeof value === "st
 function validateContent(value: unknown): asserts value is SageContent {
   if (typeof value === "string") return;
   const content = decisionRecord(value);
-  requireDecision(content?.kind === "list" && Array.isArray(content.value) && content.value.length >= 2, "sage_content");
+  if (content?.kind === "image") {
+    requireDecision(Object.keys(content).every(key => ["kind", "media", "text"].includes(key)) && (content.text === undefined || typeof content.text === "string"), "sage_image");
+    decisionImageUri(content.media, ["image/png", "image/jpeg", "image/webp"]);
+    return;
+  }
+  requireDecision(content?.kind === "list" && Array.isArray(content.value) && content.value.length >= 2 && content.value.length <= 120, "sage_content");
   const ids = content.value.map(value => {
     const item = decisionRecord(value);
     requireDecision(item && typeof item.id === "string" && item.id.length && typeof item.content === "string", "sage_list_item");
@@ -38,11 +44,11 @@ function validateQuestion(value: unknown, content: SageContent): asserts value i
   requireDecision(question && typeof question.id === "string" && question.id.length, "sage_question");
   requireDecision(question.kind === "tags" ? nullableString(question.instructions) : typeof question.instructions === "string", "sage_instructions");
   if (question.kind === "yesno") return;
-  if (question.kind === "sort") { requireDecision(typeof content !== "string", "sage_sort_content"); return; }
+  if (question.kind === "sort") { requireDecision(typeof content !== "string" && content.kind === "list", "sage_sort_content"); return; }
   const field = question.kind === "choice" ? "options" : question.kind === "scale" ? "levels" : question.kind === "tags" ? "tags" : "";
   requireDecision(field, "sage_question_type");
   const list = question[field];
-  requireDecision(Array.isArray(list) && list.length >= (field === "tags" ? 1 : 2) && list.length <= (field === "levels" ? 26 : 120), "sage_criteria");
+  requireDecision(Array.isArray(list) && list.length >= (field === "tags" ? 1 : 2) && list.length <= (field === "levels" ? 26 : field === "options" && typeof content !== "string" && content.kind === "image" ? 20 : 120), "sage_criteria");
   const ids = list.map(value => {
     const item = decisionRecord(value), id = item?.[field === "options" ? "option" : field === "levels" ? "level" : "id"];
     requireDecision(item && (field === "levels" ? Number.isSafeInteger(id) : typeof id === "string" && id.length) && nullableString(item[field === "tags" ? "name" : "description"]), "sage_criterion");
@@ -72,7 +78,7 @@ function validateAnswer(value: unknown, question: SageQuestion, content: SageCon
   if (!answer || answer.id !== question.id || answer.kind !== question.kind || !decisionRecord(answer.meta) || !result) return false;
   if (question.kind === "yesno") return ["yes", "no", null].includes(result.answer as string | null) && decisionProbability(result.probability);
   if (question.kind === "sort") {
-    if (typeof content === "string" || !Array.isArray(result.sorted)) return false;
+    if (typeof content === "string" || content.kind !== "list" || !Array.isArray(result.sorted)) return false;
     const ids = content.value.map(item => item.id);
     return result.sorted.length === ids.length && new Set(result.sorted).size === ids.length && result.sorted.every(id => ids.includes(id)) && (result.confidence == null || decisionProbability(result.confidence));
   }
@@ -80,7 +86,7 @@ function validateAnswer(value: unknown, question: SageQuestion, content: SageCon
     if (!Array.isArray(result.tags) || result.tags.length !== question.tags.length) return false;
     return result.tags.every((value, index) => {
       const tag = decisionRecord(value);
-      return tag?.id === question.tags[index].id && decisionProbability(tag.probability) && (tag.applies === null || typeof tag.applies === "boolean");
+      return tag?.id === question.tags[index].id && decisionProbability(tag.probability) && (typeof tag.applies === "boolean" || (tag.applies === null && !(typeof content !== "string" && content.kind === "image")));
     });
   }
   const probabilities = result.probabilities;
@@ -108,5 +114,11 @@ export function decodeSageResponse(value: unknown, request: SageRequest | SageBa
   } else if (!validateAnswer(value, request.question, request.content)) return null;
   const tokens = decisionUsage(meta.usage);
   if (meta.usage != null && !tokens) return null;
-  return { response: value as unknown as SageAnswer | SageBatchResponse, inspection: { tokens, outcome: "success" } };
+  const imageTokens = decisionRecord(meta.usage)?.image_tokens;
+  if (imageTokens != null && (!Number.isSafeInteger(imageTokens) || (imageTokens as number) < 0)) return null;
+  const contents = "requests" in request ? request.requests.map(group => group.content) : [request.content];
+  // The native image counter is preserved in the response. Its relationship to
+  // input_tokens is not qualified; never derive a token tariff from a partial sum.
+  const imageUsage = contents.some(content => typeof content !== "string" && content.kind === "image") || (typeof imageTokens === "number" && imageTokens > 0);
+  return { response: value as unknown as SageAnswer | SageBatchResponse, inspection: { tokens: imageUsage ? null : tokens, outcome: "success" } };
 }

@@ -1,0 +1,14 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "resultHeaders": {} },
+  "requests": [
+    { "model": "fal-ai/minimax-music/v2.6", "body": { "prompt": "Quiet piano with soft strings", "lyrics_optimizer": true, "audio_setting": { "sample_rate": 44100, "bitrate": 256000, "format": "mp3" } } },
+    { "model": "fal-ai/ace-step/prompt-to-audio", "body": { "prompt": "Soft instrumental jazz", "instrumental": true, "duration": 30 } },
+    { "model": "fal-ai/stable-audio-25/text-to-audio", "body": { "prompt": "A short piano arpeggio", "seconds_total": 12 } }
+  ],
+  "responses": [
+    { "audio": { "url": "https://assets.example/music.mp3", "content_type": "audio/mpeg", "file_size": 1024 } },
+    { "audio": { "url": "https://assets.example/music.wav", "content_type": "audio/wav" }, "seed": 42, "tags": "jazz", "lyrics": "[inst]" },
+    { "audio": "https://assets.example/stable.wav" }
+  ],
+  "mismatches": { "miniMaxDurationDocumented": false, "stableAudioMaximumSeconds": 190, "aceStepMinimumSeconds": 5, "queueIsDifferentTransport": true }
+}
