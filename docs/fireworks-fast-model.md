@@ -16,10 +16,25 @@ The card therefore qualifies omitted/default/auto/flex at the Fast rate and
 rejects priority or unknown tiers under hard budgets. With no caller output cap,
 it reserves the full context as the output ceiling. This conservative reservation
 is distinct from model facts and can exceed eventual usage. Missing served-tier
-or complete cache evidence retains the conservative reservation; a token count
-alone cannot invent a selected tier or another router's rate.
+evidence retains the conservative reservation. Missing cache counts receive no
+cache discount; complete input/output counts with an observed default tier use
+the full input tariff. Token counts cannot invent a selected tier.
 
 The focused tests exercise model remapping, default preservation, cache billing,
 service-tier admission and unknown model isolation. They do not establish live
 provider entitlement, authenticated request success or native client parity.
-Generated snapshot integration is serialized separately.
+
+The registered-client contract pins OpenClaw `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`.
+Its frozen Fireworks catalog has a 256,000-token context and output limit; the
+Router card's 1,048,576-token reservation ceiling is a separate conservative
+accounting fact, not a claim about the SDK catalog or a provider output limit.
+The fixture preserves that catalog and uses its supported custom Worker base URL.
+The official-origin-only Fireworks header-cache wrapper correctly returns no
+wrapper for this URL; its execution is not claimed. Cache evidence comes from
+the actual SSE usage fields, and explicit tiers use the public payload hook.
+
+The dedicated consumer checks registered selection, captured-provider scoped
+tool-history sanitation, exact final model/credential/wire, complete cache/tier
+receipts, denied priority/unknown tiers, and independent original SDK, Worker,
+reader, source and accounting retirement. Its cancellation begins after actual
+partial output; it does not qualify physical pre-header disconnect propagation.

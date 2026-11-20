@@ -38,10 +38,11 @@ test("Fireworks Fast uses its own cached tariff and conservative full-context ou
   assert.equal(estimateModelCost(pricing, { messages: [], max_tokens: 16 }, endpoint).outputTokens, 16);
   assert.equal(actualModelCost(pricing, { input: 1000, cached: 500, output: 100, serviceTier: "default" }, endpoint.request_format), 1905);
   assert.equal(actualModelCost(pricing, { input: 1000, cached: 500, output: 100 }, endpoint.request_format), null);
+  assert.equal(actualModelCost(pricing, { input: 1000, cached: null, output: 100, serviceTier: "default" }, endpoint.request_format), 2760);
   assert.equal(snapshot.model_index[model.id].pricing_ref, "fireworks-glm-5p3-fast-2026-11-03");
 });
 
-test("Fireworks Fast admits only qualified standard aliases and denies priority pricing before dispatch", () => {
+test("Fireworks Fast preserves automatic reservation and denies unqualified tiers before dispatch", () => {
   const plain = { messages: [], max_tokens: 16 }, connection = { providerId: provider.id, monthlyBudgetMicros: 10000000 };
   const expected = estimateCost(model, plain, null, "llm.chat", endpoint);
   for (const service_tier of [undefined, "default", "auto", "flex"]) {
@@ -51,6 +52,8 @@ test("Fireworks Fast admits only qualified standard aliases and denies priority 
     assert.equal(estimateModelCost(model.pricing, { ...plain, service_tier }, endpoint).pricingAvailable, undefined);
   }
   assert.ok(expected.reserveMicros > 0);
+  assert.ok(model.pricing.serviceTiers.every(tier => !tier.aliases.includes("auto")));
+  assert.equal(actualModelCost(model.pricing, { input: 1000, cached: 500, output: 100, serviceTier: "auto" }, endpoint.request_format), null);
   for (const service_tier of ["priority", "fast", "future"]) {
     const cost = estimateCost(model, { ...plain, service_tier }, null, "llm.chat", endpoint);
     assert.equal(cost.basis, "unpriced_service_tier");
