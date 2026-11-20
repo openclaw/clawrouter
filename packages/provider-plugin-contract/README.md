@@ -27,6 +27,11 @@ name from ESM JavaScript or TypeScript:
 import {
   parseProviderPluginDescriptor,
   parseProviderConformanceScenario,
+  bindingSupportsOperation,
+  productSupportsBinding,
+  transportForGrant,
+  type ProviderBindingGrant,
+  type ProviderBindingRequirement,
   type ProviderPluginDescriptor,
   type ProviderPackageIndex,
   type ProviderProduct,
@@ -57,6 +62,12 @@ manifest compiler, package loader, conformance runner, or provider assets.
 are static declarations. `ProviderGrantKind` retains the legacy `api_key`,
 `oauth`, and `subscription` credential classifications. Neither declares
 protocol support, admission, live entitlement, or an executable offer.
+
+`bindingSupportsOperation`, `productSupportsBinding`, and `transportForGrant`
+provide the same static product/transport checks used by ClawRouter. They inspect
+compiled declarations and a credential classification without I/O or mutation.
+A positive result is compatibility only: the host must still check provider
+qualification, credential ownership, policy, entitlement, quota, and budgets.
 
 `AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
 `CompiledGrantTransport` describe host configuration. They do not store runtime

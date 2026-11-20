@@ -411,6 +411,19 @@ Do not offer an unrestricted `handleRequest(env)` hook: it would bypass policy,
 tenant isolation, credential ownership, accounting, and output controls. Package
 metadata must never determine its own secret, network, or storage permissions.
 
+## Static binding compatibility
+
+The portable package exports `transportForGrant`, `bindingSupportsOperation`,
+and `productSupportsBinding`, with `ProviderBindingGrant` and
+`ProviderBindingRequirement` input types. These are the same implementations
+used through `shared/provider-bindings.ts` in ClawRouter.
+
+Use them to inspect a compiled product's endpoint allowlist, transport, lifecycle
+links, and HTTP/WebSocket compatibility. They do not load credentials, perform
+I/O, or authorize execution. A compatible result still requires the host's
+provider-specific qualification, credential, policy, quota, and budget checks.
+The full offer resolver remains in the Worker.
+
 ## Catalogue references
 
 A model entry can name its intended shared catalogue row:
