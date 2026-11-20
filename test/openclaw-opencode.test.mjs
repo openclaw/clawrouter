@@ -70,6 +70,20 @@ function assertSessionRelations(calls) {
   assert.notEqual(first.session, conversation.session, "another conversation must not share the derived session");
   assert.notEqual(first.session, credential.session, "another selected credential must not share the derived session");
 }
+function assertMessagesPrefill(provider, body) {
+  if (provider !== "opencode") {
+    assert.equal(body.messages.at(-1).role, "assistant", "non-Claude Messages prefill remains labelled");
+    return;
+  }
+  // Claude 5 removes unsupported trailing assistant prefill before transport.
+  // Require the original user turn to survive, not merely the absence of an assistant.
+  assert.equal(body.messages.length, 1, "Claude 5 must remove only the authored prefill");
+  const message = body.messages[0]; assert.equal(message.role, "user");
+  const text = typeof message.content === "string" ? message.content : message.content.map(block => {
+    assert.equal(block.type, "text"); return block.text;
+  }).join("");
+  assert.equal(text, "synthetic OpenCode prefill");
+}
 function assertReasoningReplay(input) {
   const reasons = input.filter(item => item.type === "reasoning"); assert.equal(reasons.length, 1);
   assert.equal(reasons[0].encrypted_content, "synthetic-encrypted");
@@ -230,7 +244,7 @@ export default { fetch(request, env, context) {
         assert.equal(tool.parameters.properties.labels.type, "array", "actual Console dynamic-record rewrite");
         if (row.id === "dynamic_replay") { const callItem = call.body.input.find(item => item.type === "function_call"); assert.equal(callItem.name, "openclaw_web_search"); assert.deepEqual(JSON.parse(callItem.arguments), { labels: [{ key: "topic", value: "synthetic" }] }); }
       }
-      if (row.id === "prefill") assert.equal(call.body.messages.at(-1).role, "assistant", "actual Messages prefill remains labelled");
+      if (row.id === "prefill") assertMessagesPrefill(provider, call.body);
       if (row.id === "replay") {
         if (protocol === "messages") {
           const blocks = call.body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
@@ -448,4 +462,17 @@ test("OpenCode quarantine trigger requires original owned nonempty transport pro
     assert.equal(controller.signal.aborted, mode === "owned", mode); assert.equal(seen.length, mode === "owned" ? 1 : 0, mode);
     if (mode === "owned") { callback(owner, value); assert.equal(seen.length, 1); }
   }
+});
+
+
+test("OpenCode Claude prefill removal preserves the exact user turn and other Messages contracts", () => {
+  const user = { role: "user", content: [{ type: "text", text: "synthetic OpenCode prefill" }] };
+  const assistant = { role: "assistant", content: [{ type: "text", text: "Synthetic prefill" }] };
+  assertMessagesPrefill("opencode", { messages: [user] });
+  assertMessagesPrefill("opencode", { messages: [{ ...user, content: "synthetic OpenCode prefill" }] });
+  assertMessagesPrefill("opencode-go", { messages: [user, assistant] });
+  for (const messages of [[], [assistant], [user, assistant], [user, user], [{ ...user, content: "foreign" }], [{ ...user, content: [] }], [{ ...user, content: [{ type: "thinking", text: "synthetic OpenCode prefill" }] }]]) {
+    assert.throws(() => assertMessagesPrefill("opencode", { messages }));
+  }
+  assert.throws(() => assertMessagesPrefill("opencode-go", { messages: [user] }));
 });

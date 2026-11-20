@@ -89,6 +89,8 @@ Responses replay preserves the actual ciphertext while checking SDK canonicaliza
 (removal of reasoning item IDs and clear summaries); it does not require whole-item
 byte identity. Shared-credential requests retain distinct original request owners
 and match SQLite events to the request IDs returned by those original handlers.
+Console Claude 5 removes unsupported assistant prefill while preserving the original
+user turn; the Go Messages prefill contract is checked separately.
 Console Claude 5 cancellation starts after nonempty bytes from the bound original
 transport while public output remains quarantined; it is not public post-delta
 cancellation. Other cases cancel after public content. Neither qualifies physical
