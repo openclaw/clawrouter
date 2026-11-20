@@ -73,7 +73,7 @@ budget denial, HTTP rejection, cancellation and one settlement. The shared
 `opencode-session` tests preserve principal/product/grant isolation.
 
 The integration harness `test/openclaw-opencode.test.mjs` pins OpenClaw
-`3ee10cbd698e44369444f27102474594df23ecce`. It calls the registered ClawRouter
+`0bc78154386d7df5d07feefca13441cd582ab3d6`. It calls the registered ClawRouter
 catalog and both real stream hooks, through Worker and SQLite. Native offers are
 selected normally. Unified Chat/Responses cases remove native offers from the
 actual credential-scoped catalog; they do not invent positive offers or change
@@ -95,12 +95,13 @@ cancellation. Other cases cancel after public content. Neither qualifies physica
 pre-response propagation. The pinned Go Messages simple client adds its high-thinking
 budget to the requested output allowance; that wire budget is not a vendor limit.
 
-Client hook composition is a separate acceptance boundary. At this pin the
-ClawRouter proxy hooks do not directly compose native Go Kimi reasoning/replay,
-DeepSeek effort or fixed Messages wrappers, nor Console dynamic-record/tool-alias
-restoration. The fixture asserts their actual final wire/results; HTTP success
-alone cannot establish that parity. Runtime proof remains pending until this
-exact candidate's native workflow completes. No client source is patched here.
+Client hook composition is a separate acceptance boundary. This pin composes
+Console Responses dynamic-record/tool-alias restoration and Go Chat DeepSeek V4 Pro
+thinking through the ClawRouter hooks. The fixture still asserts the actual
+wire/results for Kimi replay, Go Messages, error identity and both stream hooks;
+HTTP success alone cannot establish parity. Runtime proof remains pending until
+this exact candidate's native workflow completes. No client source is patched
+here, and this explicit pin is not a claim about the OpenClaw default branch.
 
 The snapshot is regenerated from all bundled manifests. Existing defaults,
 pricing uncertainty, persistent credential owners, accounting and pending-work
