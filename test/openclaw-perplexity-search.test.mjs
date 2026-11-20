@@ -98,11 +98,11 @@ function workerOutcomeOverlay(text, name = "proxy-response.ts") {
       '        if (responseFormat === "perplexity.search") qianfanOutcome.current.readStart(operation, reader);\n        const next = await input.read(() => reader.read());\n        if (responseFormat === "perplexity.search") qianfanOutcome.current.readDone(operation, reader);');
     edit('      } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }',
       '      } catch (error) { if (responseFormat === "perplexity.search") qianfanOutcome.current.failure(operation, reader, error); if (!finished) { finish("failed", error); controller.error(error); } }');
-    edit('    resolve({ ...inspection, delivery,', '    qianfanOutcome.current.inspection(operation, inspection, delivery);\n    resolve({ ...inspection, delivery,');
+    edit('    resolve({ ...inspection, delivery,', '    qianfanOutcome.current.inspection(operation, inspection, delivery);\n    if (responseFormat === "perplexity.search") searchDelivery.current.record(operation, response, delivery);\n    resolve({ ...inspection, delivery,');
     edit('    cancel(reason) { return finish("canceled", reason); },',
       '    cancel(reason) { const prior = qianfanOutcome.current.downstreamStart(operation, reason); try { return finish("canceled", reason); } finally { qianfanOutcome.current.downstreamEnd(operation, prior); } },');
   }
-  return 'import { qianfanOutcome } from "qianfan-outcome-witness";\n' + text;
+  return 'import { qianfanOutcome, searchDelivery } from "qianfan-outcome-witness";\n' + text;
 }
 async function bundleSearchOutcome(contents) {
   const require = createRequire(import.meta.resolve("wrangler/package.json")), { build } = require("esbuild");
@@ -110,7 +110,7 @@ async function bundleSearchOutcome(contents) {
     write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
     plugins: [{ name: "qianfan-first-outcome", setup(build) {
       build.onResolve({ filter: /^qianfan-outcome-witness$/ }, () => ({ path: "witness", namespace: "qianfan" }));
-      build.onLoad({ filter: /.*/, namespace: "qianfan" }, () => ({ contents: "export const qianfanOutcome = { current: undefined };", loader: "js" }));
+      build.onLoad({ filter: /.*/, namespace: "qianfan" }, () => ({ contents: "export const qianfanOutcome = { current: undefined }, searchDelivery = { current: undefined };", loader: "js" }));
       build.onLoad({ filter: /[/\\]worker[/\\](?:proxy|proxy-response|http-operation)\.ts$/ }, args => {
         const name = args.path.split(/[/\\]/).at(-1), source = readFileSync(args.path, "utf8");
         assert.equal(createHash("sha256").update(source).digest("hex"), workerOutcomePins[name]);
@@ -128,13 +128,72 @@ function assertProof(proof) {
   assert.equal(proof.rejected, proof.qualifiedReadRejections ?? 0);
 }
 
+function createSearchDeliveryWitness(lifetime, ingress, outbound, Operation, originalFetch) {
+  const records = new Map();
+  const own = (object, key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) throw new Error("Search witness requires an original data property");
+    return descriptor.value;
+  };
+  const require = (condition, message) => { if (!condition) throw new Error(message); };
+  return {
+    record(operation, response, delivery) {
+      try {
+        require(Object.getPrototypeOf(operation) === Operation.prototype, "foreign Search operation");
+        const signal = own(operation, "signal"), caller = own(operation, "caller");
+        const owners = outbound.filter(owner => owner.signal === signal && owner.claimed);
+        require(owners.length === 1, "Search delivery requires one outbound owner");
+        const owner = owners[0], incoming = owner.ingress;
+        require(ingress.includes(incoming) && incoming.claimed && incoming.signal === caller && incoming.request
+          && owner.id === incoming.id && owner.kind === "chat" && incoming.kind === "chat"
+          && owner.method === "POST" && incoming.method === "POST", "Search ingress/outbound binding changed");
+        const fetched = lifetime.operations.filter(op => op.kind === "fetch" && op.owner === owner);
+        require(fetched.length === 1 && fetched[0].original === originalFetch && fetched[0].pending
+          && fetched[0].state === "fulfilled" && fetched[0].value === response, "Search original response binding changed");
+        require(["complete", "canceled", "failed"].includes(delivery), "unknown Search delivery state");
+        require(!records.has(owner), "duplicate Search delivery observation");
+        records.set(owner, { owner, incoming, operation, response, status: response.status, delivery });
+      } catch (error) { lifetime.errors.push(error); }
+    },
+    snapshot() {
+      const requestIds = new Set();
+      return [...records.values()].map(row => {
+        const handlers = lifetime.operations.filter(op => op.kind === "handler" && op.owner === row.incoming);
+        require(handlers.length === 1 && handlers[0].state === "fulfilled" && handlers[0].pending
+          && handlers[0].operands[0] === row.incoming.request, "Search original ingress handler incomplete");
+        const reply = handlers[0].value, requestId = reply.headers.get("x-clawrouter-request-id");
+        require(typeof requestId === "string" && requestId.length > 0 && requestId.length <= 128
+          && !requestIds.has(requestId) && reply.status === row.status, "Search request ID/status binding changed");
+        requestIds.add(requestId);
+        return { id: row.owner.id, requestId, status: row.status, delivery: row.delivery };
+      });
+    },
+  };
+}
+
+function freeSearchEnvelope(id) {
+  assert.ok(["invalid_request", "rate_limit"].includes(id));
+  return { error: { message: id === "invalid_request" ? "synthetic invalid request" : "synthetic rate limit", type: id, code: status(id) } };
+}
+
+function searchExpectedReceipt(id, delivery) {
+  if (["invalid_request", "rate_limit"].includes(id)) {
+    assert.ok(delivery && delivery.id === ownerId(id) && delivery.status === status(id), id + " exact free-error delivery binding");
+    assert.ok(["complete", "canceled", "failed"].includes(delivery.delivery), id + " known raw delivery");
+    return delivery.delivery === "complete" ? { cost: 0, basis: "none" } : { cost: 5000, basis: "manifest_request_reservation" };
+  }
+  return id === "fixed" ? { cost: 7, basis: "policy_fixed" }
+    : { cost: 5000, basis: ["malformed", "error", "cancel", "oversized"].includes(id) ? "manifest_request_reservation" : "manifest_request" };
+}
+
 
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
-import { qianfanOutcome } from "qianfan-outcome-witness";
+import { qianfanOutcome, searchDelivery } from "qianfan-outcome-witness";
 ${observerCode}
+${createSearchDeliveryWitness.toString()}
 const cases = ${JSON.stringify(cases)}, ingress = createRequestBindings(), outbound = createRequestBindings();
 let sourceCancellation, acceptedConsumer = false;
 const lifetime = createLifetimeObserver(undefined, { ownerId: "psearch_cancel", source: () => acceptedConsumer ? sourceCancellation : undefined, outcome: op => qianfanOutcome.current.matches(op) });
@@ -144,6 +203,7 @@ for (const row of cases.filter(row => !row.denied)) {
   outbound.expect("psearch_" + row.id, "chat", "https://api.perplexity.ai/search", "POST", "synthetic-psearch-" + row.id + (row.id === "rotated" ? "-new" : ""));
 }
 const originalFetch = globalThis.fetch;
+searchDelivery.current = createSearchDeliveryWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation, originalFetch);
 lifetime.patch(globalThis, "fetch", function (...args) {
   const owner = outbound.claim(args[0], args[1], "chat");
   owner.ingress = ingress.bindings.find(row => row.id === owner.id && row.claimed);
@@ -169,9 +229,10 @@ export default { ...handler, fetch(request, env, context) {
     return new Response(null, { status: 204 });
   })();
   if (path === "/fixture/retire") return retire(request);
+  if (path === "/fixture/search-deliveries") return Response.json(searchDelivery.current.snapshot());
   if (path !== ${JSON.stringify(searchPath)}) return handler.fetch(request, configured(env), context);
   for (const row of ingress.bindings) if (row.url.startsWith("/")) row.url = new URL(request.url).origin + row.url;
-  const owner = ingress.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
+  const owner = ingress.claim(request, undefined, "chat"); owner.request = request; lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
   lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
   return lifetime.invoke("handler", handler.fetch, handler, [request, configured(env), context], owner);
@@ -195,6 +256,8 @@ async function serve(request, context, owner) {
         ...(id === "spurious" ? { usage: { prompt_tokens: 17, completion_tokens: 19, total_tokens: 36 } } : {}) };
   const wire = id === "cancel" ? '{"id":"synthetic-cancel","results":[' : JSON.stringify(payload);
   const bytes = new TextEncoder().encode(wire); let offset = 0, heartbeat, wake, expiry, controller, complete = false;
+  if (["invalid_request", "rate_limit"].includes(id)) call.response = { status: payload.error.code, bytes: bytes.length,
+    sha256: [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("") };
   let resolveProducer, rejectProducer;
   const producer = new Promise((resolve, reject) => { resolveProducer = resolve; rejectProducer = reject; });
   lifetime.watch("source.completion", producer, owner); context.waitUntil(producer);
@@ -258,29 +321,53 @@ async function verifyCallsAndUsage(mf, origin, native) {
   const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
   assert.deepEqual(calls.map(call => call.id).sort(), charged.map(row => row.id).sort(), "one original selected dispatch per admitted attempt");
   for (const call of calls) {
-    assert.equal(call.url, "https://api.perplexity.ai/search"); assert.equal(call.authorization, "Bearer " + secret(call.id));
-    assert.deepEqual(call.body, { query: call.id === "utf8" ? "界".repeat(2730) + "ab" : "synthetic query", max_results: call.id === "default_count" ? 5 : 2 });
-    assert.equal(call.expired, false); assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
+    assert.equal(call.url, "https://api.perplexity.ai/search", call.id); assert.equal(call.authorization, "Bearer " + secret(call.id), call.id);
+    assert.deepEqual(call.body, { query: call.id === "utf8" ? "界".repeat(2730) + "ab" : "synthetic query", max_results: call.id === "default_count" ? 5 : 2 }, call.id);
+    assert.equal(call.expired, false, call.id); assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
+    if (["invalid_request", "rate_limit"].includes(call.id)) {
+      const bytes = Buffer.from(JSON.stringify(freeSearchEnvelope(call.id)));
+      assert.deepEqual(call.response, { status: status(call.id), bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }, call.id + " original qualified error bytes");
+    }
   }
+  const observedFree = [];
   for (const row of cases.filter(row => row.id !== "invalid")) {
-    let usage;
+    let usage, delivery, expected;
     for (let attempt = 0; attempt < 150; attempt++) {
       usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json();
-      if (row.denied || usage.usage.events.length === 1) break;
+      if (row.denied) break;
+      if (usage.usage.events.length === 1) {
+        if (!delivery) {
+          const response = await fetch(origin + "/fixture/search-deliveries"); assert.equal(response.status, 200, row.id + " delivery witness");
+          const matches = (await response.json()).filter(item => item.id === ownerId(row.id));
+          assert.equal(matches.length, 1, row.id + " one original delivery"); delivery = matches[0];
+          assert.equal(delivery.status, status(row.id), row.id + " original status");
+          assert.equal(usage.usage.events[0].request_id, delivery.requestId, row.id + " exact original request ID");
+          expected = searchExpectedReceipt(row.id, delivery);
+        }
+        // The event is already final. Never poll for its cost to change; only
+        // the independently settled budget may still be catching up.
+        assert.equal(usage.usage.events[0].actual_cost_micros, expected.cost, row.id + " cost for " + delivery.delivery);
+        if (usage.budget.spentMicros === expected.cost) break;
+      }
       await new Promise(resolve => setTimeout(resolve, 20));
     }
-    if (row.denied) { assert.equal(usage.usage.events.length, 0, row.id + " has no search attempt"); assert.equal(usage.budget.spentMicros, 0); continue; }
+    if (row.denied) { assert.equal(usage.usage.events.length, 0, row.id + " has no search attempt"); assert.equal(usage.budget.spentMicros, 0, row.id); continue; }
     assert.equal(usage.usage.events.length, 1, row.id + " attempt-bound receipt");
     const [event] = usage.usage.events;
-    assert.equal(event.provider, "perplexity"); assert.equal(event.model, null); assert.equal(event.capability, "web.search");
-    assert.equal(event.credential_id, ownerId(row.id)); assert.equal(event.policy_id, ownerId(row.id));
-    const unknown = ["malformed", "error", "cancel", "oversized"].includes(row.id), free = ["invalid_request", "rate_limit"].includes(row.id), cost = row.id === "fixed" ? 7 : free ? 0 : 5000;
-    assert.equal(event.actual_cost_micros, cost); assert.equal(usage.budget.spentMicros, cost);
-    assert.equal(event.cost_basis, row.id === "fixed" ? "policy_fixed" : free ? "none" : unknown ? "manifest_request_reservation" : "manifest_request");
-    assert.equal(event.status, status(row.id) >= 500 ? "provider_error" : status(row.id) >= 400 || row.id === "cancel" || native && row.id === "oversized" ? "client_error" : "success");
-    assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
+    assert.equal(event.provider, "perplexity", row.id); assert.equal(event.model, null, row.id); assert.equal(event.capability, "web.search", row.id);
+    assert.equal(event.credential_id, ownerId(row.id), row.id); assert.equal(event.policy_id, ownerId(row.id), row.id);
+    assert.equal(event.request_id, delivery.requestId, row.id + " receipt request ID");
+    assert.equal(event.actual_cost_micros, expected.cost, row.id); assert.equal(usage.budget.spentMicros, expected.cost, row.id + " settled budget");
+    assert.equal(event.cost_basis, expected.basis, row.id + " receipt basis");
+    assert.equal(event.status, status(row.id) >= 500 ? "provider_error" : status(row.id) >= 400 || row.id === "cancel" || native && row.id === "oversized" ? "client_error" : "success", row.id);
+    assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null], row.id);
     assert.doesNotMatch(JSON.stringify(event), /synthetic query|Synthetic snippet|fixture-secret|synthetic-psearch|must-not-fallback/);
+    if (["invalid_request", "rate_limit"].includes(row.id)) {
+      if (!native) assert.equal(delivery.delivery, "complete", row.id + " direct caller drained the qualified error");
+      observedFree.push({ id: row.id, status: delivery.status, delivery: delivery.delivery, cost: event.actual_cost_micros, basis: event.cost_basis });
+    }
   }
+  return observedFree;
 }
 
 async function retire(mf, acceptedConsumer) {
@@ -410,7 +497,53 @@ test(routeKind + " Search original-operation ledger retains rejection and pendin
   let joined = false; const joining = lifetime.join().then(() => { joined = true; });
   await Promise.resolve(); assert.equal(joined, false); release(); await joining; assert.equal(joined, true);
 });
-test(routeKind + " Search actual Worker transport and SQLite request receipts", { timeout: 120000 }, async () => {
+test(routeKind + " Search delivery witness requires exact operation, ingress, response and request ID", () => {
+  const make = () => {
+    class Operation { constructor(signal, caller) { this.signal = signal; this.caller = caller; } }
+    const signal = {}, caller = {}, request = {}, originalFetch = () => {}, promise = Promise.resolve();
+    const incoming = { id: "psearch_invalid_request", kind: "chat", method: "POST", claimed: true, signal: caller, request };
+    const owner = { id: incoming.id, kind: "chat", method: "POST", claimed: true, signal, ingress: incoming };
+    const response = new Response(null, { status: 400 }), reply = new Response(null, { status: 400, headers: { "x-clawrouter-request-id": "synthetic-request-1" } });
+    const fetched = { kind: "fetch", owner, original: originalFetch, pending: promise, state: "fulfilled", value: response };
+    const handler = { kind: "handler", owner: incoming, pending: promise, state: "fulfilled", operands: [request], value: reply };
+    const lifetime = { operations: [fetched, handler], errors: [] }, operation = new Operation(signal, caller);
+    return { witness: createSearchDeliveryWitness(lifetime, [incoming], [owner], Operation, originalFetch), lifetime, operation, response, incoming, owner, fetched, handler, reply };
+  };
+  for (const delivery of ["complete", "canceled", "failed"]) {
+    const row = make(); row.witness.record(row.operation, row.response, delivery);
+    assert.deepEqual(row.lifetime.errors, []);
+    assert.deepEqual(row.witness.snapshot(), [{ id: "psearch_invalid_request", requestId: "synthetic-request-1", status: 400, delivery }]);
+    row.witness.record(row.operation, row.response, delivery); assert.equal(row.lifetime.errors.length, 1);
+  }
+  for (const alter of [
+    row => { row.operation = { ...row.operation }; }, row => { row.operation.signal = {}; }, row => { row.operation.caller = {}; },
+    row => { row.owner.ingress = { ...row.incoming }; }, row => { row.incoming.claimed = false; }, row => { row.owner.id = "foreign"; },
+    row => { row.incoming.method = "GET"; }, row => { row.fetched.value = new Response(null, { status: 400 }); },
+    row => { row.fetched.state = "rejected"; }, row => { row.fetched.pending = undefined; }, row => { row.fetched.original = () => {}; },
+  ]) {
+    const row = make(); alter(row); row.witness.record(row.operation, row.response, "complete");
+    assert.equal(row.lifetime.errors.length, 1); assert.deepEqual(row.witness.snapshot(), []);
+  }
+  for (const alter of [row => { row.handler.operands = [{}]; }, row => { row.handler.state = "pending"; },
+    row => { row.reply.headers.delete("x-clawrouter-request-id"); }, row => { row.handler.value = new Response(null, { status: 429, headers: { "x-clawrouter-request-id": "synthetic-request-1" } }); }]) {
+    const row = make(); row.witness.record(row.operation, row.response, "complete"); alter(row); assert.throws(() => row.witness.snapshot());
+  }
+  const accessor = make(); let reads = 0; Object.defineProperty(accessor.operation, "signal", { get() { reads++; throw undefined; } });
+  accessor.witness.record(accessor.operation, accessor.response, "complete"); assert.equal(accessor.lifetime.errors.length, 1); assert.equal(reads, 0);
+  const falsey = make(); falsey.operation = new Proxy(falsey.operation, { getPrototypeOf() { throw undefined; } });
+  falsey.witness.record(falsey.operation, falsey.response, "complete"); assert.deepEqual(falsey.lifetime.errors, [undefined]);
+});
+test(routeKind + " Search free-error expectation follows independent delivery, never the usage receipt", () => {
+  for (const id of ["invalid_request", "rate_limit"]) {
+    const base = { id: ownerId(id), status: status(id) };
+    assert.deepEqual(searchExpectedReceipt(id, { ...base, delivery: "complete" }), { cost: 0, basis: "none" });
+    for (const delivery of ["canceled", "failed"]) assert.deepEqual(searchExpectedReceipt(id, { ...base, delivery }), { cost: 5000, basis: "manifest_request_reservation" });
+    for (const observation of [undefined, { ...base, delivery: "unknown" }, { ...base, id: "foreign", delivery: "complete" }, { ...base, status: 503, delivery: "complete" }]) {
+      assert.throws(() => searchExpectedReceipt(id, observation));
+    }
+  }
+});
+test(routeKind + " Search actual Worker transport and SQLite request receipts", { timeout: 120000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-psearch-worker-")); let mf, accepted = false;
   await preserveFailures(async () => {
     mf = await startBundledWorkerdFixture(temporary, await bundleSearchOutcome(routerFixture()), upstreamFixture(), { directRouter: true }); const origin = await setup(mf);
@@ -426,7 +559,7 @@ test(routeKind + " Search actual Worker transport and SQLite request receipts", 
         await Promise.allSettled([read, closed]); reader.releaseLock();
       } else await response.arrayBuffer();
     }
-    await verifyCallsAndUsage(mf, origin, false); accepted = true;
+    t.diagnostic("PERPLEXITY_SEARCH_DELIVERY direct-" + routeKind + " " + JSON.stringify(await verifyCallsAndUsage(mf, origin, false))); accepted = true;
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 if (routeKind === "native") test(routeKind + " actual registered Search SDK through Worker and SQLite", { skip: !source, timeout: 300000 }, async t => {
@@ -434,7 +567,7 @@ if (routeKind === "native") test(routeKind + " actual registered Search SDK thro
   await preserveFailures(async () => {
     mf = await startBundledWorkerdFixture(temporary, await bundleSearchOutcome(routerFixture()), upstreamFixture(), { directRouter: true }); const origin = await setup(mf);
     const fixture = join(temporary, "search-contract.test.ts"); await writeFile(fixture, assembledFixture, { flag: "wx", mode: 0o600 });
-    await runNative(t, fixture, origin); await verifyCallsAndUsage(mf, origin, true); accepted = true;
+    await runNative(t, fixture, origin); t.diagnostic("PERPLEXITY_SEARCH_DELIVERY SDK-" + routeKind + " " + JSON.stringify(await verifyCallsAndUsage(mf, origin, true))); accepted = true;
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 }
