@@ -37,13 +37,16 @@ const it = Object.assign((name: string, body: () => unknown) => nativeIt(name, (
   each: (rows: any) => (name: string, body: (...args: any[]) => unknown) => nativeIt.each(rows)(name, (...args) => runCase(() => body(...args))),
 });
 
+function registeredFireworksCatalog(result: Awaited<ReturnType<typeof runProviderStaticCatalog>>) {
+  assert.ok(result && "provider" in result && result.provider, "expected registered Fireworks single-provider catalog");
+  return result.provider;
+}
+
 async function start(id: string, options: { simple?: boolean; apiKey?: string; signal?: AbortSignal; tier?: string } = {}) {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("fireworks");
   const result = await runProviderStaticCatalog({ provider });
-  if (!result || !("providers" in result) || !result.providers?.fireworks) throw new Error("missing registered Fireworks catalog");
-  expect(Object.keys(result.providers)).toEqual(["fireworks"]);
-  const catalog = result.providers.fireworks, row = catalog.models.find(row => row.id === modelId);
+  const catalog = registeredFireworksCatalog(result), row = catalog.models.find(row => row.id === modelId);
   expect(catalog.api).toBe("openai-completions");
   expect(row).toMatchObject({ id: modelId, contextWindow: 256000, maxTokens: 256000, input: ["text"], reasoning: true });
   const configured = { ...catalog, baseUrl: origin + "/v1/native/fireworks/v1", models: [row!] };

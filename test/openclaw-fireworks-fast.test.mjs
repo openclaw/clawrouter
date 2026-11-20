@@ -301,6 +301,15 @@ test(phase + " Fireworks native assembly uses the exact owned observer and a uni
   assert.equal(upstreamUrl, provider.base_urls.default + chat.path);
 });
 
+test(phase + " Fireworks fixture admits the actual registered single-provider catalog by reference", () => {
+  const start = fixtureText.indexOf("function registeredFireworksCatalog("), end = fixtureText.indexOf("async function start(", start);
+  assert.ok(start >= 0 && end > start);
+  const read = new Function("assert", stripTypeScriptTypes(fixtureText.slice(start, end)) + ";return registeredFireworksCatalog;")(assert);
+  const provider = { api: "openai-completions", models: [] };
+  assert.equal(read({ provider }), provider);
+  for (const value of [undefined, null, {}, { providers: { fireworks: provider } }, { provider: null }]) assert.throws(() => read(value));
+});
+
 test(phase + " Fireworks original reader rejection and independent release errors remain fatal", async () => {
   for (const reason of [undefined, new Error("synthetic independent")]) {
     const life = createLifetimeObserver(), owner = {}, response = new Response(new ReadableStream({ start(controller) { controller.error(reason); } }));
