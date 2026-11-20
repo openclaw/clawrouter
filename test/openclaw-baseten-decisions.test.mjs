@@ -11,7 +11,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
-import { basetenGuardPin, basetenGuardPrelude, overlayBasetenGuardSource, restoreBasetenGuardSource, withBasetenGuardObservation } from "./helpers/openclaw-baseten-guard-observer.mjs";
+import { basetenGuardPin, basetenGuardPrelude, overlayBasetenGuardSource, registerBasetenDatabaseOwner, restoreBasetenGuardSource, withBasetenGuardObservation } from "./helpers/openclaw-baseten-guard-observer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "761748e1824e2ee43e886fcce4376c3b20055015";
@@ -274,6 +274,7 @@ test("Baseten runner binds exact source, real registry path, both callsites and 
   assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length); assert.equal(basetenGuardPin, sourceHead);
   const text = readFileSync(fixture, "utf8"); assert.doesNotThrow(() => stripTypeScriptTypes(text));
   assert.match(text, /acquireAgentRunPreparedModelRuntime/); assert.match(text, /createDecisionTool/); assert.doesNotMatch(text, /vi\.spyOn|offers:\s*\[/);
+  assert.match(text, /expect\(isMainThread\)\.toBe\(true\)/);
   const guardContract = "a".repeat(64), bind = async (root, sha, run) => { assert.equal(root, source); assert.equal(sha, hash(readFileSync(fixture))); return run(guardContract); };
   const receipts = ids.map(id => "BASETEN_DECISIONS_RETIRED " + JSON.stringify({ id, acquisitions: 2, reads: 3, readers: 2, releases: 2 }));
   const invoke = lines => async (t, options) => {
@@ -284,6 +285,16 @@ test("Baseten runner binds exact source, real registry path, both callsites and 
   await invokeNative({ diagnostic() {} }, "https://router.example", invoke(receipts), bind);
   for (const lines of [[], receipts.slice(1), [...receipts, receipts[0]], receipts.map(line => line.replace("BASETEN_DECISIONS", "VYDRA_MODELS")), receipts.map(line => line.replace('"releases":2', '"releases":0'))])
     await assert.rejects(invokeNative({ diagnostic() {} }, "https://router.example", invoke(lines), bind));
+});
+
+test("Baseten injected fixture joins the native database owner without changing existing members", () => {
+  const original = 'export const databaseWorkerExtensionTestRoots = ["extensions/memory-core"];\nexport const databaseWorkerExtensionTestFiles = [\n  "extensions/clawrouter/speech-provider.test.ts",\n];\n';
+  const added = '  "extensions/clawrouter/worker-baseten-decisions-contract.test.ts",\n';
+  const output = registerBasetenDatabaseOwner(original);
+  assert.equal(output.split(added).length, 2); assert.equal(output.replace(added, ""), original);
+  assert.throws(() => registerBasetenDatabaseOwner(output), /already has an owner/);
+  assert.throws(() => registerBasetenDatabaseOwner(original + original), /one native database owner list/);
+  assert.throws(() => registerBasetenDatabaseOwner("export const files = [];"), /one native database owner list/);
 });
 
 test("Baseten original ledger retains undefined failures, held work and independent cleanup", async () => {

@@ -56,6 +56,13 @@ and joined originals; falsey observer or cleanup failures remain fatal. Worker
 handler, waitUntil, fetched-reader and source callback lifetimes are independently
 joined. Transport output alone does not prove retirement.
 
+The injected fixture is registered in the pinned client's existing extension
+database-worker owner list. Its native `forks`, `isolate:true` configuration owns
+the real main-thread SQLite broker. The fixture asserts that host boundary;
+neither the broker nor the production main-thread admission check is mocked.
+The temporary test membership and observation source bytes are restored after
+the native runner and all independent cleanup attempts complete.
+
 Predispatch abort is covered. Physical client disconnect before the buffered
 SystemOne response remains separately unqualified on the pinned local runtime;
 the harness does not inject a Worker abort, substitute body cancellation, or

@@ -1,5 +1,6 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import assert from "node:assert/strict";
+import { isMainThread } from "node:worker_threads";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -86,6 +87,7 @@ function observeGuard(module: GuardModule, callee: Function, receiver: unknown, 
   observe("guard", value as Promise<{ response: Response; release: () => Promise<void> }>, installAcquisition, { fn: callee, receiver, args });
 }
 beforeEach(() => {
+  expect(isMainThread).toBe(true);
   activeId = retired = undefined;
   rows.length = tails.length = acquisitions.length = faults.length = readers.length = 0;
   identities.clear(); guardChannel = undefined;

@@ -10,6 +10,8 @@ export const basetenGuardSources = Object.freeze([
   { path: "src/media-understanding/shared.ts", sha256: "712a4fde1ed05f51d22d439ed0ccc5957dc579849c054c5c129bdc2b4977459f" },
   { path: "src/agents/provider-transport-dispatcher-pool.ts", sha256: "fbdb819ace74f9aab0c5d9e9cc7c262e5959687258266f7d011524e8e99cb796" },
   { path: "src/infra/net/fetch-guard.ts", sha256: "b8a2b253eb3c217809e8113e224a0acf37d3cdb111f0c197d7acf03fedc817c8" },
+  { path: "test/vitest/vitest.extension-database-workers-paths.mjs", sha256: "ae3b69bc912842d2be1d87db8f83353113cbdd89d3f7b0dd5cb30f5a4a5ddb8e" },
+  { path: "test/vitest/vitest.extension-database-workers.config.ts", sha256: "cc13534951a95a132d655a34fff027b8ce8d85d6240d3d882759ff367d438cde" },
 ].map(Object.freeze));
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const validHash = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
@@ -58,7 +60,15 @@ export function overlayBasetenGuardSource(bytes, contract, site = "catalog") {
   return Buffer.from(basetenGuardPrelude(contract, site) + source.replace(before, before.replace("fetchWithSsrFGuard({", "__basetenGuardInvoke(fetchWithSsrFGuard, {")));
 }
 
-// The ephemeral CI checkout owns these three held inodes. Keep original bytes in
+export function registerBasetenDatabaseOwner(source) {
+  const anchor = "export const databaseWorkerExtensionTestFiles = [\n";
+  const target = "extensions/clawrouter/worker-baseten-decisions-contract.test.ts";
+  assert.equal(source.split(anchor).length, 2, "one native database owner list");
+  assert.equal(source.includes(target), false, "Baseten fixture already has an owner");
+  return source.replace(anchor, anchor + "  " + JSON.stringify(target) + ",\n");
+}
+
+// The ephemeral CI checkout owns these held inodes. Keep original bytes in
 // memory and restore them even when compilation, execution or observation fails.
 export async function withBasetenGuardObservation(root, fixtureSHA, run) {
   assert.equal(process.env.CI, "true", "Baseten native observation requires its ephemeral CI checkout");
@@ -96,6 +106,12 @@ export async function withBasetenGuardObservation(root, fixtureSHA, run) {
       assert.ok((await read(row.file)).bytes.equals(row.bytes) && same(await lstat(row.path), row.stat));
       row.changed = true; await write(row.file, row.output); row.applied = true;
     }
+    // The injected fixture reaches the real agent SQLite broker. Classify it
+    // through the SDK's existing forks/isolate owner before its native runner
+    // selects a project; preserve every original membership and config byte.
+    const owner = rows[3]; owner.output = Buffer.from(registerBasetenDatabaseOwner(owner.bytes.toString("utf8")));
+    assert.ok((await read(owner.file)).bytes.equals(owner.bytes) && same(await lstat(owner.path), owner.stat));
+    owner.changed = true; await write(owner.file, owner.output); owner.applied = true;
     result = await run(contract);
   } catch (error) { failures.push(error); }
   for (const row of rows.reverse()) {
