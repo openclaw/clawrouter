@@ -73,7 +73,7 @@ budget denial, HTTP rejection, cancellation and one settlement. The shared
 `opencode-session` tests preserve principal/product/grant isolation.
 
 The integration harness `test/openclaw-opencode.test.mjs` pins OpenClaw
-`c85fcaa3a218e4e518009aaf3e636e1c29803c75`. It calls the registered ClawRouter
+`dad3cce339d3173679979a1c92c1a5e3c2c92380`. It calls the registered ClawRouter
 catalog and both real stream hooks, through Worker and SQLite. Native offers are
 selected normally. Unified Chat/Responses cases remove native offers from the
 actual credential-scoped catalog; they do not invent positive offers or change
@@ -104,8 +104,8 @@ Qwen is not subject to the native MiniMax-specific thinking-field removal.
 
 Client hook composition is a separate acceptance boundary. This pin composes
 Console Responses dynamic-record/tool-alias restoration, Go DeepSeek Pro/Flash
-thinking, authority-bound Qwen reasoning admission and request-local replay identity
-through the ClawRouter hooks. The fixture still asserts the actual wire/results
+thinking, authority-bound Qwen reasoning admission, request-local replay identity,
+and the finite Go K2 reasoning-replay filter through the ClawRouter hooks. The fixture still asserts the actual wire/results
 for Kimi replay, Go Messages, error identity and both stream hooks. K3 preserves
 its actual returned reasoning content; a separate K2.7-code first/replay pair
 requires the native Go K2-only stripping policy, with distinct request owners and
