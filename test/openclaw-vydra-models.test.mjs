@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
+import { stripVTControlCharacters } from "node:util";
 import test from "node:test";
 import { parse } from "yaml";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
@@ -27,7 +28,7 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
     source, sourceHead, fixture, testPath: "extensions/vydra/worker-models-contract.test.ts",
     env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract, CLAWROUTER_VYDRA_GUARD_CONTRACT: guardContract },
   }));
-  const lines = diagnostics.join("\n").split("\n").map(line => line.trim());
+  const lines = stripVTControlCharacters(diagnostics.join("\n")).split("\n").map(line => line.trim());
   for (const model of ["kling", "veo3"]) assert.equal(lines.filter(line => line === "VYDRA_MODELS_RETIRED " + model).length, 1, "exact original SDK completion receipt");
 }
 
@@ -47,9 +48,9 @@ test("Vydra native runner binds exact source, fixture, environment, receipt and 
     assert.equal(options.sourceHead, sourceHead); assert.equal(options.fixture.href, fixture.href);
     assert.equal(options.testPath, "extensions/vydra/worker-models-contract.test.ts");
     assert.deepEqual(options.env, { CLAWROUTER_CONTRACT_ORIGIN: "https://router.example", CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_VYDRA_MODELS_CONTRACT: contract, CLAWROUTER_VYDRA_GUARD_CONTRACT: guardContract });
-    t.diagnostic("VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED veo3");
+    t.diagnostic("\u001b[22m\u001b[39mVYDRA_MODELS_RETIRED kling\n\u001b[22m\u001b[39mVYDRA_MODELS_RETIRED veo3");
   }, bind);
-  for (const wrong of ["", "MISTRAL_CANCEL_RETIRED", "VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED kling"]) {
+  for (const wrong of ["", "MISTRAL_CANCEL_RETIRED", "VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED kling", "VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED veo3\n\u001b[22mVYDRA_MODELS_RETIRED kling", "prefix VYDRA_MODELS_RETIRED kling\nVYDRA_MODELS_RETIRED veo3"]) {
     await assert.rejects(invokeNative({ diagnostic() {} }, "https://router.example", async t => t.diagnostic(wrong), bind));
   }
 });
