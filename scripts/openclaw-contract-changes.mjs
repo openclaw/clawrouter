@@ -7,6 +7,7 @@ export function affectsOpenClawContract(path) {
     || path.startsWith("shared/")
     || path.startsWith("packages/provider-plugin-contract/src/")
     || path === "packages/provider-plugin-contract/tsconfig.json"
+    || path === "packages/provider-plugin-contract/copy-manifest-schema.mjs"
     || path.startsWith("providers/")
     || /^test\/openclaw-[^/]*\.test\.mjs$/.test(path)
     || /^test\/fixtures\/openclaw-[^/]*-contract\.test\.ts$/.test(path)

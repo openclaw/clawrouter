@@ -7,7 +7,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./service-provider.schema.json": "./dist/service-provider.schema.json"
   },
   "engines": {
     "node": ">=24"
@@ -20,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node copy-manifest-schema.mjs",
     "prepack": "pnpm run build"
   },
   "devDependencies": {

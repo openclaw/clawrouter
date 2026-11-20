@@ -15,7 +15,11 @@ const tsc = resolve(dirname(typescript), JSON.parse(readFileSync(typescript, "ut
 test("packed plugin contract runs and typechecks outside the repository", t => {
   const root = mkdtempSync(join(tmpdir(), "provider-plugin-package-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const source = join(root, "source"), consumer = join(root, "consumer");
+  const source = join(root, "source/packages/provider-plugin-contract"), consumer = join(root, "consumer");
+  const schemaPath = "providers/_schema/service-provider.schema.json";
+  mkdirSync(dirname(source), { recursive: true });
+  mkdirSync(join(root, "source/providers/_schema"), { recursive: true });
+  cpSync(join(repo, schemaPath), join(root, "source", schemaPath));
   cpSync(join(repo, "packages/provider-plugin-contract"), source, {
     recursive: true, filter: path => !["node_modules", "dist"].includes(path.split(/[\\/]/).at(-1)),
   });
@@ -31,15 +35,20 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   execFileSync("tar", ["-xzf", join(root, archives[0]), "--strip-components=1", "-C", installed], { timeout: 30_000 });
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
-    "LICENSE", "README.md", "dist/bindings.d.ts", "dist/bindings.js", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/models.d.ts", "dist/models.js", "dist/model-availability.d.ts", "dist/model-availability.js", "dist/model-request-parameters.d.ts", "dist/model-request-parameters.js", "dist/native-capabilities.d.ts", "dist/native-capabilities.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js", "dist/snapshot.d.ts", "dist/snapshot.js",
+    "LICENSE", "README.md", "dist/service-provider.schema.json", "dist/bindings.d.ts", "dist/bindings.js", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/models.d.ts", "dist/models.js", "dist/model-availability.d.ts", "dist/model-availability.js", "dist/model-request-parameters.d.ts", "dist/model-request-parameters.js", "dist/native-capabilities.d.ts", "dist/native-capabilities.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js", "dist/snapshot.d.ts", "dist/snapshot.js",
     "dist/observations.d.ts", "dist/observations.js", "dist/quota.d.ts", "dist/quota.js", "dist/package-index.d.ts", "dist/package-index.js", "dist/pricing.d.ts", "dist/pricing.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
+  assert.deepEqual(readFileSync(join(installed, "dist/service-provider.schema.json")),
+    readFileSync(join(repo, schemaPath)), "the archive must contain the exact canonical schema bytes");
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
   assert.deepEqual(manifest.dependencies ?? {}, {});
   assert.equal(manifest.private, true, "local packaging must not enable registry publication");
   writeFileSync(join(consumer, "package.json"), '{"type":"module"}\n');
   writeFileSync(join(consumer, "smoke.mjs"), `
 import assert from "node:assert/strict";
+import schema from "@clawrouter/provider-plugin-contract/service-provider.schema.json" with { type: "json" };
+assert.equal(schema.properties.schema.const, "clawrouter.service-provider.v1");
+assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
 import { parseProviderPluginDescriptor, providerPluginFiles, ProviderPluginContractError,
   isPublishedMusicInputSupport, transportForGrant, bindingSupportsOperation, productSupportsBinding, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
 const descriptor = parseProviderPluginDescriptor({ schema: PROVIDER_PLUGIN_SCHEMA, id: "example", version: "1.0.0",
@@ -67,6 +76,8 @@ assert.equal(bindingSupportsOperation({ ...requirement, responsesLifecycle: true
 `);
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
+import schema from "@clawrouter/provider-plugin-contract/service-provider.schema.json" with { type: "json" };
+const schemaVersion: string = schema.properties.schema.const;
 import { parseProviderPluginDescriptor, bindingSupportsOperation, productSupportsBinding, transportForGrant, type ProviderBindingGrant, type ProviderBindingRequirement, type ProviderPluginDescriptor, type ProviderPackageIndex,
   type ProviderSnapshot, type CompiledProvider, type CompiledModel,
   type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
@@ -169,7 +180,7 @@ declare const execution: ProviderConformanceExecution;
 export { snapshot, provider, compiledModel, model, decision, availability, account, extraUsage, quota, endpoint, fileLinks, modelPrice, requestPrice, descriptor, product, apiKey, transport, authorization, refresh, kind, binding, selection, fullProduct, definition, reference, index, scenario, validation, execution };
 `);
   writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({
-    compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, noEmit: true },
+    compilerOptions: { target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", lib: ["ES2022"], types: [], strict: true, resolveJsonModule: true, noEmit: true },
     files: ["consumer.ts"],
   }));
   execFileSync(process.execPath, [tsc, "--project", "tsconfig.json"], { cwd: consumer, encoding: "utf8", timeout: 30_000, stdio: "pipe" });

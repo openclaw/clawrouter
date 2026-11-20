@@ -4317,7 +4317,7 @@ async function ownershipFixture(overrides = {}) {
 test("ownership actual helpers separate current package observations from frozen materialization", async () => {
   const f = await ownershipFixture(), { plan, contextHash } = await f.run();
   assert.equal(plan.version, 3); assert.equal(plan.current.commit, f.commit); assert.equal(plan.current.tree, f.tree);
-  assert.equal(plan.current.files.length, 24); assert.equal(plan.current.files.filter(row => row.path.startsWith("packages/")).length, 20);
+  assert.equal(plan.current.files.length, 26); assert.equal(plan.current.files.filter(row => row.path.startsWith("packages/")).length, 21);
   assert.equal(plan.current.scope, "observed-not-installed-or-native-qualified");
   assert.equal(plan.frozen.commit, edgeProof.sourceSha); assert.equal(plan.frozen.files.length, 4);
   for (const path of ["pnpm-workspace.yaml", "pnpm-lock.yaml"]) {

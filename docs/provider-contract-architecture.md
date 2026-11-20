@@ -166,6 +166,12 @@ portable package also owns provider-reported account observations.
 shared modules preserve existing imports through compatibility exports.
 Existing account type imports from `shared/contracts.ts` remain available.
 
+The portable archive also exports the canonical service-provider v1 JSON Schema
+as `@clawrouter/provider-plugin-contract/service-provider.schema.json`. Builds
+copy the repository schema unchanged; there is no second authored schema.
+External tooling can validate structure without loading the Worker or compiler.
+Semantic qualification remains with the compiler modules described above.
+
 `packages/provider-plugin-contract/src/snapshot.ts` owns `ProviderSnapshot`,
 `CompiledProvider`, and `CompiledModel`. The graph depends only on sibling
 contracts, without the client API or Worker environment.
