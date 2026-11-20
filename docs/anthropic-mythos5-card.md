@@ -28,4 +28,30 @@ unchanged; this price/metadata change does not certify them.
 
 Tests exercise native payload preservation, separate token counting, all cache
 categories, geography scaling and preflight rejection of unqualified modifiers.
-Snapshot integration and real native-client/Worker acceptance remain separate.
+The generated snapshot includes the metered API card. Subscription offers keep
+exactly their earlier model membership; the new card does not grant entitlement.
+
+## Native qualification boundary
+
+The dedicated `mythos5` consumer uses pinned OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`, its registered Anthropic provider,
+normalization, public Messages stream and selected API-key transport through
+ClawRouter and SQLite. It checks mandatory adaptive thinking and native effort
+mapping, image input, an actual returned signed-thinking/tool turn replayed through
+the captured provider's generation scope, and incompatible-model thinking removal.
+It does not turn a custom Worker URL into official-origin or subscription proof.
+
+Mythos buffers public output until terminal refusal validation. The cancellation
+case therefore aborts the real caller after positive bytes from the exact original
+guarded transport read, while asserting no public text escaped quarantine. It
+joins the original SDK guard/reader/release, Worker handler/accounting and source
+producer/cancel work. It does not claim physical pre-header disconnect propagation.
+Refusal and embedded-error cases must retain empty public output. A failed
+independent observer, restoration, release or producer remains fatal, including an
+undefined rejection reason.
+
+OpenClaw has no registered Anthropic token-counting operation in this pin. The
+separate Worker HTTP count-tokens check proves its route and receipt only: zero
+generation reservation is not zero dispatch or zero usage events. Synthetic
+responses test tariff and geography settlement, not live vendor acceptance or
+account availability. Hosted qualification is required for the final commit.

@@ -59,3 +59,15 @@ test("Mythos 5 standard calls remain priced while unsupported premium modifiers 
     assert.throws(() => validateBudgetReservation("llm.messages", cost, null, connection), error => error.code === "pricing_required");
   }
 });
+
+test("Mythos API membership does not grant subscription entitlement or replace current cards", () => {
+  const api = manifest.products.find(row => row.id === "platform-api");
+  const subscription = manifest.products.find(row => row.id === "claude-subscription");
+  for (const endpoint of ["messages", "count_tokens"]) {
+    assert.ok(api.offers.find(row => row.endpoint === endpoint).models.includes(model.id));
+    assert.ok(!subscription.offers.find(row => row.endpoint === endpoint).models.includes(model.id));
+    assert.deepEqual(api.offers.find(row => row.endpoint === endpoint).models.filter(id => id !== model.id), subscription.offers.find(row => row.endpoint === endpoint).models);
+  }
+  const fable = provider.models.find(row => row.upstream === "claude-fable-5-2");
+  assert.deepEqual([fable.pricing.inputMicrosPerMillion, fable.pricing.outputMicrosPerMillion, fable.pricing.cachedInputMicrosPerMillion, fable.pricing.cacheWrite5mInputMicrosPerMillion, fable.pricing.cacheWrite1hInputMicrosPerMillion, fable.pricing.anthropicModifiers.fastMultiplier], [8000000,40000000,200000,10000000,16000000,2]);
+});
