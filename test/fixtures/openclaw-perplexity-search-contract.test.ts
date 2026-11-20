@@ -38,8 +38,10 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
   const lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => succeeded });
   await preserveFailures(async () => {
     state = await createOpenClawTestState({ prefix: "router-perplexity-search-", applyEnv: true, prepareProfileCatalog: false,
-      env: { OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("..", import.meta.url)), CLAWROUTER_API_KEY: "must-not-fallback", PERPLEXITY_API_KEY: "must-not-fallback",
+      env: { OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("..", import.meta.url)), CLAWROUTER_API_KEY: undefined, PERPLEXITY_API_KEY: "must-not-fallback",
         HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined, http_proxy: undefined, https_proxy: undefined, all_proxy: undefined } });
+    assert.equal(process.env.CLAWROUTER_API_KEY, undefined, "case credential cannot be shadowed by Router environment auth");
+    assert.equal(process.env.PERPLEXITY_API_KEY, "must-not-fallback");
     const token = id === "invalid" ? "clawrouter-live-psearch_standard-invalid" : key(id);
     vi.spyOn(guardedTransport, "fetchWithSsrFGuard").mockImplementation(observedGuard(lifetime, bindings));
     const config = { tools: { web: { search: { provider: "clawrouter", cacheTtlMinutes: 0 } } },
