@@ -19,24 +19,21 @@ function decision() {
       score: { probabilities: "provider-defined", abstention: false, minOptions: 2, maxOptions: 10 },
     }, limits: { maxTotalOptions: 512, maxStateAndQuestionTokens: 16384 } };
 }
-function fixture() {
-  const manifest = structuredClone(existing);
-  manifest.capabilities.push({ id: "llm.decisions", endpoint: "systemone", methods: ["POST"] });
-  manifest.endpoints.systemone = { path: "/systemone", requestFormat: "baseten.systemone", responseFormat: "baseten.systemone" };
-  // Replace the exact fixture-owned decision rows, retaining every Chat card.
-  manifest.models.entries = manifest.models.entries.filter(model => !BASETEN_SYSTEMONE_MODELS.includes(model.upstream));
-  manifest.models.entries.push(...BASETEN_SYSTEMONE_MODELS.map(upstream => ({ id: `baseten/${upstream}`, upstream, capabilities: ["llm.decisions"],
-    nativeCapabilities: { version: "clawrouter.native-capabilities.v1", endpoints: { systemone: {
-      sources: ["https://docs.baseten.co/reference/inference-api/system-one", "https://docs.baseten.co/inference/model-apis/decision-models"],
-      checkedAt: "2026-11-03", input: ["text", "json"], inference: { chat: false, decision: decision() },
-    } } } })));
+function fixture() { return structuredClone(existing); }
+function chatOnly() {
+  const manifest = fixture();
+  manifest.capabilities = manifest.capabilities.filter(row => row.id !== "llm.decisions");
+  delete manifest.endpoints.systemone;
+  for (const model of manifest.models.entries.filter(model => BASETEN_SYSTEMONE_MODELS.includes(model.upstream))) {
+    model.capabilities = []; delete model.nativeCapabilities;
+  }
   return manifest;
 }
 const row = manifest => manifest.models.entries.find(model => model.upstream === BASETEN_SYSTEMONE_MODELS[0]);
 const facts = manifest => row(manifest).nativeCapabilities.endpoints.systemone;
 
 test("Baseten's exact three decision rows preserve Chat and compose the existing base with the native codec path", () => {
-  const original = compile(existing), snapshot = compile(fixture()), provider = snapshot.providers[0];
+  const original = compile(chatOnly()), snapshot = compile(fixture()), provider = snapshot.providers[0];
   assert.deepEqual(snapshot.capability_index["llm.chat"], original.capability_index["llm.chat"]);
   assert.deepEqual(provider.endpoints.find(endpoint => endpoint.id === "chat_completions"), original.providers[0].endpoints.find(endpoint => endpoint.id === "chat_completions"));
   for (const model of existing.models.entries.filter(model => !BASETEN_SYSTEMONE_MODELS.includes(model.upstream))) {
