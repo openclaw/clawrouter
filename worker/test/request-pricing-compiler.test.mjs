@@ -23,6 +23,9 @@ test("successful-request rates preserve units, provenance and native selection s
   assert.equal(search.modelPassthrough, undefined);
   tariff(manifest).parameterRates.rates.fast = 0;
   assert.equal(search.requestPricing.parameterRates.rates.fast, 1000, "compiled tariff must not alias mutable source");
+  const withoutTariff = structuredClone(source);
+  delete withoutTariff.endpoints.search.requestPricing;
+  assert.equal(compile(withoutTariff).providers[0].endpoints.find(e => e.id === "search").requestPricing, undefined, "the compiler must not invent an absent Search tariff");
   const endpoints = compile(source).providers[0].endpoints;
   assert.deepEqual(endpoints.find(e => e.id === "search").requestPricing, source.endpoints.search.requestPricing);
   assert.ok(endpoints.filter(e => e.id !== "search").every(e => e.requestPricing === undefined), "Search activation cannot mint tariffs for other protocols");
