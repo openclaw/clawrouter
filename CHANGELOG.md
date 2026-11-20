@@ -46,6 +46,8 @@
 
 ## Unreleased
 
+- Publish endpoint-specific DeepSeek Flash vision and Pro text facts, canonical reasoning controls and checked price provenance while preserving conservative peak-rate reservations. Add registered custom-base SDK image/thinking/tool-replay, cache settlement, denial and post-content retirement checks; document the pinned default-catalog and low-effort mapping gaps separately.
+
 - Add the five frozen Mistral Chat identities with dated endpoint facts, current Codestral/Small tariffs and conservative full-context reservations. Deprecated identities remain unpriced instead of borrowing replacement tariffs.
 - Add the three frozen Qianfan memory embedding models on the native selected-credential route, with registered SDK 16/17-input scheduler, ordered-output, denial, genuine post-header caller cancellation, retirement and attempt-bound settlement checks. Keep unknown vendor pricing and limits absent.
 
