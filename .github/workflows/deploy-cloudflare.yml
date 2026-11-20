@@ -188,6 +188,9 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       TRAIN_EVIDENCE_DIRECTORY: ${{ github.workspace }}/release-evidence
+      QUALIFICATION_HANDOFF_DIRECTORY: ${{ github.workspace }}/release-handoff/release-evidence/public
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -195,6 +198,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
+      - name: Fetch this attempt's last saved qualification intents
+        continue-on-error: true
+        env:
+          RELEASE_RUN: ${{ github.run_id }}
+          RELEASE_ATTEMPT: ${{ github.run_attempt }}
+        run: gh run download "$RELEASE_RUN" --name "production-train-$RELEASE_RUN-$RELEASE_ATTEMPT" --dir release-handoff
       - name: Remove only this run's isolated qualification resources
         run: node scripts/deploy-release-resources.mjs cleanup
       - name: Keep cleanup outcome independently

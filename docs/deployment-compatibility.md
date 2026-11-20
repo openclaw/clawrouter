@@ -61,7 +61,10 @@ phase deadlines and independent recovery bound production work. No soak test.
 
 Deployment, continuity, payload, accounting, recovery and cleanup have separate
 outcomes. Cleanup is required before qualification authorizes production. An
-additional fresh-runner cleanup job covers cancellation/runner loss. A later
+additional fresh-runner cleanup job covers cancellation/runner loss. It consumes
+the same attempt's automatically uploaded last mutation intents so stale KV reads
+cannot erase queue custody or replay a pending delete. If that handoff is missing,
+cleanup retains owned queue resources for investigation instead of guessing. A later
 cleanup failure cannot rewrite an already completed production deployment as an
 undeployed release: inspect the deployment result; do not deploy again to clean up.
 

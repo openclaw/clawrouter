@@ -25,7 +25,7 @@ await mkdir(out,{mode:0o700});
 const hash=x=>createHash('sha256').update(x).digest('hex'),sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const parse=text=>{const {getStaticTOMLValue,parseTOML}=createRequire(resolve('package.json'))('toml-eslint-parser');return getStaticTOMLValue(parseTOML(text));};
 const env={PATH:process.env.PATH,GITHUB_REPOSITORY:'openclaw/clawrouter',GITHUB_SHA:sha,GITHUB_RUN_ID:'123',GITHUB_RUN_ATTEMPT:'1',GITHUB_REF:'refs/heads/main',GITHUB_EVENT_NAME:'workflow_dispatch',GITHUB_WORKFLOW_REF:'openclaw/clawrouter/.github/workflows/deploy-cloudflare.yml@refs/heads/main',CLOUDFLARE_ACCOUNT_ID:'a'.repeat(32),CLOUDFLARE_API_TOKEN:'loopback-only',CLAWROUTER_POLICY_KV_ID:'b'.repeat(32),CLAWROUTER_OMIT_ROUTES:'1',TRAIN_EVIDENCE_DIRECTORY:join(out,'evidence')};
-const identity=qualificationIdentity(env),origin='https://'+identity.worker+'.fixture.workers.dev';
+const identity=qualificationIdentity(env),absentBridge=qualificationIdentity(env,'bridge'),origin='https://'+identity.worker+'.fixture.workers.dev';
 async function child(args,childEnv=env){
   return new Promise((ok,no)=>{
     const p=spawn(process.execPath,args,{env:childEnv,stdio:['ignore','pipe','pipe']}),chunks=[];
@@ -56,7 +56,7 @@ assert.equal(state.mode,'native-cutover');
 const plan=join(out,'plan.json');await writeFile(plan,JSON.stringify(state));
 let kv,owner,bucket,worker,app,versions=[],deployment,priorDeployment,deploymentReads=[],previousVersion,staleControl=0,accepting=true,revision=0,seedHash,credentialHash,queueConsumer=false;
 const queues=[],requests=[],deployments=[],accounting={events:[],policySpentMicros:0,providerSpentMicros:0},cases=[],callbacks=[],starts=[],seen={},grants=[];
-let lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0,usageDrainReads=0;
+let usageListingHides=0,lossQueue=true,lossDeploy=true,lossAdmission=true,peakConnections=0,connections=0,usageDrainReads=0;
 const boot=randomUUID(),fingerprint='d'.repeat(64);
 const selected=()=>deployment?.versions.find(v=>v.percentage===100)?.version_id;
 const runtime=()=>nativeReceipt(versions.find(v=>v.id===selected())).runtimeSha;
@@ -94,7 +94,7 @@ const server=createServer(async(r,s)=>{
    if(p==='/storage/kv/namespaces'){if(r.method==='POST')kv={id:'c'.repeat(32),title:body.title};return ok(r.method==='POST'?kv:kv?[kv]:[]);}
    if(p.endsWith('/values/release-owner')){if(r.method==='PUT'){owner=JSON.stringify(body);return ok(null);}if(!owner)return json(s,{},404);s.end(owner);return;}
    if(p==='/storage/kv/namespaces/'+'c'.repeat(32)&&r.method==='DELETE'){kv=null;return ok(null);}
-   if(p==='/queues'){if(r.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:randomUUID()});if(lossQueue){lossQueue=false;r.socket.destroy();return;}}return ok(r.method==='POST'?queues.at(-1):queues);}
+   if(p==='/queues'){if(r.method==='POST'){queues.push({queue_name:body.queue_name,queue_id:randomUUID()});if(lossQueue&&body.queue_name===identity.dlq){lossQueue=false;r.socket.destroy();return;}}if(r.method!=='POST'&&queues.some(q=>q.queue_name===identity.usage))usageListingHides++;return ok(r.method==='POST'?queues.at(-1):queues.filter(q=>q.queue_name!==identity.usage));}
    const queue=queues.find(q=>p==='/queues/'+q.queue_id||p.startsWith('/queues/'+q.queue_id+'/'));
    if(queue){
     const qp='/queues/'+queue.queue_id,usage=queue.queue_name===identity.usage;
@@ -110,6 +110,7 @@ const server=createServer(async(r,s)=>{
      return ok({...queue,producers:usage&&worker?[{type:'worker',script:identity.worker}]:[],consumers:usage&&queueConsumer?[consumer]:[]});
     }
    }
+   if(p.startsWith('/queues/'))return json(s,{},404);
    if(p==='/r2/buckets'&&r.method==='POST'){bucket={name:body.name};return ok(bucket);}
    if(p==='/r2/buckets/'+identity.bucket){if(r.method==='DELETE'){bucket=null;return ok(null);}return bucket?ok(bucket):json(s,{},404);}
    if(p==='/containers/applications')return ok(app?[app]:[]);
@@ -134,6 +135,9 @@ const server=createServer(async(r,s)=>{
     }
     return ok({deployments:[deploymentReads.shift()??deployment]});
    }
+   if(r.method==='GET'&&[
+    '/workers/scripts/'+absentBridge.worker+'/settings','/r2/buckets/'+absentBridge.bucket,
+   ].includes(p))return json(s,{},404);
    throw Error('Unexpected Cloudflare proof operation '+p);
   }
   s.setHeader('x-clawrouter-version-id',selected());
@@ -198,8 +202,9 @@ import{spawnSync,spawn}from'node:child_process';import{readFileSync,writeFileSyn
 const {origin,local,binary}=JSON.parse(readFileSync(new URL('../proof-targets.json',import.meta.url),'utf8'));
 const config=process.env.CODEX_HOME+'/config.toml';if(existsSync(config)){const t=readFileSync(config,'utf8');writeFileSync(config,t.replace(origin,local));}
 const a=process.argv.slice(2);if(a[0]!=='app-server'){const r=spawnSync(binary,a,{stdio:'inherit'});process.exit(r.status??1);}const p=spawn(binary,a,{stdio:'inherit'});for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>p.kill(signal));p.on('close',c=>process.exit(c??1));`,{mode:0o700});
+const proofEnv={...env,NODE_OPTIONS:'--import='+preload,CLAWROUTER_RELEASE_PROOF_TARGETS:JSON.stringify({origin,local,binary})};
 try{
- const output=await child(['scripts/deploy-release-qualification.mjs'],{...env,PATH:join(out,'bin')+':'+env.PATH,NODE_OPTIONS:'--import='+preload,CLAWROUTER_RELEASE_PROOF_TARGETS:JSON.stringify({origin,local,binary}),QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper});
+ const output=await child(['scripts/deploy-release-qualification.mjs'],{...proofEnv,PATH:join(out,'bin')+':'+env.PATH,QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper});
  await writeFile(join(out,'entrypoint.log'),output);
  const receipt=JSON.parse(await readFile(join(env.TRAIN_EVIDENCE_DIRECTORY,'public/qualification-release.json'),'utf8'));
  assert.equal(receipt.qualified,true);assert.equal(receipt.controlSha256,nativeControlDigest());
@@ -212,8 +217,12 @@ try{
  assert.ok(usageDrainReads>=3,'actual entrypoint must observe usage drain before deletion');
  assert.equal(kv,null);assert.equal(bucket,null);assert.equal(worker,null);assert.equal(app,null);assert.equal(queues.length,0);
  await assert.rejects(access(join(env.TRAIN_EVIDENCE_DIRECTORY,'private/release/client/session.json')));
- assert.equal(deployments.length,6);
- const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,nonmonotonicDeploymentRead:true,previousControlRead:true,lostQueueAck:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
+ assert.equal(deployments.length,6);assert(usageListingHides>0,'actual coordinator must tolerate hidden usage queue inventory');
+ const beforeFreshCleanup=requests.length;
+ await child(['scripts/deploy-release-resources.mjs','cleanup'],{...proofEnv,QUALIFICATION_HANDOFF_DIRECTORY:join(env.TRAIN_EVIDENCE_DIRECTORY,'public')});
+ for(const stage of ['release','bridge'])assert.equal(JSON.parse(await readFile(join(env.TRAIN_EVIDENCE_DIRECTORY,'public','cleanup-'+stage+'.json'),'utf8')).complete,true);
+ assert(requests.slice(beforeFreshCleanup).every(x=>x.method==='GET'),'fresh completed cleanup must only observe, never replay writes');
+ const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,nonmonotonicDeploymentRead:true,previousControlRead:true,lostQueueAck:true,hiddenQueueInventory:true,receiptQueueCustody:true,freshRunnerCleanup:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }finally{
  await writeFile(join(out,'requests.json'),JSON.stringify(requests,null,2));
