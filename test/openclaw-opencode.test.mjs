@@ -13,7 +13,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "e36384292943a6d968c84cafc432a40787074229";
+const sourceHead = "c85fcaa3a218e4e518009aaf3e636e1c29803c75";
 const sha = value => createHash("sha256").update(value).digest("hex");
 const donor = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.ts", import.meta.url), "utf8");
 assert.equal(sha(donor), "ab514fc2ea8ff572684381413230590e118f7b49826dc1a282736d2e885f6075");
@@ -60,7 +60,7 @@ function createOpenCodeBindings() {
 }
 const bindingCode = createOpenCodeBindings.toString();
 const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", observerSource + "\n" + bindingCode);
-function credentialFor(id) { return ["replay", "session_conversation"].includes(id) ? "first" : id; }
+function credentialFor(id) { return id === "k2_replay" ? "k2_first" : ["replay", "session_conversation"].includes(id) ? "first" : id; }
 function assertSessionRelations(calls) {
   const get = id => { const rows = calls.filter(row => row.id === id); assert.equal(rows.length, 1, id); return rows[0]; };
   const first = get("first"), replay = get("replay"), conversation = get("session_conversation"), credential = get("session_credential");
@@ -69,6 +69,24 @@ function assertSessionRelations(calls) {
   assert.equal(first.session, replay.session, "same credential and conversation must retain the derived session");
   assert.notEqual(first.session, conversation.session, "another conversation must not share the derived session");
   assert.notEqual(first.session, credential.session, "another selected credential must not share the derived session");
+}
+function assertGoKimiReplay(model, body) {
+  assert.ok(["kimi-k3", "kimi-k2.7-code"].includes(model), "only the exercised Kimi cards have replay expectations");
+  assert.equal(body.model, model);
+  const assistants = body.messages.filter(message => message.tool_calls?.length);
+  const results = body.messages.filter(message => message.role === "tool");
+  assert.equal(assistants.length, 1); assert.equal(results.length, 1);
+  const assistant = assistants[0]; assert.equal(assistant.tool_calls.length, 1);
+  assert.equal(assistant.tool_calls[0].id, results[0].tool_call_id);
+  assert.equal(assistant.tool_calls[0].function.name, "lookup");
+  assert.deepEqual(JSON.parse(assistant.tool_calls[0].function.arguments), {});
+  if (model === "kimi-k3") {
+    assert.equal(assistant.reasoning_content, "synthetic-thinking", "K3 retains actual returned reasoning");
+  } else {
+    // Native Go excludes reasoning replay only for its finite K2 policy set.
+    for (const message of body.messages) for (const field of ["reasoning", "reasoning_content", "reasoning_details", "reasoning_text"]) assert.equal(Object.hasOwn(message, field), false, "K2 reasoning must be stripped");
+    for (const field of ["reasoning", "reasoning_content", "reasoning_details", "reasoning_text", "reasoning_effort", "reasoningEffort"]) assert.equal(Object.hasOwn(body, field), false);
+  }
 }
 function assertGoKimiThinkingOff(body) {
   // The pinned native K3 hook omits both fields; disabled-thinking objects are
@@ -127,7 +145,7 @@ function assertProof(proof) {
 function wireFor(protocol, row, model) {
   const event = value => `event: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`;
   const data = value => `data: ${JSON.stringify(value)}\n\n`;
-  const tool = row.id === "first" || row.id === "dynamic", cancel = row.id === "cancel", error = row.id === "error";
+  const tool = ["first", "dynamic", "k2_first"].includes(row.id), cancel = row.id === "cancel", error = row.id === "error";
   if (protocol === "chat") {
     const chunk = (delta, finish_reason = null, usage) => data({ id: "chat_synthetic", object: "chat.completion.chunk", model, choices: [{ index: 0, delta, finish_reason }], ...(usage ? { usage } : {}) });
     return chunk(tool ? { role: "assistant", reasoning_content: "synthetic-thinking", tool_calls: [{ index: 0, id: "call_synthetic", type: "function", function: { name: "lookup", arguments: "{}" } }] } : { role: "assistant", content: "synthetic-answer" })
@@ -164,6 +182,7 @@ for (const [provider, protocols] of Object.entries(models)) for (const [protocol
   const cases = [
     ...(provider === "opencode" && protocol === "responses" ? [{ id: "dynamic", model: cards[0], hook: "stream" }, { id: "dynamic_replay", model: cards[0], hook: "stream" }] : []),
     ...(protocol === "messages" ? [{ id: "prefill", model: cards[0], hook: "stream" }] : []),
+    ...(provider === "opencode-go" && protocol === "chat" ? ["k2_first", "k2_replay"].map(id => ({ id, model: "kimi-k2.7-code", hook: "stream" })) : []),
     ...cards.flatMap((model, i) => ["stream", "simple"].map(hook => ({ id: `card${i}_${hook}`, model, hook }))),
     ...["first", "replay", "session_conversation", "session_credential", "error", "cancel"].map(id => ({ id, model: protocol === "chat" ? "kimi-k3" : cards[0], hook: "stream" })),
     ...(protocol === "messages" ? [] : ["stream", "simple"].map(hook => ({ id: "unified_" + hook, model: cards[0], hook, unified: true }))),
@@ -264,17 +283,23 @@ export default { fetch(request, env, context) {
       }
       if (provider === "opencode" && protocol === "messages" && ["first", "replay"].includes(row.id)) assertConsoleSignedThinking(call.body);
       if (row.id === "prefill") assertMessagesPrefill(provider, call.body);
-      if (row.id === "replay") {
+      if (row.id === "replay" || row.id === "k2_replay") {
         if (protocol === "messages") {
           const blocks = call.body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
           assert.ok(blocks.some(block => block.type === "thinking" && block.signature === "synthetic-signed-thinking"));
           const use = blocks.find(block => block.type === "tool_use"), result = blocks.find(block => block.type === "tool_result"); assert.ok(use && result); assert.equal(result.tool_use_id, use.id);
         } else if (protocol === "responses") { assertReasoningReplay(call.body.input); const use = call.body.input.find(item => item.type === "function_call"), result = call.body.input.find(item => item.type === "function_call_output"); assert.ok(use && result); assert.equal(use.call_id, result.call_id); }
-        else { const assistant = call.body.messages.find(message => message.tool_calls?.length), result = call.body.messages.find(message => message.role === "tool"); assert.ok(assistant && result); assert.equal(assistant.tool_calls[0].id, result.tool_call_id); if (provider === "opencode-go") for (const message of call.body.messages) for (const key of ["reasoning", "reasoning_content", "reasoning_details", "reasoning_text"]) assert.equal(message[key], undefined, "native Go Kimi replay stripping"); }
+        else { const assistant = call.body.messages.find(message => message.tool_calls?.length), result = call.body.messages.find(message => message.role === "tool"); assert.ok(assistant && result); assert.equal(assistant.tool_calls[0].id, result.tool_call_id); if (provider === "opencode-go") assertGoKimiReplay(row.model, call.body); }
       }
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback|raw-private-session/);
     }
     assertSessionRelations(calls);
+    if (provider === "opencode-go" && protocol === "chat") {
+      const first = calls.filter(call => call.id === "k2_first"), replay = calls.filter(call => call.id === "k2_replay");
+      assert.equal(first.length, 1); assert.equal(replay.length, 1);
+      assert.equal(first[0].authorization, replay[0].authorization); assert.equal(first[0].session, replay[0].session);
+      assert.notEqual(first[0].authorization, calls.find(call => call.id === "first").authorization);
+    }
     await verifyUsage(mf, origin, cases);
   }
   async function verifyUsage(mf, origin, selected) {
@@ -308,6 +333,9 @@ export default { fetch(request, env, context) {
     assert.equal(canceled, 1, phase + " original cancellation receipt"); assert.equal(replayed, 1, phase + " actual replay receipt");
   }
   test(phase + " runner pins actual product/protocol/key and exact receipts", async () => {
+    const actual = JSON.parse(payload);
+    assert.deepEqual(actual.cases.filter(row => row.id.startsWith("k2_")), provider === "opencode-go" && protocol === "chat" ? ["k2_first", "k2_replay"].map(id => ({ id, model: "kimi-k2.7-code", hook: "stream" })) : []);
+    if (protocol === "chat") assert.ok(actual.cases.filter(row => ["first", "replay"].includes(row.id)).every(row => row.model === "kimi-k3"));
     const invoke = lines => async (context, options) => { assert.equal(options.sourceHead, sourceHead); assert.equal(options.testPath, "extensions/clawrouter/worker-opencode-contract.test.ts"); assert.equal(options.env.CLAWROUTER_OPENCODE_CONTRACT, payload); assert.equal(options.env.CLAWROUTER_API_KEY, ""); assert.equal(options.env.OPENCODE_GO_API_KEY, "must-not-fallback"); lines.forEach(line => context.diagnostic(line)); };
     const lines = ["OPENCODE_CANCEL_RETIRED " + phase, "OPENCODE_REPLAY_RETIRED " + phase];
     await runNative({ diagnostic() {} }, "/synthetic/contract.ts", "https://fixture.example", invoke(lines));
@@ -542,4 +570,23 @@ test("OpenCode Console signed replay explicitly enables its own adaptive thinkin
   const wire = { model: "claude-opus-5", max_tokens: 128, thinking: { type: "adaptive", display: "summarized" }, output_config: { effort: "high" } };
   assertConsoleSignedThinking(wire);
   for (const wrong of [{ ...wire, model: "qwen3.8-max" }, { ...wire, thinking: undefined }, { ...wire, thinking: { type: "disabled" } }, { ...wire, thinking: { type: "enabled", budget_tokens: 1024 } }, { ...wire, output_config: undefined }, { ...wire, output_config: { effort: "low" } }]) assert.throws(() => assertConsoleSignedThinking(wrong));
+});
+
+
+test("OpenCode Go replay distinguishes K3 retained reasoning from K2 stripping", () => {
+  const assistant = { role: "assistant", reasoning_content: "synthetic-thinking", tool_calls: [{ id: "call_synthetic", type: "function", function: { name: "lookup", arguments: "{}" } }] };
+  const result = { role: "tool", tool_call_id: "call_synthetic", content: "synthetic-tool-result" };
+  const k3 = { model: "kimi-k3", messages: [assistant, result] };
+  assertGoKimiReplay("kimi-k3", k3);
+  const stripped = { ...assistant }; delete stripped.reasoning_content;
+  const k2 = { model: "kimi-k2.7-code", messages: [stripped, result] };
+  assertGoKimiReplay("kimi-k2.7-code", k2);
+  assert.throws(() => assertGoKimiReplay("kimi-k3", { ...k3, messages: [stripped, result] }));
+  assert.throws(() => assertGoKimiReplay("kimi-k3", { ...k3, messages: [{ ...assistant, reasoning_content: "foreign" }, result] }));
+  for (const field of ["reasoning", "reasoning_content", "reasoning_details", "reasoning_text"]) assert.throws(() => assertGoKimiReplay("kimi-k2.7-code", { ...k2, messages: [{ ...stripped, [field]: "synthetic-thinking" }, result] }));
+  for (const body of [{ ...k3, model: "kimi-k2.7-code" }, { ...k3, messages: [assistant] }, { ...k3, messages: [assistant, { ...result, tool_call_id: "foreign" }] }, { ...k3, messages: [assistant, assistant, result] }]) assert.throws(() => assertGoKimiReplay("kimi-k3", body));
+  assert.throws(() => assertGoKimiReplay("kimi-k2.6", k2));
+  assert.equal(credentialFor("k2_replay"), "k2_first"); assert.notEqual(credentialFor("k2_replay"), credentialFor("replay"));
+  const frames = wireFor("chat", { id: "k2_first" }, "kimi-k2.7-code").split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)));
+  assert.equal(frames[0].choices[0].delta.reasoning_content, "synthetic-thinking"); assert.equal(frames[0].choices[0].delta.tool_calls[0].function.name, "lookup");
 });

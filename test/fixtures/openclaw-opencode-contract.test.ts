@@ -25,7 +25,7 @@ assert.ok(["opencode", "opencode-go"].includes(contract.provider));
 assert.ok(["chat", "responses", "messages"].includes(contract.protocol));
 assert.equal(contract.phase, contract.provider + ":" + contract.protocol);
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
-const key = (id: string) => "clawrouter-live-opencode_" + (["replay", "session_conversation"].includes(id) ? "first" : id) + "-fixture-secret";
+const key = (id: string) => "clawrouter-live-opencode_" + (id === "k2_replay" ? "k2_first" : ["replay", "session_conversation"].includes(id) ? "first" : id) + "-fixture-secret";
 const invocation = new AsyncLocalStorage<any>();
 const originalGuard = guardedTransport.fetchWithProviderHttpGuard;
 const originalCatalogGuard = catalogTransport.fetchWithSsrFGuard;
@@ -155,6 +155,16 @@ describe(contract.phase + " registered catalog and stream ownership", { concurre
       const result = await (await start(id)).result(); expect(result.stopReason, result.errorMessage).toBe("stop");
     }
     console.log("OPENCODE_REPLAY_RETIRED " + contract.phase);
+  });
+  if (contract.provider === "opencode-go" && contract.protocol === "chat") it("replays actual K2.7-code separately from K3", async () => {
+    const first = await (await start("k2_first")).result(); expect(first.stopReason, first.errorMessage).toBe("toolUse");
+    const call = first.content.find(part => part.type === "toolCall"); assert.ok(call?.type === "toolCall");
+    expect(call.name).toBe("lookup"); expect(call.arguments).toEqual({});
+    expect(first.content.some(part => part.type === "thinking" && part.thinking === "synthetic-thinking")).toBe(true);
+    const history: AgentMessage[] = [{ role: "user", content: "synthetic K2 first turn", timestamp: 1 }, first,
+      { role: "toolResult", toolCallId: call.id, toolName: call.name, content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: first.timestamp + 1 },
+      { role: "user", content: "synthetic K2 follow-up", timestamp: first.timestamp + 2 }];
+    const second = await (await start("k2_replay", history)).result(); expect(second.stopReason, second.errorMessage).toBe("stop");
   });
   if (contract.provider === "opencode" && contract.protocol === "responses") it("restores actual Console dynamic tools and replays their arguments", async () => {
     const first = await (await start("dynamic")).result(); expect(first.stopReason, first.errorMessage).toBe("toolUse");

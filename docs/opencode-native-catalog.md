@@ -73,7 +73,7 @@ budget denial, HTTP rejection, cancellation and one settlement. The shared
 `opencode-session` tests preserve principal/product/grant isolation.
 
 The integration harness `test/openclaw-opencode.test.mjs` pins OpenClaw
-`e36384292943a6d968c84cafc432a40787074229`. It calls the registered ClawRouter
+`c85fcaa3a218e4e518009aaf3e636e1c29803c75`. It calls the registered ClawRouter
 catalog and both real stream hooks, through Worker and SQLite. Native offers are
 selected normally. Unified Chat/Responses cases remove native offers from the
 actual credential-scoped catalog; they do not invent positive offers or change
@@ -90,7 +90,8 @@ Responses replay preserves the actual ciphertext while checking SDK canonicaliza
 byte identity. Shared-credential requests retain distinct original request owners
 and match SQLite events to the request IDs returned by those original handlers.
 Console Claude 5 removes unsupported assistant prefill while preserving the original
-user turn; the Go Messages prefill contract is checked separately.
+user turn; its signed-replay cases explicitly request adaptive thinking at high effort.
+The Go Messages prefill contract is checked separately.
 Console Claude 5 cancellation starts after nonempty bytes from the bound original
 transport while public output remains quarantined; it is not public post-delta
 cancellation. Other cases cancel after public content. Neither qualifies physical
@@ -105,7 +106,10 @@ Client hook composition is a separate acceptance boundary. This pin composes
 Console Responses dynamic-record/tool-alias restoration, Go DeepSeek Pro/Flash
 thinking, authority-bound Qwen reasoning admission and request-local replay identity
 through the ClawRouter hooks. The fixture still asserts the actual wire/results
-for Kimi replay, Go Messages, error identity and both stream hooks;
+for Kimi replay, Go Messages, error identity and both stream hooks. K3 preserves
+its actual returned reasoning content; a separate K2.7-code first/replay pair
+requires the native Go K2-only stripping policy, with distinct request owners and
+shared first/replay credentials. K3 off mode omits thinking and effort fields;
 HTTP success alone cannot establish parity. Runtime proof remains pending until
 this exact candidate's native workflow completes. No client source is patched
 here, and this explicit pin is not a claim about the OpenClaw default branch.
