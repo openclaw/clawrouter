@@ -139,7 +139,7 @@ for (const [provider, protocols] of Object.entries(models)) for (const [protocol
   const credentials = cases.filter(row => credentialFor(row.id) === row.id);
   const unifiedPath = protocol === "chat" ? "/v1/chat/completions" : "/v1/responses";
   const payload = JSON.stringify({ phase, provider, protocol, api: formats[protocol], nativePath, unifiedPath, cards, cases });
-  function routerFixture() {
+  function routerFixture(selected = cases) {
     return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
@@ -147,7 +147,7 @@ import { qianfanOutcome } from "qianfan-outcome-witness";
 ${observerCode}
 ${bindingCode}
 const credentialFor = ${credentialFor.toString()};
-const cases = ${JSON.stringify(cases)}, ingress = createOpenCodeBindings(), outbound = createOpenCodeBindings(), receipts = [];
+const cases = ${JSON.stringify(selected)}, ingress = createOpenCodeBindings(), outbound = createOpenCodeBindings(), receipts = [];
 let sourceCancellation, acceptedConsumer = false;
 const lifetime = createLifetimeObserver(undefined, { ownerId: "opencode_cancel", source: () => acceptedConsumer ? sourceCancellation : undefined, outcome: op => qianfanOutcome.current.matches(op) });
 qianfanOutcome.current = createWorkerOutcomeWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation);
@@ -175,14 +175,14 @@ export default { ...handler, fetch(request, env, context) {
   return lifetime.invoke("handler", handler.fetch, handler, [request, poisoned, context], owner, response => { const requestId = response.headers.get("x-clawrouter-request-id"); if (!requestId || receipts.some(row => row.requestId === requestId)) throw new Error("missing or duplicate original request identity"); receipts.push({ id: owner.id.slice(9), requestId }); });
 } };`;
   }
-  function upstreamFixture() {
+  function upstreamFixture(selected = charged) {
     return `${observerCode}
 ${bindingCode}
 const credentialFor = ${credentialFor.toString()};
 const wireFor = ${wireFor.toString()}, lifetime = createLifetimeObserver(), bindings = createOpenCodeBindings(), calls = [], owners = new Map();
-for (const row of ${JSON.stringify(charged)}) bindings.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + credentialFor(row.id));
+for (const row of ${JSON.stringify(selected)}) bindings.expect("opencode_" + row.id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-opencode-" + credentialFor(row.id));
 async function serve(request, context, owner) {
-  const body = await lifetime.invoke("request.json", request.json, request, [], owner), id = owner.id.slice(9), row = ${JSON.stringify(charged)}.find(row => row.id === id);
+  const body = await lifetime.invoke("request.json", request.json, request, [], owner), id = owner.id.slice(9), row = ${JSON.stringify(selected)}.find(row => row.id === id);
   if (!JSON.stringify(body).includes("Synthetic instructions opencode_case=" + id + ";")) throw new Error("OpenCode wire invocation mismatch: " + id);
   const call = { id, url: request.url, authorization: request.headers.get("authorization"), session: request.headers.get("x-opencode-session"), routerSession: request.headers.get("x-clawrouter-session-id"), body, cancelled: false, expired: false }; calls.push(call); owners.set(owner, call);
   const bytes = new TextEncoder().encode(wireFor(${JSON.stringify(protocol)}, row, body.model)); let offset = 0, timer, heartbeat, wake, controller, complete = false, resolveProducer, rejectProducer;
@@ -199,9 +199,9 @@ export default { fetch(request, env, context) {
   const owner = bindings.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal); const waitUntil = context.waitUntil; lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); }); return lifetime.invoke("handler", serve, undefined, [request, context, owner], owner);
 } };`;
   }
-  async function setup(mf) {
+  async function setup(mf, selected = credentials) {
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
-    for (const row of credentials.filter(row => row.id !== "invalid")) {
+    for (const row of selected.filter(row => row.id !== "invalid" && credentialFor(row.id) === row.id)) {
       const id = "opencode_" + row.id;
       await kv.put("policies/" + id, JSON.stringify({ enabled: true, generation: "fixture", providers: [row.id === "foreign" ? "google" : provider], models: [provider + "/" + (row.id === "closed" ? provider === "opencode" ? "big-pickle" : "kimi-k2.6" : row.model)], grantRouting: { eligibleGrants: { [provider]: [provider] }, environmentFallback: false }, tenantId: "fixture", monthlyBudgetMicros: row.id === "budget" ? 0 : 1000, budgetMode: "reserve", requestCostMicros: row.id === "unpriced" ? null : 7, retainRequestContent: false }));
       await kv.put("credentials/" + id, JSON.stringify({ enabled: true, secretSha256: sha("fixture-secret"), policyId: id, policyGeneration: "fixture" }));
@@ -242,11 +242,14 @@ export default { fetch(request, env, context) {
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback|raw-private-session/);
     }
     assertSessionRelations(calls);
+    await verifyUsage(mf, origin, cases);
+  }
+  async function verifyUsage(mf, origin, selected) {
     const receipts = await (await fetch(origin + "/fixture/receipts")).json();
-    assert.deepEqual(receipts.map(row => row.id).sort(), charged.map(row => row.id).sort());
-    assert.equal(new Set(receipts.map(row => row.requestId)).size, charged.length);
-    for (const row of credentials.filter(row => row.id !== "invalid")) {
-      const expected = charged.filter(call => credentialFor(call.id) === row.id);
+    assert.deepEqual(receipts.map(row => row.id).sort(), selected.filter(row => !row.denied).map(row => row.id).sort());
+    assert.equal(new Set(receipts.map(row => row.requestId)).size, selected.filter(row => !row.denied).length);
+    for (const row of selected.filter(row => row.id !== "invalid" && credentialFor(row.id) === row.id)) {
+      const expected = selected.filter(call => !call.denied && credentialFor(call.id) === row.id);
       let result;
       for (let n = 0; n < 150; n++) { result = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json(); if (row.denied || result.usage.events.length === expected.length && result.budget.spentMicros === 7 * expected.length) break; await new Promise(resolve => setTimeout(resolve, 20)); }
       assert.equal(result.usage.events.length, expected.length, phase + "/" + row.id);
@@ -296,6 +299,27 @@ export default { fetch(request, env, context) {
     const upstream = new Function(upstreamFixture().replace("export default", "return"))();
     await assert.rejects(upstream.fetch(new Request(upstreamUrl, { method: "POST", headers: { authorization: "Bearer synthetic-opencode-first" }, body: JSON.stringify({ model: protocol === "chat" ? "kimi-k3" : cards[0], messages: [{ role: "system", content: "Synthetic instructions opencode_case=replay;" }] }) }), {}, { waitUntil() { throw new Error("no producer should start"); } }), /wire invocation mismatch: first/);
     const proof = await (await upstream.fetch(new Request("https://fixture.example/retire"))).json(); assert.equal(proof.accepted, false); assert.ok(proof.rejected > 0);
+  });
+  if (protocol === "responses") test(phase + " direct Worker preserves shared-credential response ownership and session isolation", { timeout: 30_000 }, async () => {
+    const selected = cases.filter(row => ["first", "replay", "session_conversation", "session_credential"].includes(row.id));
+    const temporary = await mkdtemp(join(tmpdir(), "clawrouter-opencode-response-owner-")); let mf;
+    await preserveFailures(async () => {
+      mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture(selected)), upstreamFixture(selected));
+      const origin = await setup(mf, selected), requestIds = [];
+      for (const row of selected) {
+        const response = await fetch(origin + nativePath, { method: "POST", headers: { authorization: "Bearer " + token(row.id), "content-type": "application/json", "x-clawrouter-session-id": row.id === "session_conversation" ? "raw-private-session-other" : "raw-private-session" }, body: JSON.stringify({ model: row.model, stream: true, store: false, max_output_tokens: 128, input: [{ role: "system", content: "Synthetic instructions opencode_case=" + row.id + ";" }, { role: "user", content: "Synthetic ownership control" }] }) });
+        assert.equal(response.status, 200); requestIds.push(response.headers.get("x-clawrouter-request-id"));
+        const text = await response.text(), events = text.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+        const terminal = events.filter(event => event.type === "response.completed"); assert.equal(terminal.length, 1, row.id); assert.equal(terminal[0].response.id, "resp_synthetic_" + row.id);
+      }
+      assert.ok(requestIds.every(Boolean)); assert.equal(new Set(requestIds).size, selected.length);
+      const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
+      assertSessionRelations(calls); assert.ok(calls.every(call => !call.expired)); await verifyUsage(mf, origin, selected);
+    }, [
+      async () => { if (mf) assertProof(await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/retire")).json()); },
+      async () => { if (mf) assertProof(await (await mf.dispatchFetch("https://fixture.example/fixture/retire", { method: "POST", body: JSON.stringify({ acceptedConsumer: false }) })).json()); },
+      () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true }),
+    ]);
   });
   test(phase + " actual registered OpenCode SDK through Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
     const temporary = await mkdtemp(join(tmpdir(), "clawrouter-opencode-sdk-")); let mf, accepted = false;
