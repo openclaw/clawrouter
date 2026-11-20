@@ -1,5 +1,7 @@
 # Changelog
 
+- Activate the three finite Baseten SystemOne DecisionV2 models through the existing native adapter. Preserve Chat, selected credentials, bounded complete JSON and unknown-price budget denial. Add a pinned registered-client Worker/SQLite contract with original acquisition, reader, release and source retirement; physical pre-response disconnect propagation remains separately unqualified.
+
 - Activate finite Vydra Models video creates for Kling and Veo3 alongside Jobs. Retain the original create adapter for shared GET controls, deny Models DELETE, bind native JSON reads to their operation signal, and hide pending output URLs until terminal success. Qualify configured OpenClaw video selection, distinct motion inputs, bounded credential-free downloads and one durable fixed-policy settlement; unknown dollar tariffs remain denied.
 
 - Preserve the registered Perplexity Search client's rejected original body cancellation after an authored post-header abort. Admit only the exact owned body/read/closed reason and completed unlock/release relationship; keep raw rejections, independent faults and Worker acceptance unchanged.

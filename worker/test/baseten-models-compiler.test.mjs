@@ -72,7 +72,7 @@ test("Baseten catalog rejects foreign origins, transport overrides and caller cr
     m => { m.adapter.injectHeaders = { authorization: "Bearer synthetic" }; },
     m => { m.adapter.injectQuery = { key: "synthetic" }; }, m => { m.adapter.passthroughHeaders = ["authorization"]; },
   ];
-  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten.models|invalid manifest/, String(change)); }
+  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten\.(models|systemone)|invalid manifest/, String(change)); }
 });
 
 test("Baseten compiled discovery composes the original policy filter and excludes the complete decision namespace", () => {
