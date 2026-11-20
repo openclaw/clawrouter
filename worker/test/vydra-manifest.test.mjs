@@ -37,3 +37,24 @@ test("the schema rejects unbound controls, invented result endpoints and a Model
     const invalid = structuredClone(source); change(invalid); assert.throws(() => compileProviderSnapshot([invalid]), /lifecycle|invalid manifest/);
   }
 });
+
+
+test("Models selects its own finite GET-only adapter while workflow Jobs keeps DELETE", () => {
+  const models = provider.endpoints.find(value => value.id === "model_video");
+  const route = managedRoute(provider, models);
+  assert.notEqual(route.adapter, managedLifecycleAdapter("vydra.jobs"));
+  assert.deepEqual(Object.keys(route.controls), ["retrieve"]);
+  assert.deepEqual(managedPaths(provider, models, "fixture_model", { model: "kling" }),
+    { retrieve: "/v1/native/vydra/api/v1/jobs/fixture_model" });
+  for (const model of ["grok-imagine", "elevenlabs/tts", "unknown"])
+    assert.throws(() => route.adapter.prepare({ prompt: "Synthetic" }, new Headers(), { model }, new URLSearchParams()));
+  for (const mutate of [
+    m => { delete m.endpoints.model_video.lifecycle; },
+    m => { m.endpoints.model_video.lifecycle.cancel = "cancel_job"; },
+    m => { m.endpoints.model_video.lifecycle.result = "job"; },
+    m => { m.endpoints.model_video.path = "/api/v1/models/other"; },
+    m => { m.endpoints.model_video.requestFormat = "vydra.job_create"; },
+    m => { m.baseUrls.default = "https://foreign.example"; },
+    m => { m.endpoints.model_video.auth = { type: "none" }; },
+  ]) { const invalid = structuredClone(source); mutate(invalid); assert.throws(() => compileProviderSnapshot([invalid])); }
+});

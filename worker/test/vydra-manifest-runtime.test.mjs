@@ -107,7 +107,7 @@ for (const field of ["workflow", "workflowSlug"]) test(`compiled Vydra changed $
 
 test("compiled Vydra uncertain create cannot replay or borrow a Models response identity", { timeout: 10_000 }, async t => {
   const f = await setup(t);
-  await json(await f.call(prefix + "/api/v1/models/veo3", { prompt: "A paper boat" }), 404);
+  await json(await f.call(prefix + "/api/v1/models/unqualified", { prompt: "A paper boat" }), 400);
   assert.equal(f.sent.length, 0);
   f.upstream = () => { throw new Error("synthetic lost create reply"); };
   const response = await f.create(true), state = f.state(response); await json(response, 503);
