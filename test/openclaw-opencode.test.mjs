@@ -13,7 +13,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "dad3cce339d3173679979a1c92c1a5e3c2c92380";
+const sourceHead = "322cfc608526dca6bf60cfef05210b231461c1db";
 const sha = value => createHash("sha256").update(value).digest("hex");
 const donor = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.ts", import.meta.url), "utf8");
 assert.equal(sha(donor), "ab514fc2ea8ff572684381413230590e118f7b49826dc1a282736d2e885f6075");

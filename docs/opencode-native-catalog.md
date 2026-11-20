@@ -73,7 +73,7 @@ budget denial, HTTP rejection, cancellation and one settlement. The shared
 `opencode-session` tests preserve principal/product/grant isolation.
 
 The integration harness `test/openclaw-opencode.test.mjs` pins OpenClaw
-`dad3cce339d3173679979a1c92c1a5e3c2c92380`. It calls the registered ClawRouter
+`322cfc608526dca6bf60cfef05210b231461c1db`. It calls the registered ClawRouter
 catalog and both real stream hooks, through Worker and SQLite. Native offers are
 selected normally. Unified Chat/Responses cases remove native offers from the
 actual credential-scoped catalog; they do not invent positive offers or change
