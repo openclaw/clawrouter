@@ -186,6 +186,26 @@ function searchExpectedReceipt(id, delivery) {
     : { cost: 5000, basis: ["malformed", "error", "cancel", "oversized"].includes(id) ? "manifest_request_reservation" : "manifest_request" };
 }
 
+function searchExpectedStatus(id, delivery) {
+  if (id === "oversized") {
+    assert.ok(delivery && delivery.id === ownerId(id) && delivery.status === 200, "oversized original delivery binding");
+    assert.ok(["complete", "canceled"].includes(delivery.delivery), "oversized delivery must complete or cancel without an independent failure");
+    // The SDK's 1 MiB read limit and the Worker's 2 MiB inspection limit
+    // belong to separate owners. SDK rejection cannot establish Worker cancellation.
+    return delivery.delivery === "complete" ? "success" : "client_error";
+  }
+  return status(id) >= 500 ? "provider_error" : status(id) >= 400 || id === "cancel" ? "client_error" : "success";
+}
+
+function validateSearchLimit(record) {
+  assert.ok(record && typeof record === "object" && !Array.isArray(record));
+  assert.deepEqual(Object.keys(record).sort(), ["id", "limitBytes", "readBytes", "readOperations", "readerCount"]);
+  assert.equal(record.id, "oversized"); assert.equal(record.limitBytes, 1024 * 1024); assert.equal(record.readerCount, 1);
+  assert.ok(Number.isSafeInteger(record.readBytes) && record.readBytes > record.limitBytes);
+  assert.ok(Number.isSafeInteger(record.readOperations) && record.readOperations > 0);
+  return record;
+}
+
 
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
@@ -256,7 +276,7 @@ async function serve(request, context, owner) {
         ...(id === "spurious" ? { usage: { prompt_tokens: 17, completion_tokens: 19, total_tokens: 36 } } : {}) };
   const wire = id === "cancel" ? '{"id":"synthetic-cancel","results":[' : JSON.stringify(payload);
   const bytes = new TextEncoder().encode(wire); let offset = 0, heartbeat, wake, expiry, controller, complete = false;
-  if (["invalid_request", "rate_limit"].includes(id)) call.response = { status: payload.error.code, bytes: bytes.length,
+  if (["invalid_request", "rate_limit", "oversized"].includes(id)) call.response = { status: id === "oversized" ? 200 : payload.error.code, bytes: bytes.length,
     sha256: [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("") };
   let resolveProducer, rejectProducer;
   const producer = new Promise((resolve, reject) => { resolveProducer = resolve; rejectProducer = reject; });
@@ -317,13 +337,20 @@ async function setup(mf) {
   return origin;
 }
 
-async function verifyCallsAndUsage(mf, origin, native) {
+async function verifyCallsAndUsage(mf, origin, native, sdkLimit) {
+  if (native) validateSearchLimit(sdkLimit);
   const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
   assert.deepEqual(calls.map(call => call.id).sort(), charged.map(row => row.id).sort(), "one original selected dispatch per admitted attempt");
   for (const call of calls) {
     assert.equal(call.url, "https://api.perplexity.ai/search", call.id); assert.equal(call.authorization, "Bearer " + secret(call.id), call.id);
     assert.deepEqual(call.body, { query: call.id === "utf8" ? "界".repeat(2730) + "ab" : "synthetic query", max_results: call.id === "default_count" ? 5 : 2 }, call.id);
     assert.equal(call.expired, false, call.id); assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
+    if (call.id === "oversized") {
+      assert.equal(call.response.status, 200, call.id);
+      assert.ok(call.response.bytes > 2 * 1024 * 1024, "oversized original source crosses the Worker inspection bound");
+      assert.match(call.response.sha256, /^[a-f0-9]{64}$/);
+      if (native) assert.ok(sdkLimit.readBytes <= call.response.bytes, "SDK retained bytes belong to this original oversized body");
+    }
     if (["invalid_request", "rate_limit"].includes(call.id)) {
       const bytes = Buffer.from(JSON.stringify(freeSearchEnvelope(call.id)));
       assert.deepEqual(call.response, { status: status(call.id), bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }, call.id + " original qualified error bytes");
@@ -359,11 +386,11 @@ async function verifyCallsAndUsage(mf, origin, native) {
     assert.equal(event.request_id, delivery.requestId, row.id + " receipt request ID");
     assert.equal(event.actual_cost_micros, expected.cost, row.id); assert.equal(usage.budget.spentMicros, expected.cost, row.id + " settled budget");
     assert.equal(event.cost_basis, expected.basis, row.id + " receipt basis");
-    assert.equal(event.status, status(row.id) >= 500 ? "provider_error" : status(row.id) >= 400 || row.id === "cancel" || native && row.id === "oversized" ? "client_error" : "success", row.id);
+    assert.equal(event.status, searchExpectedStatus(row.id, delivery), row.id + " status for " + delivery.delivery);
     assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null], row.id);
     assert.doesNotMatch(JSON.stringify(event), /synthetic query|Synthetic snippet|fixture-secret|synthetic-psearch|must-not-fallback/);
-    if (["invalid_request", "rate_limit"].includes(row.id)) {
-      if (!native) assert.equal(delivery.delivery, "complete", row.id + " direct caller drained the qualified error");
+    if (["invalid_request", "rate_limit", "oversized"].includes(row.id)) {
+      if (!native) assert.equal(delivery.delivery, "complete", row.id + " direct caller drained the original response");
       observedFree.push({ id: row.id, status: delivery.status, delivery: delivery.delivery, cost: event.actual_cost_micros, basis: event.cost_basis });
     }
   }
@@ -382,13 +409,21 @@ async function retire(mf, acceptedConsumer) {
 }
 
 async function runNative(t, fixture, origin, invoke = runOpenClawConsumer) {
-  let receipts = 0;
+  let receipts = 0; const limits = [];
   const observed = new Proxy(t, { get(target, key, receiver) { if (key !== "diagnostic") return Reflect.get(target, key, receiver);
-    return text => { receipts += text.split("\n").filter(line => line.trim() === "PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind).length; t.diagnostic(text); };
+    return text => {
+      for (const line of text.split("\n").map(line => line.trim())) {
+        if (line === "PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind) receipts++;
+        if (line.startsWith("PERPLEXITY_SEARCH_LIMIT ")) limits.push(validateSearchLimit(JSON.parse(line.slice("PERPLEXITY_SEARCH_LIMIT ".length))));
+      }
+      t.diagnostic(text);
+    };
   } });
   await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/clawrouter/worker-perplexity-search-contract.test.ts",
     env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_PERPLEXITY_SEARCH_PHASE: routeKind, CLAWROUTER_API_KEY: "must-not-fallback", PERPLEXITY_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } });
   assert.equal(receipts, 1, "one exact native Search cancellation and cleanup receipt");
+  assert.equal(limits.length, 1, "one original SDK oversized-reader and cleanup receipt");
+  return limits[0];
 }
 
 test(routeKind + " Search native assembly binds the actual public client and independent row", () => {
@@ -403,15 +438,19 @@ test(routeKind + " Search native assembly binds the actual public client and ind
 });
 test(routeKind + " Search runner rejects missing, foreign and duplicated receipts", async () => {
   const origin = "https://fixture.example", receipt = "PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind;
+  const limit = { id: "oversized", limitBytes: 1048576, readBytes: 1048577, readOperations: 17, readerCount: 1 };
+  const limitReceipt = "PERPLEXITY_SEARCH_LIMIT " + JSON.stringify(limit);
   const invoke = lines => async (context, options) => {
     assert.equal(options.sourceHead, sourceHead); assert.equal(options.testPath, "extensions/clawrouter/worker-perplexity-search-contract.test.ts");
     assert.equal(options.env.CLAWROUTER_PERPLEXITY_SEARCH_PHASE, routeKind); assert.equal(options.env.CLAWROUTER_CONTRACT_ORIGIN, origin);
     assert.equal(options.env.PERPLEXITY_API_KEY, "must-not-fallback"); assert.equal(options.env.CLAWROUTER_API_KEY, "must-not-fallback");
     for (const line of lines) context.diagnostic(line);
   };
-  await runNative({ diagnostic() {} }, "/synthetic/search.ts", origin, invoke([receipt]));
+  assert.deepEqual(await runNative({ diagnostic() {} }, "/synthetic/search.ts", origin, invoke([receipt, limitReceipt])), limit);
   for (const lines of [[], ["RESPONSES_CANCEL_RETIRED perplexity"], [receipt, receipt], ["PERPLEXITY_SEARCH_CANCEL_RETIRED " + (routeKind === "native" ? "manifest" : "native")]])
-    await assert.rejects(runNative({ diagnostic() {} }, "/synthetic/search.ts", origin, invoke(lines)));
+    await assert.rejects(runNative({ diagnostic() {} }, "/synthetic/search.ts", origin, invoke([...lines, limitReceipt])));
+  for (const limits of [[], [limitReceipt, limitReceipt], ["PERPLEXITY_SEARCH_LIMIT {}"], ["PERPLEXITY_SEARCH_LIMIT invalid"]])
+    await assert.rejects(runNative({ diagnostic() {} }, "/synthetic/search.ts", origin, invoke([receipt, ...limits])));
 });
 test(routeKind + " Search observed guard retains wrapped unexpected dispatch and exact rejection identity", async () => {
   const begin = fixtureText.indexOf("function observedGuard("), end = fixtureText.indexOf("async function runCase(", begin);
@@ -543,6 +582,37 @@ test(routeKind + " Search free-error expectation follows independent delivery, n
     }
   }
 });
+test(routeKind + " Search oversized outcome requires independent delivery and original SDK byte evidence", () => {
+  const delivery = { id: "psearch_oversized", status: 200 };
+  for (const [observed, expected] of [["complete", "success"], ["canceled", "client_error"]]) {
+    assert.equal(searchExpectedStatus("oversized", { ...delivery, delivery: observed }), expected);
+    assert.deepEqual(searchExpectedReceipt("oversized", { ...delivery, delivery: observed }), { cost: 5000, basis: "manifest_request_reservation" });
+  }
+  for (const row of [undefined, { ...delivery, delivery: "failed" }, { ...delivery, delivery: "unknown" },
+    { ...delivery, delivery: "complete", id: "foreign" }, { ...delivery, delivery: "complete", status: 503 }])
+    assert.throws(() => searchExpectedStatus("oversized", row));
+  const limit = { id: "oversized", limitBytes: 1048576, readBytes: 1048577, readOperations: 17, readerCount: 1 };
+  assert.strictEqual(validateSearchLimit(limit), limit);
+  for (const patch of [{ id: "foreign" }, { limitBytes: 2097152 }, { readBytes: 1048576 }, { readBytes: Infinity },
+    { readOperations: 0 }, { readerCount: 2 }, { extra: true }]) assert.throws(() => validateSearchLimit({ ...limit, ...patch }));
+
+  const begin = fixtureText.indexOf("function searchLimitEvidence("), end = fixtureText.indexOf("async function waitForOriginalRead(", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const check = new Function("assert", stripTypeScriptTypes(fixtureText.slice(begin, end)) + "; return searchLimitEvidence;")(assert);
+  function make() {
+    const owner = { id: "oversized", kind: "chat", claimed: true }, body = {}, acquisition = { owner, acquired: true, result: { response: { body } } };
+    const reader = { owner, acquisition, body, receivedBody: body, reader: {} };
+    const op = { owner, acquisition, reader, receiver: reader.reader, kind: "reader.read", pending: Promise.resolve(), state: "fulfilled", value: { done: false, value: new Uint8Array(1048577) } };
+    return { owner, acquisition, reader, op, lifetime: { guards: [acquisition], readers: [reader], operations: [op] }, bindings: { bindings: [owner] } };
+  }
+  const good = make(); assert.deepEqual(check(good.lifetime, good.bindings), { ...limit, readOperations: 1 });
+  for (const alter of [row => { row.owner.claimed = false; }, row => { row.acquisition.owner = {}; }, row => { row.acquisition.acquired = false; },
+    row => { row.reader.acquisition = {}; }, row => { row.reader.receivedBody = {}; }, row => { row.reader.body = {}; },
+    row => { row.op.owner = {}; }, row => { row.op.acquisition = {}; }, row => { row.op.receiver = {}; }, row => { row.op.pending = undefined; },
+    row => { row.op.state = "rejected"; row.op.reason = undefined; }, row => { row.op.value.value = new Uint8Array(1048576); }]) {
+    const row = make(); alter(row); assert.throws(() => check(row.lifetime, row.bindings));
+  }
+});
 test(routeKind + " Search actual Worker transport and SQLite request receipts", { timeout: 120000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-psearch-worker-")); let mf, accepted = false;
   await preserveFailures(async () => {
@@ -567,7 +637,7 @@ if (routeKind === "native") test(routeKind + " actual registered Search SDK thro
   await preserveFailures(async () => {
     mf = await startBundledWorkerdFixture(temporary, await bundleSearchOutcome(routerFixture()), upstreamFixture(), { directRouter: true }); const origin = await setup(mf);
     const fixture = join(temporary, "search-contract.test.ts"); await writeFile(fixture, assembledFixture, { flag: "wx", mode: 0o600 });
-    await runNative(t, fixture, origin); t.diagnostic("PERPLEXITY_SEARCH_DELIVERY SDK-" + routeKind + " " + JSON.stringify(await verifyCallsAndUsage(mf, origin, true))); accepted = true;
+    const sdkLimit = await runNative(t, fixture, origin); t.diagnostic("PERPLEXITY_SEARCH_DELIVERY SDK-" + routeKind + " " + JSON.stringify(await verifyCallsAndUsage(mf, origin, true, sdkLimit))); accepted = true;
   }, [() => mf && retire(mf, accepted), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 }
