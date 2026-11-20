@@ -26,28 +26,51 @@ function lifecycleEndpoints(requirement: ProviderBindingRequirement): string[] |
     .filter((id): id is string => typeof id === "string");
 }
 
-/** Static transport checks only; provider-specific qualification remains in the Worker. */
-export function bindingSupportsOperation(requirement: ProviderBindingRequirement, grant: ProviderBindingGrant | null): boolean {
-  if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return false;
+/** A static declaration mismatch, never a credential or account-health diagnosis. */
+export type ProviderBindingIssue =
+  | "operation_requires_websocket"
+  | "transport_endpoint_unsupported"
+  | "lifecycle_unavailable"
+  | "lifecycle_endpoint_unsupported"
+  | "websocket_unsupported"
+  | "product_transport_mismatch"
+  | "product_endpoint_unsupported";
+
+/** First static mismatch in check order. Null means compatible, not admitted. */
+export function bindingCompatibilityIssue(requirement: ProviderBindingRequirement, grant: ProviderBindingGrant | null): ProviderBindingIssue | null {
+  if (requirement.endpoint.websocket === "openai.realtime" && requirement.mode !== "websocket") return "operation_requires_websocket";
   const transport = transportForGrant(requirement.provider, grant);
-  if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
+  if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return "transport_endpoint_unsupported";
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
     const dependencies = lifecycleEndpoints(requirement);
-    if (!dependencies || !dependencies.every(id => requirement.provider.endpoints.some(endpoint => endpoint.id === id)
-      && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
+    if (!dependencies) return "lifecycle_unavailable";
+    if (!dependencies.every(id => requirement.provider.endpoints.some(endpoint => endpoint.id === id)
+      && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return "lifecycle_endpoint_unsupported";
   }
   return requirement.mode === "http" || (["openai.responses", "openai.realtime"].includes(requirement.endpoint.websocket ?? "")
-    && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"));
+    && transport === null && (requirement.endpoint.websocket !== "openai.realtime" || !grant || grant.kind === "api_key"))
+    ? null : "websocket_unsupported";
+}
+
+/** Static transport checks only; provider-specific qualification remains in the Worker. */
+export function bindingSupportsOperation(requirement: ProviderBindingRequirement, grant: ProviderBindingGrant | null): boolean {
+  return bindingCompatibilityIssue(requirement, grant) === null;
+}
+
+/** Product restrictions precede operation checks, matching the boolean compatibility API. */
+export function productBindingCompatibilityIssue(requirement: ProviderBindingRequirement, product: ProviderProduct, grant: ProviderBindingGrant | null): ProviderBindingIssue | null {
+  const transport = transportForGrant(requirement.provider, grant);
+  if (product.binding.type === "provider-default") {
+    if (transport !== null) return "product_transport_mismatch";
+  } else if (grant?.kind !== product.binding.grantKind || transport === null
+    || !Object.hasOwn(requirement.provider.auth.grantTransports, product.binding.grantKind)) return "product_transport_mismatch";
+  const dependencies = lifecycleEndpoints(requirement);
+  if (dependencies === null) return "lifecycle_unavailable";
+  if (![requirement.endpoint.id, ...dependencies].every(id => product.endpoints.includes(id))) return "product_endpoint_unsupported";
+  return bindingCompatibilityIssue(requirement, grant);
 }
 
 /** Match a declared product to a selected transport, without inferring commerce or authentication. */
 export function productSupportsBinding(requirement: ProviderBindingRequirement, product: ProviderProduct, grant: ProviderBindingGrant | null): boolean {
-  const transport = transportForGrant(requirement.provider, grant);
-  if (product.binding.type === "provider-default") {
-    if (transport !== null) return false;
-  } else if (grant?.kind !== product.binding.grantKind || transport === null
-    || !Object.hasOwn(requirement.provider.auth.grantTransports, product.binding.grantKind)) return false;
-  const dependencies = lifecycleEndpoints(requirement);
-  return dependencies !== null && [requirement.endpoint.id, ...dependencies].every(id => product.endpoints.includes(id))
-    && bindingSupportsOperation(requirement, grant);
+  return productBindingCompatibilityIssue(requirement, product, grant) === null;
 }

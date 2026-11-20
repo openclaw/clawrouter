@@ -50,7 +50,7 @@ import schema from "@clawrouter/provider-plugin-contract/service-provider.schema
 assert.equal(schema.properties.schema.const, "clawrouter.service-provider.v1");
 assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
 import { parseProviderPluginDescriptor, providerPluginFiles, ProviderPluginContractError,
-  isPublishedMusicInputSupport, transportForGrant, bindingSupportsOperation, productSupportsBinding, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
+  isPublishedMusicInputSupport, transportForGrant, bindingSupportsOperation, productSupportsBinding, bindingCompatibilityIssue, productBindingCompatibilityIssue, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
 const descriptor = parseProviderPluginDescriptor({ schema: PROVIDER_PLUGIN_SCHEMA, id: "example", version: "1.0.0",
   manifest: "example.provider.yaml", documentation: "README.md", license: "LICENSE" });
 assert.deepEqual(providerPluginFiles(descriptor), ["LICENSE", "README.md", "example.provider.yaml"]);
@@ -68,6 +68,8 @@ assert.equal(transportForGrant(provider, subscription), transport);
 assert.equal(transportForGrant(provider, null), null);
 assert.equal(bindingSupportsOperation(requirement, subscription), true);
 assert.equal(productSupportsBinding(requirement, product, subscription), false);
+assert.equal(bindingCompatibilityIssue(requirement, subscription), null);
+assert.equal(productBindingCompatibilityIssue(requirement, product, subscription), "product_transport_mismatch");
 assert.equal(productSupportsBinding(requirement, product, null), true);
 assert.equal(productSupportsBinding(requirement, { ...product, binding: { type: "grant-transport", grantKind: "subscription" } }, subscription), true);
 assert.equal(bindingSupportsOperation({ ...requirement, mode: "websocket" }, subscription), false);
@@ -78,7 +80,7 @@ assert.equal(bindingSupportsOperation({ ...requirement, responsesLifecycle: true
   writeFileSync(join(consumer, "consumer.ts"), `
 import schema from "@clawrouter/provider-plugin-contract/service-provider.schema.json" with { type: "json" };
 const schemaVersion: string = schema.properties.schema.const;
-import { parseProviderPluginDescriptor, bindingSupportsOperation, productSupportsBinding, transportForGrant, type ProviderBindingGrant, type ProviderBindingRequirement, type ProviderPluginDescriptor, type ProviderPackageIndex,
+import { parseProviderPluginDescriptor, bindingCompatibilityIssue, productBindingCompatibilityIssue, bindingSupportsOperation, productSupportsBinding, transportForGrant, type ProviderBindingIssue, type ProviderBindingGrant, type ProviderBindingRequirement, type ProviderPluginDescriptor, type ProviderPackageIndex,
   type ProviderSnapshot, type CompiledProvider, type CompiledModel,
   type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
   type ProviderModelDefinition, type ProviderModelCatalogRef, type ModelAvailability, type ProviderReasoningEffort, type ParameterSupport, type ModelRequestParameters, type OpenAiDecisionCapabilities, type BasetenSystemOneDecisionCapabilities, type SageDecisionCapabilities, type NativeDecisionCapabilities, type OpaquePcmSpeechProfile, type InlineMusicReferenceImage, type PublishedMusicInputSupport, type NativeEndpointCapabilities, type NativeModelCapabilities,
@@ -157,6 +159,10 @@ const provider: CompiledProvider = { id: "example", display_name: "Example", sta
   billing: { meter: null, dimensions: [], counters: [] }, meter: null, quota };
 const grant: ProviderBindingGrant = { kind: "subscription" };
 const requirement: ProviderBindingRequirement = { provider, endpoint, mode: "http", managedLifecycle: true };
+const bindingIssue: ProviderBindingIssue | null = bindingCompatibilityIssue(requirement, grant);
+const productIssue: ProviderBindingIssue | null = productBindingCompatibilityIssue(requirement, fullProduct, grant);
+// @ts-expect-error Static compatibility cannot diagnose credential availability.
+const invalidBindingIssue: ProviderBindingIssue = "credential_missing";
 const compatible: boolean = bindingSupportsOperation(requirement, grant) && productSupportsBinding(requirement, fullProduct, grant);
 const selectedTransport: CompiledGrantTransport | null = transportForGrant(provider, grant);
 // @ts-expect-error Binding grants use credential classifications, not protocols.
