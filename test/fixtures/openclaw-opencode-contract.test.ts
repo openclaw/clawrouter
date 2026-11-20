@@ -30,6 +30,7 @@ const invocation = new AsyncLocalStorage<any>();
 const originalGuard = guardedTransport.fetchWithProviderHttpGuard;
 const originalCatalogGuard = catalogTransport.fetchWithSsrFGuard;
 const originalFailure = transportStream.failTransportStream;
+let cancelController: AbortController | undefined;
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createOpenCodeBindings>, bodySucceeded: boolean;
 
 // BEGIN OPENCODE CLAIM
@@ -38,6 +39,16 @@ function claimOwned(url: any, init: any, kind: string) {
   catch (error) { lifetime.errors.push(error); throw error; }
 }
 // END OPENCODE CLAIM
+
+// BEGIN OPENCODE QUARANTINED PROGRESS
+function observeQuarantinedProgress(owner: any, value: any) {
+  if (contract.provider !== "opencode" || contract.protocol !== "messages" || owner.id !== "cancel" || owner.kind !== "chat" || owner.partialDelivery || value?.done !== false || !(value.value?.byteLength > 0)) return;
+  assert.equal(owner.claimed, true); assert.equal(owner.caller, cancelController?.signal);
+  const matches = bindings.bindings.filter(row => row.id === "cancel" && row.kind === "chat");
+  assert.equal(matches.length, 1); assert.equal(matches[0], owner);
+  lifetime.partial(owner); cancelController!.abort();
+}
+// END OPENCODE QUARANTINED PROGRESS
 
 async function runCase(body: () => unknown) {
   await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
@@ -102,8 +113,10 @@ async function start(id: string, history?: AgentMessage[], signal?: AbortSignal)
 
 describe(contract.phase + " registered catalog and stream ownership", { concurrent: false }, () => {
   beforeEach(() => {
-    clearLiveCatalogCacheForTests(); bodySucceeded = false; bindings = createOpenCodeBindings();
-    lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore(), apiPrototype: APIError.prototype, isProxy: types.isProxy });
+    clearLiveCatalogCacheForTests(); bodySucceeded = false; cancelController = undefined; bindings = createOpenCodeBindings();
+    lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore(), apiPrototype: APIError.prototype, isProxy: types.isProxy,
+      readProgress: observeQuarantinedProgress,
+    });
     vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (...args) {
       const options = args[0]; if (options.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalogGuard, this, args);
       const owner = claimOwned(options.url, options.init, "catalog"); lifetime.signal(owner, options.signal ?? options.init?.signal); return lifetime.guard(originalCatalogGuard, this, args, owner);
@@ -143,12 +156,18 @@ describe(contract.phase + " registered catalog and stream ownership", { concurre
   it("preserves provider error and original cleanup", async () => {
     const result = await (await start("error")).result(); expect(result.stopReason).toBe("error"); expect(result.errorMessage).toContain("synthetic-upstream-error"); lifetime.providerResult(result);
   });
-  it("retires real post-content caller cancellation", async () => {
-    const controller = new AbortController(), output = await start("cancel", undefined, controller.signal);
-    for await (const event of output) if (event.type === "text_delta") {
-      const matches = bindings.bindings.filter(row => row.id === "cancel" && row.kind === "chat" && row.method === "POST"); expect(matches).toHaveLength(1);
-      lifetime.partial(matches[0]); controller.abort(); break;
+  const quarantined = contract.provider === "opencode" && contract.protocol === "messages";
+  it(quarantined ? "aborts after original transport bytes while Claude 5 output stays quarantined" : "retires real post-content caller cancellation", async () => {
+    const controller = new AbortController(); cancelController = controller;
+    const output = await start("cancel", undefined, controller.signal), events: string[] = [];
+    for await (const event of output) {
+      events.push(event.type);
+      if (!quarantined && event.type === "text_delta") {
+        const matches = bindings.bindings.filter(row => row.id === "cancel" && row.kind === "chat" && row.method === "POST"); expect(matches).toHaveLength(1);
+        lifetime.partial(matches[0]); controller.abort(); break;
+      }
     }
-    expect(controller.signal.aborted).toBe(true); expect((await output.result()).stopReason).toBe("aborted");
+    const result = await output.result(); expect(controller.signal.aborted).toBe(true); expect(result.stopReason).toBe("aborted");
+    if (quarantined) { expect(result.content).toEqual([]); expect(events).not.toContain("text_delta"); expect(events).not.toContain("thinking_delta"); expect(events).not.toContain("toolcall_end"); }
   });
 });

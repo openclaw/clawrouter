@@ -89,7 +89,11 @@ Responses replay preserves the actual ciphertext while checking SDK canonicaliza
 (removal of reasoning item IDs and clear summaries); it does not require whole-item
 byte identity. Shared-credential requests retain distinct original request owners
 and match SQLite events to the request IDs returned by those original handlers.
-Post-content cancellation does not qualify physical pre-response propagation.
+Console Claude 5 cancellation starts after nonempty bytes from the bound original
+transport while public output remains quarantined; it is not public post-delta
+cancellation. Other cases cancel after public content. Neither qualifies physical
+pre-response propagation. The pinned Go Messages simple client adds its high-thinking
+budget to the requested output allowance; that wire budget is not a vendor limit.
 
 Client hook composition is a separate acceptance boundary. At this pin the
 ClawRouter proxy hooks do not directly compose native Go Kimi reasoning/replay,

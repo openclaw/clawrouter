@@ -17,8 +17,14 @@ const sourceHead = "3ee10cbd698e44369444f27102474594df23ecce";
 const sha = value => createHash("sha256").update(value).digest("hex");
 const donor = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.ts", import.meta.url), "utf8");
 assert.equal(sha(donor), "ab514fc2ea8ff572684381413230590e118f7b49826dc1a282736d2e885f6075");
-const observerSource = donor.slice(donor.indexOf("type OriginalOperation ="), donor.indexOf("// END ORIGINAL LIFETIME OBSERVERS"));
+let observerSource = donor.slice(donor.indexOf("type OriginalOperation ="), donor.indexOf("// END ORIGINAL LIFETIME OBSERVERS"));
 assert.ok(observerSource.startsWith("type OriginalOperation ="));
+// Reuse the existing passive-progress adaptation for Claude 5 quarantine. No
+// extra read, cancellation or promise replacement is introduced by this hook.
+for (const [before, after] of [
+  ["bodySucceeded: () => boolean; current?", "bodySucceeded: () => boolean; readProgress?: (owner: any, value: any) => void; current?"],
+  ["if (value?.done === true) row.eof = true;", "if (value?.done === true) row.eof = true; sdk?.readProgress?.(owner, value);"],
+]) { assert.equal(observerSource.split(before).length, 2); observerSource = observerSource.replace(before, after); }
 const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver, createRequestBindings } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver, createRequestBindings };")();
 // Reuse the landed original-reader/HttpOperation witness, not its prior results.
@@ -115,7 +121,7 @@ function wireFor(protocol, row, model) {
     { type: "response.function_call_arguments.delta", output_index: 1, item_id: call.id, delta: call.arguments },
     { type: "response.output_item.done", output_index: 1, item: call },
   ] : [{ type: "response.output_item.added", output_index: 0, item: { ...message, content: [] } }, { type: "response.content_part.added", output_index: 0, item_id: message.id, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }, { type: "response.output_text.delta", output_index: 0, item_id: message.id, content_index: 0, delta: "synthetic-answer" }];
-  return events.map(data).join("") + (cancel ? "" : error ? data({ error: { message: "synthetic-upstream-error", code: "server_error" } }) : data({ type: "response.completed", response: { id: "resp_synthetic", object: "response", status: "completed", model, output: items, usage: { input_tokens: 11, output_tokens: 3, total_tokens: 14 } } }));
+  return events.map(data).join("") + (cancel ? "" : error ? data({ error: { message: "synthetic-upstream-error", code: "server_error" } }) : data({ type: "response.completed", response: { id: "resp_synthetic_" + row.id, object: "response", status: "completed", model, output: items, usage: { input_tokens: 11, output_tokens: 3, total_tokens: 14 } } }));
 }
 
 for (const [provider, protocols] of Object.entries(models)) for (const [protocol, cards] of Object.entries(protocols)) {
@@ -211,7 +217,9 @@ export default { fetch(request, env, context) {
       assert.equal(call.body.model, row.model); assert.equal(call.body.stream, true); assert.equal(call.expired, false);
       assert.match(call.session, /^crs_[a-f0-9]{64}$/); assert.equal(call.routerSession, null);
       if (protocol === "responses") { assert.equal(call.body.store, false); assert.equal(call.body.previous_response_id, undefined); assert.equal(call.body.max_output_tokens, 128); }
-      else assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, 128);
+      // The pinned simple Anthropic path adds its high-thinking budget to the
+      // output allowance for non-adaptive models (128 + 16384), before hooks.
+      else assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, protocol === "messages" && provider === "opencode-go" && row.hook === "simple" ? 16512 : 128, row.id);
       if (provider === "opencode-go" && protocol === "chat") {
         if (row.model.startsWith("deepseek-")) { assert.deepEqual(call.body.thinking, { type: "enabled" }, row.id + " native Go thinking contract"); assert.equal(call.body.reasoning_effort, row.model === "deepseek-v4-pro" ? "high" : "low", row.id + " native Go effort contract"); }
         if (row.model === "kimi-k3") { assert.deepEqual(call.body.thinking, { type: "disabled" }, row.id + " native Go K3 thinking-off contract"); assert.equal(call.body.reasoning_effort, undefined); }
@@ -373,4 +381,47 @@ test("OpenCode Responses replay requires preserved ciphertext and canonical item
   const item = { type: "reasoning", encrypted_content: "synthetic-encrypted", summary: [] };
   assertReasoningReplay([item]);
   for (const bad of [[], [item, item], [{ ...item, encrypted_content: undefined }], [{ ...item, encrypted_content: "foreign" }], [{ ...item, id: "rs_synthetic" }], [{ ...item, summary: [{ type: "summary_text", text: "stale" }] }]]) assert.throws(() => assertReasoningReplay(bad));
+});
+
+
+test("OpenCode Responses completion IDs belong to distinct original requests", () => {
+  const identities = ["first", "replay", "session_conversation", "session_credential"].map(id => {
+    const events = wireFor("responses", { id }, "gpt-5.6-sol").split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+    const terminal = events.filter(event => event.type === "response.completed"); assert.equal(terminal.length, 1);
+    assert.equal(terminal[0].response.id, "resp_synthetic_" + id); return terminal[0].response.id;
+  });
+  assert.equal(new Set(identities).size, identities.length);
+});
+
+test("OpenCode passive original read progress preserves identity and independent falsey faults", async () => {
+  for (const fail of [false, true]) {
+    const owner = {}, result = { done: true }, promise = Promise.resolve(result), seen = [];
+    const reader = { closed: Promise.resolve(), read() { return promise; }, cancel() { return Promise.resolve(); }, releaseLock() {} };
+    const body = { getReader() { return reader; }, cancel() { return Promise.resolve(); } };
+    const life = createLifetimeObserver({ bindings: [], bodySucceeded: () => true, readProgress(actualOwner, value) { seen.push([actualOwner, value]); if (fail) throw undefined; } });
+    life.response({ body }, owner); const actual = body.getReader(); assert.equal(actual.read(), promise); assert.equal(await promise, result);
+    assert.deepEqual(seen, [[owner, result]]); actual.releaseLock();
+    if (fail) await assert.rejects(life.join(), error => error.errors.includes(undefined)); else await life.join();
+    life.restore();
+  }
+});
+
+
+test("OpenCode quarantine trigger requires original owned nonempty transport progress", () => {
+  const text = fixtureText.slice(fixtureText.indexOf("function observeQuarantinedProgress("), fixtureText.indexOf("// END OPENCODE QUARANTINED PROGRESS"));
+  const build = new Function("assert", "contract", "bindings", "lifetime", "cancelController", stripTypeScriptTypes(text) + "; return observeQuarantinedProgress;");
+  for (const mode of ["owned", "empty", "eof", "catalog", "other-provider", "foreign-owner", "wrong-caller", "unclaimed", "duplicate-owner"]) {
+    const controller = new AbortController(), owner = { id: "cancel", kind: "chat", claimed: true, caller: controller.signal }, bindings = { bindings: [owner] }, seen = [];
+    const lifetime = { partial(row) { row.partialDelivery = true; seen.push(row); } };
+    const contract = { provider: mode === "other-provider" ? "opencode-go" : "opencode", protocol: "messages" };
+    if (mode === "wrong-caller") owner.caller = new AbortController().signal;
+    if (mode === "unclaimed") owner.claimed = false;
+    if (mode === "catalog") owner.kind = "catalog";
+    if (mode === "duplicate-owner") bindings.bindings.push({ ...owner });
+    const callback = build(assert, contract, bindings, lifetime, controller), value = { done: mode === "eof", value: new Uint8Array(mode === "empty" ? 0 : 1) };
+    const action = () => callback(mode === "foreign-owner" ? { ...owner } : owner, value);
+    if (["foreign-owner", "wrong-caller", "unclaimed", "duplicate-owner"].includes(mode)) assert.throws(action); else action();
+    assert.equal(controller.signal.aborted, mode === "owned", mode); assert.equal(seen.length, mode === "owned" ? 1 : 0, mode);
+    if (mode === "owned") { callback(owner, value); assert.equal(seen.length, 1); }
+  }
 });
