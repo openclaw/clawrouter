@@ -83,7 +83,12 @@ and responses containing unrelated usage fields.
 Cancellation waits for actual original response bytes and a pending SDK read
 before aborting the caller. The direct Router socket exercises post-header
 cancellation, source completion and SQLite settlement without an injected Worker
-signal. It does not qualify physical pre-header disconnect propagation.
+signal. Its final original body cancellation can reject with the stored caller
+reason after the JSON reader unlocks. The Search-only test disposition requires
+the exact acquired body, reader/read/closed reason, owner, post-progress abort,
+successful unlock and release; rejected originals remain recorded. Foreign or
+independent failures remain fatal. It does not qualify physical pre-header
+disconnect propagation.
 Invocation-retirement checks are not catalog-age freshness proof. The client
 uses 30-second/1-MiB limits; no direct codec invocation substitutes for the
 registered tool.

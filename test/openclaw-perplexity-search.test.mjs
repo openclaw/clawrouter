@@ -33,7 +33,44 @@ const observerSHA = "cf00bd435b61c4b49fdad7bd6b95ed683238c4ba469c71f4df18af25655
 const { preserveFailures, createLifetimeObserver, createRequestBindings } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver, createRequestBindings };")();
 const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
-const assembledFixture = fixtureText.replace(marker, observerSource);
+function searchLifetimeSource(text) {
+  const anchor = "  function providerError(params: any) {";
+  assert.equal(text.split(anchor).length, 2);
+  text = text.replace(anchor, String.raw`  function searchBodyCancelDisposition(op: OriginalOperation) {
+    if (!sdk?.bodySucceeded() || op.kind !== "body.cancel" || op.state !== "rejected" || op.reason === undefined) return false;
+    const owner = op.owner, acquisition = op.acquisition, caller = owner?.callerObservation;
+    const body = acquisition?.result?.response?.body, reason = op.reason;
+    if (!sdk.bindings.includes(owner) || owner.id !== "cancel" || owner.kind !== "chat" || owner.method !== "POST" || !owner.claimed
+      || sdk.bindings.filter(item => item.id === "cancel" && item.kind === "chat").length !== 1
+      || guards.filter(item => item.owner === owner).length !== 1 || !guards.includes(acquisition)
+      || op.receiver !== body || bodyOwners.get(body) !== owner || op.guardSignal !== acquisition.guardSignal
+      || !bodies.some(item => item.body === body && item.owner === owner && item.acquisition === acquisition)
+      || !Array.isArray(op.operands) || op.operands.length !== 0) return false;
+    if (!owner.caller || caller?.signal !== owner.caller || !caller.abort || !owner.caller.aborted
+      || caller.abort.reason !== reason || owner.caller.reason !== reason || !owner.partialDelivery
+      || !(caller.entered < owner.partialSequence && owner.partialSequence < caller.abort.sequence)
+      || !op.signalAtInvoke.aborted || op.signalAtInvoke.reason !== reason) return false;
+    const rows = readers.filter(row => row.body === body && row.owner === owner && row.acquisition === acquisition);
+    if (rows.length !== 1) return false;
+    const row = rows[0], related = operations.filter(item => item.reader === row);
+    const closed = related.filter(item => item.kind === "reader.closed"), rejectedReads = related.filter(item => item.kind === "reader.read" && item.state === "rejected");
+    const cancels = operations.filter(item => item.kind === "body.cancel" && item.owner === owner && item.acquisition === acquisition);
+    const releases = operations.filter(item => item.kind === "release" && item.owner === owner && item.acquisition === acquisition);
+    return closed.length === 1 && closed[0].pending === row.closed && closed[0].reason === reason && sdkAbortDisposition(closed[0])
+      && rejectedReads.length === 1 && rejectedReads[0].reason === reason && sdkAbortDisposition(rejectedReads[0])
+      && closed[0].settled! < op.invoked && rejectedReads[0].settled! < op.invoked
+      && row.receivedBody === body && !body.locked && row.unlocks === 1 && row.unlocked === 1
+      && row.unlockReturns.length === 1 && row.unlockReturns[0] < op.invoked
+      && cancels.length === 1 && cancels[0] === op
+      && acquisition.releaseCalls === 1 && releases.length === 1 && releases[0].state === "fulfilled"
+      && releases[0].invoked > op.invoked && releases[0].pending && typeof releases[0].pending.then === "function";
+  }
+` + anchor);
+  const verdict = "sdkAbortDisposition(op) || sdkProviderErrorDisposition(op)";
+  assert.equal(text.split(verdict).length, 2);
+  return text.replace(verdict, "sdkAbortDisposition(op) || searchBodyCancelDisposition(op) || sdkProviderErrorDisposition(op)");
+}
+const assembledFixture = fixtureText.replace(marker, searchLifetimeSource(observerSource));
 
 const workerOutcomePins = {"proxy.ts": "b1a8d68993b406b5660ebff0cd3b94e6d11cd0dccbafb7a22d50ec5bec2d483f", "proxy-response.ts": "b938ae532df851af62d90c5cb0e8dfa68fb88ed2a15e75f384ff3ca336fb1227", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
@@ -307,6 +344,54 @@ test(routeKind + " Search observed guard retains wrapped unexpected dispatch and
   const reason = new Error("same message"); check({ error: reason }, reason); check({ error: undefined }, undefined);
   assert.throws(() => check({ error: new Error("same message") }, reason));
   assert.throws(() => check({ value: undefined }, undefined));
+});
+test(routeKind + " Search body cancellation requires the original owned abort and complete independent cleanup", async () => {
+  const { createLifetimeObserver: createSearchObserver, createRequestBindings: createBindings } = new Function(stripTypeScriptTypes(searchLifetimeSource(observerSource)) + "; return { createLifetimeObserver, createRequestBindings };")();
+  async function scenario(mode) {
+    const bindings = createBindings(), caller = new AbortController(), reason = new Error("synthetic caller");
+    let succeeded = false, controller, releaseHeld, joined = false, released = 0;
+    const life = createSearchObserver({ bindings: bindings.bindings, bodySucceeded: () => succeeded });
+    const owner = bindings.expect(mode === "foreign-owner" ? "foreign" : "cancel", "chat", "https://fixture.example/search", "POST", "fixture", caller.signal);
+    bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture" } }, "chat");
+    owner.callerObservation = {}; life.signal(owner.callerObservation, caller.signal); life.signal(owner, caller.signal);
+    const response = new Response(new ReadableStream({ start(value) { controller = value; value.enqueue(new Uint8Array([1])); } }));
+    const original = Promise.resolve({ response, release: async () => {
+      released++;
+      if (mode.startsWith("release-")) throw mode === "release-undefined" ? undefined : mode === "release-null" ? null : reason;
+    } });
+    assert.strictEqual(life.guard(() => original, undefined, [], owner), original);
+    const acquired = await original, reader = response.body.getReader();
+    await reader.read(); const pending = reader.read(), closed = reader.closed, settled = Promise.allSettled([pending, closed]);
+    if (mode !== "no-progress") life.partial(owner);
+    if (mode === "preexisting-error") { controller.error(reason); await settled; caller.abort(reason); }
+    else {
+      caller.abort(reason);
+      controller.error(mode === "wrong-reason" ? new Error("synthetic independent failure") : mode === "undefined-reason" ? undefined : reason);
+      await settled;
+    }
+    if (mode === "premature") await response.body.cancel().catch(() => {});
+    reader.releaseLock();
+    if (mode === "foreign-body") {
+      const other = new ReadableStream({ start(value) { value.error(reason); } });
+      await response.body.cancel.call(other).catch(() => {});
+    } else if (mode !== "premature") {
+      await response.body.cancel().catch(() => {});
+      if (mode === "duplicate") await response.body.cancel().catch(() => {});
+    }
+    await acquired.release().catch(() => {});
+    if (mode === "independent" || mode === "independent-undefined") life.watch("waitUntil", Promise.reject(mode === "independent" ? reason : undefined), owner);
+    if (mode === "observer-undefined") life.errors.push(undefined);
+    if (mode === "held") life.watch("source.completion", new Promise(resolve => { releaseHeld = resolve; }), owner);
+    succeeded = true;
+    const joining = life.join().then(() => { joined = true; return { accepted: true }; }, error => { joined = true; return { accepted: false, error }; });
+    if (mode === "held") { await Promise.resolve(); await Promise.resolve(); assert.equal(joined, false); releaseHeld(); }
+    const result = await joining;
+    assert.equal(released, 1);
+    assert.ok(life.operations.some(op => op.kind === "body.cancel" && op.state === "rejected"), "raw rejected original is preserved");
+    assert.equal(result.accepted, mode === "owned" || mode === "held", mode);
+    await life.restore();
+  }
+  for (const mode of ["owned", "held", "foreign-body", "foreign-owner", "wrong-reason", "undefined-reason", "preexisting-error", "no-progress", "premature", "duplicate", "release-same", "release-null", "release-undefined", "independent", "independent-undefined", "observer-undefined"]) await scenario(mode);
 });
 test(routeKind + " Search cleanup preserves independent falsey failures", async () => {
   const attempted = [];
