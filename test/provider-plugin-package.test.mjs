@@ -31,7 +31,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   execFileSync("tar", ["-xzf", join(root, archives[0]), "--strip-components=1", "-C", installed], { timeout: 30_000 });
   const files = readdirSync(installed, { recursive: true }).map(name => name.replaceAll("\\", "/")).sort();
   assert.deepEqual(files.filter(name => name !== "dist"), [
-    "LICENSE", "README.md", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/models.d.ts", "dist/models.js", "dist/model-availability.d.ts", "dist/model-availability.js", "dist/model-request-parameters.d.ts", "dist/model-request-parameters.js", "dist/native-capabilities.d.ts", "dist/native-capabilities.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js", "dist/snapshot.d.ts", "dist/snapshot.js",
+    "LICENSE", "README.md", "dist/bindings.d.ts", "dist/bindings.js", "dist/auth.d.ts", "dist/auth.js", "dist/conformance.d.ts", "dist/conformance.js", "dist/models.d.ts", "dist/models.js", "dist/model-availability.d.ts", "dist/model-availability.js", "dist/model-request-parameters.d.ts", "dist/model-request-parameters.js", "dist/native-capabilities.d.ts", "dist/native-capabilities.js", "dist/endpoints.d.ts", "dist/endpoints.js", "dist/index.d.ts", "dist/index.js", "dist/snapshot.d.ts", "dist/snapshot.js",
     "dist/observations.d.ts", "dist/observations.js", "dist/quota.d.ts", "dist/quota.js", "dist/package-index.d.ts", "dist/package-index.js", "dist/pricing.d.ts", "dist/pricing.js", "dist/product-metadata.d.ts", "dist/product-metadata.js", "dist/products.d.ts", "dist/products.js", "package.json",
   ].sort());
   const manifest = JSON.parse(readFileSync(join(installed, "package.json"), "utf8"));
@@ -41,7 +41,7 @@ test("packed plugin contract runs and typechecks outside the repository", t => {
   writeFileSync(join(consumer, "smoke.mjs"), `
 import assert from "node:assert/strict";
 import { parseProviderPluginDescriptor, providerPluginFiles, ProviderPluginContractError,
-  isPublishedMusicInputSupport, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
+  isPublishedMusicInputSupport, transportForGrant, bindingSupportsOperation, productSupportsBinding, parseProviderConformanceScenario, PROVIDER_PLUGIN_SCHEMA, PROVIDER_CONFORMANCE_SCHEMA } from "@clawrouter/provider-plugin-contract";
 const descriptor = parseProviderPluginDescriptor({ schema: PROVIDER_PLUGIN_SCHEMA, id: "example", version: "1.0.0",
   manifest: "example.provider.yaml", documentation: "README.md", license: "LICENSE" });
 assert.deepEqual(providerPluginFiles(descriptor), ["LICENSE", "README.md", "example.provider.yaml"]);
@@ -49,10 +49,25 @@ assert.throws(() => parseProviderPluginDescriptor({}), ProviderPluginContractErr
 assert.equal(typeof parseProviderConformanceScenario, "function");
 assert.equal(PROVIDER_CONFORMANCE_SCHEMA, "clawrouter.provider-conformance.v1");
 assert.equal(isPublishedMusicInputSupport({}), false);
+const endpoint = { id: "invoke" };
+const transport = { allowedEndpoints: ["invoke"] };
+const provider = { auth: { grantTransports: { subscription: transport } }, endpoints: [endpoint] };
+const requirement = { provider, endpoint, mode: "http" };
+const subscription = { kind: "subscription" };
+const product = { binding: { type: "provider-default" }, endpoints: ["invoke"] };
+assert.equal(transportForGrant(provider, subscription), transport);
+assert.equal(transportForGrant(provider, null), null);
+assert.equal(bindingSupportsOperation(requirement, subscription), true);
+assert.equal(productSupportsBinding(requirement, product, subscription), false);
+assert.equal(productSupportsBinding(requirement, product, null), true);
+assert.equal(productSupportsBinding(requirement, { ...product, binding: { type: "grant-transport", grantKind: "subscription" } }, subscription), true);
+assert.equal(bindingSupportsOperation({ ...requirement, mode: "websocket" }, subscription), false);
+assert.equal(bindingSupportsOperation({ ...requirement, responsesLifecycle: true }, subscription), false);
+
 `);
   execFileSync(process.execPath, ["smoke.mjs"], { cwd: consumer, encoding: "utf8", timeout: 30_000 });
   writeFileSync(join(consumer, "consumer.ts"), `
-import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
+import { parseProviderPluginDescriptor, bindingSupportsOperation, productSupportsBinding, transportForGrant, type ProviderBindingGrant, type ProviderBindingRequirement, type ProviderPluginDescriptor, type ProviderPackageIndex,
   type ProviderSnapshot, type CompiledProvider, type CompiledModel,
   type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
   type ProviderModelDefinition, type ProviderModelCatalogRef, type ModelAvailability, type ProviderReasoningEffort, type ParameterSupport, type ModelRequestParameters, type OpenAiDecisionCapabilities, type BasetenSystemOneDecisionCapabilities, type SageDecisionCapabilities, type NativeDecisionCapabilities, type OpaquePcmSpeechProfile, type InlineMusicReferenceImage, type PublishedMusicInputSupport, type NativeEndpointCapabilities, type NativeModelCapabilities,
@@ -129,6 +144,12 @@ const provider: CompiledProvider = { id: "example", display_name: "Example", sta
   adapter: { request: null, response: null, stream: null, error: null, passthroughHeaders: [], injectHeaders: {}, injectQuery: {}, requestTransforms: { renameFields: [] } },
   capabilities: [{ id: "inference.decision", endpoint: "invoke", methods: ["POST"] }], endpoints: [endpoint], models: [compiledModel],
   billing: { meter: null, dimensions: [], counters: [] }, meter: null, quota };
+const grant: ProviderBindingGrant = { kind: "subscription" };
+const requirement: ProviderBindingRequirement = { provider, endpoint, mode: "http", managedLifecycle: true };
+const compatible: boolean = bindingSupportsOperation(requirement, grant) && productSupportsBinding(requirement, fullProduct, grant);
+const selectedTransport: CompiledGrantTransport | null = transportForGrant(provider, grant);
+// @ts-expect-error Binding grants use credential classifications, not protocols.
+const invalidBindingGrant: ProviderBindingGrant = { kind: "rest" };
 const { id: modelId, ...indexedModel } = compiledModel;
 const snapshot: ProviderSnapshot = { version: "1", providers: [provider],
   capability_index: { "inference.decision": [{ provider: provider.id, endpoint: endpoint.id, methods: ["POST"] }] },
