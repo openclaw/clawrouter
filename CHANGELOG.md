@@ -1,5 +1,7 @@
 # Changelog
 
+- Activate finite Vydra Models video creates for Kling and Veo3 alongside Jobs. Retain the original create adapter for shared GET controls, deny Models DELETE, bind native JSON reads to their operation signal, and hide pending output URLs until terminal success. Qualify configured OpenClaw video selection, distinct motion inputs, bounded credential-free downloads and one durable fixed-policy settlement; unknown dollar tariffs remain denied.
+
 - Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
 
 - Export static product and transport compatibility checks from the portable provider plugin contract. Preserve existing shared imports and Worker admission behavior.
