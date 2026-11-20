@@ -61,13 +61,32 @@ including original source, handler, reader, cancellation and SQLite settlement.
 Pinned OpenClaw D8 has no registered Agent consumer. No OpenClaw Agent parity is
 claimed or invented.
 
-Pinned OpenClaw D8 lacks a `perplexity.search` native web-search codec. Its
-registered bridge currently rejects this format. Client Search parity remains
-blocked until the OpenClaw owner adds and qualifies the bounded model-less codec:
-nonblank query at most 4,000 characters, count 1–10 (default 5),
-`POST {query,max_results}`, selected offer/origin/credential, 30-second/1-MiB
-limits, unsafe-URL filtering, untrusted result wrapping and original abort/cleanup.
-Worker transport tests are not a substitute for that registered client proof.
+The separate Search consumer pins OpenClaw
+`addccb3274d885d3e06fb4662e0a620e8829523a`; the Responses consumer retains
+D8. The Search fixture invokes the registered `web_search` tool and the actual
+credential-scoped catalog. Shipping Search advertises its native route instead
+of a second manifest offer. Registered SDK proof therefore covers
+`/v1/native/perplexity/search`; direct Worker/SQLite tests cover the manifest
+route separately. No eligible offer is manufactured, and the existing generic
+Search consumer keeps its independent source pin.
+
+The codec accepts nonblank queries up to 4,000 characters and 8,192 UTF-8 bytes,
+count 1–10 (default 5), and sends `POST {query,max_results}` without a model.
+It does not select Fast Search: successful requests use the 5,000-micro standard
+tariff. Tests cover selected and rotated credentials, denied offers, unsafe URL
+filtering, untrusted result wrapping, empty results, bounded body parsing and
+original guard release. Documented complete 400/429 envelopes prove free
+upstream rejections at the Worker boundary; a client error by itself never
+proves zero billing. Search tokens remain null, including policy-fixed requests
+and responses containing unrelated usage fields.
+
+Cancellation waits for actual original response bytes and a pending SDK read
+before aborting the caller. The direct Router socket exercises post-header
+cancellation, source completion and SQLite settlement without an injected Worker
+signal. It does not qualify physical pre-header disconnect propagation.
+Invocation-retirement checks are not catalog-age freshness proof. The client
+uses 30-second/1-MiB limits; no direct codec invocation substitutes for the
+registered tool.
 
 These are synthetic provider fixtures, not live vendor access or tariff invoices.
 No new credential format, persistent owner or deployment transition is introduced.

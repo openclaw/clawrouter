@@ -1,5 +1,7 @@
 # Changelog
 
+- Exercise registered Perplexity Search through its actual catalog-selected native route, selected and rotated credentials, request-based SQLite receipts, bounded results and joined post-header cancellation. Preserve independent Responses and generic Search pins; retain unexpected-dispatch observer faults even when the client wraps the error.
+
 - Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
 
 - Export static product and transport compatibility checks from the portable provider plugin contract. Preserve existing shared imports and Worker admission behavior.
@@ -868,7 +870,7 @@
 - Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
-- Activate Perplexity Agent/Responses and native Search declarations, qualify complete native Search request receipts, and exercise catalog-selected ClawRouter Responses replay and retirement. Preserve unknown Agent/tool/session budgets and explicitly track the missing OpenClaw Search codec.
+- Activate Perplexity Agent/Responses and native Search declarations, qualify complete native Search request receipts, and exercise catalog-selected ClawRouter Responses replay and retirement. Preserve unknown Agent/tool/session budgets and keep the independent registered Search client pin and native-only advertised offer distinct from direct manifest transport proof.
 - Add the frozen Hugging Face R1, V3.1 and unsuffixed OSS 120B identities while preserving native model names and dynamic-provider pricing guards. Qualify the registered custom-base Chat route with exact suffix/credential binding, captured-provider replay, separate unpriced-denial and fixed-policy accounting, and original SDK/Worker/source retirement controls.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.
