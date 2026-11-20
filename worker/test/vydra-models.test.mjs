@@ -7,7 +7,7 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/vydra/mo
 const prepare = name => prepareVydraModel(wire.requests[name].model, wire.requests[name].body);
 const video = prepare("video"), image = prepare("image"), speech = prepare("speech");
 const observe = value => observeVydraModel(value, video, "retrieve", wire.completed.id);
-const context = { action: "retrieve", expectedId: wire.completed.id, requestedVersion: "veo3", pathParams: { model: "veo3" } };
+const context = { signal: new AbortController().signal, action: "retrieve", expectedId: wire.completed.id, requestedVersion: "veo3", pathParams: { model: "veo3" } };
 
 test("four frozen Models routes preserve native fields and keep speech separate from direct ElevenLabs", () => {
   for (const name of Object.keys(wire.requests)) {
@@ -123,4 +123,50 @@ test("managed wrapper rejects model/route rebinding, unsupported cancellation an
     request("https://www.vydra.ai" + wire.wire.retrievePath + "?key=synthetic"),
     request("https://www.vydra.ai" + wire.wire.retrievePath, "GET", "Basic synthetic"),
   ]) assert.throws(() => adapter.assertDispatch(req));
+});
+
+
+test("Kling distinct references use canonical URL identity", () => {
+  for (const video_url of ["https://ASSETS.example:443/image.png", "https://assets.example/a/../image.png"])
+    assert.throws(() => prepareVydraModel("kling", { prompt: "motion", image_url: "https://assets.example/image.png", video_url }), /motion_reference/);
+});
+
+test("pending and failed Models responses cannot make the actual client download partial output", () => {
+  for (const terminal of [null, "failed", "canceled"]) {
+    const body = adapter.rewrite({ id: wire.completed.id, nativeStatus: "running", terminal,
+      body: { ...wire.partial, outputUrl: "https://assets.example/partial.mp4", output: { url: "https://assets.example/partial.mp4" },
+        data: { videoUrl: "https://assets.example/partial.mp4" }, resultUrls: ["https://assets.example/partial.mp4"] } },
+      { retrieve: "/v1/native/vydra/api/v1/jobs/" + wire.completed.id });
+    assert.doesNotMatch(JSON.stringify(body), /assets\.example|output|videoUrl|resultUrls/);
+    assert.equal(body.id, wire.completed.id);
+  }
+});
+
+test("the Models reader retains its actual operation signal and joins pending input cancellation", async () => {
+  const controller = new AbortController(), reason = { fixture: "owned cancel" };
+  let entered, cancellation, owner;
+  const reading = new Promise(resolve => { entered = resolve; });
+  const response = new Response(new ReadableStream({ pull() { entered(); }, cancel(value) { cancellation = value; } }),
+    { headers: { "content-type": "application/json" } });
+  const pending = adapter.read(response, { ...context, signal: controller.signal, registerInput(value) { owner = value; } });
+  await reading; controller.abort(reason); await assert.rejects(pending);
+  assert.equal(cancellation, reason); assert.ok(owner); assert.equal(response.body.locked, false);
+  await assert.rejects(adapter.read(Response.json(wire.completed), { ...context, signal: undefined }), /operation_signal_required/);
+});
+
+
+test("Models reader preserves independent cancellation and registration failures, including undefined", async () => {
+  for (const reason of [new Error("independent cancellation"), undefined]) {
+    const controller = new AbortController(); let entered, owner;
+    const start = new Promise(resolve => { entered = resolve; });
+    const response = new Response(new ReadableStream({ pull() { entered(); }, cancel() { throw reason; } }), { headers: { "content-type": "application/json" } });
+    const pending = adapter.read(response, { ...context, signal: controller.signal, registerInput(value) { owner = value; } });
+    await start; controller.abort({ owned: true });
+    const result = await pending.then(() => ({ ok: true }), error => ({ ok: false, error }));
+    assert.equal(result.ok, false); assert.ok(owner); assert.equal(response.body.locked, false);
+  }
+  let canceled = 0;
+  const response = new Response(new ReadableStream({ cancel() { canceled++; } }), { headers: { "content-type": "application/json" } });
+  const result = await adapter.read(response, { ...context, registerInput() { throw undefined; } }).then(() => ({ ok: true }), error => ({ ok: false, error }));
+  assert.deepEqual(result, { ok: false, error: undefined }); assert.equal(canceled, 1); assert.equal(response.body.locked, false);
 });

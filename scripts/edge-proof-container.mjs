@@ -201,9 +201,9 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "providers/_schema/service-provider.schema.json",
-    "blob": "702eb617c91a23b836042d0cabde7c6759c3cfae",
-    "sha256": "67f9768a37191fcc90c90dd68f4bdecbae22b80af16beda654af044a008694b8",
-    "bytes": 117646
+    "blob": "b6f7a26a40a1275e357df33f2afbda8faa5b347c",
+    "sha256": "1d48a0e210dce57c0a43fbea6c0cccb39fa99d65a77e2afc8a6f8684667ec993",
+    "bytes": 117620
   }
 ]
 );
