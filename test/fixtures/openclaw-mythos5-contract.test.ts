@@ -42,6 +42,12 @@ function registeredMythosCatalog(result: Awaited<ReturnType<typeof runProviderSt
   return result.providers.anthropic;
 }
 
+function replayAssistant(assistant: any, foreign: boolean) {
+  // The serving-model receipt is authoritative in the pinned replay contract.
+  // A synthetic incompatible-origin negative must change BOTH identity fields.
+  return foreign ? { ...assistant, model: "claude-sonnet-4-6", responseModel: "claude-sonnet-4-6" } : assistant;
+}
+
 async function start(id: string, options: { simple?: boolean; apiKey?: string; signal?: AbortSignal; effort?: string; modifiers?: Record<string, string>; replay?: boolean; foreignReplay?: boolean; image?: boolean } = {}) {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("anthropic");
@@ -61,7 +67,7 @@ async function start(id: string, options: { simple?: boolean; apiKey?: string; s
   const history: AgentMessage[] = [user];
   if (options.replay) {
     assert.ok(retainedAssistant);
-    const assistant = options.foreignReplay ? { ...retainedAssistant, model: "claude-sonnet-4-6" } : retainedAssistant;
+    const assistant = replayAssistant(retainedAssistant, options.foreignReplay === true);
     history.push(assistant, { role: "toolResult", toolCallId: "tool_fixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: 3 });
   }
   history.push({ role: "user", content: "fixture mythos_" + id, timestamp: 4 });

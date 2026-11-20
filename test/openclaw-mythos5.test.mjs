@@ -359,6 +359,17 @@ test(phase + " Mythos fixture admits the actual registered named Anthropic catal
   for (const value of [undefined, null, {}, { provider }, { provider: null }]) assert.throws(() => read(value));
 });
 
+test(phase + " Mythos replay negative binds both requested and actual serving identities", () => {
+  const begin = fixtureText.indexOf("function replayAssistant("), end = fixtureText.indexOf("async function start(", begin);
+  const replay = new Function(stripTypeScriptTypes(fixtureText.slice(begin, end)) + ";return replayAssistant;")();
+  const content = [{ type: "thinking", thinkingSignature: "synthetic-signature" }];
+  const original = Object.freeze({ model: models[0], responseModel: models[0], content });
+  assert.equal(replay(original, false), original);
+  const foreign = replay(original, true);
+  assert.equal(foreign.model, "claude-sonnet-4-6"); assert.equal(foreign.responseModel, foreign.model);
+  assert.equal(foreign.content, content); assert.equal(original.responseModel, models[0]);
+});
+
 test(phase + " Mythos original reader rejection and independent release errors remain fatal", async () => {
   for (const reason of [undefined, new Error("synthetic independent")]) {
     const life = createLifetimeObserver(), owner = {}, response = new Response(new ReadableStream({ start(controller) { controller.error(reason); } }));

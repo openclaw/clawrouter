@@ -22,7 +22,12 @@ test("Anthropic products cover API operations and the existing subscription tran
     assert.deepEqual(offer.models?.slice().sort() ?? null, models, capability.id);
   }
   assert.deepEqual(subscription.endpoints, ["messages", "count_tokens"]);
-  assert.deepEqual(subscription.offers, api.offers.filter(offer => subscription.endpoints.includes(offer.endpoint)));
+  const subscriptionModels = ["claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5"].map(id => "anthropic/" + id);
+  assert.deepEqual(subscription.offers, [
+    { endpoint: "messages", capability: "llm.messages", models: subscriptionModels },
+    { endpoint: "count_tokens", capability: "llm.count_tokens", models: subscriptionModels },
+  ]);
+  assert.ok(!subscriptionModels.includes("anthropic/claude-mythos-5"), "API membership grants no subscription entitlement");
 });
 
 test("Anthropic product declarations preserve the entire legacy execution snapshot", () => {
@@ -31,7 +36,9 @@ test("Anthropic product declarations preserve the entire legacy execution snapsh
   delete legacy.products;
   const { products, offer_definitions, ...execution } = compiled.providers[0];
   assert.equal(products.length, 2);
-  assert.equal(offer_definitions.length, 46);
+  const declaredOffers = manifest.products.flatMap(product => product.offers.flatMap(offer => (offer.models ?? [null]).map(model => [product.id, offer.endpoint, offer.capability, model])));
+  assert.equal(new Set(declaredOffers.map(row => JSON.stringify(row))).size, declaredOffers.length);
+  assert.equal(offer_definitions.length, declaredOffers.length);
   assert.deepEqual({ ...compiled, providers: [execution] }, compileProviderSnapshot([legacy]));
   const bundled = JSON.parse(readFileSync(new URL("../worker/generated/provider-snapshot.json", import.meta.url), "utf8"));
   assert.deepEqual(compiled.providers[0], bundled.providers.find(provider => provider.id === "anthropic"));
