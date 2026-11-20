@@ -1,10 +1,18 @@
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { prepareGoogleEmbedding, readGoogleEmbedding } from "./provider-google-embeddings.ts";
+import type { CompiledEndpoint, CompiledProvider } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./utils.ts";
 
 export function nativeEmbeddingMode(format: string): "unary" | "batch" | null {
   return format === "google.embed_content" ? "unary" : format === "google.batch_embed_contents" ? "batch" : null;
+}
+
+// Native embedding bodies are protocol input, not router model selectors.
+export function nativeEmbeddingInput(provider: CompiledProvider, endpoint: CompiledEndpoint): boolean {
+  return nativeEmbeddingMode(endpoint.request_format) !== null || provider.id === "aws-bedrock"
+    && endpoint.request_format === "aws_bedrock.invoke"
+    && provider.capabilities.some(capability => capability.id === "llm.embeddings" && capability.endpoint === endpoint.id);
 }
 
 // Client task formatting and vector normalization stay with the native client.

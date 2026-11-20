@@ -44,20 +44,34 @@ export function usageEventGroups(events: UsageAuditEvent[]): UsageEventGroup[] {
 function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEventGroup {
   const primary = events.find((event) => event.compound_request_stage === "fusion_synthesizer") ?? events[0];
   if (!primary) throw new Error("usage event group cannot be empty");
-  const startedAt = Math.min(...events.map((event) => event.compound_request_started_at_ms ?? event.occurred_at_ms - Math.max(0, event.duration_ms ?? 0)));
-  const occurredAtMs = Math.max(...events.map((event) => event.occurred_at_ms));
+  let startedAt = Infinity;
+  let occurredAtMs = -Infinity;
+  let hasDuration = false;
+  let actualCostMicros = 0;
+  let unpricedRequestCount = 0;
+  let successCount = 0;
+  let expectedCallCount = -Infinity;
+  for (const event of events) {
+    startedAt = Math.min(startedAt, event.compound_request_started_at_ms ?? event.occurred_at_ms - Math.max(0, event.duration_ms ?? 0));
+    occurredAtMs = Math.max(occurredAtMs, event.occurred_at_ms);
+    if (event.duration_ms != null) hasDuration = true;
+    actualCostMicros += event.actual_cost_micros;
+    if (event.cost_basis === "unpriced_usage") unpricedRequestCount += 1;
+    if (event.status === "success") successCount += 1;
+    expectedCallCount = Math.max(expectedCallCount, event.compound_request_size ?? events.length);
+  }
   return {
     id: key,
     compound: Boolean(primary.compound_request_id),
     events: [...events].sort((left, right) => (left.compound_request_index ?? Number.MAX_SAFE_INTEGER) - (right.compound_request_index ?? Number.MAX_SAFE_INTEGER)),
     primary,
     occurredAtMs,
-    durationMs: events.some((event) => event.duration_ms != null) ? occurredAtMs - startedAt : null,
-    actualCostMicros: events.reduce((total, event) => total + event.actual_cost_micros, 0),
-    unpricedRequestCount: events.filter((event) => event.cost_basis === "unpriced_usage").length,
-    successCount: events.filter((event) => event.status === "success").length,
-    expectedCallCount: Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
-    complete: !primary.compound_request_id || events.length >= Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
+    durationMs: hasDuration ? occurredAtMs - startedAt : null,
+    actualCostMicros,
+    unpricedRequestCount,
+    successCount,
+    expectedCallCount,
+    complete: !primary.compound_request_id || events.length >= expectedCallCount,
   };
 }
 

@@ -1,3 +1,4 @@
+import { assertFalRunDispatch } from "./fal-dispatch.ts";
 import { mediaObject } from "./managed-media-json.ts";
 import { readNativeJson } from "./native-json.ts";
 
@@ -32,12 +33,7 @@ export function prepareFalMusic(model: string, value: unknown): FalMusicRequest 
 }
 
 export function assertFalMusicDispatch(request: Request, prepared: FalMusicRequest): void {
-  const url = new URL(request.url);
-  if (request.method !== "POST" || url.origin !== "https://fal.run" || url.pathname !== prepared.path
-    || !(falMusicModels as readonly string[]).includes(prepared.model) || prepared.path !== "/" + prepared.model
-    || url.username || url.password || url.search || url.hash
-    || !/^Key [\x21-\x7e]{1,4096}$/.test(request.headers.get("authorization") ?? "")
-    || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") fail("dispatch");
+  assertFalRunDispatch(request, prepared, falMusicModels, fail);
 }
 
 export interface FalMusicObservation {

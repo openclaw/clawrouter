@@ -1,4 +1,4 @@
-import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
+import { managedCreateAdapter, managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import type { ManagedControl, ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import type { CompiledProvider } from "./types.ts";
 import { HttpError } from "./utils.ts";
@@ -7,9 +7,9 @@ export function managedProbeId(adapter: ManagedLifecycleAdapter): string {
   return adapter.validateId(adapter.identityProbe ?? (adapter.protocol === "replicate.predictions" ? "owner-pin" : "11111111-1111-4111-8111-111111111111"));
 }
 
-export function assertManagedDispatch(protocol: string | undefined, request: Request): void {
+export function assertManagedDispatch(protocol: string | undefined, request: Request, requestFormat?: string): void {
   if (!protocol) return;
-  const adapter = managedLifecycleAdapter(protocol);
+  const adapter = requestFormat === undefined ? managedLifecycleAdapter(protocol) : managedCreateAdapter(protocol, requestFormat);
   if (!adapter || protocol === "dashscope.video" && !adapter.assertDispatch) unavailable();
   try {
     // A Promise cannot be an admission verdict; the hook is deliberately pure.

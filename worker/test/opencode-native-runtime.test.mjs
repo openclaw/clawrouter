@@ -6,6 +6,7 @@ import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot, configuredUpstream, upstreamPath, modelSupportsEndpoint } = await import("../providers.ts");
@@ -83,7 +84,10 @@ async function fixture(t, id, models = null) {
   const values = new Map(), sent = [], events = [], pending = [], responses = [];
   const other = id === "opencode" ? "opencode-go" : "opencode";
   const env = { OPENCODE_API_KEY: "synthetic-console-environment", OPENCODE_GO_API_KEY: "synthetic-go-environment", OPENAI_API_KEY: "synthetic-lab-key",
-    POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map(k => [k, values.get(k) ?? null])) : values.get(key) ?? null; },
+    POLICY_KV: { async get(key, type) {
+      const read = name => { const value = values.get(name) ?? null; return type === "stream" && value !== null ? accessBytesResponse(JSON.stringify(value), "").body : structuredClone(value); };
+      return Array.isArray(key) ? new Map(key.map(name => [name, read(name)])) : read(key);
+    },
       async put(key, value) { values.set(key, JSON.parse(value)); }, async list() { return { keys: [], list_complete: true }; } },
     BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(event) { events.push(event); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
@@ -159,7 +163,9 @@ for (const provider of providers) {
         try {
           assert.equal(request.url, destination(id, endpoint));
           assert.equal(request.headers.get("authorization"), `Bearer synthetic-selected-${id}`);
-          for (const header of ["x-api-key", "x-goog-api-key", "x-opencode-session", "user-agent"]) assert.equal(request.headers.get(header), null);
+          for (const header of ["x-api-key", "x-goog-api-key", "user-agent"]) assert.equal(request.headers.get(header), null);
+          assert.match(request.headers.get("x-opencode-session"), /^crs_[a-f0-9]{64}$/);
+          assert.notEqual(request.headers.get("x-opencode-session"), "synthetic-unbound-session");
           if (endpoint === "messages") assert.equal(request.headers.get("anthropic-version"), "2023-06-01");
           assert.deepEqual(await request.json(), body);
           assert.equal(f.env.BUDGET_LEDGER.get("fixture:paid").reservations()[0].reserved_micros, 7);
@@ -217,14 +223,18 @@ for (const provider of providers) {
       f.reply = () => Response.json({ error: { type: "rate_limit_error", code: "rate_limit_exceeded", message: "synthetic-upstream-error" } }, { status: 429 });
       const r = await f.call(`/v1/native/${id}${paths[endpoint]}`, bodyFor(endpoint, model)); assert.equal(r.status, 429); await r.text(); await f.drain();
       assert.equal(f.sent.length, 1); const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1");
-      assert.equal(event.status, "provider_error"); assert.equal(event.total_tokens, null);
+      assert.equal(event.status, "client_error"); assert.equal(event.total_tokens, null);
+      assert.equal(event.actual_cost_micros, 0, "complete HTTP 429 rejection has no inference charge");
     });
     test(`${id}: ${endpoint} SSE cancellation cancels the transport and preserves unknown usage`, async t => {
       const f = await fixture(t, id); let cancelled = false;
-      f.reply = () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(": fixture\n\n")); }, cancel() { cancelled = true; } },
+      f.reply = () => new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(endpoint === "messages"
+        ? frame({ type: "message_start", message: { id: "msg_partial", type: "message", role: "assistant", model, content: [], usage: { input_tokens: 0, output_tokens: 0 } } })
+        : endpoint === "responses" ? frame({ type: "response.created", response: { id: "resp_partial", object: "response", status: "in_progress", model, output: [] } })
+        : `data: ${JSON.stringify({ id: "chat_partial", object: "chat.completion.chunk", model, choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })}\n\n`)); }, cancel() { cancelled = true; } },
         { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
       const r = await f.call(`/v1/native/${id}${paths[endpoint]}`, bodyFor(endpoint, model, true)); assert.equal(r.status, 200);
-      const reader = r.body.getReader(); await reader.read(); await reader.cancel(); await f.drain(); assert.equal(cancelled, true);
+      const reader = r.body.getReader(); await reader.read(); await reader.cancel(); await reader.closed; reader.releaseLock(); await f.drain(); assert.equal(cancelled, true);
       const [event] = f.events.filter(e => e.type === "clawrouter.usage.v1"); assert.equal(event.status, "client_error"); assert.equal(event.total_tokens, null);
     });
   }

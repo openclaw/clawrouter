@@ -14,6 +14,11 @@ import {
 
 test("self-host preserves the canonical ingress abort compatibility flag", () => {
   const rendered = renderSelfHostConfig(readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8"));
+  assert.match(rendered, /^main = "worker\/index.ts"$/m);
+  assert.match(rendered, /^no_bundle = false$/m);
+  assert.match(rendered, /^LARGE_HTTP_ENABLED = "0"$/m);
+  assert.match(rendered, /^directory = "\.\/admin\/dist"$/m);
+  assert.doesNotMatch(rendered, /LargeHttpPool|LargeHttpSlot|v6-large-http|\[\[containers\]\]|\[triggers\]/);
   assert.match(rendered, /^compatibility_flags = \["enable_request_signal"\]$/m);
 });
 
@@ -84,7 +89,7 @@ EXAMPLE = "kept"
   assert.doesNotMatch(rendered, /\[\[routes\]\]/);
   assert.doesNotMatch(rendered, /\[build\]/);
   assert.doesNotMatch(rendered, /pnpm build/);
-  assert.match(rendered, /\[vars\]\nEXAMPLE = "kept"/);
+  assert.match(rendered, /\[vars\]\nLARGE_HTTP_ENABLED = "0"\nEXAMPLE = "kept"/);
   assert.match(
     rendered,
     /\[\[kv_namespaces\]\]\nbinding = "POLICY_KV"\nid = "self-host-local"/,

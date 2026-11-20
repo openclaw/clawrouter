@@ -1,0 +1,67 @@
+# Jobs and finite Models video creates share only original-owner GET controls.
+schema: clawrouter.service-provider.v1
+id: vydra
+displayName: Vydra Jobs
+status: experimental
+class: rest_json
+service:
+  platform: vydra
+  kind: tool_provider
+  upstreamService: vydra
+  configKeys: [VYDRA_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://www.vydra.ai
+routing:
+  nativePrefixes: [clawrouter-vydra, vydra]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: media.predict
+    endpoint: jobs
+    methods: [POST]
+  - id: media.predict
+    endpoint: model_video
+    methods: [POST]
+endpoints:
+  model_video:
+    path: /api/v1/models/${model}
+    pathParams: [model]
+    requestFormat: vydra.model_video_create
+    responseFormat: vydra.job
+    lifecycle:
+      protocol: vydra.jobs
+      retrieve: job
+    timeoutMs: 120000
+  jobs:
+    path: /api/v1/jobs
+    requestFormat: vydra.job_create
+    responseFormat: vydra.job
+    lifecycle:
+      protocol: vydra.jobs
+      retrieve: job
+      cancel: cancel_job
+    timeoutMs: 120000
+  job:
+    path: /api/v1/jobs/${job_id}
+    method: GET
+    pathParams: [job_id]
+    requestFormat: vydra.job_get
+    responseFormat: vydra.job
+    timeoutMs: 120000
+  cancel_job:
+    path: /api/v1/jobs/${job_id}
+    method: DELETE
+    pathParams: [job_id]
+    requestFormat: vydra.job_cancel
+    responseFormat: vydra.job_cancel
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]

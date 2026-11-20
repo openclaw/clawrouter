@@ -45,8 +45,8 @@ for (const pooled of [false, true]) test(`query preflight preserves original ${p
   assert.equal(prepared.headers.get("authorization"), null); assert.deepEqual(JSON.parse(prepared.requestBody), body);
   assert.equal(f.sent.length, 0); assert.ok(f.budgetCalls.every(call => call.path === "/status"));
 });
-for (const pooled of [false, true]) for (const manifest of [false, true]) test(`unwired speech ${manifest ? "manifest" : "native"}/${pooled ? "pooled" : "environment"} stays zero-egress`, { timeout: 10_000 }, async t => {
-  const f = await setup(t, pooled), query = { output_format: "mp3_44100_128", optimize_streaming_latency: "2" };
+for (const pooled of [false, true]) for (const manifest of [false, true]) test(`unsupported speech query ${manifest ? "manifest" : "native"}/${pooled ? "pooled" : "environment"} stays zero-egress`, { timeout: 10_000 }, async t => {
+  const f = await setup(t, pooled), query = { output_format: "pcm_16000", optimize_streaming_latency: "2" };
   const response = await f.call(manifest ? "/v1/proxy/elevenlabs/speech" : "/v1/native/elevenlabs" + path + "?" + new URLSearchParams(query),
     manifest ? { body, pathParams: { voice_id: voice }, query } : body);
   const result = await response.json(); assert.equal(response.status, 400, JSON.stringify(result));

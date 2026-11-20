@@ -22,15 +22,16 @@ test("plan is fixed, defensive and requires no key, network or receipt", async (
   plan.targets[0].url = "https://unapproved.invalid/";
   assert.equal(responseShapePlan().targets[0].url, "https://www.iana.org/help/example-domains");
   const script = new URL("../scripts/search-response-shape-comparison.mjs", import.meta.url).pathname;
+  const childEnv = { ...process.env, NO_COLOR: "1" }; delete childEnv.FORCE_COLOR;
   for (const args of [[], ["--plan"], ["--help"]]) {
-    const { stdout, stderr } = await execute(process.execPath, [script, ...args]);
+    const { stdout, stderr } = await execute(process.execPath, [script, ...args], { env: childEnv });
     assert.equal(stderr, "");
     const result = JSON.parse(stdout);
     assert.equal(result.mode, "plan-only");
     assert.equal(result.executionAuthorized, false);
     assert.deepEqual(result.plan, responseShapePlan());
   }
-  await assert.rejects(execute(process.execPath, [script, "--run-approved", "--plan"]), error => {
+  await assert.rejects(execute(process.execPath, [script, "--run-approved", "--plan"], { env: childEnv }), error => {
     assert.equal(error.code, 2);
     assert.equal(error.stdout, "");
     assert.equal(error.stderr, "unsupported arguments; use --plan\n");

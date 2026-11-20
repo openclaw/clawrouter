@@ -8,6 +8,29 @@ const context = { action: "retrieve", expectedId: id, requestedVersion: "wan2.6-
 const prepare = body => adapter.prepare(body, new Headers({ authorization: "Bearer synthetic-caller" }), {}, new URLSearchParams());
 const observe = output => adapter.read(Response.json({ output: { task_id: id, ...output } }), context);
 
+test("Wan dispatch guard qualifies selected Bearer credentials and original regions without mutation", () => {
+  for (const [method, path] of [["POST", wire.create.path], ["GET", "/api/v1/tasks/" + id]]) {
+    const request = new Request("https://dashscope-intl.aliyuncs.com" + path, {
+      method, headers: { authorization: "Bearer synthetic-standard", "x-fixture": "unchanged" },
+      ...(method === "POST" ? { body: JSON.stringify(wire.create.body) } : {}),
+    });
+    const headers = [...request.headers];
+    assert.equal(adapter.assertDispatch(request), undefined);
+    assert.deepEqual([...request.headers], headers);
+    assert.equal(request.bodyUsed, false);
+  }
+  for (const authorization of [null, "synthetic-standard", "Basic synthetic", "Token synthetic", "Bearer sk-sp-synthetic", "Bearer first, Bearer second", "Bearer first second"]) {
+    const request = new Request("https://dashscope-intl.aliyuncs.com/api/v1/tasks/" + id,
+      { headers: authorization === null ? {} : { authorization } });
+    assert.throws(() => adapter.assertDispatch(request), error => error.message === "wan_requires_same_region_standard_api_credential");
+  }
+  for (const origin of ["http://dashscope-intl.aliyuncs.com", "https://coding-intl.dashscope.aliyuncs.com", "https://token-plan.ap-southeast-1.maas.aliyuncs.com", "https://example.com"]) {
+    assert.throws(() => adapter.assertDispatch(new Request(origin + "/api/v1/tasks/" + id, {
+      headers: { authorization: "Bearer synthetic-standard" },
+    })), error => error.message === "wan_requires_same_region_standard_api_credential");
+  }
+});
+
 test("Wan prepares only frozen model inputs and owns non-secret async headers", () => {
   assert.equal(wanModels.length, 5);
   const body = structuredClone(wire.create.body), result = prepare(body);
@@ -22,10 +45,10 @@ test("Wan prepares only frozen model inputs and owns non-secret async headers", 
   assert.throws(() => prepare({ ...body, input: { ...body.input, img_url: "https://image.example/a.png" } }));
 });
 
-test("Wan preserves model-specific reference and size/resolution contracts", () => {
-  prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "data:image/png;base64,AAAA" }, parameters: { resolution: "720P", duration: 15 } });
-  for (const model of ["wan2.6-r2v", "wan2.6-r2v-flash"]) prepare({ model, input: { prompt: "synthetic", reference_urls: ["https://media.example/input.mp4"] }, parameters: { size: "1280*720", duration: 10 } });
-  prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { resolution: "1080P", ratio: "16:9", duration: 10 } });
+test("Wan preserves native input validation but denies all image/reference creates without asset binding", () => {
+  assert.throws(() => prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "data:image/png;base64,AAAA" }, parameters: { resolution: "720P", duration: 15 } }), /wan_input_asset_binding_required/);
+  for (const model of ["wan2.6-r2v", "wan2.6-r2v-flash"]) assert.throws(() => prepare({ model, input: { prompt: "synthetic", reference_urls: ["https://media.example/input.mp4"] }, parameters: { size: "1280*720", duration: 10 } }), /wan_input_asset_binding_required/);
+  assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { resolution: "1080P", ratio: "16:9", duration: 10 } }), /wan_input_asset_binding_required/);
   assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_video", url: "data:video/mp4;base64,AAAA" }] } }));
   assert.throws(() => prepare({ model: "wan2.6-i2v", input: { prompt: "synthetic", img_url: "https://user:secret@media.example/image.png" } }));
   assert.throws(() => prepare({ model: "wan2.7-r2v", input: { prompt: "synthetic", media: [{ type: "reference_image", url: "https://media.example/input.png" }] }, parameters: { audio: false } }));

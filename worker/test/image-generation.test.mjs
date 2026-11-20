@@ -13,7 +13,7 @@ const pricing = model.pricing;
 const usage = { input_tokens: 15, output_tokens: 100, total_tokens: 115, input_tokens_details: { text_tokens: 10, image_tokens: 5 } };
 const format = "openai.images_generations";
 
-test("current image aliases and dated snapshots expose modality tariffs and generation only", () => {
+test("current image aliases and dated snapshots expose modality tariffs for generation and edits", () => {
   const images = provider.models.filter(m => m.capabilities.includes("image.generation"));
   assert.equal(images.length, 4);
   assert.equal(capabilityForPath("/v1/images/generations"), "image.generation");
@@ -21,7 +21,7 @@ test("current image aliases and dated snapshots expose modality tariffs and gene
   assert.equal(unifiedPathForEndpoint(provider, endpoint), "/v1/images/generations");
   assert.equal(endpoint.streaming, null);
   for (const m of images) {
-    assert.deepEqual(m.capabilities, ["image.generation"]);
+    assert.deepEqual(m.capabilities, ["image.generation", "image.edit"]);
     assert.equal(m.pricing.textInputMicrosPerMillion, 5_000_000);
     assert.equal(m.pricing.imageInputMicrosPerMillion, 8_000_000);
     assert.equal(m.pricing.imageOutputMicrosPerMillion, 30_000_000);

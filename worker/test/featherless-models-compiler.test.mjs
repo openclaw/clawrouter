@@ -9,6 +9,9 @@ const { FEATHERLESS_MODELS_FORMAT, featherlessCatalogRequest, filterFeatherlessM
 const { discoveryAllows, modelDiscoveryResponse } = await import("../model-discovery.ts");
 const { HttpOperation } = await import("../http-operation.ts");
 const existing = parse(readFileSync(new URL("../../providers/featherless.provider.yaml", import.meta.url), "utf8"));
+// Foundation fixtures remain independent; bundled activation has its own suite.
+existing.capabilities = existing.capabilities.filter(capability => capability.endpoint !== "catalog");
+delete existing.endpoints.catalog;
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
   const manifest = structuredClone(existing);
@@ -36,7 +39,7 @@ test("Featherless catalog compiles a bodyless route with the original selected k
     assert.equal(request.body, null); assert.equal(request.method, "GET");
     assert.equal(request.headers.get("authorization"), upstream.headers.get("authorization"));
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", "Bearer synthetic-selected-key"]]);
-    assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+    assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
   }
   assert.equal(endpoint.auth, null);
   assert.equal(provider.auth.schemes[0].secretKind, "api_key");

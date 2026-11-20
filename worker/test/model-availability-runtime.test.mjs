@@ -5,6 +5,7 @@ import test from "node:test";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { snapshot } = await import("../providers.ts");
 const { authorityCall } = await import("../authority.ts");
@@ -21,7 +22,7 @@ function providerFixture() {
     baseUrls: { default: "https://provider.example" }, routing: { nativePrefixes: [id], modelPrefixes: [`${id}/`] },
     capabilities: [
       { id: "llm.chat", endpoint: "chat", methods: ["POST"] }, { id: "llm.messages", endpoint: "messages", methods: ["POST"] },
-      { id: "models.list", endpoint: "models_list", methods: ["GET"] }, { id: "models.get", endpoint: "models_get", methods: ["GET"] },
+      { id: "models.list", endpoint: "models_list", methods: ["GET"] }, { id: "models.retrieve", endpoint: "models_get", methods: ["GET"] },
     ],
     endpoints: {
       chat: { path: "/v1/chat/completions", requestFormat: "openai.chat_completions", responseFormat: "openai.chat_completions", modelPassthrough: {} },
@@ -43,7 +44,11 @@ async function fixture(t, { restricted = false, anthropic = false } = {}) {
   snapshot.providers.push(provider); t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(provider), 1));
   const values = new Map(), pending = [], responses = [], sent = [], events = [];
   const env = { FIXTURE_API_KEY: "synthetic-environment", POLICY_KV: {
-    async get(key) { return Array.isArray(key) ? new Map(key.map(k => [k, values.get(k) ?? null])) : values.get(key) ?? null; },
+    async get(key, type) {
+      if (Array.isArray(key)) return new Map(key.map(k => [k, values.get(k) ?? null]));
+      const value = values.get(key) ?? null;
+      return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+    },
     async put(key, value) { values.set(key, JSON.parse(value)); },
   }, USAGE_QUEUE: { async send(event) { events.push(event); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env); attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });

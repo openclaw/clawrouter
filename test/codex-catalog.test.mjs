@@ -163,3 +163,12 @@ test("catalog fetch keeps per-model transport qualification without exposing sco
     assert.equal(native.models[0].base_instructions, descriptor.base_instructions);
   } finally { producer.mock.restore(); syncBuiltinESMExports(); }
 });
+
+test("router tier restrictions narrow upstream metadata without stripping access programs or wrapper fields", () => {
+  const input = catalog([model], { offers: [offer(model.id, "http", { permittedServiceTiers: ["default"] })] });
+  const upstream = { models: [{ ...descriptor, available_access_programs: { cyber: ["standard", "daybreak_blue"] } }], future_wrapper: { keep: true } };
+  const result = buildCodexCatalog(input, upstream, "fixture").catalog;
+  assert.deepEqual(result.models[0].service_tiers, []);
+  assert.deepEqual(result.models[0].available_access_programs, upstream.models[0].available_access_programs);
+  assert.deepEqual(result.future_wrapper, upstream.future_wrapper);
+});

@@ -2,7 +2,7 @@ import type { CompiledEndpoint } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
 const mappedMethods: Readonly<Record<string, string>> = {
-  "openai.chat_completions": "POST", "anthropic.messages": "POST",
+  "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.responses": "POST",
   "openai.models": "GET", "anthropic.models": "GET", "synthetic.models": "GET",
 };
 const literalPath = /^\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$(?![\s\S])/;
@@ -20,6 +20,7 @@ export function configuredEndpointPath(endpoint: CompiledEndpoint, transportPath
     || !method || endpoint.method !== method || endpoint.methods.some(value => value !== method)
     || endpoint.response_format !== endpoint.request_format || endpoint.path_params.length || Object.keys(endpoint.path_param_styles).length
     || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.requestPricing || endpoint.toolPricing
+    || endpoint.request_format === "openai.responses" && (endpoint.path !== "/v1/responses" || Object.keys(endpoint.query).length)
     || endpoint.request_format.endsWith(".models") && (endpoint.streaming || endpoint.modelPassthrough)
     || transportPath !== undefined && transportPath !== path) invalid();
   if (baseUrl !== undefined) {

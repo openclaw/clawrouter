@@ -1,3 +1,10 @@
+import type { BackgroundJob } from "./background-store.ts";
+import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
+import { videoControlVersion, videoJsonBytes } from "./minimax-video-operation.ts";
+import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { isMusicCoverControl, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { accessIdentityVerification, type AccessVerification } from "./access.ts";
@@ -6,10 +13,10 @@ import type { AuthorizationSnapshot } from "./authority-contracts.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { currentLocalSession } from "./local-auth.ts";
 import { proxyCredentialFailure, proxyKeyVerification, type ProxyKeyVerification } from "./proxy-auth.ts";
-import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, safeEqual } from "./utils.ts";
+import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
+import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
-interface PublicControlBinding {
+export interface PublicControlBinding {
   credentialId: string | null;
   principalId: string | null;
   policyId: string;
@@ -17,7 +24,46 @@ interface PublicControlBinding {
   tenantId: string;
   proof: ProxyKeyVerification | AccessVerification;
 }
-export type ResponseControlAuthorization = { kind: "public"; binding: PublicControlBinding } | { kind: "collection" };
+export type ResponseControlAuthorization = { kind: "public"; binding: PublicControlBinding } | { kind: "collection"; video?: VideoCollectionContext };
+
+interface VideoCollectionContext {
+  version: typeof videoControlVersion; credentialId: string; principalId: string; policyId: string;
+  tenantId: string; policyGeneration: string; model: string; requestedVersion: string;
+}
+
+// Constructed only by the durable collector from its admitted job, never HTTP input.
+export function videoCollectionAuthorization(job: BackgroundJob): ResponseControlAuthorization {
+  if (!job.facts) denied();
+  const event = job.facts.event, managed = job.managed;
+  if (!managed || managed.protocol !== "minimax.video" || managed.providerId !== "minimax" || job.owner.providerId !== "minimax"
+    || event.auth_type !== "proxy_key" || event.provider !== "minimax" || event.capability !== "media.predict"
+    || !event.credential_id || !event.principal_id || !event.policy_id || !event.tenant_id || !event.model
+    || !isMiniMaxVideoModel(managed.requestedVersion) || !job.owner.grantKey) denied();
+  const video: VideoCollectionContext = { version: videoControlVersion, credentialId: event.credential_id,
+    principalId: event.principal_id, policyId: event.policy_id, tenantId: event.tenant_id,
+    policyGeneration: job.owner.policyGeneration, model: event.model, requestedVersion: managed.requestedVersion };
+  videoJsonBytes(video); return { kind: "collection", video };
+}
+
+async function authorizeVideoCollection(env: Env, input: VideoCollectionContext, owner: ContinuationOwner,
+  signal: AbortSignal, video?: MiniMaxVideoOperation): Promise<AccessPolicy> {
+  videoJsonBytes(input);
+  if (input.version !== videoControlVersion || Object.keys(input).length !== 8 || owner.providerId !== "minimax" || !owner.grantKey
+    || input.policyGeneration !== owner.policyGeneration || !input.credentialId || !input.principalId
+    || !isMiniMaxVideoModel(input.requestedVersion)) denied();
+  const snapshot = await authorityCall<AuthorizationSnapshot>(env, "/authorization/snapshot",
+    { credentialId: input.credentialId, principalId: input.principalId, policyId: input.policyId, video: videoControlVersion },
+    "policy-bindings", signal, undefined, undefined, video);
+  signal.throwIfAborted();
+  const credential = snapshot.credential, entry = snapshot.policy;
+  if (!credential || !entry || entry.policyId !== input.policyId || credential.policyId !== input.policyId
+    || credential.principalId !== input.principalId || snapshot.principalEnabled !== true
+    || entry.policy.generation !== input.policyGeneration || (entry.policy.tenantId ?? "default") !== input.tenantId
+    || entry.policy.providers.length && !entry.policy.providers.includes("minimax")
+    || entry.policy.models != null && !entry.policy.models.includes(input.model)
+    || proxyCredentialFailure(credential, entry, snapshot.principalEnabled)) denied();
+  return entry.policy;
+}
 
 export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseControlAuthorization {
   // Only verifier-returned objects carry provenance. Public-looking identity
@@ -30,11 +76,25 @@ export function publicControlAuthorization(auth: AuthorizedIdentity): ResponseCo
     policyId: auth.policyId, policyGeneration: auth.policy.generation, tenantId: auth.policy.tenantId ?? "default", proof } };
 }
 
-export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string): Promise<void> {
-  if (authorization?.kind === "collection") return;
+export async function authorizeResponseControl(env: Env, authorization: ResponseControlAuthorization, owner: ContinuationOwner, signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false, cover?: MiniMaxMusicCoverControl): Promise<AccessPolicy | undefined> {
+  if (authorization?.kind === "collection") {
+    if (cover) musicCoverUnavailable(403);
+    if (authorization.video) return authorizeVideoCollection(env, authorization.video, owner, signal, video);
+    if (video) denied();
+    return;
+  }
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  const binding = authorization.binding, proof = binding.proof;
-  assertControlCallerLive(authorization);
+  return authorizeIssuedControl(env, authorization.binding, owner, signal, retentionProtocol, wan, search, video, boundedVideo, cover);
+}
+
+// The public path obtains this binding only from publicControlAuthorization.
+// Delegated asset reads obtain it only from a validated, verifier-matched
+// durable receipt issued by that path. URL fields never supply caller proof.
+export async function authorizeIssuedControl(env: Env, binding: PublicControlBinding, owner: ContinuationOwner,
+  signal: AbortSignal, retentionProtocol?: string, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, boundedVideo = false, cover?: MiniMaxMusicCoverControl): Promise<AccessPolicy> {
+  const proof = binding.proof;
+  if (cover && (!isMusicCoverControl(cover) || proof.kind !== "proxy_key" || wan || search || video || retentionProtocol)) musicCoverUnavailable(403);
+  assertIssuedControlLive(binding);
   if (binding.policyGeneration !== owner.policyGeneration) denied();
   if (proof.kind === "proxy_key") {
     if (proof.credentialId !== binding.credentialId || proof.principalId !== binding.principalId) denied();
@@ -44,7 +104,7 @@ export async function authorizeResponseControl(env: Env, authorization: Response
   if (proof.kind === "local" && !await currentLocalSession(proof, env)) denied();
   signal.throwIfAborted();
   const snapshot = await authorityCall<AuthorizationSnapshot>(env, "/authorization/snapshot",
-    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId }, "policy-bindings", signal);
+    { credentialId: binding.credentialId, principalId: binding.principalId, policyId: binding.policyId, ...(video || boundedVideo ? { video: videoControlVersion } : {}) }, "policy-bindings", signal, wan, search, video, cover);
   const policy = snapshot.policy;
   if (!policy || policy.policyId !== binding.policyId || !policy.policy.enabled || policy.policy.generation !== binding.policyGeneration
     || (policy.policy.tenantId ?? "default") !== binding.tenantId
@@ -57,14 +117,27 @@ export async function authorizeResponseControl(env: Env, authorization: Response
     const failure = proxyCredentialFailure(credential, policy, snapshot.principalEnabled);
     if (failure) throw failure;
   } else if (snapshot.principalEnabled !== true || snapshot.policyHeld !== true) denied();
+  return policy.policy;
 }
 
 // Called synchronously after the final await and immediately before fetch.
 export function assertControlCallerLive(authorization: ResponseControlAuthorization): void {
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
-  const proof = authorization.binding.proof;
+  assertIssuedControlLive(authorization.binding);
+}
+export function assertIssuedControlLive(binding: PublicControlBinding): void {
+  const proof = binding.proof;
   if (proof.kind === "proxy_key" && credentialExpired(proof)) throw credentialExpiryError(proof.expiresAt!);
   if (proof.kind !== "proxy_key" && (!Number.isSafeInteger(proof.expiresAtMs) || Date.now() >= proof.expiresAtMs)) denied();
 }
 function denied(): never { throw new HttpError(403, "response_caller_unavailable", "the original response caller is no longer authorized"); }
+
+// Public proof is revalidated by authorizeResponseControl before using this
+// scope. Collection authority must never authorize a new input upload/create.
+export async function publicControlScope(authorization: ResponseControlAuthorization): Promise<string> {
+  if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
+  const { binding } = authorization;
+  return `http-continuations:${await sha256Hex(JSON.stringify([binding.proof.kind === "proxy_key" ? "proxy_key" : "access",
+    binding.tenantId, binding.policyId, binding.credentialId, binding.principalId]))}`;
+}

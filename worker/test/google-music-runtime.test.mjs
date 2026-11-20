@@ -21,6 +21,8 @@ const bytes = value => new TextEncoder().encode(JSON.stringify(value));
 
 async function setup(t, options = {}) {
   const manifest = structuredClone(source);
+  manifest.capabilities = manifest.capabilities.filter(value => value.id !== "audio.generate" || value.endpoint !== "music_generate");
+  manifest.models.entries = manifest.models.entries.filter(value => !models.some(upstream => value.id === `google/${upstream}`));
   manifest.capabilities.push({ id: "audio.generate", endpoint: "music_generate", methods: ["POST"] });
   manifest.endpoints.music_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.music_generate", responseFormat: "google.music", timeoutMs: 600000 };

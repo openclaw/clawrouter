@@ -1,3 +1,4 @@
+import { inputUnavailable, managedInputState, type ManagedInputAllocation, type ManagedInputBinding } from "./managed-input-receipt.ts";
 import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
 import { collectBackground } from "./background-collection.ts";
 import { BackgroundStore, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
@@ -12,8 +13,14 @@ import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
+import { assertPublishedVerifier, samePublishedInput, publishedInputUnavailable, type PublishedInputBinding,
+  type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 
-type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
+type PublishedInputAction = { action: "asset_allocate" | "asset_claim_publish" | "asset_bind_publish" | "asset_claim_forward";
+  binding: PublishedInputBinding; object?: PublishedInputObject; attempt?: PublishedInputAttempt }
+  | { action: "asset_get"; id: string; verifierDigest: string };
+
+type Input = { summary?: true; input?: ManagedInputAllocation; binding?: ManagedInputBinding; imageId?: string; action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files" | "input_allocate" | "input_get" | "input_claim_upload" | "input_bind_upload" | "input_claim_create"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -50,7 +57,62 @@ export class ResponsesScopeStore {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const input = await readJson<Input>(request);
+    const value = await readJson<Input | PublishedInputAction>(request);
+    if (typeof value?.action === "string" && value.action.startsWith("asset_")) {
+      const input = value as PublishedInputAction;
+      if (input.action === "asset_get") {
+        if (Object.keys(input).sort().join(",") !== "action,id,verifierDigest") publishedInputUnavailable();
+        return this.serial(() => {
+          const receipt = this.jobs.publishedInput(input.id);
+          assertPublishedVerifier(receipt, input.verifierDigest);
+          return json(receipt);
+        }, false);
+      }
+      const field = input.action === "asset_bind_publish" ? "object" : input.action === "asset_claim_forward" ? "attempt" : undefined;
+      if (Object.keys(input).sort().join(",") !== ["action", "binding", ...(field ? [field] : [])].sort().join(",")) publishedInputUnavailable();
+      // No external awaits, ledger ACKs, alarms or callback into a held grant
+      // owner. Publication/forwarding owners perform their own final checks.
+      return this.serial(() => this.storage.transactionSync(() => {
+        const receipt = input.action === "asset_allocate" ? this.jobs.allocatePublishedInput(input.binding)
+          : input.action === "asset_claim_publish" ? this.jobs.claimPublishedInputPublication(input.binding)
+          : input.action === "asset_bind_publish" && input.object ? this.jobs.bindPublishedInputObject(input.binding, input.object)
+          : input.action === "asset_claim_forward" && input.attempt ? this.jobs.claimPublishedInputForward(input.binding, input.attempt)
+          : publishedInputUnavailable();
+        if (!samePublishedInput(receipt.binding, input.binding)) publishedInputUnavailable();
+        return json({ acknowledged: true, receipt });
+      }), false);
+    }
+    const input = value as Input;
+    if (input.summary !== undefined && (input.summary !== true || !input.action.startsWith("input_"))) inputUnavailable();
+    if (input.action === "input_allocate" && input.input) {
+      const job = await this.mutate(() => this.jobs.allocateInput(input.input!));
+      await this.reserve(job);
+      await this.reserve(job, true);
+      return json({ allocated: true, receipt: await this.serial(() => input.summary ? managedInputState(this.jobs.get(input.input!.binding.jobId), input.input!.binding) : this.jobs.getInput(input.input!.binding), false) });
+    }
+    if (input.action.startsWith("input_")) {
+      if (!input.binding) inputUnavailable();
+      const binding = input.binding;
+      const receipt = () => input.summary ? managedInputState(this.jobs.get(binding.jobId), binding) : this.jobs.getInput(binding);
+      if (input.action === "input_get") return this.serial(() => json(receipt()), false);
+      if (input.action === "input_bind_upload" && typeof input.imageId === "string")
+        return this.mutate(() => { this.jobs.bindInputUpload(binding, input.imageId!); return json({ bound: true, receipt: receipt() }); });
+      if (input.action === "input_claim_upload" || input.action === "input_claim_create") {
+        const upload = input.action === "input_claim_upload";
+        const operation = await this.mutate(() => upload ? this.jobs.claimInputUpload(binding) : this.jobs.claimInputCreate(binding));
+        // The durable uncertainty/attempt claim precedes ledger acknowledgments.
+        // A missing ACK never permits another upload or a replacement img_id.
+        for (let index = 0; index < operation.legs.length; index++) {
+          const leg = operation.legs[index];
+          await bounded(signal => markBudgetDispatched(this.env, { reservedMicros: operation.reservedMicros,
+            reservations: [{ objectName: leg.intent.objectName, reservationId: leg.intent.request.reservationId }] }, signal));
+          await this.mutate(() => this.jobs.dispatched(binding.jobId, index, upload));
+        }
+        if (!upload) await this.mutate(() => this.jobs.beginEgress(binding.jobId));
+        return this.serial(() => json({ claimed: true, receipt: receipt() }), false);
+      }
+      inputUnavailable();
+    }
     if (input.action === "get") return this.serial(() => json(this.jobs.get(input.id)), false);
     if (input.action === "list") return this.serial(() => json({ records: this.jobs.list(input.after) }), false);
     if (input.action === "admit" && input.admission && !input.admission.managed) return json(await this.admit(input.admission));
@@ -106,15 +168,16 @@ export class ResponsesScopeStore {
     return { admitted: true };
   }
 
-  private async reserve(job: BackgroundJob): Promise<void> {
-    for (let index = 0; index < job.legs.length; index++) {
-      const intent = await this.mutate(() => this.jobs.beginReserve(job.id, index));
+  private async reserve(job: BackgroundJob, upload = false): Promise<void> {
+    const operation = upload ? job.inputReceipt!.upload as BackgroundJob : job;
+    for (let index = 0; index < operation.legs.length; index++) {
+      const intent = await this.mutate(() => this.jobs.beginReserve(job.id, index, upload));
       try {
         await bounded(signal => reserveLedgerIntent(this.env, intent, signal));
-        await this.mutate(() => this.jobs.reserved(job.id, index, true));
+        await this.mutate(() => this.jobs.reserved(job.id, index, true, upload));
       } catch (error) {
         await this.mutate(() => {
-          if (error instanceof HttpError && error.status === 402) this.jobs.reserved(job.id, index, false);
+          if (error instanceof HttpError && error.status === 402) this.jobs.reserved(job.id, index, false, upload);
           this.freeze(job.id, { occurredAtMs: Date.now(), statusCode: error instanceof HttpError ? error.status : 503, status: error instanceof HttpError && error.status === 402 ? "denied" : "provider_error", billable: false, tokens: null, contentRef: null });
         });
         throw error instanceof HttpError ? error : new HttpError(503, "accounting_unavailable", "background admission could not confirm budget ownership; recovery remains pending");
@@ -175,6 +238,8 @@ export class ResponsesScopeStore {
     const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
     if (Date.now() >= until) return;
     try {
+      const upload = claimed.inputReceipt?.upload;
+      if (upload && liveBackground(upload) && upload.event) await this.settleOperation(upload, true, until);
       if (!claimed.event) {
         if (claimed.managed) {
           const { collectManagedPrediction } = await import("./managed-predictions.ts");
@@ -187,27 +252,31 @@ export class ResponsesScopeStore {
       const current = await this.mutate(() => this.jobs.get(claimed.id));
       if (!current || !liveBackground(current) || current.attempts !== claimed.attempts || Date.now() >= current.replayUntil) return;
       if (!current.event) { await this.mutate(() => this.jobs.retry(current.id, null, claimed.attempts)); return; }
-      const event = current.event;
+      await this.settleOperation(current, false, until);
+      await this.mutate(() => this.jobs.retry(current.id, "accounting_unavailable", claimed.attempts));
+    } catch {
+      await this.mutate(() => this.jobs.retry(claimed.id, "observation_unavailable", claimed.attempts));
+    }
+  }
+
+  private async settleOperation(current: BackgroundJob, upload: boolean, until: number): Promise<void> {
+    const event = current.event!;
       await Promise.all([
         ...current.legs.map(async (leg, index) => {
           if (leg.settlement === "settled") return;
           let disposition: SettlementDisposition = "settled";
           try { await bounded(signal => settleLedger(this.env, leg.intent.objectName, { reservationId: leg.intent.request.reservationId, actualCostMicros: event.actual_cost_micros }, signal), until); }
           catch (error) { disposition = error instanceof BudgetSettlementError ? error.disposition : "unavailable"; }
-          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, index, disposition));
+          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, index, disposition, upload));
         }),
         (async () => {
           if (["stored", "duplicate", "expired_by_retention"].includes(current.usage)) return;
           let disposition: "stored" | "duplicate" | "expired_by_retention" | "unavailable";
           try { disposition = (await bounded(signal => ingestUsage(this.env, event, signal), until)).outcome; }
           catch { disposition = "unavailable"; }
-          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, "usage", disposition));
+          await this.mutate(() => this.jobs.acknowledge(current.id, event.id, "usage", disposition, upload));
         })(),
       ]);
-      await this.mutate(() => this.jobs.retry(current.id, "accounting_unavailable", claimed.attempts));
-    } catch {
-      await this.mutate(() => this.jobs.retry(claimed.id, "observation_unavailable", claimed.attempts));
-    }
   }
 
   private mutate<T>(operation: () => T, alarm = false): Promise<T> { return this.serial(() => this.storage.transactionSync(operation), true, alarm); }

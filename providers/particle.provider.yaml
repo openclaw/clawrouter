@@ -1,4 +1,4 @@
-# Chat API only; qualification: docs/hosted-specialist-providers.md.
+# Frozen Chat and keyed model discovery: docs/particle-native-catalog.md.
 # Endpoint/model source checked 2026-11-03: https://docs.particle.ai/
 schema: clawrouter.service-provider.v1
 id: particle
@@ -27,10 +27,19 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -41,8 +50,25 @@ endpoints:
 models:
   entries:
     - id: particle/particle-ai/particle-1
+      displayName: "Particle 1"
       upstream: particle-1
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, high, max]
+      requestParameters:
+        chat_completions:
+          sources: [https://docs.particle.ai/models, https://docs.particle.ai/reasoning]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.particle.ai/models, https://docs.particle.ai/models-endpoint]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+            maxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

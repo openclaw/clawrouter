@@ -2,6 +2,7 @@ import { googleField, googleInt32, googleServiceTier } from "./google-protocol.t
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
 export interface UsageTokens {
+  reasoning?: number | null; // Subset of output, never an additional billable category.
   webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
@@ -17,7 +18,9 @@ export interface UsageTokens {
   billedTokens?: { input: number | null; output: number | null };
 }
 
-export function extractUsageTokens(value: unknown): UsageTokens | null {
+export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string }
+
+export function extractUsageTokens(value: unknown, context?: Readonly<UsageTokenContext>): UsageTokens | null {
   const root = record(value);
   if (root && ("usageMetadata" in root || "usage_metadata" in root)) return googleUsageTokens(googleField(root, "usageMetadata", "usage_metadata"));
   const usage = root?.type === "message-end" ? record(record(root.delta)?.usage) : usageRecord(root);
@@ -26,8 +29,11 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
+  const outputDetails = record(usage.output_tokens_details ?? usage.completion_tokens_details);
+  const reportedReasoning = outputDetails && Object.hasOwn(outputDetails, "reasoning_tokens")
+    ? subsetCounter(outputDetails.reasoning_tokens, output) : undefined;
   const inclusivePrompt = "prompt_tokens" in usage;
-  const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput)
+  const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput, context)
     : details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
   const cacheCreation = record(usage.cache_creation);
   const cacheWrite5m = cacheCreation ? pickNumber(cacheCreation, "ephemeral_5m_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_5m_input_tokens");
@@ -45,7 +51,7 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   const modifiers = anthropicModifiers(usage);
   const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
   const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(reportedReasoning !== undefined ? { reasoning: reportedReasoning } : {}), ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 // Cohere reports observed context separately from the units it bills. Missing
@@ -59,8 +65,13 @@ function cohereUsageTokens(usage: Record<string, unknown>): UsageTokens {
     billedTokens: { input: count(billed?.input_tokens), output: count(billed?.output_tokens) } };
 }
 
-function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null): number | null {
-  const hits = [details?.cached_tokens, details?.cache_read_input_tokens, usage.prompt_cache_hit_tokens].filter(value => value !== undefined);
+function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null, context?: Readonly<UsageTokenContext>): number | null {
+  // StepFun standard Chat reports a cache-hit subset at usage.cached_tokens.
+  // Neither the response's model field nor another product grants this meaning.
+  const stepfun = (context?.providerId === "stepfun" || context?.providerId === "stepfun-cn")
+    && context.requestFormat === "openai.chat_completions" && context.responseFormat === "openai.chat_completions";
+  const hits = [details?.cached_tokens, details?.cache_read_input_tokens, usage.prompt_cache_hit_tokens,
+    ...(stepfun ? [usage.cached_tokens] : [])].filter(value => value !== undefined);
   const prompt = usage.prompt_tokens, miss = usage.prompt_cache_miss_tokens;
   // Conflicting or invalid cache evidence cannot establish a discount. Keep the
   // observed inclusive input and let pricing charge it at the full input rate.
@@ -83,7 +94,7 @@ function googleUsageTokens(value: unknown): UsageTokens | null {
   const tier = googleField(value, "serviceTier", "service_tier");
   // Absent/null ProtoJSON fields are unset; null in normalized usage instead
   // records an explicit invalid tier so accounting cannot assume Standard.
-  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: thoughts,
     ...(tier == null ? {} : { serviceTier: googleServiceTier(tier) }) };
 }
 
@@ -128,25 +139,25 @@ export function responsesObservation(value: unknown): ResponsesObservation | nul
   return { id, status: status as ResponsesObservation["status"], terminal: status !== "queued" && status !== "in_progress", tokens: extractUsageTokens(root) };
 }
 
-export function extractSseUsageTokens(text: string): UsageTokens | null {
-  const inspector = createSseUsageInspector();
+export function extractSseUsageTokens(text: string, context?: Readonly<UsageTokenContext>): UsageTokens | null {
+  const inspector = createSseUsageInspector(undefined, undefined, context);
   inspector.push(new TextEncoder().encode(text));
   return inspector.result().tokens;
 }
 
 export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error"; value?: unknown } | { kind: "invalid" } | { kind: "unavailable" };
 
-function rejectionOnlyEvidence(evidence: SseUsageEvidence): boolean {
+function rejectionOnlyEvidence(evidence: SseUsageEvidence, context?: Readonly<UsageTokenContext>): boolean {
   const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
   // A failure is not necessarily a rejection before generation. Usage and
   // nonempty output take precedence over its error/terminal classification.
   const outputs = [root?.output, record(root?.response)?.output];
-  if (root && (extractUsageTokens(root) || outputs.some(output => Array.isArray(output) ? output.length > 0 : output != null))) return false;
+  if (root && (extractUsageTokens(root, context) || outputs.some(output => Array.isArray(output) ? output.length > 0 : output != null))) return false;
   return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
 }
 
-export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void) {
-  const accumulator = createSseUsageAccumulator(revokeRejection);
+export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>) {
+  const accumulator = createSseUsageAccumulator(revokeRejection, context);
   function evidence(frame: string | null): SseUsageEvidence | null {
     if (frame === null) return { kind: "unavailable" };
     const lines = frame.split("\n");
@@ -182,7 +193,7 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
 
 // Both bounded frame parsing and the Responses scalar projection feed one
 // accounting state owner; parser limits cannot invent a terminal provider error.
-export function createSseUsageAccumulator(revokeRejection?: () => void) {
+export function createSseUsageAccumulator(revokeRejection?: () => void, context?: Readonly<UsageTokenContext>) {
   let provisionalRejection = !!revokeRejection;
   function continuedWork() {
     if (!provisionalRejection) return;
@@ -199,7 +210,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
   function accept(evidence: SseUsageEvidence) {
     const root = evidence.kind === "data" || evidence.kind === "error" ? record(evidence.value) : null;
     // End markers carry no content or usage; later work still revokes rejection.
-    if (provisionalRejection && !rejectionOnlyEvidence(evidence)) continuedWork();
+    if (provisionalRejection && !rejectionOnlyEvidence(evidence, context)) continuedWork();
     if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
@@ -209,7 +220,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
     if (evidence.kind === "error") {
       // Preserve the normal event:error precedence. Only the provisional
       // rejection path can resume accounting from a usage-bearing error event.
-      if (revokeRejection && !provisionalRejection && outcome === null) terminalTokens = extractUsageTokens(root);
+      if (revokeRejection && !provisionalRejection && outcome === null) terminalTokens = extractUsageTokens(root, context);
       outcome = "provider_error"; return;
     }
     if (outcome !== null) return;
@@ -222,7 +233,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
     if (evidence.kind === "invalid") { if (protocol) outcome = "provider_error"; found = null; return; }
     if (!root) { if (protocol) outcome = "provider_error"; found = null; return; }
     const terminal = responseOutcome(root);
-    if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
+    if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root, context); return; }
     if (typeof root.type === "string" && root.type.startsWith("response.")) protocol = "response";
     if (typeof root.type === "string" && /^(message|content|tool-call|tool-plan|citation)-/.test(root.type)) protocol = "cohere";
     if (root.object === "chat.completion.chunk") {
@@ -253,9 +264,9 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
       if (message) message.content = undefined;
     } else if (root.type === "message_stop") {
       outcome = "success";
-      terminalTokens = messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }) : null;
+      terminalTokens = messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }, context) : null;
     } else {
-      const tokens = extractUsageTokens(root);
+      const tokens = extractUsageTokens(root, context);
       // A malformed final native snapshot invalidates an earlier partial one.
       // Ordinary content-only chunks still retain the latest usage snapshot.
       found = root && ("usageMetadata" in root || "usage_metadata" in root) ? tokens : tokens ?? found;
@@ -266,7 +277,7 @@ export function createSseUsageAccumulator(revokeRejection?: () => void) {
     unfinished(evidence: SseUsageEvidence | null) {
       // EOF/cancellation cannot certify unfinished nonempty data as error-only.
       // Never accept its usage or terminal facts without an SSE boundary.
-      if (provisionalRejection && evidence && !rejectionOnlyEvidence(evidence)) {
+      if (provisionalRejection && evidence && !rejectionOnlyEvidence(evidence, context)) {
         continuedWork(); uncertain = true; found = null; messageUsage = null;
       }
     },
@@ -346,6 +357,10 @@ function pickNumber(value: Record<string, unknown>, ...keys: string[]): number |
     if (number != null) return number;
   }
   return null;
+}
+
+function subsetCounter(value: unknown, inclusive: number | null): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && inclusive !== null && value <= inclusive ? value : null;
 }
 
 function searchRequests(value: unknown): number | null {

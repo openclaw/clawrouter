@@ -1,4 +1,5 @@
 import { policyRequestCost } from "../../../../shared/request-pricing";
+import { fusionAdviserModels } from "../../../../shared/fusion-strategy";
 import { type FormEvent, type SetStateAction, useRef, useState } from "react";
 import { errorMessage, policyCoversProvider } from "../../domain";
 import { defaultFusion, demo } from "../../ui-config";
@@ -103,7 +104,7 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
 
 function demoReadiness(config: FusionConfig, policy?: AccessPolicy): FusionReadiness {
   if (!policy) throw new Error("select a policy to check Fusion readiness");
-  const models = [...config.adviserModels, config.aggregatorModel];
+  const models = [...fusionAdviserModels(config), config.aggregatorModel];
   const calls = models.map((model, index) => {
     const provider = model.startsWith("local/") ? "local-openai" : model.split("/")[0] ?? "unknown";
     const policyAllowed = policy.enabled && policyCoversProvider(policy, provider);
@@ -129,7 +130,7 @@ function demoReadiness(config: FusionConfig, policy?: AccessPolicy): FusionReadi
     executable,
     advertisable: config.enabled && executable,
     readyAdviserCount: calls.filter((call) => call.stage === "adviser" && call.executable).length,
-    adviserCount: config.adviserModels.length,
+    adviserCount: fusionAdviserModels(config).length,
     callCount: calls.length,
     estimatedReservationMicros: calls.reduce((sum, call) => sum + call.estimatedReservationMicros, 0),
     budgetConfigured: policy.monthlyBudgetMicros != null,

@@ -28,6 +28,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -36,25 +39,198 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    requestPricing:
+      unit: request
+      version: xai-responses-outcome-2026-11-03
+      effectiveAt: "2026-11-03"
+      source: https://docs.x.ai/developers/pricing#usage-guidelines-violation-fee
+      outcome: xai.responses_violation
+      maximumAdditionalMicros: 50000
+      receipt: xai.usage.cost_in_usd_ticks
+    streaming: sse
+    timeoutMs: 600000
 models:
   entries:
     - id: xai/grok-4.3
+      displayName: "Grok 4.3"
       upstream: grok-4.3
       capabilities: [llm.chat]
       pricingRef: xai-grok-4-3-standard-2026-06-21
       pricing:
         effectiveAt: "2026-06-21"
-        source: https://api.x.ai/v1/models/grok-4.3
+        checkedAt: "2026-11-04"
+        source: https://docs.x.ai/developers/pricing
         inputMicrosPerMillion: 1250000
         cachedInputMicrosPerMillion: 200000
         outputMicrosPerMillion: 2500000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 131072
         longContext:
-          thresholdInputTokens: 200000
+          # The shared threshold is exclusive; xAI charges long rates at >=200k.
+          # https://docs.x.ai/developers/pricing
+          thresholdInputTokens: 199999
           inputMicrosPerMillion: 2500000
           cachedInputMicrosPerMillion: 400000
           outputMicrosPerMillion: 5000000
+    - id: xai/grok-4.6
+      displayName: "Grok 4.6"
+      upstream: grok-4.6
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.6
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.6
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 500000
+    - id: xai/grok-4.5
+      displayName: "Grok 4.5"
+      upstream: grok-4.5
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.5
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.5
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 500000
+    - id: xai/grok-build-0.1
+      displayName: "Grok Build 0.1"
+      upstream: grok-build-0.1
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-build-0.1
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-build-0.1
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 256000
+    - id: xai/grok-4.20-0309-reasoning
+      displayName: "Grok 4.20 (0309, Reasoning)"
+      upstream: grok-4.20-0309-reasoning
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.20-0309-reasoning
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.20-0309-reasoning
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 1000000
+    - id: xai/grok-4.20-0309-non-reasoning
+      displayName: "Grok 4.20 (0309, Non-Reasoning)"
+      upstream: grok-4.20-0309-non-reasoning
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning
+          checkedAt: "2026-11-04"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.20-0309-non-reasoning
+            checkedAt: "2026-11-04"
+            input: [text, image]
+            contextWindow: 1000000
+    - id: xai/grok-4.7
+      upstream: grok-4.7
+      capabilities: [llm.responses]
+      supportedReasoningEfforts: [low, medium, high, xhigh]
+      requestParameters:
+        responses:
+          sources:
+            - https://docs.x.ai/developers/models/grok-4.7
+            - https://docs.x.ai/developers/model-capabilities/text/best-practices
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: high
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses:
+            sources:
+              - https://docs.x.ai/developers/models/grok-4.7
+              - https://docs.x.ai/developers/tools/web-search
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 500000
+            hostedTools: [web_search]
+      pricingRef: xai-grok-4-7-token-rates-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://docs.x.ai/developers/models/grok-4.7
+        # The bound outcome tariff handles this gap only on its qualified runtime
+        # path. Hosted tool fees and iteration bounds remain independent gaps.
+        unpricedCosts: [request_fee]
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 500000
+        outputMicrosPerMillion: 6000000
+        maxInputTokens: 500000
+        defaultMaxOutputTokens: 500000
+        longContext: &grok47LongContext
+          # The upstream tariff starts at >=200k; the runtime compares >.
+          thresholdInputTokens: 199999
+          inputMicrosPerMillion: 4000000
+          cachedInputMicrosPerMillion: 1000000
+          outputMicrosPerMillion: 12000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 500000
+            outputMicrosPerMillion: 6000000
+            longContext: *grok47LongContext
+          - id: priority
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 1000000
+            outputMicrosPerMillion: 12000000
+            longContext:
+              thresholdInputTokens: 199999
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 2000000
+              outputMicrosPerMillion: 24000000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

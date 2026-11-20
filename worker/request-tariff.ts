@@ -1,6 +1,6 @@
 import { prepareXaiImage, type XaiImageRequest } from "./xai-images.ts";
-import { imageRequestReserve, requestOutcomeCost, type ImageRequestSelection, type RequestCostReceipt } from "./pricing.ts";
-import type { ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
+import { deepSeekSearchReserve, imageRequestReserve, requestOutcomeCost, type ImageRequestSelection, type RequestCostReceipt } from "./pricing.ts";
+import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { CompiledEndpoint, ProxyRequestBody } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -31,10 +31,17 @@ export interface ImageRequestTariff {
   selection: Readonly<ImageRequestSelection>;
   micros: number;
 }
-export type RequestTariff = SuccessfulRequestTariff | OutcomeRequestTariff | ImageRequestTariff;
+export interface DeepSeekSearchTariff {
+  kind: "deepseek_search";
+  version: string;
+  effectiveAt: string;
+  pricing: Readonly<DeepSeekSearchRequestPricing>;
+  micros: number;
+}
+export type RequestTariff = SuccessfulRequestTariff | OutcomeRequestTariff | ImageRequestTariff | DeepSeekSearchTariff;
 export type RequestTariffOutcome = "succeeded" | "failed" | "unknown" | "unsent";
 export type RequestTariffEndpoint = Partial<Pick<CompiledEndpoint,
-  "method" | "path" | "request_format" | "response_format" | "streaming" | "lifecycle" | "responsesLifecycle" | "websocket" | "modelPassthrough" | "query" | "requestPricing">>;
+  "method" | "path" | "upstreamPath" | "request_format" | "response_format" | "streaming" | "lifecycle" | "responsesLifecycle" | "websocket" | "modelPassthrough" | "query" | "requestPricing">>;
 
 export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: ProxyRequestBody, preparedImage?: XaiImageRequest): RequestTariff | undefined {
   const pricing = endpoint.requestPricing;
@@ -67,6 +74,18 @@ export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: Proxy
     return Object.freeze({ kind: "outcome_request", version: pricing.version, effectiveAt: pricing.effectiveAt,
       pricing: Object.freeze({ ...pricing }), model: body.model });
   }
+  // Narrow native-result tariffs before the successful-request parameter table.
+  // Request bodies and native billing counters cannot select a different rate.
+  if ("protocol" in pricing) {
+    if (pricing.protocol !== "deepseek.search" || endpoint.method !== "POST" || endpoint.path !== "/v1/tools/search"
+      || endpoint.request_format !== "deepseek.search" || endpoint.response_format !== "deepseek.search" || endpoint.upstreamPath !== undefined
+      || endpoint.streaming || endpoint.lifecycle || endpoint.responsesLifecycle || endpoint.websocket || endpoint.modelPassthrough
+      || Object.keys(endpoint.query ?? {}).length) unqualified();
+    const micros = deepSeekSearchReserve(pricing);
+    if (micros === null) unqualified();
+    return Object.freeze({ kind: "deepseek_search", version: pricing.version, effectiveAt: pricing.effectiveAt,
+      pricing: Object.freeze({ ...pricing }), micros });
+  }
   const rates = pricing.parameterRates;
   const amount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
   if (endpoint.method !== "POST" || endpoint.path !== "/search" || endpoint.request_format !== "perplexity.search" || endpoint.response_format !== "perplexity.search"
@@ -87,6 +106,31 @@ export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: Proxy
 
 export function nativeImageMode(format: string): "generate" | "edit" | null {
   return format === "xai.images_generations" ? "generate" : format === "xai.images_edits" ? "edit" : null;
+}
+
+// Frozen ApiSearchResponse/Page/ErrorResponse grammar, checked 2026-11-20:
+// https://docs.perplexity.ai/api-reference/search-post.md
+// Called only on the original bounded body after delivered-byte EOF. This is
+// receipt qualification, not URL safety validation or a second content reader.
+export function perplexitySearchOutcome(value: unknown, status: number): RequestTariffOutcome {
+  const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const nullableString = (row: Record<string, unknown>, key: string) => !Object.hasOwn(row, key) || row[key] === null || typeof row[key] === "string";
+  if (!object(value)) return "unknown";
+  if (Object.hasOwn(value, "error")) {
+    const error = value.error;
+    if (!object(error) || Object.hasOwn(value, "results") || Object.hasOwn(value, "id") ||
+      typeof error.message !== "string" || typeof error.type !== "string" || !Number.isSafeInteger(error.code) || error.code !== status) return "unknown";
+    const documented = status === 400 && ["invalid_request", "invalid_language_code", "invalid_country_code"].includes(error.type)
+      || status === 401 && error.type === "invalid_api_key" || status === 429;
+    // Other statuses/shapes have no frozen free-rejection grammar here.
+    return documented ? "failed" : "unknown";
+  }
+  if (status !== 200 || typeof value.id !== "string" || !Array.isArray(value.results) || !nullableString(value, "server_time")) return "unknown";
+  for (const page of value.results) {
+    if (!object(page) || typeof page.title !== "string" || typeof page.url !== "string" || typeof page.snippet !== "string" ||
+      !nullableString(page, "date") || !nullableString(page, "last_updated")) return "unknown";
+  }
+  return "succeeded";
 }
 
 export function settleRequestTariff(tariff: SuccessfulRequestTariff, outcome: RequestTariffOutcome): { micros: number; basis: string } {
@@ -110,7 +154,7 @@ function unqualified(): never {
 // selected destination before admission, without retaining credentials or URLs.
 export function assertRequestTariffDestination(endpoint: RequestTariffEndpoint, destination: string | URL): void {
   if (!endpoint.requestPricing) return;
-  const expected = endpoint.requestPricing.unit === "image" ? `https://api.x.ai${endpoint.path}` : "outcome" in endpoint.requestPricing ? "https://api.x.ai/v1/responses" : "https://api.perplexity.ai/search";
+  const expected = endpoint.requestPricing.unit === "image" ? `https://api.x.ai${endpoint.path}` : "outcome" in endpoint.requestPricing ? "https://api.x.ai/v1/responses" : "protocol" in endpoint.requestPricing && endpoint.requestPricing.protocol === "deepseek.search" ? "https://api.deepseek.com/v1/tools/search" : "https://api.perplexity.ai/search";
   if (String(destination) !== expected) unqualified();
 }
 

@@ -33,6 +33,9 @@ export const falManagedAdapter: ManagedLifecycleAdapter = {
   prepare(body, _headers, pathParams, query) {
     if (!mediaObject(body)) throw new Error("invalid_fal_create");
     const id = endpointId(pathParams), prepared = prepareFalQueueSubmit(id, query);
+    // The synchronous codec's unqualified generation path must not gain
+    // authority through the generic queue route. Existing jobs keep controls.
+    if (id === "xai/grok-imagine-image/quality") throw new Error("fal_grok_quality_native_contract_unqualified");
     return { body: isFalPromptVideoModel(id) ? prepareFalPromptVideo(id, body) : isFalHostedWanModel(id) ? prepareFalHostedWan(id, body).body
       : isFalSeedanceModel(id) ? prepareFalSeedance(id, body).body : body,
       headers: prepared.headers, requestedVersion: id, pathParams: { ...pathParams } };

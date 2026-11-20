@@ -30,7 +30,7 @@ test("DeepInfra requests isolate the original credential from public metadata pr
     assert.equal(requests.pricing.url, "https://api.deepinfra.com/models/list");
     assert.deepEqual([...requests.pricing.headers], [["accept", "application/json"]]);
     for (const request of Object.values(requests)) {
-      assert.equal(request.method, "GET"); assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit"); assert.equal(request.body, null);
+      assert.equal(request.method, "GET"); assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit"); assert.equal(request.body, null);
     }
     controller.abort(); assert.equal(requests.metadata.signal.aborted, true); assert.equal(requests.pricing.signal.aborted, true);
   }

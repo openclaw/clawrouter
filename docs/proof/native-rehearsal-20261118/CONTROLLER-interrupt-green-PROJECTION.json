@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "source": "e3bfa63b8bd162d2bfd632bafec8842902f74a28",
+  "controlSha256": "1e9d87757d9dcfce668aeb5000e95a0adb6dc26d1d0d3cc9520624835c22afa1",
+  "worker": "clawrouter-native-qualification-870a9258ae58",
+  "blue": "009c3288-ee3f-4d50-97c2-dddb97591a4f",
+  "green": "094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+  "recovery": "6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+  "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+  "greenRuntimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+  "startedAt": "2026-11-18T07:10:51.138Z",
+  "mode": "interrupt-green",
+  "qualified": false,
+  "limits": [
+    "Controller evidence only; synthetic upstream, old-state/mixed-callback, accounting/envelope and saved Codex session evidence must be independently collected and reviewed."
+  ],
+  "result": "interrupted",
+  "finishedAt": "2026-11-18T07:11:48.331Z",
+  "observations": [
+    {
+      "phase": "snapshot:009c3288-ee3f-4d50-97c2-dddb97591a4f",
+      "at": "2026-11-18T07:10:51.982Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 0,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 1,
+      "members": 8,
+      "issued": 2,
+      "seen": 2
+    },
+    {
+      "phase": "snapshot:009c3288-ee3f-4d50-97c2-dddb97591a4f",
+      "at": "2026-11-18T07:10:54.426Z",
+      "accepting": false,
+      "poolPhase": "draining",
+      "control": {
+        "schema": 1,
+        "revision": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 8,
+      "issued": 2,
+      "seen": 2
+    },
+    {
+      "phase": "snapshot:009c3288-ee3f-4d50-97c2-dddb97591a4f",
+      "at": "2026-11-18T07:10:56.695Z",
+      "accepting": false,
+      "poolPhase": "closed",
+      "control": {
+        "schema": 1,
+        "revision": 1,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:03.298Z",
+      "accepting": false,
+      "poolPhase": "closed",
+      "control": {
+        "schema": 1,
+        "revision": 1,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:04.139Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:06.380Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:09.034Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 2,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:11.301Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 4,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:13.559Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 6,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:15.895Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 7,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:18.205Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 8,
+      "issued": 1,
+      "seen": 1
+    },
+    {
+      "phase": "green-warm",
+      "at": "2026-11-18T07:11:18.253Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 8,
+      "issued": 1,
+      "seen": 1
+    }
+  ]
+}

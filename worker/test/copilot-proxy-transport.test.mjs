@@ -1,8 +1,10 @@
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 const { snapshot, configuredUpstream } = await import("../providers.ts");
@@ -10,7 +12,7 @@ const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
 
-const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", "providers/copilot-proxy.provider.yaml"], { encoding: "utf8" }));
+const compiled = compileProviderSnapshot([parse(readFileSync("providers/copilot-proxy.provider.yaml", "utf8"))]);
 const provider = compiled.providers[0];
 const existing = snapshot.providers.findIndex(row => row.id === provider.id);
 if (existing < 0) snapshot.providers.push(provider); else snapshot.providers[existing] = provider;

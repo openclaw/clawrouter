@@ -58,30 +58,45 @@ Gemini row has no executable capabilities, so neither manifest nor native calls
 can activate it. The remaining proof is actual Worker template/query dispatch
 and the actual client's SDK base/path composition before enabling that row.
 
-The source does not inject a User-Agent or accept `x-opencode-session` from the
-caller. Activation stays closed pending the shared runtime's authenticated,
-original-grant-bound session contract and the actual client bridge. A static
-session value, generic passthrough header or renamed client is not a substitute.
-Frozen native OpenClaw adds conversation headers only at native OpenCode origins;
-a rewritten router URL needs the explicit bridge. Standalone calls need distinct
-routing identities without acquiring unrelated conversation/cache ownership.
-Go Kimi reasoning wrappers also remain an actual-client boundary; raw protocol
-fixtures do not claim that wrapper or a plan entitlement has been proven.
+The Worker does not forward a caller's native session header or inject a vendor
+User-Agent. Its existing session owner derives an opaque `crs_` value from the
+actual authenticated principal, selected product/grant and conversation scope.
+The OpenClaw client bridge translates its conversation identity into the Router
+header; a raw/static vendor session never becomes the upstream session.
 
-## Verification and integration
+## Verification and client boundary
 
-`worker/test/opencode-native-runtime.test.mjs` compiles these two source manifests
-and replaces their bundled rows in the actual Worker fixture. It covers finite
-bindings, original product grants, JSON/SSE replay, usage, errors, cancellation,
-catalog offers, wrong-format rejection and closed rows. The Responses cases are
-prepared against the required common runtime mapping contract; no skipped test
-or helper-only result substitutes for that dependency.
+`worker/test/opencode-native-runtime.test.mjs` compiles both manifests and exercises
+the actual Worker: all 17 identities, 13 executable bindings, four closed rows,
+native and manifest requests, JSON/SSE replay, selected grants, unknown-price
+budget denial, HTTP rejection, cancellation and one settlement. The shared
+`opencode-session` tests preserve principal/product/grant isolation.
 
-Local checkouts are code-only. CI must validate all manifests and run the actual
-Worker fixtures after the serialized snapshot gate. Source6 owns later snapshot
-integration; source1 owns runtime mapping/session gates and source2 owns native
-client proof. Compilation or a public inventory listing alone proves none of
-those activation conditions.
+The integration harness `test/openclaw-opencode.test.mjs` pins OpenClaw
+`3ee10cbd698e44369444f27102474594df23ecce`. It calls the registered ClawRouter
+catalog and both real stream hooks, through Worker and SQLite. Native offers are
+selected normally. Unified Chat/Responses cases remove native offers from the
+actual credential-scoped catalog; they do not invent positive offers or change
+production discovery. No SDK manifest-route execution is claimed.
+
+The harness requires fragmented protocol events, actual tool/signed-thinking
+replay through the captured provider registry, selected Router/upstream keys,
+opaque session derivation, strict denial/accounting and original guard, reader,
+closed, release, source and handler retirement. Policy-fixed seven-micro charges
+are synthetic transport controls, not vendor tariffs or subscription entitlement.
+Post-content cancellation does not qualify physical pre-response propagation.
+
+Client hook composition is a separate acceptance boundary. At this pin the
+ClawRouter proxy hooks do not directly compose native Go Kimi reasoning/replay,
+DeepSeek effort or fixed Messages wrappers, nor Console dynamic-record/tool-alias
+restoration. The fixture asserts their actual final wire/results; HTTP success
+alone cannot establish that parity. Runtime proof remains pending until this
+exact candidate's native workflow completes. No client source is patched here.
+
+The snapshot is regenerated from all bundled manifests. Existing defaults,
+pricing uncertainty, persistent credential owners, accounting and pending-work
+contracts remain unchanged. This is not a deployment; normal scheduled/manual
+main deployment remains separate from PR qualification.
 
 ## Sources
 

@@ -5,10 +5,11 @@ The optional YAML field `endpoints.<id>.upstreamPath` compiles unchanged to
 route and authorization identity. Manifest endpoint IDs, unified routes,
 capabilities, selected model, policy and original credential do not change.
 
-The runtime accepts `openai.chat_completions`, `anthropic.messages`,
+The runtime accepts `openai.chat_completions`, `anthropic.messages`, `openai.responses`,
 `openai.models`, `anthropic.models` and the separately qualified `synthetic.models`.
 Request and response formats must match;
-Chat/Messages use POST and metadata uses GET. WebSockets, lifecycle endpoints,
+Chat/Messages/Responses use POST and metadata uses GET. Responses requires the
+public path `/v1/responses` and no configured query. WebSockets, lifecycle endpoints,
 path parameters and other native formats are not qualified by this field.
 Mapping does not translate request or response formats. Model listing cannot
 stream or enable inference-model passthrough. Request and hosted-tool tariffs
@@ -53,3 +54,13 @@ Metadata still requires a scoped API-key grant; mapping does not turn an
 environment inference key into discovery permission.
 Central schema/compiler validation belongs to its existing owner; Synthetic
 YAML and activation belong to the provider owner. This PR changes neither.
+
+The Responses extension composes a literal dispatch path with the same configured
+origin. For a base of `https://opencode.ai`, OpenCode Go's published target is
+`/inference/go/openai/v1/responses`; Console omits `/go`. The base is the origin,
+so the declared full path is appended exactly once. The public and manifest
+route identities, selected model, original grant and native Responses body stay
+unchanged. This shared runtime qualification does not activate OpenCode
+declarations or qualify its separate session-header scope. Compiler validation,
+source-owned provider declarations and actual client/integration proof remain
+separate dependencies.

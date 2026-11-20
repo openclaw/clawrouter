@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "0093b58c0d132ae1707f9553839f1cf297fb9a25";
@@ -19,8 +20,9 @@ test("actual Vercel catalog, replay, Anthropic SDK and SQLite accounting", { ski
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-vercel-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [id === "vercel_foreign" ? "anthropic" : provider.id], models: [modelId], tenantId: "fixture", monthlyBudgetMicros: 100,
@@ -29,7 +31,7 @@ test("actual Vercel catalog, replay, Anthropic SDK and SQLite accounting", { ski
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put(`connections/${provider.id}`, JSON.stringify({ providerId: provider.id, enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const headers = { authorization: "Bearer clawrouter-live-vercel_chat_only-fixture-secret" };
     const catalog = await (await fetch(`${origin}/v1/catalog`, { headers })).json();
     const offers = catalog.providers.find(row => row.id === provider.id).offers;
@@ -76,7 +78,12 @@ test("actual Vercel catalog, replay, Anthropic SDK and SQLite accounting", { ski
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], ["vercel_error", "vercel_cancel"].includes(id) ? [null, null, null] : [11, 3, 14]);
       assert.doesNotMatch(JSON.stringify(event), /synthetic record|fixture-upstream|must-not-fallback/);
     }
-  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
+  } finally {
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+  }
 });
 
 function routerFixture() {

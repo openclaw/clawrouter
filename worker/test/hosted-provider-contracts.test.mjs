@@ -15,7 +15,7 @@ const contracts = [
   ["chutes", "CHUTES_API_KEY", "https://llm.chutes.ai/v1/chat/completions", "deepseek-ai/DeepSeek-V4-Flash-0731-TEE"],
   ["featherless", "FEATHERLESS_API_KEY", "https://api.featherless.ai/v1/chat/completions", "GalrionSoftworks/Margnum-12B-v1"],
   ["venice", "VENICE_API_KEY", "https://api.venice.ai/api/v1/chat/completions", "zai-org-glm-5-2"],
-  ["nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1/chat/completions", "meta/llama-3.1-8b-instruct"],
+  ["nvidia", "NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1/chat/completions", "nvidia/nemotron-3-ultra-550b-a55b"],
   ["cerebras", "CEREBRAS_API_KEY", "https://api.cerebras.ai/v1/chat/completions", "qwen-3.8-27b"],
   ["deepinfra", "DEEPINFRA_API_KEY", "https://api.deepinfra.com/v1/openai/chat/completions", "Qwen/Qwen3.8-27B"],
   ["baseten", "BASETEN_API_KEY", "https://inference.baseten.co/v1/chat/completions", "zai-org/GLM-5.3"],
@@ -38,7 +38,7 @@ const contracts = [
   ["opencode", "OPENCODE_API_KEY", "https://opencode.ai/inference/openai/v1/chat/completions", "glm-5.3"],
   ["opencode-go", "OPENCODE_GO_API_KEY", "https://opencode.ai/inference/go/openai/v1/chat/completions", "glm-5.3"],
 ];
-const aliases = { gmi: ["gmi-cloud", "gmicloud"], novita: ["novita-ai", "novitaai"] };
+const aliases = { gmi: ["gmi-cloud", "gmicloud"], novita: ["novita-ai", "novitaai"], longcat: ["meituan-longcat"], stepfun: ["stepfun-ai"] };
 const { providers } = compileProviderSnapshot(contracts.map(([id]) =>
   parse(readFileSync(`providers/${id}.provider.yaml`, "utf8"))));
 
@@ -57,10 +57,27 @@ for (const [id, binding, url, upstream, catalogId = upstream] of contracts) {
       ANTHROPIC_API_KEY: "fixture-lab-key", VERCEL_OIDC_TOKEN: "fixture-oidc",
       OPENCODE_ZEN_API_KEY: "fixture-unbound-alias",
     });
+    if (id === "abliteration") delete foreign.ABLIT_KEY;
     assert.throws(() => configuredUpstream(provider, null, foreign), error => error.code === "provider_not_configured");
     const auth = configuredUpstream(provider, null, { ...foreign, [binding]: "fixture-standard" });
     assert.equal(auth.headers.get("authorization"), "Bearer fixture-standard");
     assert.equal(auth.baseUrl + upstreamPath(provider, endpoint, {}, {}, auth), url);
+    if (id === "abliteration") {
+      const canonical = { ...foreign, ABLIT_KEY: "fixture-canonical" };
+      const both = { ...canonical, ABLITERATION_API_KEY: "fixture-legacy" };
+      for (const env of [canonical, both]) {
+        assert.equal(configuredUpstream(provider, null, env).headers.get("authorization"), "Bearer fixture-canonical");
+      }
+      const malformed = { ...both, ABLIT_KEY: "fixture-private\r\ninvalid" };
+      assert.throws(() => configuredUpstream(provider, null, malformed), error => {
+        assert.equal(error.code, "provider_not_configured");
+        assert.doesNotMatch(String(error), /fixture-private/);
+        return true;
+      });
+      const grant = { provider: id, kind: "api_key", enabled: true, credential: "fixture-selected" };
+      assert.equal(configuredUpstream(provider, grant, malformed).headers.get("authorization"), "Bearer fixture-selected");
+      assert.throws(() => configuredUpstream(provider, { ...grant, credential: "" }, both), error => error.code === "provider_not_configured");
+    }
     assert.deepEqual(provider.auth.grantTransports, {});
     assert.deepEqual(provider.routing.nativePrefixes, [`clawrouter-${id}`, id, ...(aliases[id] ?? [])]);
     for (const alias of aliases[id] ?? []) {
@@ -73,11 +90,15 @@ for (const [id, binding, url, upstream, catalogId = upstream] of contracts) {
     const known = providerModel(provider, `${id}/${catalogId}`, endpoint);
     assert.equal(known.upstream, upstream);
     assert.equal(known.pricing, null);
-    const dynamic = providerModel(provider, `${id}/tenant-model`, endpoint);
-    assert.equal(dynamic.upstream, "tenant-model");
-    assert.equal(dynamic.pricing, null);
-    assert.equal(dynamic.nativeCapabilities, undefined);
-    assert.equal(providerModel(provider, `${id}/opaque`, endpoint, true).upstream, `${id}/opaque`);
+    if (id === "nvidia") {
+      assert.equal(providerModel(provider, `${id}/tenant-model`, endpoint), null);
+    } else {
+      const dynamic = providerModel(provider, `${id}/tenant-model`, endpoint);
+      assert.equal(dynamic.upstream, "tenant-model");
+      assert.equal(dynamic.pricing, null);
+      assert.equal(dynamic.nativeCapabilities, undefined);
+      assert.equal(providerModel(provider, `${id}/opaque`, endpoint, true).upstream, `${id}/opaque`);
+    }
     const body = { model: known.upstream, stream: true, stream_options: { include_usage: true },
       messages: [{ role: "assistant", content: null, reasoning_content: "fixture-reasoning",
         tool_calls: [{ id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{}" } }] },

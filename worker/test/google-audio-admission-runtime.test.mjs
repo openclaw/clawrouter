@@ -49,10 +49,12 @@ test("unqualified explicit audio selections cannot bypass their native wrapper g
   for (const format of ["google.music_generate", "google.speech_generate_content", "google.speech_interactions"]) {
     const selection = { provider: f.provider, endpoint: { ...base, request_format: format }, model: f.model,
       body: original, method: "POST", capability: "audio.generate", pathParams: { model: f.model.upstream } };
-    assert.throws(() => validateSelectedInput(selection), error => error.code === (format === "google.music_generate" ? "invalid_native_google_music_route" : "native_audio_route_required"));
+    assert.throws(() => validateSelectedInput(selection), error => error.status === 400
+      && error.code === (format === "google.music_generate" ? "invalid_native_google_music_route" : "invalid_native_google_speech_route"));
     assert.equal(selection.nativeResponse, undefined);
   }
   assert.equal(f.sent.length, 0);
+  assert.equal(f.reservations().length, 0);
 });
 
 test("frozen audio intent cannot turn native token-shaped output into a text invoice or an uncertain refund", async t => {

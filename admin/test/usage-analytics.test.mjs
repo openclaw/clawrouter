@@ -77,6 +77,32 @@ test("truncated Fusion groups are explicitly partial", () => {
   assert.equal(group.actualCostMicros, 20);
 });
 
+test("compound summaries preserve missing timing, fallback sizes and stable call order", () => {
+  const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", reserved_cost_micros: 0, compound_request_id: "mixed", status: "success" };
+  const events = [
+    { ...base, id: "first", occurred_at_ms: 200, duration_ms: -10, actual_cost_micros: 3, compound_request_size: 1, compound_request_index: 1 },
+    { ...base, id: "second", occurred_at_ms: 100, duration_ms: null, actual_cost_micros: 0, cost_basis: "unpriced_usage", status: "provider_error", compound_request_index: 1 },
+    { ...base, id: "third", occurred_at_ms: 150, duration_ms: 0, compound_request_started_at_ms: 0, actual_cost_micros: 2 },
+  ];
+  events.forEach(Object.freeze);
+  Object.freeze(events);
+
+  const [group] = usageEventGroups(events);
+  assert.equal(group.primary, events[0]);
+  assert.deepEqual(group.events, events);
+  assert.notEqual(group.events, events);
+  assert.equal(group.occurredAtMs, 200);
+  assert.equal(group.durationMs, 200);
+  assert.equal(group.actualCostMicros, 5);
+  assert.equal(group.unpricedRequestCount, 1);
+  assert.equal(group.successCount, 2);
+  assert.equal(group.expectedCallCount, 3);
+  assert.equal(group.complete, true);
+
+  const [untimed] = usageEventGroups(events.map((event) => ({ ...event, duration_ms: null })));
+  assert.equal(untimed.durationMs, null);
+});
+
 test("unavailable prices remain distinct from known zero and mixed accounted totals", () => {
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", occurred_at_ms: 1_000, actual_cost_micros: 0, reserved_cost_micros: 0, status: "success" };
   const [unknown, knownZero, mixed] = usageEventGroups([

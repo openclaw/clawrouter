@@ -5,7 +5,7 @@ were checked on 2026-11-03; no live upstream calls qualify this batch.
 
 | Provider | API-key binding | Base URL | Initial upstream model |
 | --- | --- | --- | --- |
-| `nvidia` | `NVIDIA_API_KEY` | `https://integrate.api.nvidia.com/v1` | `meta/llama-3.1-8b-instruct` |
+| `nvidia` | `NVIDIA_API_KEY` | `https://integrate.api.nvidia.com/v1` | `nvidia/nemotron-3-ultra-550b-a55b` |
 | `cerebras` | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` | `qwen-3.8-27b` |
 | `deepinfra` | `DEEPINFRA_API_KEY` | `https://api.deepinfra.com/v1/openai` | `Qwen/Qwen3.8-27B` |
 | `baseten` | `BASETEN_API_KEY` | `https://inference.baseten.co/v1` | `zai-org/GLM-5.3` |
@@ -17,7 +17,9 @@ The native URL is `/v1/native/<provider>/chat/completions`. Each upstream reques
 appends `/chat/completions` to the listed base URL. DeepInfra must not gain an
 extra `/v1` after `/openai`.
 
-Model passthrough is unpriced, including unknown tenant models. These manifests
+NVIDIA now has a closed, four-model [qualified inventory](nvidia-model-catalog.md);
+its deprecated hosted Llama seed is excluded. The other providers' model
+passthrough remains unpriced, including unknown tenant models. These manifests
 do not publish prices, reasoning-effort maps or native model capability facts.
 Hard-budget requests require an explicit policy fixed request price; unmetered
 policies can use the routes. Fixed router charges are not measured upstream cost.

@@ -19,7 +19,7 @@ test("Cerebras public request has no inference credentials and refuses redirects
     assert.equal(r.url, "https://api.cerebras.ai/public/v1/models");
     assert.equal(r.method, "GET"); assert.equal(r.body, null);
     assert.deepEqual([...r.headers], [["accept", "application/json"]]);
-    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+    assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
   }
 });
 

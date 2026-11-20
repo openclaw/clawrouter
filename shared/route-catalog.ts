@@ -27,7 +27,7 @@ export interface CatalogProvider extends Pick<ProviderRow, "id" | "class"> {
   capabilities: Array<{ id: string; endpoint: string }>;
   routing: { modelPrefixes?: string[] };
   models: Array<{ id: string; upstream?: string; availability?: ModelAvailability; capabilities: string[] }>;
-  endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
+  endpoints: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
 }
 
 interface ModelIdentity { id: string; upstream?: string; availability?: ModelAvailability }
@@ -52,7 +52,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     provider: provider.id,
     models: provider.models.filter(model => modelExecutable(provider, model)).flatMap((model) => {
       const capabilities = model.capabilities.filter(capability => legacyUnifiedCapability(provider, capability));
-      if (model.capabilities.includes("llm.decisions") && !capabilities.length) return [];
+      if (!capabilities.length && model.capabilities.some(capability => capability === "llm.decisions" || capability === "audio.transcription" || capability === "audio.speech")) return [];
       return [{
         id: model.id,
         ...(model.availability ? { availability: model.availability } : {}),
@@ -64,7 +64,7 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
     endpoints: provider.capabilities.filter(capability => legacyUnifiedCapability(provider, capability.id))
       .map((capability) => unifiedPathForCapability(capability.id)).filter(Boolean),
   }));
-  const manifestProxy = providers.flatMap((provider) => provider.endpoints.map((endpoint) => ({
+  const manifestProxy = providers.flatMap((provider) => provider.endpoints.filter(endpoint => endpoint.inputProfile === undefined).map((endpoint) => ({
     provider: provider.id,
     endpoint: endpoint.id,
     route: `/v1/proxy/${provider.id}/${endpoint.id}`,
@@ -79,13 +79,17 @@ export function createRouteCatalog(providers: CatalogProvider[]): RouteCatalog {
   return { openaiCompatible, manifestProxy };
 }
 
-// Decision capability alone does not establish an OpenAI wire contract. Match
+// Decision and audio capabilities alone do not establish an OpenAI wire contract. Match
 // the same first capability binding used by unified request selection.
 function legacyUnifiedCapability(provider: CatalogProvider, capability: string): boolean {
-  if (capability !== "llm.decisions") return true;
+  const format = capability === "llm.decisions" ? "openai.decisions"
+    : capability === "audio.transcription" ? "openai.audio_transcriptions"
+    : capability === "audio.speech" ? "openai.audio_speech" : null;
+  if (!format) return true;
   const id = provider.capabilities.find(value => value.id === capability)?.endpoint;
   const endpoint = provider.endpoints.find(value => value.id === id);
-  return endpoint?.request_format === "openai.decisions" && endpoint.response_format === "openai.decisions"
+  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
+  return endpoint?.request_format === format && endpoint.response_format === responseFormat
     && endpoint.methods.includes("POST");
 }
 
@@ -100,6 +104,7 @@ const unifiedProtocols = [
   ["audio.speech", "/v1/audio/speech", "openai.audio_speech"],
   ["audio.transcription", "/v1/audio/transcriptions", "openai.audio_transcriptions"],
   ["image.generation", "/v1/images/generations", "openai.images_generations"],
+  ["image.edit", "/v1/images/edits", "openai.images_edits"],
 ] as const;
 
 const pathsByCapability = new Map<string, string>(unifiedProtocols.map(([capability, path]) => [capability, path]));

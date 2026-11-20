@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
+import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 
 const source = parse(readFileSync(new URL("../providers/openai.provider.yaml", import.meta.url), "utf8"));
@@ -14,8 +15,30 @@ test("compiled compact is a distinct unary registered-model contract", () => {
   assert.equal(compact.path, "/v1/responses/compact"); assert.deepEqual(compact.methods, ["POST"]);
   assert.equal(compact.request_format, "openai.responses_compact"); assert.equal(compact.response_format, "openai.responses_compact");
   assert.ok(!compact.streaming); assert.ok(!compact.websocket); assert.ok(!compact.modelPassthrough); assert.ok(!compact.outputTokenLimit); assert.ok(!compact.responsesLifecycle);
-  assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.responses.compact")).map(model => model.id), ["openai/gpt-6-astra", "openai/gpt-6.1-sol", "openai/gpt-6.1-terra"]);
   assert.deepEqual(snapshot.capability_index["llm.responses.compact"], [{ provider: "openai", endpoint: "responses_compact", methods: ["POST"] }]);
+});
+test("Responses support alone does not enable compact routing", () => {
+  const compactId = "openai/fixture-compact", ordinaryId = "openai/fixture-responses";
+  const { providers: [provider] } = compile(manifest => {
+    const pricing = { effectiveAt: "2026-01-01", source: "https://example.com/pricing", inputMicrosPerMillion: 1, outputMicrosPerMillion: 1, maxInputTokens: 4096, defaultMaxOutputTokens: 512 };
+    manifest.models.entries.push(
+      { id: compactId, upstream: "fixture-compact", capabilities: ["llm.responses", "llm.responses.compact"], pricing },
+      { id: ordinaryId, upstream: "fixture-responses", capabilities: ["llm.responses"], pricing },
+    );
+    const offers = manifest.products.find(product => product.id === "platform-api").offers;
+    for (const [endpoint, added] of [["responses", [compactId, ordinaryId]], ["responses_compact", [compactId]]]) {
+      const offer = offers.find(row => row.endpoint === endpoint);
+      offer.models = [...offer.models, ...added];
+    }
+  });
+  const compact = provider.endpoints.find(row => row.id === "responses_compact");
+  const responses = provider.endpoints.find(row => row.id === "responses");
+  for (const [id, allowed] of [[compactId, true], [ordinaryId, false]]) {
+    const model = provider.models.find(row => row.id === id);
+    assert.ok(modelSupportsEndpoint(provider, model, responses), id);
+    assert.equal(modelSupportsEndpoint(provider, model, compact), allowed, id);
+    assert.equal(provider.offer_definitions.some(offer => offer.endpoint === compact.id && offer.model?.id === id), allowed, id);
+  }
 });
 function removePricing(manifest) {
   const model = manifest.models.entries.find(model => model.id === "openai/gpt-6-astra");
@@ -28,11 +51,15 @@ test("ordinary unpriced models remain supported without compact capability", () 
   const snapshot = compile(manifest => {
     const model = removePricing(manifest);
     model.capabilities = model.capabilities.filter(capability => capability !== "llm.responses.compact");
+    for (const product of manifest.products) for (const offer of product.offers) {
+      if (offer.capability === "llm.responses.compact") offer.models = offer.models.filter(id => id !== model.id);
+    }
   });
   const model = snapshot.providers[0].models.find(model => model.id === "openai/gpt-6-astra");
   assert.ok(model.capabilities.includes("llm.responses"));
   assert.ok(!model.capabilities.includes("llm.responses.compact"));
   assert.equal(model.pricing, null);
+  assert.ok(snapshot.providers[0].offer_definitions.some(offer => offer.model?.id === model.id && offer.capability === "llm.responses"));
 });
 const mutations = {
   wrong_response: manifest => { manifest.endpoints.responses_compact.responseFormat = "openai.responses"; },

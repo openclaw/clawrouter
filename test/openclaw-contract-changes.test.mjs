@@ -11,6 +11,9 @@ const relevant = [
   "worker/index.ts", "worker/lib/routes.ts", "worker/generated/provider-snapshot.json",
   "worker/test/helpers/runtime.mjs", "worker/test/fixtures/search.json",
   "shared/contracts.ts", "providers/example.provider.yaml",
+  "packages/provider-plugin-contract/src/snapshot.ts", "packages/provider-plugin-contract/src/native-capabilities.ts",
+  "packages/provider-plugin-contract/src/nested/future.ts", "packages/provider-plugin-contract/tsconfig.json",
+  "packages/provider-plugin-contract/copy-manifest-schema.mjs",
   "test/openclaw-search.test.mjs", "test/openclaw-native-embeddings.test.mjs",
   "test/fixtures/openclaw-search-contract.test.ts", "test/helpers/openclaw-consumer.mjs",
   "test/helpers/workerd.mjs", ".github/workflows/openclaw-contract.yml",
@@ -22,6 +25,8 @@ const unrelated = [
   "worker/test/provider-pricing-evidence.test.mjs", "worker/test/hosted-search-metering.test.mjs",
   "README.md", "CHANGELOG.md", "docs/architecture.md", "admin/src/App.svelte",
   "test/provider-compiler.test.mjs", "scripts/smoke-process.mjs", ".github/workflows/codeql.yml",
+  "packages/provider-plugin-contract/README.md", "packages/provider-plugin-contract/LICENSE",
+  "packages/provider-plugin-contract-extra/src/snapshot.ts", "packages/other/src/snapshot.ts",
 ];
 
 test("consumer selection retains runtime, fixture and install inputs, excluding unrelated tests", () => {
@@ -43,6 +48,7 @@ function fixture(t) {
   git("config", "commit.gpgsign", "false");
   git("config", "core.hooksPath", "/dev/null");
   write("worker/original.ts", "original\n");
+  write("packages/provider-plugin-contract/src/snapshot.ts", "original contract\n");
   write("README.md", "base\n");
   git("add", ".");
   git("commit", "-m", "Base");
@@ -68,6 +74,10 @@ for (const [name, changes, expected] of [
   ["runtime deletion", [["worker/original.ts", null]], true],
   ["runtime renamed into excluded tests", [["worker/original.ts", null], ["worker/test/moved.test.mjs", "original\n"]], true],
   ["new consumer fixture", [["test/fixtures/openclaw-future-contract.test.ts", "fixture\n"]], true],
+  ["portable contract source only", [["packages/provider-plugin-contract/src/snapshot.ts", "changed contract\n"]], true],
+  ["portable contract build configuration", [["packages/provider-plugin-contract/tsconfig.json", "{}\n"]], true],
+  ["portable schema packaging", [["packages/provider-plugin-contract/copy-manifest-schema.mjs", "// packaging\n"]], true],
+  ["portable contract renamed into documentation", [["packages/provider-plugin-contract/src/snapshot.ts", null], ["packages/provider-plugin-contract/README.md", "original contract\n"]], true],
 ]) {
   test(`merge diff selects ${name}`, (t) => {
     const { cwd, write, merge } = fixture(t);
