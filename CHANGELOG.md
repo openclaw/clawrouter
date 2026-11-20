@@ -2,6 +2,8 @@
 
 - Preserve optional, explicit catalogue references on compiled provider models. Router aliases and upstream slugs remain separate; references do not import model facts, prices, or permissions.
 
+- Preserve full CI checkout ancestry when fetching the pinned native baseline so deployment compatibility does not misclassify already-landed migrations as new feature changes.
+
 - Exercise the five frozen Mistral Chat cards through the registered OpenClaw client, actual Worker and SQLite: selected credentials, replay IDs, typed reasoning, standard/Priority accounting, zero-egress denials, controlled provider errors and joined post-response cancellation. Put the new consumer first without reordering existing consumers; preserve independent cleanup failures and the separate pre-header physical-disconnect limitation.
 
 - Keep the four Z.AI native lifetime controls serial through supported Vitest suite options and prioritize its existing CI row without changing the matrix membership or other rows’ order. Scope actual transcript sanitization to the case-owned captured Z.AI provider, preserving original sanitizer outcomes, resource joins and qualification gates. Bind canceled Worker reads to their exact first caller outcome and original failure handler, retain their rejected state, and require independently joined source cancellation, cleanup and accounting. Keep controlled provider-error handling separate: bind the actual SDK failure callback, returned output and request-owned stored-error rejections without admitting unrelated transport or cleanup failures.
@@ -819,6 +821,7 @@
 - Add executable Perplexity Agent/Search wire fixtures covering native results, typed streaming failures, credential isolation and conservative billing for the provider/client integration.
 
 - Define typed Replicate prediction lifecycle links and validate the native create, retrieve and cancel endpoint contracts before compiling manifests.
+- Add the frozen Fireworks GLM 5.3 Fast router identity with its distinct sourced tariff, full-context reservation ceiling and conservative service-tier guards. Bind the registered custom-base Chat client, scoped tool replay, cache/tier accounting and independent cancellation retirement through a dedicated native consumer; the official-origin header-cache wrapper remains outside this route.
 - Qualify the Deepgram prerecorded manifest format as native raw-audio transcription with Token authentication, exact endpoint/model constraints and no fabricated token tariff. Bundled discovery activation remains gated on binary dispatch integration.
 
 - Add a bounded DuckDuckGo HTML search codec and synthetic challenge/result fixtures. Anonymous-auth schema, actual HTML runtime integration and service-use qualification remain separate activation gates.
