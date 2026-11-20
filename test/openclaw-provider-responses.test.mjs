@@ -317,6 +317,15 @@ test(phase + " Responses owned cleanup preserves falsey failures and attempts in
   assert.deepEqual(attempts, [1, 2]);
 });
 
+test(phase + " Responses cancellation selects the POST owner despite an earlier same-case catalog request", () => {
+  const begin = fixtureText.indexOf("function cancellationOwner("), end = fixtureText.indexOf("// END RESPONSES CANCELLATION OWNER");
+  assert.ok(begin >= 0 && end > begin);
+  const select = new Function("assert", stripTypeScriptTypes(fixtureText.slice(begin, end)) + "; return cancellationOwner;")(assert);
+  const catalog = { id: "cancel", kind: "catalog", method: "GET" }, post = { id: "cancel", kind: "chat", method: "POST" };
+  assert.equal(select([catalog, post]), post); assert.equal(select([post, catalog]), post);
+  for (const rows of [[], [catalog], [{ ...post, id: "foreign" }], [{ ...post, method: "GET" }], [post, { ...post }]]) assert.throws(() => select(rows));
+});
+
 test(phase + " Responses request bindings reject foreign credentials, duplicate claims and missing original calls", () => {
   const bindings = createRequestBindings(); bindings.expect("card", "chat", upstreamUrl, "POST", "synthetic");
   assert.throws(() => bindings.claim(upstreamUrl, { method: "POST", headers: { authorization: "Bearer foreign" } }, "chat"));

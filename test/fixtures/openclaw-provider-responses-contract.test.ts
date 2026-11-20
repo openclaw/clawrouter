@@ -32,6 +32,14 @@ const invocation = new AsyncLocalStorage<any>();
 const originalGuard = guardedTransport.fetchWithProviderHttpGuard, originalCatalogGuard = catalogTransport.fetchWithSsrFGuard, originalFailure = transportStream.failTransportStream;
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, bodySucceeded: boolean;
 
+// BEGIN RESPONSES CANCELLATION OWNER
+function cancellationOwner(rows: any[]) {
+  const matches = rows.filter(row => row.id === "cancel" && row.kind === "chat" && row.method === "POST");
+  assert.equal(matches.length, 1, "one exact inference cancellation owner");
+  return matches[0];
+}
+// END RESPONSES CANCELLATION OWNER
+
 async function runCase(body: () => unknown) {
   await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
     () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(),
@@ -163,7 +171,7 @@ describe(phase + " registered Responses through Worker and SQLite", { concurrent
     expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "synthetic-answer" }));
   });
   it.each(["invalid", "foreign", "budget", "model_denied", ...(xai ? ["stored", "hosted"] : perplexity ? ["unpriced", "stored", "stale"] : ["unpriced"])])("denies %s without ambient fallback or unqualified dispatch", async id => {
-    if (perplexity && !["stored", "stale"].includes(id)) { await expect(start(id)).rejects.toThrow("catalog offer unavailable"); return; }
+    if (perplexity && !["stored", "stale"].includes(id)) { await expect(start(id)).rejects.toThrow(id === "invalid" ? "clawrouter model discovery failed: HTTP 401" : "catalog offer unavailable"); return; }
     const result = await (await start(id)).result(); expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toMatch(/fixture-secret|must-not-fallback|synthetic-responses/);
   });
@@ -173,7 +181,7 @@ describe(phase + " registered Responses through Worker and SQLite", { concurrent
   });
   it("retires an actual partial Responses stream after caller cancellation", async () => {
     const controller = new AbortController(), output = await start("cancel", { signal: controller.signal });
-    for await (const event of output) if (event.type === "text_delta") { lifetime.partial(bindings.bindings.find(row => row.id === "cancel")); controller.abort(); break; }
+    for await (const event of output) if (event.type === "text_delta") { lifetime.partial(cancellationOwner(bindings.bindings)); controller.abort(); break; }
     expect(controller.signal.aborted).toBe(true); expect((await output.result()).stopReason).toBe("aborted");
   });
 });
