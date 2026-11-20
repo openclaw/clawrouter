@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { types } from "node:util";
 import { APIError } from "openai";
+import * as catalogTransport from "../../src/infra/net/fetch-guard.js";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import * as transportStream from "../../packages/ai/src/transports/transport-stream-shared.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
@@ -20,14 +22,23 @@ import plugin from "./index.js";
 /* OWNED_LIFETIME_IMPLEMENTATION */
 
 const phase = process.env.CLAWROUTER_RESPONSES_PHASE;
-assert.ok(phase === "xai" || phase === "openrouter");
-const xai = phase === "xai", modelId = xai ? "grok-4.7" : "openai/gpt-6.1-terra";
+assert.ok(phase === "xai" || phase === "openrouter" || phase === "perplexity");
+const xai = phase === "xai", perplexity = phase === "perplexity";
+const modelId = xai ? "grok-4.7" : perplexity ? "perplexity/openai/gpt-5.6-sol" : "openai/gpt-6.1-terra";
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const key = (id: string) => `clawrouter-live-responses_${id}-fixture-secret`;
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 const invocation = new AsyncLocalStorage<any>();
-const originalGuard = guardedTransport.fetchWithProviderHttpGuard, originalFailure = transportStream.failTransportStream;
+const originalGuard = guardedTransport.fetchWithProviderHttpGuard, originalCatalogGuard = catalogTransport.fetchWithSsrFGuard, originalFailure = transportStream.failTransportStream;
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, bodySucceeded: boolean;
+
+// BEGIN RESPONSES CANCELLATION OWNER
+function cancellationOwner(rows: any[]) {
+  const matches = rows.filter(row => row.id === "cancel" && row.kind === "chat" && row.method === "POST");
+  assert.equal(matches.length, 1, "one exact inference cancellation owner");
+  return matches[0];
+}
+// END RESPONSES CANCELLATION OWNER
 
 async function runCase(body: () => unknown) {
   await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
@@ -39,9 +50,25 @@ const it = Object.assign((name: string, body: () => unknown) => nativeIt(name, (
   each: (rows: any) => (name: string, body: (...args: any[]) => unknown) => nativeIt.each(rows)(name, (...args) => runCase(() => body(...args))),
 });
 
-async function select(chat = false) {
+async function select(chat = false, id = "stream") {
   const provider = await registerSingleProviderPlugin(plugin);
-  expect(provider.id).toBe(phase);
+  expect(provider.id).toBe(perplexity ? "clawrouter" : phase);
+  if (perplexity) {
+    const apiKey = id === "invalid" ? "clawrouter-live-responses_stream-invalid" : key(id);
+    const config = { models: { providers: { clawrouter: { baseUrl: origin + "/v1", apiKey, models: [] } } } };
+    const owner = bindings.expect(id, "catalog", origin + "/v1/catalog", "GET", apiKey);
+    const catalog = await invocation.run(owner, () => withOpenClawTestState({ label: "perplexity-responses-catalog" }, async state => provider.catalog!.run({
+      config, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir,
+      resolveProviderAuth: () => ({ apiKey, discoveryApiKey: apiKey, mode: "api_key", source: "config" }),
+    } as any)));
+    const row = catalog && "provider" in catalog ? catalog.provider?.models.find((row: any) => row.id === modelId) : undefined;
+    if (!row) throw new Error("catalog offer unavailable");
+    const raw = { ...row, provider: "clawrouter" } as Model<"openai-responses">;
+    const model = provider.normalizeResolvedModel?.({ provider: "clawrouter", modelId, model: raw } as any) ?? raw;
+    expect(model).toMatchObject({ id: modelId, api: "openai-responses", provider: "clawrouter", baseUrl: origin + "/v1" });
+    expect("clawrouter/" + model.id).toBe("clawrouter/perplexity/openai/gpt-5.6-sol");
+    return { provider, model, config };
+  }
   let row: any;
   if (xai) {
     const result = await runProviderStaticCatalog({ provider });
@@ -57,31 +84,35 @@ async function select(chat = false) {
   }
   const api = chat ? "openai-completions" : "openai-responses";
   const configured = { api, baseUrl: origin + "/v1/native/" + phase + "/v1", models: [row] };
-  const raw = { ...row, provider: phase, api, baseUrl: configured.baseUrl } as Model<"openai-responses">;
-  const model = provider.normalizeResolvedModel?.({ provider: phase, modelId, model: raw }) ?? raw;
-  expect(model).toMatchObject({ id: modelId, provider: phase, api, baseUrl: configured.baseUrl });
+  const raw = { ...row, provider: perplexity ? "clawrouter" : phase, api, baseUrl: configured.baseUrl } as Model<"openai-responses">;
+  const model = provider.normalizeResolvedModel?.({ provider: perplexity ? "clawrouter" : phase, modelId, model: raw }) ?? raw;
+  expect(model).toMatchObject({ id: modelId, provider: perplexity ? "clawrouter" : phase, api, baseUrl: configured.baseUrl });
   return { provider, model, config: { models: { providers: { [phase]: configured } } } };
 }
 
 async function start(id: string, options: { selected?: Awaited<ReturnType<typeof select>>; history?: AgentMessage[]; signal?: AbortSignal } = {}) {
-  const selected = options.selected ?? await select(id === "chat"), { provider, model, config } = selected;
+  const selected = options.selected ?? await select(id === "chat", id), { provider, model, config } = selected;
   const history: AgentMessage[] = options.history ?? [{ role: "user", content: [{ type: "text", text: "fixture responses_" + id },
     ...(id === "image" ? [{ type: "image" as const, data: png, mimeType: "image/png" }] : [])], timestamp: 1 }];
   const messages = await withOpenClawTestState({ label: "responses-" + phase }, async state => {
-    const policy = resolveTranscriptPolicy({ provider: phase, modelId, modelApi: model.api, model, runtimeHandle: { provider: phase, plugin: provider } });
-    const registry = createEmptyPluginRegistry(); registry.providers.push({ pluginId: phase, provider, source: "test" });
+    const policy = resolveTranscriptPolicy({ provider: perplexity ? "clawrouter" : phase, modelId, modelApi: model.api, model, runtimeHandle: { provider: perplexity ? "clawrouter" : phase, plugin: provider } });
+    const registry = createEmptyPluginRegistry(); registry.providers.push({ pluginId: perplexity ? "clawrouter" : phase, provider, source: "test" });
     return withPluginRuntimeGenerationRegistryScope(registry, async () => {
       await Promise.resolve();
-      return sanitizeSessionHistory({ provider: phase, modelId, modelApi: model.api, model, policy, config, env: {}, workspaceDir: state.workspaceDir,
-        sessionId: `responses-${phase}-${id}`, sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: phase, modelApi: model.api, modelId })]), messages: history });
+      return sanitizeSessionHistory({ provider: perplexity ? "clawrouter" : phase, modelId, modelApi: model.api, model, policy, config, env: {}, workspaceDir: state.workspaceDir,
+        sessionId: `responses-${phase}-${id}`, sessionManager: makeInMemorySessionManager([makeModelSnapshotEntry({ timestamp: 0, provider: perplexity ? "clawrouter" : phase, modelApi: model.api, modelId })]), messages: history });
     });
   });
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
     tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   // Public stream keeps serviceTier/reasoningEffort as native Responses options.
-  const wrapped = provider.wrapStreamFn?.({ provider: phase, modelId, model, sourceApi: model.api, streamFn: id === "chat" ? streamSimple : stream });
+  const wrapped = provider.wrapStreamFn?.({ provider: perplexity ? "clawrouter" : phase, modelId, model, sourceApi: model.api, streamFn: id === "chat" ? streamSimple : stream });
   expect(wrapped).toBeDefined();
   const apiKey = id === "invalid" ? "clawrouter-live-responses_stream-invalid" : key(id);
+  if (id === "stale") {
+    const control = await fetch(origin + "/fixture/revoke");
+    expect(control.status).toBe(204); await control.arrayBuffer();
+  }
   const owner = bindings.expect(id, "chat", model.baseUrl + (id === "chat" ? "/chat/completions" : "/responses"), "POST", apiKey, options.signal);
   owner.callerObservation = {}; lifetime.signal(owner.callerObservation, options.signal);
   return invocation.run(owner, () => wrapped!(model, context, {
@@ -98,8 +129,16 @@ async function start(id: string, options: { selected?: Awaited<ReturnType<typeof
 describe(phase + " registered Responses through Worker and SQLite", { concurrent: false }, () => {
   beforeEach(async () => {
     bodySucceeded = false; bindings = createRequestBindings();
+    if (perplexity) clearLiveCatalogCacheForTests();
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore(), apiPrototype: APIError.prototype, isProxy: types.isProxy });
     try {
+      if (perplexity) vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (...args) {
+        const options = args[0];
+        if (options.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalogGuard, this, args);
+        const owner = bindings.claim(options.url, options.init, "catalog");
+        lifetime.signal(owner, options.signal ?? options.init?.signal);
+        return lifetime.guard(originalCatalogGuard, this, args, owner);
+      });
       vi.spyOn(transportStream, "failTransportStream").mockImplementation(function (...args: Parameters<typeof originalFailure>) {
         lifetime.providerError(args[0]); return Reflect.apply(originalFailure, this, args);
       });
@@ -121,17 +160,18 @@ describe(phase + " registered Responses through Worker and SQLite", { concurrent
     const history: AgentMessage[] = [{ role: "user", content: "fixture responses_stream", timestamp: 1 }, first,
       { role: "toolResult", toolCallId: tool.id, toolName: tool.name, content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: first.timestamp + 1 },
       { role: "user", content: "fixture responses_replay", timestamp: first.timestamp + 2 }];
-    const second = await (await start("replay", { selected, history })).result();
+    const second = await (await start("replay", { selected: perplexity ? await select(false, "replay") : selected, history })).result();
     expect(second.stopReason, second.errorMessage).toBe("stop");
     expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "synthetic-answer" }));
     console.log("RESPONSES_REPLAY_RETIRED " + phase);
   });
-  it.each(["no_effort", "image", "low", ...(xai ? ["priority", "long", "priority_long", "unknown_bill"] : ["chat"])])("uses actual selected provider for %s", async id => {
+  it.each(["no_effort", ...(!perplexity ? ["image"] : []), "low", ...(xai ? ["priority", "long", "priority_long", "unknown_bill"] : perplexity ? [] : ["chat"])])("uses actual selected provider for %s", async id => {
     const result = await (await start(id)).result();
     expect(result.stopReason, result.errorMessage).toBe("stop");
     expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "synthetic-answer" }));
   });
-  it.each(["invalid", "foreign", "budget", "model_denied", ...(xai ? ["stored", "hosted"] : ["unpriced"])])("denies %s without ambient fallback or unqualified dispatch", async id => {
+  it.each(["invalid", "foreign", "budget", "model_denied", ...(xai ? ["stored", "hosted"] : perplexity ? ["unpriced", "stored", "stale"] : ["unpriced"])])("denies %s without ambient fallback or unqualified dispatch", async id => {
+    if (perplexity && !["stored", "stale"].includes(id)) { await expect(start(id)).rejects.toThrow(id === "invalid" ? "clawrouter model discovery failed: HTTP 401" : "catalog offer unavailable"); return; }
     const result = await (await start(id)).result(); expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toMatch(/fixture-secret|must-not-fallback|synthetic-responses/);
   });
@@ -141,7 +181,7 @@ describe(phase + " registered Responses through Worker and SQLite", { concurrent
   });
   it("retires an actual partial Responses stream after caller cancellation", async () => {
     const controller = new AbortController(), output = await start("cancel", { signal: controller.signal });
-    for await (const event of output) if (event.type === "text_delta") { lifetime.partial(bindings.bindings.find(row => row.id === "cancel")); controller.abort(); break; }
+    for await (const event of output) if (event.type === "text_delta") { lifetime.partial(cancellationOwner(bindings.bindings)); controller.abort(); break; }
     expect(controller.signal.aborted).toBe(true); expect((await output.result()).stopReason).toBe("aborted");
   });
 });

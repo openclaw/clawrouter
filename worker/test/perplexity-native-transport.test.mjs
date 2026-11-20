@@ -14,23 +14,11 @@ const { snapshot } = await import("../providers.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/perplexity/native-contracts.json", import.meta.url), "utf8"));
 const sse = events => events.map(event => `event: ${event.type}\r\ndata: ${JSON.stringify(event)}\r\n\r\n`).join("");
 
-async function fixture(t, { body = wire.search.response, status = 200, stream = false } = {}) {
-  // Candidate endpoint contract only. The manifest owner activates these routes;
-  // this test does not change or certify the shipped provider catalog.
-  const original = snapshot.providers;
-  const provider = structuredClone(original.find(provider => provider.id === "perplexity"));
-  provider.models = [];
-  const template = provider.endpoints[0];
-  provider.endpoints = ["search", "agent"].map(kind => {
-    const contract = wire.transport[kind];
-    const endpoint = { ...template, id: contract.id, path: contract.path, request_format: contract.requestFormat,
-      response_format: contract.responseFormat, streaming: contract.streaming };
-    if (kind === "search") delete endpoint.modelPassthrough;
-    return endpoint;
-  });
-  provider.capabilities = ["search", "agent"].map(kind => ({ id: wire.transport[kind].capability, endpoint: kind, methods: ["POST"] }));
-  snapshot.providers = original.map(row => row.id === provider.id ? provider : row);
-  t.after(() => { snapshot.providers = original; });
+async function fixture(t, { body = wire.search.response, status = 200, stream = false, raw = false, contentType = "application/json" } = {}) {
+  // Exercise the bundled declaration and generated snapshot, not a test-only catalog.
+  const provider = snapshot.providers.find(provider => provider.id === "perplexity");
+  assert.ok(provider.endpoints.some(endpoint => endpoint.id === "agent" && endpoint.path === "/v1/agent"));
+  assert.ok(provider.endpoints.some(endpoint => endpoint.id === "search" && endpoint.requestPricing?.successfulResponseMicros === 5000));
   const base = { enabled: true, generation: "v1", providers: ["perplexity"], models: null, tenantId: "fixture",
     monthlyBudgetMicros: 1000000, requestCostMicros: null, retainRequestContent: false };
   const policies = { fixed: { ...base, requestCostMicros: wire.billing.policyFixedMicros },
@@ -55,7 +43,7 @@ async function fixture(t, { body = wire.search.response, status = 200, stream = 
   await authorityCall(env, "/connections/initialize-all", [{ providerId: "perplexity", enabled: true }]);
   t.mock.method(globalThis, "fetch", async (url, init) => {
     sent.push({ url: String(url), headers: new Headers(init.headers), body: await new Response(init.body).json() });
-    if (!stream) return Response.json(body, { status });
+    if (!stream) return raw ? new Response(body, { status, headers: { "content-type": contentType } }) : Response.json(body, { status });
     const bytes = new TextEncoder().encode(body); let offset = 0;
     return new Response(new ReadableStream({ pull(controller) {
       if (offset === bytes.length) return controller.close();
@@ -73,7 +61,7 @@ async function fixture(t, { body = wire.search.response, status = 200, stream = 
   return { request, sent, events, pending };
 }
 
-test("Perplexity candidate Search preserves native filters and result bytes on native and internal routes", async t => {
+test("Perplexity bundled Search preserves native filters and result bytes on native and internal routes", async t => {
   const f = await fixture(t);
   for (const native of [true, false]) {
     const response = await f.request("search", wire.search.request, "fixed", native);
@@ -93,7 +81,7 @@ test("Perplexity candidate Search preserves native filters and result bytes on n
   }
 });
 
-test("Perplexity candidate Agent supports effort-only and explicit model requests without Sonar conversion", async t => {
+test("Perplexity bundled Agent supports effort-only and explicit model requests without Sonar conversion", async t => {
   for (const input of [wire.agent.request, wire.agent.explicitModelRequest]) await t.test(input.model ?? input.effort, async t => {
     const f = await fixture(t, { body: wire.agent.response });
     const response = await f.request("agent", input);
@@ -109,7 +97,7 @@ test("Perplexity candidate Agent supports effort-only and explicit model request
   });
 });
 
-test("Perplexity candidate Agent preserves typed search-result/text/completion SSE including split UTF-8", async t => {
+test("Perplexity bundled Agent preserves typed search-result/text/completion SSE including split UTF-8", async t => {
   const bytes = sse(wire.agent.streamEvents);
   const f = await fixture(t, { body: bytes, stream: true });
   const input = { ...wire.agent.request, stream: true };
@@ -122,7 +110,7 @@ test("Perplexity candidate Agent preserves typed search-result/text/completion S
   assert.equal(f.events[0].actual_cost_micros, wire.billing.policyFixedMicros);
 });
 
-test("Perplexity candidate Agent keeps HTTP-200 stream failure visible after partial output", async t => {
+test("Perplexity bundled Agent keeps HTTP-200 stream failure visible after partial output", async t => {
   const bytes = sse(wire.agent.failureEvents);
   const f = await fixture(t, { body: bytes, stream: true });
   const response = await f.request("agent", { ...wire.agent.request, stream: true });
@@ -133,12 +121,41 @@ test("Perplexity candidate Agent keeps HTTP-200 stream failure visible after par
   assert.equal(f.events[0].status, "provider_error");
 });
 
-test("Perplexity candidate Agent and Search fail closed before egress without qualified hard-budget prices", async t => {
+test("Perplexity bundled Agent and Search fail closed before egress without qualified hard-budget prices", async t => {
   const f = await fixture(t);
-  for (const kind of ["search", "agent"]) for (const key of ["reserve", "denied"]) {
+  for (const [kind, key] of [["search", "denied"], ["agent", "reserve"], ["agent", "denied"]]) {
     const response = await f.request(kind, wire[kind].request, key);
     assert.ok(response.status >= 400);
     assert.equal((await response.json()).error.code, key === "reserve" ? "pricing_required" : "provider_not_allowed");
   }
   assert.equal(f.sent.length, 0);
+});
+
+
+test("bundled Perplexity Search settles one native result-qualified request, not HTTP status or token hints", async t => {
+  for (const [name, body, status, expected, basis, raw] of [
+    ["standard", wire.search.response, 200, 5000, "manifest_request", false],
+    ["empty", wire.search.emptyResponse, 200, 5000, "manifest_request", false],
+    ["spurious-tokens", { ...wire.search.emptyResponse, usage: { input_tokens: 100, output_tokens: 40, total_tokens: 140 } }, 200, 5000, "manifest_request", false],
+    ["fast", wire.search.response, 200, 1000, "manifest_request", false],
+    ["rejected", { error: { message: "synthetic", type: "invalid_request", code: 400 } }, 400, 0, "none", false],
+    ["rate-limited", { error: { type: "rate_limit", message: "synthetic", code: 429 } }, 429, 0, "none", false],
+    ["provider-error", { error: { code: 500, type: "upstream", message: "synthetic" } }, 200, 5000, "manifest_request_reservation", false],
+    ["status-only", {}, 200, 5000, "manifest_request_reservation", false],
+    ["malformed-results", { results: [{}] }, 200, 5000, "manifest_request_reservation", false],
+    ["ambiguous", { results: [], error: { code: "upstream", message: "synthetic" } }, 200, 5000, "manifest_request_reservation", false],
+    ["truncated", '{"results":[', 200, 5000, "manifest_request_reservation", true],
+    ["oversized", JSON.stringify({ padding: "x".repeat(2 * 1024 * 1024), results: [] }), 200, 5000, "manifest_request_reservation", true],
+  ]) await t.test(name, async t => {
+    const f = await fixture(t, { body, status, raw });
+    const response = await f.request("search", { query: ["synthetic one", "synthetic two"], ...(name === "fast" ? { search_type: "fast" } : {}) }, "reserve");
+    await response.text(); await Promise.all(f.pending);
+    assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    const event = f.events[0];
+    assert.equal(event.credential_id, "reserve"); assert.equal(event.policy_id, "reserve");
+    assert.equal(event.model, null); assert.equal(event.capability, "web.search");
+    assert.equal(event.actual_cost_micros, expected); assert.equal(event.cost_basis, basis);
+    assert.equal(event.reserved_cost_micros, name === "fast" ? 1000 : 5000);
+    assert.equal(event.input_tokens, null); assert.equal(event.output_tokens, null);
+  });
 });

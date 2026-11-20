@@ -44,6 +44,12 @@ jobs:
           - consumer: vydra-models
             ref: 542958f2c02754de72361bfbdc016a724a4572f1
             test: test/openclaw-vydra-models.test.mjs
+          - consumer: perplexity-search
+            ref: addccb3274d885d3e06fb4662e0a620e8829523a
+            test: test/openclaw-perplexity-search.test.mjs
+          - consumer: provider-responses
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-provider-responses.test.mjs
           - consumer: radius
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-radius.test.mjs
@@ -59,9 +65,6 @@ jobs:
           - consumer: fireworks-fast
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-fireworks-fast.test.mjs
-          - consumer: provider-responses
-            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
-            test: test/openclaw-provider-responses.test.mjs
           - consumer: mistral-frozen-chat
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-mistral-frozen-chat.test.mjs
