@@ -3,7 +3,11 @@ import { fileURLToPath } from "node:url";
 import * as guardedTransport from "../../src/infra/net/fetch-guard.js";
 import { createWebSearchTool } from "../../src/agents/tools/web-search.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { createCapturedPluginRegistration, createEmptyPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
+import { resolvePluginWebSearchProviders } from "../../src/plugins/web-search-providers.runtime.js";
 import { describe, expect, it, vi } from "vitest";
+import plugin from "./index.js";
 
 /* OWNED_LIFETIME_IMPLEMENTATION */
 
@@ -54,7 +58,22 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
       }
       return tool.execute("perplexity-search-" + id, { query: "synthetic query", count: 2, ...args }, signal);
     };
-    await body(execute, lifetime, bindings); succeeded = true;
+    const captured = createCapturedPluginRegistration();
+    plugin.register?.(captured.api);
+    const providers = captured.webSearchProviders.filter(provider => provider.id === "clawrouter");
+    assert.equal(providers.length, 1, "one actual registered Search provider");
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push({ pluginId: "clawrouter", provider: providers[0], source: "test" });
+    const previous = getPluginRuntimeGenerationRegistry();
+    await withPluginRuntimeGenerationRegistryScope(registry, async () => {
+      await Promise.resolve();
+      assert.strictEqual(getPluginRuntimeGenerationRegistry(), registry);
+      const selected = resolvePluginWebSearchProviders({ config, onlyPluginIds: ["clawrouter"] });
+      assert.equal(selected.length, 1); assert.strictEqual(selected[0].createTool, providers[0].createTool);
+      await body(execute, lifetime, bindings);
+    });
+    assert.strictEqual(getPluginRuntimeGenerationRegistry(), previous);
+    succeeded = true;
   }, [() => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => state?.cleanup()]);
   if (id === "cancel") console.log("PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind);
 }
@@ -76,6 +95,26 @@ async function waitForOriginalRead(lifetime: any, owner: any) {
 }
 
 describe("registered Perplexity Search through Worker and SQLite", { concurrent: false }, () => {
+  it("keeps the captured provider across async scopes without empty or foreign fallback", () => runCase("preabort", async () => {
+    const registry = getPluginRuntimeGenerationRegistry()!;
+    const options = { onlyPluginIds: ["clawrouter"] };
+    const selected = resolvePluginWebSearchProviders(options);
+    assert.equal(selected.length, 1);
+    const empty = createEmptyPluginRegistry(), foreign = createEmptyPluginRegistry();
+    foreign.webSearchProviders.push({ pluginId: "foreign", provider: registry.webSearchProviders[0].provider, source: "test" });
+    await Promise.all([empty, foreign].map(other => withPluginRuntimeGenerationRegistryScope(other, async () => {
+      await Promise.resolve(); assert.strictEqual(getPluginRuntimeGenerationRegistry(), other);
+      assert.deepEqual(resolvePluginWebSearchProviders(options), []);
+      await withPluginRuntimeGenerationRegistryScope(registry, async () => {
+        await Promise.resolve(); assert.strictEqual(resolvePluginWebSearchProviders(options)[0].createTool, selected[0].createTool);
+      });
+      assert.strictEqual(getPluginRuntimeGenerationRegistry(), other);
+    })));
+    assert.strictEqual(getPluginRuntimeGenerationRegistry(), registry);
+    let threw = false;
+    try { withPluginRuntimeGenerationRegistryScope(empty, () => { throw undefined; }); } catch (error) { threw = true; assert.strictEqual(error, undefined); }
+    assert.equal(threw, true); assert.strictEqual(getPluginRuntimeGenerationRegistry(), registry);
+  }));
   it.each(["standard", "fixed", "spurious", "default_count", "utf8", "rotated"])("selects the actual model-less offer for %s", id => runCase(id, async execute => {
     const query = id === "utf8" ? "界".repeat(2730) + "ab" : "synthetic query";
     const result = await execute({ query, ...(id === "default_count" ? { count: undefined } : {}) });
@@ -87,9 +126,13 @@ describe("registered Perplexity Search through Worker and SQLite", { concurrent:
   it("bills an empty complete result once", () => runCase("empty", async execute => {
     expect((await execute()).details).toMatchObject({ kind: "results", provider: "clawrouter", count: 0, results: [] });
   }));
-  it.each(["invalid", "foreign", "budget", "revoked"])("denies %s without an inference fallback", id => runCase(id, async execute => {
+  it.each(["invalid", "foreign", "budget", "revoked"])("denies %s without an inference fallback", id => runCase(id, async (execute, lifetime) => {
     const result = await execute(); expect(result.details).toMatchObject({ kind: "error", provider: "clawrouter" });
-    if (id === "invalid") expect(JSON.stringify(result.details)).toContain("HTTP 401");
+    if (id === "invalid") {
+      const catalog = lifetime.guards.filter((row: any) => row.owner.kind === "catalog");
+      assert.equal(catalog.length, 1); assert.equal(catalog[0].result.response.status, 401);
+      expect(JSON.stringify(result.details)).not.toContain("fixture-secret");
+    }
   }));
   it.each(["blank", "count", "utf8_over"])("rejects %s without search dispatch", id => runCase(id, async execute => {
     const args = id === "blank" ? { query: " " } : id === "count" ? { count: 11 } : { query: "界".repeat(2731) };
