@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve optional, explicit catalogue references on compiled provider models. Router aliases and upstream slugs remain separate; references do not import model facts, prices, or permissions.
+
 - Exercise the five frozen Mistral Chat cards through the registered OpenClaw client, actual Worker and SQLite: selected credentials, replay IDs, typed reasoning, standard/Priority accounting, zero-egress denials, controlled provider errors and joined post-response cancellation. Put the new consumer first without reordering existing consumers; preserve independent cleanup failures and the separate pre-header physical-disconnect limitation.
 
 - Keep the four Z.AI native lifetime controls serial through supported Vitest suite options and prioritize its existing CI row without changing the matrix membership or other rows’ order. Scope actual transcript sanitization to the case-owned captured Z.AI provider, preserving original sanitizer outcomes, resource joins and qualification gates. Bind canceled Worker reads to their exact first caller outcome and original failure handler, retain their rejected state, and require independently joined source cancellation, cleanup and accounting. Keep controlled provider-error handling separate: bind the actual SDK failure callback, returned output and request-owned stored-error rejections without admitting unrelated transport or cleanup failures.

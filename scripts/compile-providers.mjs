@@ -43,6 +43,7 @@ export function compileProviderSnapshot(manifests) {
       model_index[model.id] = {
         provider: provider.id,
         upstream: model.upstream,
+        ...(model.catalogRef ? { catalogRef: { ...model.catalogRef } } : {}),
         ...(model.displayName ? { displayName: model.displayName } : {}),
         capabilities: model.capabilities,
         ...(model.availability ? { availability: structuredClone(model.availability) } : {}),

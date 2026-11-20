@@ -55,7 +55,7 @@ assert.equal(isPublishedMusicInputSupport({}), false);
 import { parseProviderPluginDescriptor, type ProviderPluginDescriptor, type ProviderPackageIndex,
   type ProviderSnapshot, type CompiledProvider, type CompiledModel,
   type GrantQuotaKind, type CompiledQuotaWindow, type CompiledQuotaProbeWindow, type CompiledQuotaProbe, type CompiledQuotaConfig, type GrantAccount, type GrantExtraUsage,
-  type ProviderModelDefinition, type ModelAvailability, type ProviderReasoningEffort, type ParameterSupport, type ModelRequestParameters, type OpenAiDecisionCapabilities, type BasetenSystemOneDecisionCapabilities, type SageDecisionCapabilities, type NativeDecisionCapabilities, type OpaquePcmSpeechProfile, type InlineMusicReferenceImage, type PublishedMusicInputSupport, type NativeEndpointCapabilities, type NativeModelCapabilities,
+  type ProviderModelDefinition, type ProviderModelCatalogRef, type ModelAvailability, type ProviderReasoningEffort, type ParameterSupport, type ModelRequestParameters, type OpenAiDecisionCapabilities, type BasetenSystemOneDecisionCapabilities, type SageDecisionCapabilities, type NativeDecisionCapabilities, type OpaquePcmSpeechProfile, type InlineMusicReferenceImage, type PublishedMusicInputSupport, type NativeEndpointCapabilities, type NativeModelCapabilities,
   type ManagedProtocol, type ManagedFileLinks, type OutputTokenLimit, type ToolPricing, type CompiledEndpoint,
   type TokenRates, type LongContextPricing, type ServiceTierPricing, type AnthropicPriceModifiers, type TokenPricing, type CharacterPricing, type ImageTokenPricing, type ModelPricing, type SuccessfulRequestPricing, type OutcomeRequestPricing, type ImageRequestPricing, type DeepSeekSearchRequestPricing, type RequestPricing,
   type AuthScheme, type AuthorizationConfig, type RefreshConfig, type GrantTransportAuth, type CompiledGrantTransport,
@@ -102,7 +102,10 @@ const availability: ModelAvailability = { version: "clawrouter.model-availabilit
   checkedAt: "2026-01-01", sources: [], status: "upstream_alias", servingModel: "serving-model" };
 const decision: OpenAiDecisionCapabilities = { protocol: "openai-decisions", questions: {
   boolean: { probabilities: "boolean", abstention: true } }, limits: { maxQuestions: 16 } };
-const model: ProviderModelDefinition = { id: "example/model", upstream: "model", capabilities: ["inference.decision"],
+const catalogRef: ProviderModelCatalogRef = { provider: "catalog-provider", modelId: "org/Model:revision" };
+// @ts-expect-error A catalogue reference needs an exact model ID as well as a provider.
+const invalidCatalogRef: ProviderModelCatalogRef = { provider: "catalog-provider" };
+const model: ProviderModelDefinition = { id: "example/model", upstream: "model", catalogRef, capabilities: ["inference.decision"],
   pricing_ref: null, pricing: null, availability, supportedReasoningEfforts: ["low", "high"],
   requestParameters: { invoke: { sources: [], checkedAt: "2026-01-01", temperature: "requires_reasoning_none" } },
   nativeCapabilities: { version: "clawrouter.native-capabilities.v1", endpoints: {
