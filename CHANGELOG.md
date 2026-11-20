@@ -46,6 +46,8 @@
 
 ## Unreleased
 
+- Activate Radius API-key Pi routes and bounded, owner-bound config filtering with a closed native metadata projection. Add registered configured-stream, replay, cache-counter, denial and original cancellation/accounting checks; keep automatic catalog/OAuth routing and unknown tariffs explicitly separate.
+
 - Publish endpoint-specific DeepSeek Flash vision and Pro text facts, canonical reasoning controls and checked price provenance while preserving conservative peak-rate reservations. Add registered custom-base SDK image/thinking/tool-replay, cache settlement, denial and post-content retirement checks; document the pinned default-catalog and low-effort mapping gaps separately.
 
 - Add the five frozen Mistral Chat identities with dated endpoint facts, current Codestral/Small tariffs and conservative full-context reservations. Deprecated identities remain unpriced instead of borrowing replacement tariffs.
@@ -890,6 +892,7 @@
 - Qualify finite Sage batch decision metadata with an exact paired transport and text/list model binding, preserving singular protocols and leaving runtime activation, batch bounds and prices unqualified.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.
+- Declare the Radius native Pi gateway and scoped config contract with isolated API-key/model bindings and no inferred tariff; runtime/client activation remains gated on integration proof.
 
 - Observe native Ollama JSON/NDJSON through the existing byte-preserving delivery and accounting path, and filter native model discovery by caller policy without inference charges. Native hosts and model loading remain separately configured.
 - Route managed Replicate submit, poll, and cancel through the original caller and credential binding, collect terminal jobs after disconnect, and require explicit policy-fixed pricing. Unknown create results are never replayed; upstream dollar parity remains unqualified.

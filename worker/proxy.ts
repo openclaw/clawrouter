@@ -1301,7 +1301,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         // cancellation; no detached abort race can hide its independent failure.
         ? () => prepared.revalidateDiscovery!(signal)
         : () => operation.wait(prepared.revalidateDiscovery!(signal)) : undefined,
-      catalogInputs ? registerCatalogInput : undefined);
+      catalogInputs ? registerCatalogInput : undefined, prepared.url.origin);
       if (catalogInputs) catalogWork = reading;
       response = catalogInputs ? await operation.wait(reading, "upstream", discard) : await reading;
     }
@@ -1652,7 +1652,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     preparation?.headers(headers); preparation?.text(url.href, 16384);
     const gmiCheck = selection.provider.id === "gmi"
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
-    const discoveryCheck = gmiCheck ?? (["openai.models", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
+    const discoveryCheck = gmiCheck ?? (["openai.models", "radius.config", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
       ? await prepareModelDiscoveryOwner(request, env, auth, selection, upstream, url, headers) : undefined);
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);

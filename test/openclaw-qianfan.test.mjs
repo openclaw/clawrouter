@@ -1085,7 +1085,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
 
 // The test bundle alone observes the original handler boundary. Exact source
 // pins and single anchors prevent an overlay from silently following new code.
-const workerOutcomePins = {"proxy.ts": "0dd94cd16e6205d62a2bc0da80c6a2ba63615393f0b57be851d23b4bbefbddd1", "proxy-response.ts": "d612c0a2181c145c6cc4761b82053d04454bb009c872dd2996595a202c9b2b0f", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "b1a8d68993b406b5660ebff0cd3b94e6d11cd0dccbafb7a22d50ec5bec2d483f", "proxy-response.ts": "d612c0a2181c145c6cc4761b82053d04454bb009c872dd2996595a202c9b2b0f", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
