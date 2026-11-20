@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: baseten-decisions
+            ref: 761748e1824e2ee43e886fcce4376c3b20055015
+            test: test/openclaw-baseten-decisions.test.mjs
           - consumer: vydra-models
             ref: 542958f2c02754de72361bfbdc016a724a4572f1
             test: test/openclaw-vydra-models.test.mjs

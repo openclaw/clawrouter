@@ -65,32 +65,18 @@ no vendor tariff, Liquid zero-output rule or TypeSafe accounting is borrowed.
 The typed fixture is `worker/test/baseten-systemone-fixtures.ts`. Focused tests
 also check the native import path without the test-only resolver hook.
 
-## Required integration and ownership
+## Integration and ownership
 
-Central schema3 still needs to publish `baseten.systemone` as matching request
-and response formats, `llm.decisions`, `POST /systemone`, no streaming or model
-passthrough, and `baseten-systemone` decision metadata for the exact three IDs.
-That schema/compiler registration is a dependency, not a claim made by this
-codec constant. Source4 retains new-family provider declarations after the
-actual runtime/schema contracts are proven; snapshot integration requires a
-separate source6 slot.
+The landed compiler/schema and `worker/native-baseten-systemone.ts` bind this
+codec to matching `baseten.systemone` request/response formats, `llm.decisions`
+and finite `POST /systemone` metadata. Unrelated formats return `undefined`;
+route/model qualification precedes replacement of only `selection.body`.
+The shared runtime owns credentials, destination checks, capacity, admission,
+reservation, cancellation, no-replay behavior and settlement. The wrapper
+returns the decoded native body and independently validated usage.
 
-The accepted, still-held wrapper proposal names only the new
-`worker/native-baseten-systemone.ts` and
-`worker/test/native-baseten-systemone.test.mjs`. Its proposed export is
-`prepareNativeBasetenSystemOne(selection: ProxySelection): NativeResponse | undefined`.
-Unrelated formats return `undefined`; qualifying the actual route/model precedes
-replacement of only `selection.body`. The wrapper will use `nativeResponseLease`
-and this complete reader, with origin `https://inference.baseten.co` and path
-`/v1/systemone`. No wrapper file is implemented or transferred by this codec PR.
-Root must record the exact published codec/schema handoff and authorize those
-files before their edits.
-
-Runtime1 retains credentials, destination checks, capacity, admission/reservation,
-cancellation, no-replay behavior, settlement and controller/index/types wiring.
-The wrapper will return the codec's native body with its independently validated
-usage; absent qualified tariffs remain unknown. Client2 owns actual DecisionV2
-consumption and proof6 owns end-to-end acceptance. These helper fixtures do not
-replace that transport, client or live-account proof. No credentials, live
-inference, provisioning, model deployment or shared runtime edits are required
-for this deterministic slice.
+The bundled declaration now activates those three rows. See the
+[runtime and registered-client contract](baseten-systemone-runtime.md) for the
+explicit client pin, actual Worker/SQLite harness and remaining physical
+pre-response cancellation limitation. The codec alone does not establish
+client, live-account, vendor-price or deployment qualification.
