@@ -161,7 +161,8 @@ async function runCase(id: string) {
         assert.ok("error" in outcome); assert.strictEqual(outcome.error, reason);
       } else {
         const output = await tool!.execute("baseten-" + id, { contractVersion: 2, ...input }, controller.signal);
-        if (blocked.has(id) || failed.has(id)) expect(output.details).toMatchObject({ status: "unavailable" });
+        if (id === "unsupported") expect(output.details).toMatchObject({ status: "unavailable", reason: "unsupported-input" });
+        else if (blocked.has(id) || failed.has(id)) expect(output.details).toMatchObject({ status: "unavailable" });
         else expect(output.details).toMatchObject({ status: "ok", result: { model: "synthetic-served-backend", answers: { damaged: { probabilityTrue: 0.9 }, route: { confidence: 0.2 }, severity: { score: 1.25 } }, usage: { inputTokens: 11, outputTokens: 3 } }, provenance: { providerId: "clawrouter" } });
       }
       expect(identities.has("decision")).toBe(!blocked.has(id));
