@@ -56,6 +56,15 @@ endpoints:
     path: /search
     requestFormat: perplexity.search
     responseFormat: perplexity.search
+    requestPricing:
+      unit: request
+      version: perplexity-search-2026-11-03
+      effectiveAt: "2026-11-03"
+      source: https://docs.perplexity.ai/docs/getting-started/pricing
+      successfulResponseMicros: 5000
+      parameterRates:
+        parameter: search_type
+        rates: { web: 5000, fast: 1000 }
     timeoutMs: 120000
   chat_completions:
     modelPassthrough: {}

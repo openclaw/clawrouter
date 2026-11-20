@@ -868,7 +868,7 @@
 - Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
-- Add documented Perplexity Agent/Responses and native Search routes while retaining conservative legacy Sonar pricing and leaving new upstream tariffs unqualified.
+- Activate Perplexity Agent/Responses and native Search declarations, qualify complete native Search request receipts, and exercise catalog-selected ClawRouter Responses replay and retirement. Preserve unknown Agent/tool/session budgets and explicitly track the missing OpenClaw Search codec.
 - Add the frozen Hugging Face R1, V3.1 and unsuffixed OSS 120B identities while preserving native model names and dynamic-provider pricing guards. Qualify the registered custom-base Chat route with exact suffix/credential binding, captured-provider replay, separate unpriced-denial and fixed-policy accounting, and original SDK/Worker/source retirement controls.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
 - Define a typed successful-request tariff contract with dated provenance and bounded parameter rates for native Search; activation remains gated on request-cost runtime accounting.

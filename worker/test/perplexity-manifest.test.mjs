@@ -43,7 +43,7 @@ test("Perplexity Agent and Responses share the documented wire format without bo
   assert.throws(() => prepareManifestRequest(provider, endpoint("responses"), { model: "perplexity/sonar-pro", input: "fixture" }, {}, env), /does not support/);
 });
 
-test("native Search preserves its non-model request and keeps unqualified hard-budget calls closed", () => {
+test("native Search preserves its non-model tariff while unpriced Agent budgets stay closed", () => {
   const search = endpoint("search"), auth = configuredUpstream(provider, null, env);
   assert.equal(search.request_format, "perplexity.search");
   assert.equal(search.response_format, "perplexity.search");
@@ -56,7 +56,9 @@ test("native Search preserves its non-model request and keeps unqualified hard-b
   assert.deepEqual(prepared.body, body);
   const identity = { policy: { monthlyBudgetMicros: 1000000, requestCostMicros: null, budgetMode: "reserve" } };
   const connection = { providerId: "perplexity", enabled: true, monthlyBudgetMicros: null };
-  for (const [e, model, capability] of [[search, null, "web.search"], [endpoint("responses"), provider.models.find(model => model.id === id), "llm.responses"]]) {
+  assert.equal(search.requestPricing.successfulResponseMicros, 5000);
+  assert.deepEqual(search.requestPricing.parameterRates, { parameter: "search_type", rates: { web: 5000, fast: 1000 } });
+  for (const [e, model, capability] of [[endpoint("responses"), provider.models.find(model => model.id === id), "llm.responses"]]) {
     assert.deepEqual(operationAffordability(identity, connection, model, capability, e), { status: "exact-blocked", reasonCode: "pricing_required" });
   }
 });
