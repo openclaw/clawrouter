@@ -1,5 +1,7 @@
 # Changelog
 
+- Explain static provider product and transport incompatibility with typed diagnostic codes. Preserve boolean compatibility decisions and keep credential, policy, quota, and budget admission with the host.
+
 - Preserve the registered Perplexity Search client's rejected original body cancellation after an authored post-header abort. Admit only the exact owned body/read/closed reason and completed unlock/release relationship; keep raw rejections, independent faults and Worker acceptance unchanged.
 
 - Exercise registered Perplexity Search through its actual catalog-selected native route, selected and rotated credentials, request-based SQLite receipts, bounded results and joined post-header cancellation. Preserve independent Responses and generic Search pins; retain unexpected-dispatch observer faults even when the client wraps the error.

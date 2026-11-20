@@ -442,6 +442,35 @@ I/O, or authorize execution. A compatible result still requires the host's
 provider-specific qualification, credential, policy, quota, and budget checks.
 The full offer resolver remains in the Worker.
 
+### Binding diagnostics
+
+Use `bindingCompatibilityIssue(requirement, grant)` for operation compatibility
+and `productBindingCompatibilityIssue(requirement, product, grant)` to include
+product restrictions. Both return the first mismatch, or `null` when compatible.
+The existing boolean helpers return whether the corresponding result is `null`.
+
+| Code | Static mismatch |
+| --- | --- |
+| `operation_requires_websocket` | The realtime endpoint requires WebSocket mode. |
+| `transport_endpoint_unsupported` | The selected grant transport excludes the requested endpoint. |
+| `lifecycle_unavailable` | Requested lifecycle metadata is absent, or lifecycle mode is not HTTP. |
+| `lifecycle_endpoint_unsupported` | A required control or file endpoint is absent or excluded by the transport. |
+| `websocket_unsupported` | The endpoint, transport, or credential classification does not support this WebSocket path. |
+| `product_transport_mismatch` | The selected transport does not match the product binding. |
+| `product_endpoint_unsupported` | The product excludes the requested endpoint or a required lifecycle endpoint. |
+
+Operation checks examine realtime mode, the transport endpoint allowlist,
+lifecycle dependencies, and general WebSocket support in that order. Product
+checks first examine the product binding, lifecycle availability, and product
+endpoint allowlist, then apply the operation checks. Multiple incompatibilities
+can exist; a code identifies the first check, not an exhaustive diagnosis.
+
+These functions inspect only the supplied compiled declarations and credential
+classification. They perform no I/O and do not change inputs. A `null` result
+cannot prove that credentials exist or that policy, entitlement, quota, budget,
+provider-specific qualification, or model eligibility permits execution. Keep
+those decisions with their existing host owners.
+
 ## Catalogue references
 
 A model entry can name its intended shared catalogue row:

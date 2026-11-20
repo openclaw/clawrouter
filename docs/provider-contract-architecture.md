@@ -139,7 +139,10 @@ adapters and lifecycle validation retain their existing owners.
 transport selection and product/operation compatibility checks.
 `shared/provider-bindings.ts` preserves existing imports through re-exports.
 The package can inspect endpoint allowlists and lifecycle dependencies without
-I/O. It does not own credential admission or provider-specific qualification;
+I/O. The same evaluator returns typed static incompatibility codes through
+`bindingCompatibilityIssue` and `productBindingCompatibilityIssue`; existing
+boolean helpers use those results. These codes explain declaration restrictions,
+not account health. It does not own credential admission or provider-specific qualification;
 `worker/provider-auth.ts` and `worker/provider-offers.ts` retain those decisions.
 
 ### Model contract ownership

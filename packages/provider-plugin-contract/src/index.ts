@@ -1,8 +1,8 @@
 /** Packaging metadata only. Execution remains governed by the provider manifest. */
 export { PROVIDER_CONFORMANCE_SCHEMA, PROVIDER_CONFORMANCE_VALIDATION_SCHEMA, PROVIDER_CONFORMANCE_EXECUTION_SCHEMA, ProviderConformanceContractError, parseProviderConformanceScenario } from "./conformance.ts";
 export type { ProviderConformanceScenario, ProviderConformanceValidation, ProviderConformanceExecution, ProviderFixtureJson, ProviderFixtureRequest, ProviderFixtureResponse } from "./conformance.ts";
-export { transportForGrant, bindingSupportsOperation, productSupportsBinding } from "./bindings.ts";
-export type { ProviderBindingGrant, ProviderBindingRequirement } from "./bindings.ts";
+export { transportForGrant, bindingSupportsOperation, productSupportsBinding, bindingCompatibilityIssue, productBindingCompatibilityIssue } from "./bindings.ts";
+export type { ProviderBindingGrant, ProviderBindingRequirement, ProviderBindingIssue } from "./bindings.ts";
 export type { ProviderPackageIndex, ProviderPackageResource } from "./package-index.ts";
 export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderProductSummary } from "./product-metadata.ts";
 export type { ProviderGrantKind, ProviderProductBinding, ProviderProductOffer, ProviderOfferDefinition, ProviderOfferReference, ProviderProduct } from "./products.ts";
