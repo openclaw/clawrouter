@@ -669,7 +669,9 @@ for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown
         if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
         assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
         if (providerId === "anthropic") {
-          assert.equal(view.models.length, 11);
+          assert.deepEqual(view.models.map(({ id }) => id).sort(),
+            snapshot.providers.find(({ id }) => id === providerId).models.map(({ id }) => id).sort(),
+            "API-key discovery preserves every compiled Anthropic identity exactly once");
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
           assert.equal(view.routes.length, 4);
