@@ -204,6 +204,13 @@ export function assertResponseControlRetention(env: Env, input: ResponseControlD
     throw new HttpError(403, "upstream_retention_unqualified", "the original upstream retention qualification is unavailable");
 }
 
+export function assertResponseControlDispatch(input: ResponseControlDispatch, request: Request): void {
+  if (!input.protocol) return;
+  const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
+  if (!create || create.lifecycle?.protocol !== input.protocol) unavailable();
+  assertManagedDispatch(input.protocol, request, create.request_format);
+}
+
 export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal, wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<Response> {
   signal.throwIfAborted();
   if (input.owner.grantKey) {
@@ -243,7 +250,7 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
     assertResponseControlRetention(env, input);
-    assertManagedDispatch(input.protocol, request);
+    assertResponseControlDispatch(input, request);
     return wan ? wan.nativeResponse(() => fetch(request, { signal }), signal) : fetch(request, { signal });
   } finally { preparation.stop("complete"); }
 }
