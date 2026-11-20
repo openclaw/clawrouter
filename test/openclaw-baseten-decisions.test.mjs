@@ -68,6 +68,7 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
 function routerFixture(allIds, expected, native) {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+import { authorityCall, resolvePolicies, resolveCredentials } from "./worker/authority.ts";
 ${observerCode}
 const ids = ${JSON.stringify(allIds)}, expected = ${JSON.stringify(expected)}, native = ${JSON.stringify(native)};
 const lifetime = createLifetimeObserver(), ingress = createRequestBindings(), outbound = createRequestBindings(), requests = [], transitioned = new Set();
@@ -93,13 +94,19 @@ function observeContext(context, owner) {
 async function transition(id, env) {
   if (!ids.includes(id) || transitioned.has(id)) throw new Error("unknown or duplicate Baseten transition");
   transitioned.add(id);
-  const name = "baseten_" + id, policy = await env.POLICY_KV.get("policies/" + name, "json");
-  if (id === "invalid") { const credential = await env.POLICY_KV.get("credentials/" + name, "json"); credential.enabled = false; await env.POLICY_KV.put("credentials/" + name, JSON.stringify(credential)); }
+  // Catalog admission has already imported legacy KV into the SQLite authority.
+  // Mutate that current owner; rewriting its old seed does not revoke anything.
+  const name = "baseten_" + id, policy = (await resolvePolicies(env, [name]))[0].policy;
+  if (id === "invalid") {
+    await resolveCredentials(env, [name]);
+    const result = await authorityCall(env, "/credentials/mutate", { operation: "revoke", credentialId: name, scope: "admin", actor: { auth: "admin_token", role: "admin", email: "fixture@example.invalid" } });
+    if (result.outcome !== "updated" || result.entry.credential.enabled !== false) throw new Error("Baseten credential revocation failed");
+  }
   if (id === "foreign") policy.providers = ["openai"];
   if (id === "budget") policy.monthlyBudgetMicros = 0;
   if (id === "unpriced") policy.requestCostMicros = null;
   if (id === "unmetered") { policy.monthlyBudgetMicros = null; policy.requestCostMicros = null; }
-  await env.POLICY_KV.put("policies/" + name, JSON.stringify(policy));
+  await authorityCall(env, "/policies/put", { policyId: name, policy });
   if (id === "revoked") await revokeGrantCredentials(env, "oauth/" + name + "/baseten", { provider: "baseten", kind: "api_key" });
   if (id === "rotated") await putGrantCredentials(env, "oauth/" + name + "/baseten", { provider: "baseten", kind: "api_key", enabled: true, credential: "synthetic-baseten-rotated-new" });
 }
@@ -186,9 +193,9 @@ function assertProof(value) {
   assert.equal(value.rejected, 0); assert.equal(value.readers, value.unlocked);
 }
 async function json(response, expected = 200) { const text = await response.text(); assert.equal(response.status, expected, text); return text ? JSON.parse(text) : null; }
-async function withFixture(native, run) {
+async function withFixture(native, run, selection) {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-baseten-decisions-"));
-  const allIds = native ? ids : directIds, expected = native ? reaching : directIds.filter(id => id !== "unpriced"); let mf;
+  const allIds = selection?.ids ?? (native ? ids : directIds), expected = selection?.expected ?? (native ? reaching : directIds.filter(id => id !== "unpriced")); let mf;
   await preserveFailures(async () => {
     mf = await startWorkerdFixture(temporary, routerFixture(allIds, expected, native), upstreamFixture(expected));
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -254,13 +261,34 @@ test("actual Baseten native and manifest routes preserve finite decisions, limit
   });
 });
 
+test("Baseten post-catalog revocation changes the SQLite authority without upstream dispatch", { timeout: 60000 }, async () => {
+  const denied = ["invalid", "foreign", "budget", "unpriced"];
+  await withFixture(true, async ({ origin, upstream }) => {
+    for (const id of denied) {
+      const headers = { authorization: "Bearer " + key(id) };
+      const before = await json(await fetch(origin + "/v1/catalog", { headers }));
+      assert.ok(before.providers.find(row => row.id === "baseten").offers.some(row => row.endpoint === "systemone" && row.eligible), id + " initially eligible");
+      await json(await fetch(origin + "/fixture/transition/" + id, { method: "POST" }), 204);
+      const after = await json(await fetch(origin + "/v1/catalog", { headers }), id === "invalid" ? 403 : 200);
+      if (id === "invalid") assert.equal(after.error.code, "proxy_key_revoked");
+      else {
+        assert.equal(after.providers.find(row => row.id === "baseten")?.offers.some(row => row.endpoint === "systemone" && row.eligible) ?? false, false, id + " current authority denies offer");
+        const receipt = await json(await fetch(origin + "/v1/usage", { headers }));
+        assert.equal(receipt.usage.events.length, 0, id + " catalog-only denial has no inference event");
+        assert.equal(receipt.budget.spentMicros, 0, id + " no debit");
+      }
+    }
+    assert.deepEqual(await json(await upstream.fetch("https://fixture.example/state")), []);
+  }, { ids: denied, expected: [] });
+});
+
 test("actual registered Baseten DecisionV2 SDK through Worker and SQLite", { skip: !source, timeout: 300000 }, async t => {
   await withFixture(true, async ({ origin, upstream }) => {
     await invokeNative(t, origin);
     await verifyCallsAndUsage(origin, upstream, reaching);
     const requests = await json(await fetch(origin + "/fixture/requests"));
     assert.deepEqual(requests.filter(row => row.method === "POST").map(row => row.id).sort(), [...reaching].sort());
-    assert.ok(requests.some(row => row.id === "invalid" && row.path === "/v1/catalog" && row.status === 401));
+    assert.ok(requests.some(row => row.id === "invalid" && row.path === "/v1/catalog" && row.status === 403));
     for (const id of ids.filter(id => !reaching.includes(id) && id !== "invalid")) {
       const receipt = await json(await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + key(id) } }));
       assert.equal(receipt.usage.events.length, 0, id + " no inference receipt"); assert.equal(receipt.budget.spentMicros, 0, id + " no debit");

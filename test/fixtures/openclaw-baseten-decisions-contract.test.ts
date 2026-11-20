@@ -153,7 +153,7 @@ async function runCase(id: string) {
       expect(tool?.name).toBe("decision_evaluate"); expect(tool?.description).toContain("512 total options");
       const input = structuredClone(batch), controller = new AbortController();
       if (id === "text") (input as any).state = { type: "text", text: "synthetic damaged parcel" };
-      if (id === "unsupported") (input as any).state = { type: "image", url: "https://example.com/synthetic.png" };
+      if (id === "unsupported") (input as any).state = { type: "image", dataUri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9V8AAAAASUVORK5CYII=" };
       if (id === "options_over") (input as any).questions = { route: { type: "choice", criteria: Object.fromEntries(Array.from({ length: 256 }, (_, i) => [String(i), "Synthetic"])) } };
       if (id === "preabort") {
         const reason = new Error("synthetic pre-dispatch owner abort"); controller.abort(reason);
