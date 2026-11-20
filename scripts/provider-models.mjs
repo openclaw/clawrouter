@@ -14,6 +14,7 @@ export function compileProviderModels(manifest) {
   return (manifest.models?.entries ?? []).map((model) => ({
     id: model.id,
     upstream: model.upstream,
+    ...(model.catalogRef ? { catalogRef: { ...model.catalogRef } } : {}),
     ...(model.displayName ? { displayName: model.displayName } : {}),
     capabilities: model.capabilities ?? [],
     ...(model.availability ? { availability: structuredClone(model.availability) } : {}),

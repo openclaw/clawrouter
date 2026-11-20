@@ -9,7 +9,7 @@ export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPrice
 export type { ManagedProtocol, ManagedFileLinks, OutputTokenLimit, ToolPricing, CompiledEndpoint } from "./endpoints.ts";
 export type { GrantQuotaKind, CompiledQuotaWindow, CompiledQuotaProbeWindow, CompiledQuotaProbe, CompiledQuotaConfig } from "./quota.ts";
 export type { GrantAccount, GrantExtraUsage } from "./observations.ts";
-export type { ProviderModelDefinition } from "./models.ts";
+export type { ProviderModelDefinition, ProviderModelCatalogRef } from "./models.ts";
 export type { ModelAvailability } from "./model-availability.ts";
 export type { ProviderReasoningEffort, ParameterSupport, ModelRequestParameters } from "./model-request-parameters.ts";
 export { isPublishedMusicInputSupport } from "./native-capabilities.ts";
