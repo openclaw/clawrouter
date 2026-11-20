@@ -29,6 +29,9 @@ export const kieManagedAdapter: ManagedLifecycleAdapter = {
     if (context.action === "create") {
       return { id: parseKieSubmission(text, response.status).id, nativeStatus: null, terminal: null, body, followUp: "retrieve" };
     }
+    if (mediaObject(body.data) && body.data.model !== undefined && body.data.model !== context.requestedVersion) {
+      throw new Error("kie_task_model_mismatch");
+    }
     const observation = parseKieTask(text, response.status, validateKieTaskId(context.expectedId));
     // The documented state establishes termination even when output/metrics are
     // absent. Output decoding is a consumer concern, never evidence of a refund.

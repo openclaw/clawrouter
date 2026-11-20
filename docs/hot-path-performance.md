@@ -1,5 +1,105 @@
 # Hot-path review and local load evidence
 
+## Exact usage snapshot rollups (2026-11-05)
+
+Sanitized production evidence: the busiest shard receives about 100,000 calls/day,
+roughly ten times the other shards. It recorded 375 errors in three days. Successful
+`/snapshot` requests consumed 13–31 seconds of CPU; three requests in six hours
+exceeded the 32.5-second CPU limit after 97–119 seconds wall time. Those resets
+failed queued `/ingest` requests, exhausted queue retries, and sent usage/budget
+messages to the dead-letter queue. `/v1/usage` polls about every 90 seconds.
+There were no `/grant-usage` calls in the sample. Neither that route nor
+`/personal-report` changes here.
+
+The indexes from #337 reduced the cost, but did **not** remove the retained-row
+aggregate scans. Each snapshot still grouped all retained events three times
+(summary, providers, daily), repeated those scans for personal totals, and
+grouped principals for admin reads. Indexes cannot make that work constant in
+the number of events.
+
+`usage_rollups` stores the exact request/success/error, input/output/total-token,
+recorded-cost, and unpriced-request counters. Its key is policy, UTC day, provider,
+principal, credential, and non-text-principal flag. JSON-quoted keys distinguish
+NULL from empty strings. Projected normalized principal keys collapse valid
+aliases; invalid text remains distinct as required by existing admin output.
+Pre-attribution rows temporarily retain raw aliases until their existing
+attribution backfill visits them. Owner queries normalize those keys with the
+same JavaScript normalizer and admin results use the existing principal merger.
+Only `unpriced_usage` increments the unavailable-cost count, including failed
+events; `unpriced_service_tier` does not. NULL token counters contribute zero.
+
+Persistent AFTER INSERT/DELETE/UPDATE triggers maintain the counters in the
+canonical event transaction, independently of application-version bookkeeping.
+The existing reporting coverage triggers and paired writes remain intact.
+Deleting the final event in a group removes its rollup row. UPDATE subtracts
+OLD and adds NEW, including attribution changes, rowid moves and owner changes.
+Schema and the initial `(last_rowid, upper_rowid, complete)` marker are created
+atomically with the triggers; `upper_rowid` captures MAX(rowid) once. Rows beyond
+that bound or already visited are trigger-maintained. Rows still inside the
+unvisited window are counted only by the backfill, so retention deletes cannot
+subtract events that were never added. Additions and cursor advancement commit
+together. A restart resumes; it does not recapture the upper bound. Rowid reuse
+on either side of the cursor follows the same rule.
+
+Each alarm groups at most 2,000 historical rows and projects at most 250 pending
+attribution rows. Pending work schedules the next alarm 500 ms later: nominally
+12.5 minutes for three million already-attributed rows, or 100 minutes when
+attribution also needs the full history. Scheduling and storage contention can
+extend these estimates. Completion waits for attribution too. Snapshots keep
+the existing exact scan path until completion and do not perform rollup batches
+themselves. Alarms log one content-free JSON record with retained row count,
+`sql.databaseSize` in bytes, and migration watermarks/completion.
+
+The rolling cutoff equals the 30-day retention cutoff. Snapshot cleanup and
+window calculation share one timestamp. The daily cutoff is the next UTC
+midnight after that rolling boundary, so filtering whole daily rollups is exact;
+no partially included retained day needs an event aggregate query. Completed
+snapshots aggregate only rollups; their bounded recent-event query retains the
+existing owner/time indexes.
+
+Reproduce with `node scripts/benchmark-usage-snapshots.mjs` (default one million
+retained events, 1,514 bytes/event, 100 recurring credential owners and 28,875
+rollup rows). Five samples on Node 26.12.1, macOS/arm64, external-volume SQLite:
+
+| Operation | Before CPU | After CPU | Change |
+| --- | ---: | ---: | ---: |
+| Personal snapshot | 2,343.47 ms | 14.87 ms | 157.6× faster |
+| Admin snapshot | 3,584.52 ms | 18.93 ms | 189.4× faster |
+| Ingest, per insert | 1.2931 ms | 1.5788 ms | +0.2858 ms / +22.1% |
+
+Snapshot wall medians were 2,369.42 → 14.36 ms personal and 3,608.47 → 18.97 ms
+admin. The 500 full alarm calls (including cleanup, retained-row count, and
+scheduling) took 27.33 ms median / 38.63 ms maximum CPU. A separate 6,001-row
+pre-attribution fixture completed in 25 alarms, at 33.32 ms median / 71.29 ms
+maximum CPU with the 250-row attribution cap. At those median costs plus the
+500 ms delay, three million rows take about 13.2 minutes when already attributed,
+or 106.7 minutes with pending attribution, excluding scheduling delays.
+
+The ingest comparison uses the same candidate path and existing reporting
+triggers, disabling only the new rollup triggers for its control. It isolates
+trigger cost, not every candidate-versus-baseline instruction. At the supplied
+100,000 calls/day, the measured addition is about 28.6 CPU seconds/day; that is a
+22.1% local ingest increase, not zero overhead. These are process CPU measurements,
+not edge invocation timing; shared-host checks ran during part of the benchmark.
+The 2,091.78 ms fixture schema setup includes constructing #337's indexes, which
+already exist on current deployed shards. [Raw samples](performance/usage-rollups-local.json)
+retain both CPU and wall measurements. No live provider or deployment was used.
+
+Validation includes seeded old-SQL equality through partial migration, boundary
+timestamps, aliases/non-text principals, NULL counters, failures/unpriced calls,
+duplicate delivery, retention, UPDATE and rowid reuse; merged shard responses
+are compared too. Real persisted workerd storage is written by v0.4.0, opened
+by the candidate, restarted and aborted mid-batch, then exercised by the pinned
+pre-change writer with inserts/deletes on both sides of the cursor and after
+completion. The rollback target retains #337's attribution schema/semantics;
+v0.4.0 is the historical upgrade source, not the rollback target.
+
+This is an additive schema change, with no rewritten event payload, queue
+format or authority data. **No `ClawRouter-Rollback-Unsafe` trailer is needed**:
+the pre-change writer can read the same records and its writes keep executing
+the persisted triggers. Rollback does not automatically finish a pending new
+backfill, but old snapshots remain complete through their original scan path.
+
 ## Indexed usage snapshots (2026-10-25)
 
 Production observation supplied for this change: one UsageLedgerObject
@@ -22,7 +122,8 @@ Pending migrations schedule alarms every 60 seconds; new ingests write the
 projections immediately. Only pending rows use the original JSON ownership and
 counter expressions. Snapshots remain complete during migration, although
 pending reads still incur JSON scan costs. Completed shards never restart the
-backfill and snapshot SQL performs no JSON extraction. SQLite builds the two
+backfill and snapshot SQL performs no event JSON extraction. Aggregate scans of
+retained rows remained, as corrected above. SQLite builds the two
 new indexes once on first activation.
 
 Reproduce with `node scripts/benchmark-usage-snapshots.mjs`: 100,000 synthetic
@@ -225,7 +326,7 @@ Reproduce timing, profiles and the optional serialization audit separately:
 
 ```sh
 # Choose an artifact directory on the external volume, outside this checkout.
-proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-http-cpu-proof
+proof="$(mktemp -d)"
 HTTP_CPU_OUT="$proof/timing" node test/diagnostics/http-responses-cpu.test.mjs
 HTTP_CPU_PROFILE=1 HTTP_CPU_SIZES=5 HTTP_CPU_RUNS=20 HTTP_CPU_OUT="$proof/profile" \
   node test/diagnostics/http-responses-cpu.test.mjs
@@ -282,7 +383,7 @@ per-token loop (~50%) and the identity scanner (~20%). First-request compile
 cost is not addressable from application code.
 
 ```sh
-proof=/Volumes/Clawstudio-Storage/CodexWorktrees/clawrouter-cold-proof
+proof="$(mktemp -d)"
 HTTP_CPU_SIZES=0.003 HTTP_CPU_OUT="$proof" node --no-opt --no-maglev --no-sparkplug \
   test/diagnostics/http-responses-cpu.test.mjs
 HTTP_CPU_DELTAS=10 HTTP_CPU_WARMUPS=0 HTTP_CPU_SIZES=0.003 HTTP_CPU_RUNS=12 HTTP_CPU_OUT="$proof" \
@@ -571,15 +672,18 @@ allowed time after invocation end and have been cancelled`, each with 30-37 s of
 wall time. When that limit hits, Cloudflare cancels every remaining task of the
 request, including its usage accounting and settlement.
 
-The Worker entry handed the whole global set of pending background work (stale
-refreshes, colo publishes, counter flushes) to each request's `waitUntil`,
-including work owned by other requests. If such work never settles in the
-draining request's context (for example after its owner's client disconnected),
-the 25 s bound inside `runInBackground` does not help either, because that timer
-also belongs to the owning request. A request now drains only work registered
-after its own entry (`backgroundMark`) and races it against a 10 s timer created
-in its own context (`DRAIN_BOUND_MS`), so it can no longer reach the platform
-limit through someone else's work.
+The change at that time limited the background facade handed to `waitUntil`
+using `backgroundMark` and a caller-created 10 s timer (`DRAIN_BOUND_MS`). A
+sequence mark is not request identity: it includes interleaved registrations
+from other requests. This observation did not establish physical retirement or
+guarantee that the platform would complete the originating tasks.
+
+The current [registration contract](background-registration-contract.md) keeps
+64 actual logical registrations until their original tasks settle. A facade
+polls a snapshot of scalar identities on its own timers, never foreign native
+I/O promises. Its hard 10 s timer and monotonic 25 s visibility age do not release
+registrations. Cache TTL and wall-clock adjustments are separate. Platform
+execution and originating-request physical lifetime remain best effort.
 
 ### Production check of the colo layer and burst coalescing (2026-10-24)
 
@@ -724,8 +828,10 @@ requests. Findings and changes:
 - Catalog and model lists stayed CPU/KV-bound with zero authority calls. The
   derived per-key inventory (health, grant eligibility, balances) is now reused
   within the hot-cache bounds, keyed by the full authorized identity and policy.
-- Background work is bounded at 25 s so a hung backend call leaves the pending
-  set instead of extending every later request's `waitUntil`.
+- The historical implementation removed background work from its pending set
+  after 25 s. The current registration contract supersedes that behavior:
+  facade expiry leaves actual work charged until settlement, and saturation
+  refuses new background starts before side effects.
 - The harness now waits for asynchronous selection counters to converge before
   reconciling them.
 - Mid-stream aborts at concurrency 200 produced occasional client `ECONNRESET`

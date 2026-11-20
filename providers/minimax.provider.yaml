@@ -39,8 +39,16 @@ endpoints:
 models:
   entries:
     - id: minimax/MiniMax-M2.7
+      displayName: "MiniMax M2.7"
       upstream: MiniMax-M2.7
       capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-10-19"
+        checkedAt: "2026-11-04"
+        sources:
+          - https://platform.minimax.io/docs/faq/models
       pricingRef: minimax-m2-7-standard-2026-06-22
       pricing:
         effectiveAt: "2026-06-22"
@@ -50,6 +58,68 @@ models:
         outputMicrosPerMillion: 1200000
         maxInputTokens: 204800
         defaultMaxOutputTokens: 131072
+    - id: minimax/MiniMax-M3
+      displayName: "MiniMax M3"
+      upstream: MiniMax-M3
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-04"
+            sources:
+              - https://platform.minimax.io/docs/api-reference/text-openai-api
+              - https://platform.minimax.io/docs/pricing/overview
+            contextWindow: 1000000
+            input: [text, image, video]
+            inference:
+              chat: true
+    - id: minimax/MiniMax-M2.7-highspeed
+      displayName: "MiniMax M2.7 Highspeed"
+      upstream: MiniMax-M2.7-highspeed
+      capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-10-19"
+        checkedAt: "2026-11-04"
+        sources:
+          - https://platform.minimax.io/docs/faq/models
+          - https://platform.minimax.io/docs/release-notes/models
+    - id: minimax/MiniMax-M3.1-Flash
+      upstream: MiniMax-M3.1-Flash
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://platform.minimax.io/docs/api-reference/text-openai-api
+          checkedAt: "2026-11-03"
+          defaultReasoningEffort: max
+          temperature: unsupported
+          topP: unsupported
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources:
+              - https://platform.minimax.io/docs/api-reference/text-openai-api
+            checkedAt: "2026-11-03"
+            input: [text, image, video]
+            contextWindow: 1000000
+      pricingRef: minimax-m3-1-flash-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        source: https://platform.minimax.io/docs/pricing/overview
+        inputMicrosPerMillion: 150000
+        cachedInputMicrosPerMillion: 15000
+        outputMicrosPerMillion: 600000
+        maxInputTokens: 1000000
+        # Full context is a conservative reservation ceiling, not a documented
+        # default output limit. Explicit max_completion_tokens includes thinking.
+        defaultMaxOutputTokens: 1000000
+        # M3.1-Flash does not support service_tier; do not inherit M3's tiers.
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

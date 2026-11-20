@@ -39,6 +39,7 @@ endpoints:
 models:
   entries:
     - id: huggingface/gpt-oss-120b-fastest
+      displayName: "GPT-OSS 120B (Fastest)"
       upstream: openai/gpt-oss-120b:fastest
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic

@@ -77,7 +77,8 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ grants, grantsReady, grantsError, onOpenGrant, session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ personalUsageSummary, grants, grantsReady, grantsError, onOpenGrant, session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+  personalUsageSummary?: React.ReactNode;
   grants: UpstreamGrant[];
   grantsReady: boolean;
   grantsError: string;
@@ -141,20 +142,19 @@ export function DashboardScreen({ grants, grantsReady, grantsError, onOpenGrant,
       </header>
 
       {isAdmin ? <GrantPoolIncidents policies={policies} grants={grants} ready={grantsReady} error={grantsError} onOpenGrant={onOpenGrant} /> : null}
+      {isAdmin ? <>
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="dashboardStats" aria-label="access overview">
-        <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
-        {!isAdmin && usage.personal
-          ? <DashboardStat label="your requests" value={usageLoaded ? formatCount(usage.personal.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.personal.summary.totalTokens)} tokens · ${formatCount(usage.summary.requestCount)} across your policy pools` : "Usage unavailable"} />
-          : <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />}
+        <DashboardStat label="catalog coverage" value={`${configuredServices.length}/${services.length}`} note={`${services.length - configuredServices.length} need attention`} />
+        <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
-        <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
-        <DashboardStat label={spend.label} value={usageLoaded ? spend.value : "—"} note={usageLoaded ? `Last 30 days · ${spend.note}${isAdmin ? "" : " · across your policy pools"}` : "Usage unavailable"} />
+        <DashboardStat label="active policies" value={String(overview?.policiesActive ?? activePolicies)} note={`${overview?.tenantsTotal ?? tenants.length} tenants`} />
+        <DashboardStat label={spend.label} value={usageLoaded ? spend.value : "—"} note={usageLoaded ? `Last 30 days · ${spend.note}` : "Usage unavailable"} />
       </section>
 
       <div className="dashboardAnalyticsGrid">
         <section className="dashboardPanel dashboardTrafficPanel">
-          <DashboardPanelHeader eyebrow="Last 30 days" title="Request activity" meta="UTC daily totals" action={isAdmin ? "Open usage" : undefined} onAction={isAdmin ? onOpenUsage : undefined} />
+          <DashboardPanelHeader eyebrow="Last 30 days" title="Request activity" meta="UTC daily totals" action="Open usage" onAction={onOpenUsage} />
           <div className="dashboardChartBody">{usageLoaded ? <TrafficAreaChart usage={usage} compact /> : <InlineNote>Request activity unavailable.</InlineNote>}</div>
         </section>
         <section className="dashboardPanel dashboardProviderPanel">
@@ -162,6 +162,8 @@ export function DashboardScreen({ grants, grantsReady, grantsError, onOpenGrant,
           {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={services} limit={5} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
         </section>
       </div>
+
+      </> : personalUsageSummary}
 
       <div className="dashboardGrid">
         <MyKeysCard policies={myPolicyLimits ?? session.entitlements?.policies} key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} onRename={onRenameMyKey} />
@@ -189,6 +191,7 @@ export function DashboardScreen({ grants, grantsReady, grantsError, onOpenGrant,
 
         <section className="dashboardPanel quotaPanel">
           <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your policy budgets"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
+          {!isAdmin ? <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} /> : null}
           <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
             {rows.slice(0, 6).map((row) => {

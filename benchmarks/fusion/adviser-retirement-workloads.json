@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "fusion-adviser-input-retirement",
+      "split": "development",
+      "base": "31f798d290ce974e67100b4ce0dd2ce488d92564",
+      "oracle": "4c47a87f78d7f34a660d46fc195b9112c3fea60e",
+      "editPaths": [
+        "worker/fusion.ts"
+      ],
+      "visibleTests": [
+        "worker/test/fusion-strategy.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/fusion.test.mjs"
+      ],
+      "sourceContext": [
+        {
+          "path": "worker/input-retirement.ts",
+          "query": "export interface InputRetirement"
+        }
+      ],
+      "reproducer": "import assert from 'node:assert/strict';\nimport { collectFusionProposals, normalizeFusionConfig } from '/work/worker/fusion.ts';\nconst cleanup = Promise.withResolvers();\nconst retained = [];\nlet cancelled = 0;\nconst response = new Response(new ReadableStream({ cancel() { cancelled++; return cleanup.promise; } }), { status: 503 });\nconst config = normalizeFusionConfig({ adviserModels: ['local/rejected'] });\ntry {\n  const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => {\n    const entry = { settled: false, work };\n    retained.push(entry);\n    void work.then(() => { entry.settled = true; }, () => { entry.settled = true; });\n  });\n  await new Promise(resolve => setImmediate(resolve));\n  assert.deepEqual(result.failedModels, ['local/rejected']);\n  assert.equal(cancelled, 1);\n  assert.ok(retained.some(entry => !entry.settled), 'HTTP-error cancellation must remain retained after collection returns');\n} finally {\n  cleanup.resolve();\n  await Promise.allSettled(retained.map(entry => entry.work));\n}\n",
+      "instruction": "Repair Fusion adviser response cleanup without delaying public fallback. HTTP-error responses and successful responses arriving after the adviser deadline must retain their body-cancellation work through settlement. While reading a successful response, a deadline or byte-limit failure must cancel exactly once and keep the original reader locked until its pending read and cancellation settle, including cancellation rejection. Retain that work through the existing optional callback. Use the existing input retirement contract; do not add replacement readers, timers, capacity or retries. Preserve concurrent adviser collection, adviser order, original response byte/time limits, successful proposals, aggregator-only fallback and all single-strategy behavior. Successful body consumption must release its reader without cancelling the source. Change only worker/fusion.ts."
+    }
+  ]
+}

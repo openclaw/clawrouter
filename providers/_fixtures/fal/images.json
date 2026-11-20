@@ -1,0 +1,12 @@
+{
+  "qualification": { "live": false, "frozenOpenClaw": "31ad71a8addc1d42fbc5478f7e114860f5cbf6c7", "origin": "https://fal.run", "authorizationScheme": "Key", "upstreamCostMicros": null, "inlineBytesAreSynthetic": true },
+  "requests": [
+    { "model": "fal-ai/flux/dev", "body": { "prompt": "A blue paper boat", "num_images": 2, "output_format": "png", "image_size": { "width": 1024, "height": 1024 } } },
+    { "model": "fal-ai/flux/dev/image-to-image", "body": { "prompt": "Make the paper boat green", "num_images": 1, "output_format": "png", "image_url": "data:image/png;base64,iVBORw0KGgo=" } },
+    { "model": "krea/v2/medium/text-to-image", "body": { "prompt": "A paper boat in a lake", "creativity": "medium", "aspect_ratio": "16:9", "image_style_references": [{ "image_url": "data:image/png;base64,iVBORw0KGgo=" }] } },
+    { "model": "krea/v2/large/text-to-image", "body": { "prompt": "A paper boat near the shore", "creativity": "low", "aspect_ratio": "2.35:1" } }
+  ],
+  "completed": { "images": [{ "url": "https://assets.example/boat.png", "content_type": "image/png", "width": 1024, "height": 1024 }], "has_nsfw_concepts": [false], "seed": 42, "prompt": "A synthetic fixture prompt" },
+  "partial": { "images": [{ "url": "https://assets.example/partial.png" }], "has_nsfw_concepts": [true] },
+  "mismatches": { "fluxEditImageSizeDocumented": false, "kreaSupportsCount": false, "kreaSupportsOutputFormat": false }
+}

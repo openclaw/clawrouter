@@ -12,6 +12,7 @@ const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { providerById } = await import("../providers.ts");
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const queued = { object: "response", id: "response-fixture", status: "queued", usage: null };
 const completed = { ...queued, status: "completed", usage: { input_tokens: 10, output_tokens: 15, total_tokens: 25 } };
@@ -19,7 +20,12 @@ const completed = { ...queued, status: "completed", usage: { input_tokens: 10, o
 async function fixture(t) {
   let now = Date.parse("2026-09-25T00:00:00Z"); t.mock.method(Date, "now", () => now);
   const records = new Map(), env = { OPENAI_API_KEY: "fixture-upstream-key", CLAWROUTER_LOCAL_AUTH: "enabled", POLICY_KV: {
-    async get(key, type) { if (Array.isArray(key)) return new Map(key.map(item => [item, records.get(item) ?? null])); const value = records.get(key) ?? null; return value && type === "text" ? JSON.stringify(value) : structuredClone(value); },
+    async get(key, type) {
+      if (Array.isArray(key)) return new Map(key.map(item => [item, records.get(item) ?? null]));
+      const value = records.get(key) ?? null;
+      if (value !== null && type === "stream") return accessBytesResponse(JSON.stringify(value)).body;
+      return value && type === "text" ? JSON.stringify(value) : structuredClone(value);
+    },
     async put(key, value) { records.set(key, JSON.parse(value)); },
     async delete(key) { return records.delete(key); },
     async list({ prefix }) { return { keys: [...records.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },

@@ -23,6 +23,9 @@ export function presentCost(micros: number, basis: string | null | undefined, re
     case "request_character_estimate": label = reservation ? "Input-byte reservation estimate" : "Request-character estimate"; break;
     case "policy_fixed": label = "Fixed policy tariff"; break;
     case "manifest_reservation": label = "Retained reservation estimate"; break;
+    case "manifest_request": label = reservation ? "Request-tariff reservation estimate" : "Published request tariff"; break;
+    case "manifest_request_reservation": label = "Retained request reservation estimate"; break;
+    case "provider_reported": label = "Provider-reported charge"; break;
     case "flat_fallback": label = "Fallback tariff"; break;
     case "none": label = "Accounted · no charge"; break;
     case "unpriced_usage": label = "Unpriced usage"; unavailable = true; break;

@@ -1,0 +1,23 @@
+{
+  "protocol": "google.omni_video",
+  "selectedBase": "https://generativelanguage.googleapis.com",
+  "descriptor": { "id": "fixture-video", "mimeType": "video/mp4" },
+  "metadata": { "method": "GET", "path": "/v1beta/files/${file_id}", "query": {} },
+  "download": { "method": "GET", "path": "/v1beta/files/${file_id}:download", "query": { "alt": "media" } },
+  "publicPaths": {
+    "id": "fixture-video",
+    "metadata": "/v1/native/google-gemini/v1beta/files/fixture-video",
+    "download": "/v1/native/google-gemini/v1beta/files/fixture-video:download?alt=media"
+  },
+  "syntheticBytes": [0, 255, 128],
+  "qualification": {
+    "selectorHeader": "x-clawrouter-job-id",
+    "requiresOriginalJobBinding": true,
+    "requiresOriginalCredential": true,
+    "rawIdAuthorizesAccess": false,
+    "fileFailureProvesGenerationFree": false,
+    "policyFixedIsUpstreamCost": false,
+    "liveRouteActivated": false
+  }
+}
+
