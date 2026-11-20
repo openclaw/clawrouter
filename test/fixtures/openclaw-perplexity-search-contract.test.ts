@@ -36,7 +36,7 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
   let succeeded = false;
   const bindings = createRequestBindings();
   const lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => succeeded });
-  await preserveFailures(async () => {
+  try { await preserveFailures(async () => {
     state = await createOpenClawTestState({ prefix: "router-perplexity-search-", applyEnv: true, prepareProfileCatalog: false,
       env: { OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("..", import.meta.url)), CLAWROUTER_API_KEY: undefined, PERPLEXITY_API_KEY: "must-not-fallback",
         HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined, http_proxy: undefined, https_proxy: undefined, all_proxy: undefined } });
@@ -77,6 +77,7 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
     assert.strictEqual(getPluginRuntimeGenerationRegistry(), previous);
     succeeded = true;
   }, [() => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => state?.cleanup()]);
+  } finally { if (id === "cancel") console.log("PERPLEXITY_SEARCH_CANCEL_OBSERVATION " + JSON.stringify({ v: 1, summary: lifetime.summary(), join: lifetime.joinDiagnostic() })); }
   if (id === "cancel") console.log("PERPLEXITY_SEARCH_CANCEL_RETIRED " + routeKind);
 }
 
