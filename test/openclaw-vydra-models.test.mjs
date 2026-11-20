@@ -98,6 +98,20 @@ function assertReceipt(result, id, amount) {
   assert.equal(result.budget.spentMicros, amount);
   assert.doesNotMatch(JSON.stringify(event), /Synthetic|fixture-upstream|fixture-secret/);
 }
+function assertNativeCredentials(requests) {
+  const expected = new Set(["kling", "veo3", "failed", "overflow", "unpriced"].map(id => "Bearer " + key(id)));
+  for (const row of requests.filter(row => row.path.startsWith("/v1/native/"))) {
+    assert.ok(expected.has(row.authorization), "native request must use an exact configured transport-case credential");
+  }
+}
+
+test("Vydra native credentials bind finite transport cases, including Veo3, without accepting other tokens", () => {
+  const request = authorization => [{ path: "/v1/native/vydra/api/v1/models/veo3", authorization }];
+  for (const id of ["kling", "veo3", "failed", "overflow", "unpriced"]) assertNativeCredentials(request("Bearer " + key(id)));
+  for (const authorization of [null, "Bearer fixture-upstream-vydra-key", "Bearer must-not-fallback", "Bearer " + key("veo4"), "Bearer " + key("foreign"), "Bearer " + key("missingmotion"), "Bearer " + key("veo3") + "-extra"]) {
+    assert.throws(() => assertNativeCredentials(request(authorization)), /exact configured transport-case credential/);
+  }
+});
 
 test("actual Workerd keeps Models original GET, pending output, financial and foreign-control boundaries", { timeout: 30000 }, async t => {
   await withFixture(t, async ({ origin, upstream, call }) => {
@@ -138,7 +152,7 @@ test("actual registered Vydra SDK Models through Worker and SQLite", { skip: !so
     const requests = await json(await fetch(origin + "/fixture/requests"));
     const downloads = requests.filter(row => row.path === "/fixture/output");
     assert.equal(downloads.length, 3); assert.ok(downloads.every(row => row.authorization === null));
-    for (const row of requests.filter(row => row.path.startsWith("/v1/native/"))) assert.match(row.authorization, /^Bearer clawrouter-live-vydra_[a-z]+-fixture-secret$/);
+    assertNativeCredentials(requests);
     for (const id of ["unpriced", "missingmotion", "samereference", "credentialreference"]) {
       const denied = await usage(origin, id); assert.equal(denied.budget.spentMicros, 0);
       assert.equal(denied.usage.events.length, 0);
