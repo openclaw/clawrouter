@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -67,3 +67,39 @@ for (const name of ["deploy-cloudflare-fakeco"]) {
     });
   }
 }
+
+
+test("feature compatibility retains full ancestry after the pinned native-source fetch", t => {
+  const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const steps = workflow.jobs["script-tests"].steps;
+  assert.equal(steps[0].with["fetch-depth"], 0);
+  const fetchStep = steps.find(step => step.name === "Fetch exact launch native source for synthetic compatibility");
+  const checkStep = steps.find(step => step.name === "Validate deployment compatibility in the feature PR");
+  assert.ok(steps.indexOf(fetchStep) < steps.indexOf(checkStep));
+  assert.equal(checkStep.run, "node scripts/check-deployment-compatibility.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-compat-history-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const git = (cwd, ...args) => {
+    const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8", timeout: 10_000 });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git(directory, "init", "-q");
+  const commit = message => { git(directory, "commit", "--allow-empty", "-qm", message); return git(directory, "rev-parse", "HEAD"); };
+  const historical = commit("legacy change\n\nClawRouter-Rollback-Unsafe: historical fixture boundary");
+  const launch = commit("native launch"), base = commit("current base");
+  git(directory, "switch", "-qc", "feature", historical); commit("provider card");
+  git(directory, "merge", "--no-ff", "-qm", "compose current base", base);
+  const head = git(directory, "rev-parse", "HEAD");
+  for (const shallow of [false, true]) {
+    const checkout = join(directory, shallow ? "shallow-check" : "full-check"); mkdirSync(checkout);
+    git(checkout, "init", "-q"); git(checkout, "remote", "add", "origin", directory);
+    git(checkout, "fetch", "--no-tags", "origin", head); git(checkout, "checkout", "--detach", head);
+    let command = fetchStep.run.replace("434a526a37fff4d91e04cc1caa5cd6aa2eff2d82", launch);
+    if (shallow) command = command.replace("--no-tags", "--no-tags --depth=1");
+    const fetched = spawnSync("/bin/bash", ["--noprofile", "--norc", "-e", "-c", command], { cwd: checkout, encoding: "utf8", timeout: 10_000 });
+    assert.equal(fetched.status, 0, fetched.stderr);
+    const range = git(checkout, "rev-list", base + ".." + head).split("\n");
+    assert.equal(range.includes(historical), shallow, "only truncated ancestry reintroduces the already-landed boundary");
+    assert.equal(git(checkout, "rev-parse", "--is-shallow-repository"), String(shallow));
+  }
+});

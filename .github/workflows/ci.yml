@@ -223,7 +223,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Fetch exact launch native source for synthetic compatibility
-        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 434a526a37fff4d91e04cc1caa5cd6aa2eff2d82
+        # Preserve the full DAG used by deployment compatibility below.
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin 434a526a37fff4d91e04cc1caa5cd6aa2eff2d82
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
