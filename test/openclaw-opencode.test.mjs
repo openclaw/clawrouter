@@ -70,6 +70,14 @@ function assertSessionRelations(calls) {
   assert.notEqual(first.session, conversation.session, "another conversation must not share the derived session");
   assert.notEqual(first.session, credential.session, "another selected credential must not share the derived session");
 }
+function assertGoMessagesThinking(row, body) {
+  assert.equal(row.model, "qwen3.8-max", "thinking policy is specific to the selected Qwen card");
+  const replay = ["first", "replay"].includes(row.id);
+  const budget = replay ? 1024 : row.hook === "simple" ? 16384 : undefined;
+  assert.equal(body.max_tokens, replay ? 2048 : row.hook === "simple" ? 16512 : 128, row.id);
+  assert.deepEqual(body.thinking, budget === undefined ? undefined : { type: "enabled", budget_tokens: budget, display: "summarized" }, row.id);
+  assert.equal(body.output_config, undefined, "Qwen uses a manual budget, not Claude adaptive effort");
+}
 function assertMessagesPrefill(provider, body) {
   if (provider !== "opencode") {
     assert.equal(body.messages.at(-1).role, "assistant", "non-Claude Messages prefill remains labelled");
@@ -231,14 +239,12 @@ export default { fetch(request, env, context) {
       assert.equal(call.body.model, row.model); assert.equal(call.body.stream, true); assert.equal(call.expired, false);
       assert.match(call.session, /^crs_[a-f0-9]{64}$/); assert.equal(call.routerSession, null);
       if (protocol === "responses") { assert.equal(call.body.store, false); assert.equal(call.body.previous_response_id, undefined); assert.equal(call.body.max_output_tokens, 128); }
-      // The pinned simple Anthropic path adds its high-thinking budget to the
-      // output allowance for non-adaptive models (128 + 16384), before hooks.
-      else assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, protocol === "messages" && provider === "opencode-go" && row.hook === "simple" ? 16512 : 128, row.id);
+      else if (protocol === "messages" && provider === "opencode-go") assertGoMessagesThinking(row, call.body);
+      else assert.equal(call.body.max_tokens ?? call.body.max_completion_tokens, 128, row.id);
       if (provider === "opencode-go" && protocol === "chat") {
         if (row.model.startsWith("deepseek-")) { assert.deepEqual(call.body.thinking, { type: "enabled" }, row.id + " native Go thinking contract"); assert.equal(call.body.reasoning_effort, row.model === "deepseek-v4-pro" ? "high" : "low", row.id + " native Go effort contract"); }
         if (row.model === "kimi-k3") { assert.deepEqual(call.body.thinking, { type: "disabled" }, row.id + " native Go K3 thinking-off contract"); assert.equal(call.body.reasoning_effort, undefined); }
       }
-      if (provider === "opencode-go" && protocol === "messages") { assert.equal(call.body.thinking, undefined); assert.equal(call.body.output_config, undefined); }
       if (row.id === "dynamic" || row.id === "dynamic_replay") {
         const tool = call.body.tools.find(tool => tool.name === "openclaw_web_search"); assert.ok(tool, "actual Console web_search alias");
         assert.equal(tool.parameters.properties.labels.type, "array", "actual Console dynamic-record rewrite");
@@ -475,4 +481,32 @@ test("OpenCode Claude prefill removal preserves the exact user turn and other Me
     assert.throws(() => assertMessagesPrefill("opencode", { messages }));
   }
   assert.throws(() => assertMessagesPrefill("opencode-go", { messages: [user] }));
+});
+
+
+test("OpenCode enables a valid raw Anthropic budget only for the intended signed Qwen replay", () => {
+  const text = fixtureText.slice(fixtureText.indexOf("function signedMessagesReplayOptions("), fixtureText.indexOf("// END OPENCODE SIGNED MESSAGES OPTIONS"));
+  const build = new Function("contract", stripTypeScriptTypes(text) + "; return signedMessagesReplayOptions;");
+  const options = build({ provider: "opencode-go", protocol: "messages" });
+  const expected = { thinkingEnabled: true, thinkingBudgetTokens: 1024, maxTokens: 2048 };
+  for (const id of ["first", "replay"]) {
+    const row = Object.freeze({ id, model: "qwen3.8-max", hook: "stream" });
+    assert.deepEqual(options(row), expected);
+    assert.ok(expected.thinkingBudgetTokens >= 1024 && expected.thinkingBudgetTokens < expected.maxTokens);
+  }
+  const row = { id: "first", model: "qwen3.8-max", hook: "stream" };
+  for (const changed of [{ ...row, id: "prefill" }, { ...row, id: "error" }, { ...row, id: "cancel" }, { ...row, id: "card0_stream" }, { ...row, hook: "simple" }, { ...row, model: "minimax-m2.7" }]) assert.deepEqual(options(changed), {});
+  for (const contract of [{ provider: "opencode", protocol: "messages" }, { provider: "opencode-go", protocol: "chat" }]) assert.deepEqual(build(contract)(row), {});
+});
+
+test("OpenCode Qwen wire assertions distinguish enabled replay, simple budgets and disabled raw requests", () => {
+  const replay = { id: "replay", model: "qwen3.8-max", hook: "stream" };
+  const body = { max_tokens: 2048, thinking: { type: "enabled", budget_tokens: 1024, display: "summarized" } };
+  assertGoMessagesThinking(replay, body);
+  assertGoMessagesThinking({ ...replay, id: "first" }, body);
+  assertGoMessagesThinking({ ...replay, id: "card0_simple", hook: "simple" }, { max_tokens: 16512, thinking: { ...body.thinking, budget_tokens: 16384 } });
+  assertGoMessagesThinking({ ...replay, id: "prefill" }, { max_tokens: 128 });
+  for (const wrong of [{ ...body, thinking: undefined }, { ...body, max_tokens: 1024 }, { ...body, thinking: { ...body.thinking, budget_tokens: 512 } }, { ...body, thinking: { ...body.thinking, budget_tokens: 2048 } }, { ...body, thinking: { type: "adaptive" } }, { ...body, output_config: { effort: "high" } }]) assert.throws(() => assertGoMessagesThinking(replay, wrong));
+  assert.throws(() => assertGoMessagesThinking({ ...replay, id: "prefill" }, body));
+  assert.throws(() => assertGoMessagesThinking({ ...replay, model: "minimax-m2.7" }, body));
 });

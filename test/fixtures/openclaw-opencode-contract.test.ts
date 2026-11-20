@@ -83,8 +83,19 @@ async function select(id: string) {
   return { provider, model, modelId, config, row };
 }
 
+// BEGIN OPENCODE SIGNED MESSAGES OPTIONS
+function signedMessagesReplayOptions(row: { id: string; model: string; hook: string }) {
+  if (contract.provider !== "opencode-go" || contract.protocol !== "messages" || row.model !== "qwen3.8-max" || row.hook !== "stream" || !["first", "replay"].includes(row.id)) return {};
+  // Raw Anthropic streaming does not consume reasoningEffort. Keep its manual
+  // thinking budget valid and strictly below this request's output allowance.
+  return { thinkingEnabled: true, thinkingBudgetTokens: 1024, maxTokens: 2048 };
+}
+// END OPENCODE SIGNED MESSAGES OPTIONS
+
 async function start(id: string, history?: AgentMessage[], signal?: AbortSignal) {
   const { provider, model, modelId, config, row } = await select(id);
+  const replayOptions = signedMessagesReplayOptions(row);
+  if (replayOptions.thinkingEnabled) expect(model.reasoning, "actual selected Qwen catalog must admit enabled thinking").toBe(true);
   const sessionId = id === "session_conversation" ? "raw-private-session-other" : "raw-private-session";
   const input: AgentMessage[] = history ?? [{ role: "user", content: [{ type: "text", text: "synthetic OpenCode " + id }], timestamp: 1 }];
   if (id === "prefill") input.push({ role: "assistant", content: [{ type: "text", text: "Synthetic prefill" }], api: model.api, provider: "clawrouter", model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: 2 } as any);
@@ -108,6 +119,7 @@ async function start(id: string, history?: AgentMessage[], signal?: AbortSignal)
   owner.callerObservation = {}; lifetime.signal(owner.callerObservation, signal);
   return invocation.run(owner, () => wrapped!(model, context, { apiKey: key(id), maxTokens: 128, signal, sessionId, maxRetries: 0,
     ...(row.hook === "simple" ? { reasoning: thinkingLevel } : { reasoningEffort: thinkingLevel === "off" ? undefined : thinkingLevel }),
+    ...replayOptions,
   } as any));
 }
 

@@ -96,6 +96,10 @@ transport while public output remains quarantined; it is not public post-delta
 cancellation. Other cases cancel after public content. Neither qualifies physical
 pre-response propagation. The pinned Go Messages simple client adds its high-thinking
 budget to the requested output allowance; that wire budget is not a vendor limit.
+The Go Qwen signed replay explicitly enables a 1,024-token Anthropic thinking
+budget within a 2,048-token output allowance and requires the actual selected
+catalog model to admit reasoning. Other raw requests keep thinking disabled;
+Qwen is not subject to the native MiniMax-specific thinking-field removal.
 
 Client hook composition is a separate acceptance boundary. This pin composes
 Console Responses dynamic-record/tool-alias restoration and Go Chat DeepSeek V4 Pro
