@@ -6,7 +6,6 @@ import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { fixture } from "./managed-runtime-fixture.mjs";
 const { snapshot } = await import("../providers.ts");
 const { BASETEN_SYSTEMONE_MODELS: models } = await import("../provider-baseten-systemone.ts");
-const { systemOneDecision } = await import("./native-decision-catalog-fixture.ts");
 const { basetenSystemOneRequest: input, basetenSystemOneResponse: output } = await import("./baseten-systemone-fixtures.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const source = parse(readFileSync(new URL("../../providers/baseten.provider.yaml", import.meta.url), "utf8"));
@@ -17,14 +16,6 @@ async function setup(t, options = {}) {
   snapshot.providers = original.filter(provider => provider.id !== "baseten");
   t.after(() => { snapshot.providers = original; });
   const manifest = structuredClone(source);
-  manifest.capabilities.push({ id: "llm.decisions", endpoint: "systemone", methods: ["POST"] });
-  manifest.endpoints.systemone = { path: "/systemone", requestFormat: "baseten.systemone", responseFormat: "baseten.systemone" };
-  // Replace the exact fixture-owned decision rows, retaining every Chat card.
-  manifest.models.entries = manifest.models.entries.filter(model => !models.includes(model.upstream));
-  manifest.models.entries.push(...models.map(upstream => ({ id: `baseten/${upstream}`, upstream, capabilities: ["llm.decisions"], nativeCapabilities: {
-    version: "clawrouter.native-capabilities.v1", endpoints: { systemone: { sources: ["https://docs.baseten.co/reference/inference-api/system-one"],
-      checkedAt: "2026-11-03", input: ["text", "json"], inference: { chat: false, decision: structuredClone(systemOneDecision) } } },
-  } })));
   const f = await fixture(t, { ...options, providerId: "baseten", configure(provider) {
     Object.assign(provider, compileProviderSnapshot([manifest]).providers[0]);
     provider.endpoints.find(endpoint => endpoint.id === "systemone").timeout_ms = options.timeout ?? 1000;
