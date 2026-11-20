@@ -19,6 +19,22 @@ distinguishes direct non-streaming REST from SDK calls: Carbon and Argon have a
 no route promises a single 1M-token response. The shared model-level budget
 card reserves the larger per-hop ceiling when no output limit is supplied.
 
+ClawRouter records continuation ownership only after a fully delivered hop
+ending in `CONTINUATION`. The next hop must use the same caller, credential,
+model, endpoint and original request settings. A checkpoint from a dropped
+stream is not a replay credential here. Retrying `MAX_TOKENS` with a higher output
+limit is also unsupported. Both are rejected before dispatch; ClawRouter does
+not retry on your behalf. Starting a new request is a separate billable run.
+
+Google does not charge for a dropped unary response or a stream interrupted
+before its first checkpoint. After a streaming checkpoint, only the usage
+committed at that checkpoint is billable, not later uncommitted output. The
+router uses the last complete checkpoint's cumulative usage; it does not infer
+counts from text length. If a checkpoint lacks usable counters, the existing
+hard-budget fallback retains the labeled reservation rather than claiming a
+measured provider charge. Explicit fixed-price policies are independent of Google's
+per-token billing.
+
 All four take text, image, video, audio and PDF inputs and return text. The
 router has no separate PDF modality. Google's model pages list function calling,
 structured output and thinking. Carbon and Argon support low/medium/high

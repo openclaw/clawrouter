@@ -1,3 +1,4 @@
+import { gemini4Hop, googleStreamBilling } from "./google-hop-billing.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
@@ -37,6 +38,9 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
+  const gemini = response.ok && gemini4Hop(usageContext);
+  if (!response.body && gemini) { operation.stop("complete"); return { response, retired: Promise.resolve(),
+    result: Promise.resolve({ tokens: null, nonbillable: true, outcome: "provider_error", delivery: "complete" }) }; }
   if (!response.body) { operation.stop("complete"); return { response, retired: Promise.resolve(), result: Promise.resolve({ tokens: null, outcome: speech || [ollamaChatFormat, "radius.messages"].includes(responseFormat ?? "") ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const mime = contentType.split(";")[0].trim();
@@ -51,7 +55,10 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const radius = responseFormat === "radius.messages" && eventStream ? createNativeEventObserver(createRadiusEventInspector()) : null;
   const nativeChat = responseFormat === ollamaChatFormat || responseFormat === "radius.messages";
   const ollama = responseFormat === ollamaChatFormat && ["application/json", "application/x-ndjson"].includes(mime) ? createOllamaChatInspector(mime === "application/json" ? "json" : "ndjson") : null;
-  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
+  const checkpoints = gemini && responseFormat === "google.stream_generate_content" && mime === "text/event-stream" ? googleStreamBilling() : undefined;
+  const unaryHop = gemini && responseFormat === "google.generate_content" && mime === "application/json";
+  let upstreamEof = false;
+  const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext, checkpoints?.accept) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const searchTariff = responseFormat === "perplexity.search" && tariff?.kind === "successful_request";
   const decoder = new TextDecoder("utf-8", { fatal: searchTariff });
@@ -101,7 +108,10 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
     const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
     const requestCostReceipt = receipt?.result(delivery === "complete") ?? validated?.requestCostReceipt;
-    resolve({ ...inspection, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
+    // A local publication failure after upstream EOF is not a dropped Google hop.
+    const hop = checkpoints?.finish(inspection, upstreamEof) ?? (unaryHop && (!upstreamEof && delivery !== "complete" || upstreamEof && inspection.outcome === "provider_error")
+      ? { tokens: null, outcome: "provider_error" as const, nonbillable: true as const } : undefined);
+    resolve({ ...inspection, ...hop, delivery, ...(operation.receivedRejection ? { nonbillable: true as const } : {}), ...(binaryComplete ? { binaryComplete: true as const } : {}),
       ...(hostedSearch ? { hostedSearch } : {}), ...(requestCostReceipt ? { requestCostReceipt } : {}),
       ...(searchTariff ? { requestTariffOutcome: delivery === "complete" ? requestTariffOutcome : "unknown" as const } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
@@ -127,6 +137,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         const next = await input.read(() => reader.read());
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
+          upstreamEof = true;
           sse?.end();
           if (inspect && bodyInspection?.acceptJson) {
             try {
