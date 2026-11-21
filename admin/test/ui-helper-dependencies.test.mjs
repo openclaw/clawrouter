@@ -37,3 +37,38 @@ test("demo data owns its configuration without importing browser initialization"
   assert.deepEqual(data.connections.filter((connection) => !connection.enabled).map((connection) => connection.providerId).sort(), ["aws-bedrock", "cloudflare-ai-gateway"]);
   assert.equal(data.entitlements.providers.find((provider) => provider.provider === "azure-openai").readiness.status, "missing_config");
 });
+
+test("user demo projection keeps the selected user's presentation separate", async () => {
+  const { demoData, projectUserDemo } = await loadHeadlessModule("demo-data");
+  const data = demoData(), original = JSON.stringify(data);
+  const user = data.users.find((candidate) => candidate.email === "research@example.com");
+  const personal = projectUserDemo(data, user);
+  assert.equal(personal.entitlements.session.email, user.email);
+  assert.deepEqual(personal.policyIds, ["user_research"]);
+  assert.deepEqual(personal.credentials.map((credential) => credential.credentialId), ["research_notebook"]);
+  assert.deepEqual(personal.entitlements.providers.filter((provider) => provider.allowed).map((provider) => provider.provider).sort(), ["google-gemini", "openai", "tavily"]);
+  assert.equal(JSON.stringify(data), original);
+});
+
+test("demo timelines preserve scoped totals and UTC days", async (t) => {
+  const now = Date.UTC(2026, 5, 24, 18), dayMs = 86_400_000;
+  t.mock.method(Date, "now", () => now);
+  const { demoData, projectUserDemo } = await loadHeadlessModule("demo-data");
+  const data = demoData();
+  const sparse = structuredClone(data);
+  for (const provider of sparse.usage.providers) {
+    Object.assign(provider, { requestCount: 10, successCount: 9, errorCount: 1, totalTokens: 100, actualCostMicros: 500, unpricedRequestCount: 3 });
+  }
+  const empty = structuredClone(data);
+  for (const provider of empty.usage.providers) {
+    Object.assign(provider, { requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  }
+  const snapshots = [data.usage, ...[data, sparse, empty].flatMap((source) => source.users.map((user) => projectUserDemo(source, user).usage))];
+  for (const { summary, daily } of snapshots) {
+    assert.equal(daily.length, 30);
+    assert.deepEqual(daily.map((point) => point.dayStartMs), Array.from({ length: 30 }, (_, index) => Math.floor(now / dayMs) * dayMs - (29 - index) * dayMs));
+    for (const field of ["requestCount", "successCount", "errorCount", "totalTokens", "actualCostMicros", "unpricedRequestCount"]) {
+      assert.equal(daily.reduce((total, point) => total + point[field], 0), summary[field] ?? 0, field);
+    }
+  }
+});
