@@ -29,6 +29,7 @@ export function localRoutes(strategy, pins) {
 }
 
 export function validateLocalQualification(tasks, qualification) {
+  if (qualification?.acceptanceVerifier !== undefined) throw new Error('custom_acceptance_verifier_required');
   if (!/^node@sha256:[a-f0-9]{64}$/.test(qualification?.nodeImage ?? '')) throw new Error('unqualified_node_image');
   return tasks.map(task => {
     const matches = qualification.receipts?.filter(row => row.taskId === task.id), receipt = matches?.[0];
