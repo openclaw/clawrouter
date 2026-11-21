@@ -1,6 +1,7 @@
+import '../../scripts/typescript-resolver.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseUsageRangeInput } from '../src/usage-range.ts';
+const { parseUsageRangeInput } = await import('../src/usage-range.ts');
 // Fixed public calendar expectations, not a second implementation of the helper.
 for (const [timezone,from,to,start,end] of [
  ['Asia/Kathmandu','2024-02-29','2024-03-01','2024-02-28T18:15:00Z','2024-02-29T18:15:00Z'],

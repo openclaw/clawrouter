@@ -3,7 +3,7 @@ import { usageMetricKeys as metricKeys } from '../../shared/usage-report.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 const {exportRefreshedUsage,completeQueryString,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,usageCaveats}=await import('../src/complete-usage.ts');
-import {parseUsageRangeInput} from '../src/usage-range.ts';
+const {parseUsageRangeInput}=await import('../src/usage-range.ts');
 const ok=value=>({kind:'complete',value});
 const metrics=()=>Object.fromEntries(metricKeys.map(k=>[k,0]));
 const query={from:1000,to:2000,timezone:'UTC',grain:'day',groupBy:'model',rankBy:'calls',rankOffset:0,filters:{model:'selected'}};
