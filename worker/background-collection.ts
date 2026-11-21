@@ -1,4 +1,4 @@
-import type { BackgroundJob } from "./background-store.ts";
+import type { BackgroundJob } from "./background-record.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { dispatchResponseControl } from "./responses-control-dispatch.ts";
 import type { ResponsesObservation } from "./token-usage.ts";

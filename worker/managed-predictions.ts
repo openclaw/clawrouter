@@ -4,7 +4,7 @@ import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./min
 import { videoCollectionAuthorization } from "./response-control-authorization.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-store.ts";
+import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-record.ts";
 import { retentionRequired } from "./content-retention.ts";
 import { setBackgroundRecovery } from "./correlation.ts";
 import { backgroundCall, HttpBackground } from "./http-background.ts";

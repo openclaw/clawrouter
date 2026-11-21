@@ -184,6 +184,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "worker/budget-scope.ts",
     "worker/proxy-accounting.ts",
     "worker/accounting.ts",
+    "worker/background-record.ts",
     "worker/ledgers.ts",
     "worker/usage-ledger-client.ts",
     "worker/usage-report-protocol.ts",

@@ -1,6 +1,6 @@
 import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { isMiniMaxVideoOrigin } from "./minimax-video.ts";
-import type { BackgroundRecord } from "./background-store.ts";
+import type { BackgroundRecord } from "./background-record.ts";
 import { BodyLease } from "./body-budget.ts";
 import { backgroundCall } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
