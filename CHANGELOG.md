@@ -1,5 +1,7 @@
 # Changelog
 
+- Bind custom fusion acceptance receipts to their matching validator and grader; reject custom receipts in default Git-oracle runners.
+
 - Allow fusion benchmark runners to select one fixed-model control without rerunning or reserving budget for the other control. Keep the default two-control run and record single-control limitations.
 
 - Run the realtime cadence proof before the concurrent CI script suite, retaining every test, deadline, bounded diagnostic and failure status.

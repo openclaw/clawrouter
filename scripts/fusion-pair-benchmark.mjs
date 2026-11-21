@@ -75,7 +75,9 @@ async function exportAcceptedRepair(out, task, files, sourceSha, qualificationDi
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', actionSchemaProfile = 'legacy', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, controlStrategy = null, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, preflight = nativePins }) {
+  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', actionSchemaProfile = 'legacy', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, controlStrategy = null, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, acceptance = null, preflight = nativePins }) {
+  if (acceptance !== null && (typeof acceptance?.validate !== 'function' || typeof acceptance?.grade !== 'function' || grade !== verify)) throw new Error('invalid_acceptance_adapter');
+  const effectiveGrade = acceptance?.grade ?? grade;
   validateOpenAiApi(openAiApi);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
@@ -118,7 +120,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (!Number.isSafeInteger(cheapMaxCalls) || cheapMaxCalls < 1 || cheapMaxCalls > 59) throw new Error('invalid_cheap_call_allowance');
   if (typeof preloadSource !== 'boolean') throw new Error('invalid_source_preload');
   const rawQualification = await readFile(qualificationPath);
-  const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
+  const receipts = (acceptance?.validate ?? validateLocalQualification)(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly, controlStrategy,
@@ -220,7 +222,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           } finally { agentElapsedMs = Math.round(performance.now() - agentStarted); }
           let verdict;
           const gradingStarted = performance.now();
-          try { verdict = await grade(task, receipt.image, result.files, repo); }
+          try { verdict = await effectiveGrade(task, receipt.image, result.files, repo); }
           finally { gradingElapsedMs = Math.round(performance.now() - gradingStarted); }
           const { files, ...trace } = result;
           if (verdict.valid !== true) {
@@ -231,7 +233,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
           if (strategy === 'probe-selection') {
             const diagnosticStart = performance.now();
-            row.probeDiagnostics = await diagnoseProbeSelection(result, task, receipt.image, repo, receipt, { grade });
+            row.probeDiagnostics = await diagnoseProbeSelection(result, task, receipt.image, repo, receipt, { grade: effectiveGrade });
             diagnosticMs = performance.now() - diagnosticStart;
           }
           if (exportRepairs && row.score === 1) {
