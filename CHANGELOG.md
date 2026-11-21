@@ -1,5 +1,7 @@
 # Changelog
 
+- Let repository fusion benchmarks declare new source modules, with isolated initialization and guarded first writes.
+
 - Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
 - Require an explicit submission before scoring or exporting paired fusion repairs; reject legacy positive scores for unfinished patches during analysis.
 
