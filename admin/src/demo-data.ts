@@ -1,12 +1,12 @@
 import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, readinessMap, tenantSummaryFallback } from "./domain";
 import { demoCatalog } from "./demo-catalog";
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
-import { syntheticUsageTimeline } from "./usage-analytics";
+import { addUsageCounters, usageDayMs } from "./usage-analytics";
 import type { ClientCatalog } from "../../shared/contracts";
 import type {
   AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, FusionConfig, PolicyBinding,
   ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
-  UsageAuditEvent, UsageSnapshot,
+  UsageAuditEvent, UsageDailySummary, UsageSnapshot, UsageSummary,
 } from "./ui-types";
 
 const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
@@ -200,6 +200,36 @@ export function demoData() {
   return { session, providers, routes, keys, credentials, connections, upstreamGrants, assignmentRules, fusion, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
+export function projectUserDemo(data: Pick<ReturnType<typeof demoData>, "keys" | "bindings" | "services" | "usage" | "session" | "entitlements" | "credentials">, user: AccessUser) {
+  const effective = effectiveAccess(user, data.keys, data.bindings, data.services);
+  const providerIds = new Set(effective.services.map((service) => service.provider));
+  const providerUsage = data.usage.providers.filter((provider) => providerIds.has(provider.provider));
+  const summary = providerUsage.reduce<UsageSummary>(addUsageCounters, { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
+  const contentRetention = {
+    enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
+    retentionDays: 30,
+    policyEnabled: effective.policies.some((policy) => policy.retainRequestContent),
+    userExempt: user.contentRetentionDisabled,
+  };
+  const entitlements: EntitlementsResponse = {
+    session: { ...data.session, ...user, auth: "demo", contentRetention },
+    catalog: demoClientCatalog(user.email),
+    contentRetention,
+    providers: data.entitlements.providers.map((provider) => ({
+      ...provider,
+      allowed: providerIds.has(provider.provider),
+      policies: effective.policies.filter((policy) => policyCoversProvider(policy, provider.provider)).map((policy) => policy.policyId),
+    })),
+  };
+  return {
+    entitlements,
+    usageRows: effective.policies.map(policyUsageFallback),
+    usage: { ...data.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] },
+    credentials: data.credentials.filter((credential) => credential.principalId === user.email),
+    policyIds: effective.policies.filter((policy) => policy.enabled).map((policy) => policy.policyId),
+  };
+}
+
 export function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
   const openaiRoute = routes.openaiCompatible.find((route) => route.provider === provider.id);
   const manifestRoutes = routes.manifestProxy.filter((route) => route.provider === provider.id);
@@ -231,4 +261,34 @@ export function demoReadiness(provider: ProviderRow, routes: RouteCatalog): Prov
     status,
     reasons: status === "verified" ? [] : status === "disabled" ? ["Provider connection is disabled by an administrator."] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
   };
+}
+
+function syntheticUsageTimeline(now: number, summary: UsageSummary): UsageDailySummary[] {
+  const today = Math.floor(now / usageDayMs) * usageDayMs;
+  const weights = [31, 34, 29, 36, 39, 33, 27, 41, 44, 38, 46, 49, 43, 35, 52, 55, 48, 58, 62, 54, 47, 64, 69, 61, 73, 67, 76, 81, 72, 88];
+  const requestSeries = distributeTotal(summary.requestCount, weights);
+  const errorSeries = distributeTotal(summary.errorCount, weights.map((weight, index) => weight * (index % 7 === 2 ? 2 : 1)));
+  const tokenSeries = distributeTotal(summary.totalTokens, weights.map((weight, index) => weight * (index % 5 === 0 ? 1.18 : 1)));
+  const costSeries = distributeTotal(summary.actualCostMicros, weights.map((weight, index) => weight * (index % 6 === 4 ? 1.25 : 1)));
+  const unpricedSeries = distributeTotal(summary.unpricedRequestCount ?? 0, weights);
+  return weights.map((_, index) => ({
+    dayStartMs: today - (weights.length - index - 1) * usageDayMs,
+    requestCount: requestSeries[index],
+    successCount: requestSeries[index] - errorSeries[index],
+    errorCount: errorSeries[index],
+    totalTokens: tokenSeries[index],
+    actualCostMicros: costSeries[index],
+    unpricedRequestCount: unpricedSeries[index],
+  }));
+}
+
+function distributeTotal(total: number, weights: number[]) {
+  const sum = weights.reduce((value, weight) => value + weight, 0);
+  const values = weights.map((weight) => Math.floor((total * weight) / sum));
+  let remainder = total - values.reduce((value, amount) => value + amount, 0);
+  for (let index = values.length - 1; remainder > 0; index = (index - 1 + values.length) % values.length) {
+    values[index] += 1;
+    remainder -= 1;
+  }
+  return values;
 }
