@@ -14,7 +14,7 @@ import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "3206356e0fff73751495ca6a5c8cd4f3e97caf04";
 const successes = ["success", "rotated", "count_ignored"];
-const failures = ["malformed", "model_mismatch", "incomplete", "error", "oversized"];
+const failures = ["malformed", "model_mismatch", "incomplete", "error", "oversized", "redirect"];
 const charged = [...successes, ...failures, "cancel"];
 const denied = ["invalid", "foreign", "budget", "revoked", "preabort", "blank", "count", "retired"];
 const cases = [...charged, ...denied].map(id => ({ id, denied: denied.includes(id) }));
@@ -191,8 +191,8 @@ function requests() {
     const requestId = op.value.headers.get("x-clawrouter-request-id");
     if (!requestId || ids.has(requestId)) throw new Error("missing or duplicate xAI request ID"); ids.add(requestId);
     const bound = [...deliveries.values()].filter(row => row.incoming === op.owner);
-    if (op.owner.id !== "xsearch_direct_budget" && (bound.length !== 1 || !bound[0].delivery)) throw new Error("missing original xAI delivery");
-    return { id: op.owner.id, requestId, status: op.value.status, delivery: bound[0]?.delivery };
+    if (op.owner.id !== "xsearch_direct_budget" && (bound.length !== 1 || op.owner.id !== "xsearch_redirect" && !bound[0].delivery)) throw new Error("missing original xAI delivery");
+    return { id: op.owner.id, requestId, status: op.value.status, location: op.value.headers.get("location"), upstreamStatus: bound[0]?.response.status, delivery: bound[0]?.delivery };
   });
 }
 const configured = env => ({ ...env, XAI_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" });
@@ -251,7 +251,8 @@ async function serve(request, context, owner) {
     cancel() { call.cancelled = true; finish(false); },
   };
   for (const kind of ["pull", "cancel"]) { const original = source[kind]; lifetime.patch(source, kind, function (...args) { return lifetime.invoke("source." + kind, original, this, args, owner); }); }
-  return new Response(new ReadableStream(source, { highWaterMark: 0 }), { status: id === "error" ? 503 : 200, headers: { "content-type": "application/json" } });
+  call.status = id === "error" ? 503 : id === "redirect" ? 307 : 200;
+  return new Response(new ReadableStream(source, { highWaterMark: 0 }), { status: call.status, headers: { "content-type": "application/json", ...(id === "redirect" ? { location: "https://foreign.example/replayed-search" } : {}) } });
 }
 export default { fetch(request, env, context) {
   if (request.url === "https://fixture.example/state") return Response.json(calls);
@@ -303,6 +304,7 @@ function assertCalls(calls) {
   for (const call of calls) {
     assert.equal(call.method, "POST", call.id); assert.equal(call.url, "https://api.x.ai/v1/responses", call.id);
     assert.equal(call.authorization, "Bearer " + secret(call.id), call.id); assert.deepEqual(call.body, requestBody, call.id);
+    assert.equal(call.status, call.id === "error" ? 503 : call.id === "redirect" ? 307 : 200, call.id);
     assert.equal(call.expired, false, call.id); assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
     if (call.id === "cancel") assert.equal(call.cancelled, true, "actual upstream cancel");
   }
@@ -325,7 +327,7 @@ async function verifyCallsAndUsage(mf, origin, sdkLimit) {
     const dispatched = charged.includes(row.id), posted = dispatched || row.id === "direct_budget";
     // This fixed-policy HTTP rejection uses the shipping nonbillable outcome;
     // it is not a qualified vendor hosted-tool tariff or a generic SDK-error rule.
-    const cost = dispatched && row.id !== "error" ? 7 : 0;
+    const cost = dispatched && !["error", "redirect"].includes(row.id) ? 7 : 0;
     let usage;
     for (let attempt = 0; attempt < 150; attempt++) {
       usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(row.id) } })).json();
@@ -341,8 +343,12 @@ async function verifyCallsAndUsage(mf, origin, sdkLimit) {
     assert.equal(event.provider, "xai", row.id); assert.equal(event.model, "xai/grok-4.7", row.id); assert.equal(event.capability, "llm.responses", row.id);
     assert.equal(event.actual_cost_micros, cost, row.id); assert.equal(event.cost_basis, cost ? "policy_fixed" : "none", row.id);
     if (row.id === "error") assert.equal(bound.status, 503);
+    if (row.id === "redirect") {
+      assert.equal(bound.upstreamStatus, 307); assert.equal(bound.status, 502); assert.equal(bound.location, null);
+      assert.equal(event.status_code, 502); assert.equal(bound.delivery, undefined, "redirect refusal precedes delivery inspection");
+    }
     if (dispatched) {
-      let status = row.id === "cancel" ? "client_error" : row.id === "error" ? "provider_error" : "success";
+      let status = row.id === "cancel" ? "client_error" : ["error", "redirect"].includes(row.id) ? "provider_error" : "success";
       if (row.id === "oversized") { assert.ok(["complete", "canceled"].includes(bound.delivery), "oversized failed/unknown delivery remains fatal"); status = bound.delivery === "complete" ? "success" : "client_error"; }
       assert.equal(event.status, status, row.id);
     }
@@ -434,7 +440,7 @@ test("xAI Search records a rejected ownership claim even when the tool catches i
 });
 
 test("xAI Search rejects extra requests, foreign keys and Perplexity-shaped payloads", () => {
-  const calls = charged.map(id => ({ id, method: "POST", url: "https://api.x.ai/v1/responses", authorization: "Bearer " + secret(id), body: structuredClone(requestBody), expired: false, cancelled: id === "cancel" }));
+  const calls = charged.map(id => ({ id, method: "POST", url: "https://api.x.ai/v1/responses", authorization: "Bearer " + secret(id), body: structuredClone(requestBody), status: id === "error" ? 503 : id === "redirect" ? 307 : 200, expired: false, cancelled: id === "cancel" }));
   assert.doesNotThrow(() => assertCalls(calls));
   for (const mutate of [rows => rows.push({ ...rows[0] }), rows => { rows[0].method = "GET"; }, rows => { rows[0].authorization = "Bearer foreign"; },
     rows => { rows[0].body.max_results = 2; }, rows => { rows[0].body.store = true; }, rows => { rows[0].body.reasoning.effort = "high"; },

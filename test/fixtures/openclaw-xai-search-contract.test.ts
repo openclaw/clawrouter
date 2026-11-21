@@ -166,6 +166,13 @@ describe("registered xAI Search through Worker and SQLite", { concurrent: false 
   it.each(["malformed", "model_mismatch", "incomplete", "error"])("preserves %s and its original cleanup", id => runCase(id, async execute => {
     expect((await execute()).details).toMatchObject({ kind: "error", provider: "clawrouter" });
   }));
+  it("receives the Worker's owned redirect refusal without following it", () => runCase("redirect", async (execute, lifetime) => {
+    expect((await execute()).details).toMatchObject({ kind: "error", provider: "clawrouter" });
+    const acquisitions = lifetime.guards.filter((row: any) => row.owner.kind === "chat");
+    assert.equal(acquisitions.length, 1); assert.equal(acquisitions[0].acquired, true);
+    assert.equal(acquisitions[0].result.response.status, 502);
+    assert.equal(acquisitions[0].result.response.headers.get("location"), null);
+  }));
   it("bounds the original response reader and retains its completed cleanup", async () => {
     let evidence;
     await runCase("oversized", async (execute, lifetime, bindings) => {

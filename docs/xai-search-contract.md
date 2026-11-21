@@ -59,9 +59,11 @@ original SDK, Worker and upstream operations. Post-content cancellation is
 distinct from physical pre-response disconnect propagation. The source fixture
 is prepared; its exact-client runtime qualification is still pending.
 The current rotation and revocation cases change the selected grant before
-catalog acquisition. They do not establish post-catalog invalidation. Redirect
-retirement and the new fixture's owning OpenClaw TypeScript graph remain pending
-qualification alongside the full runtime contract.
+catalog acquisition. They do not establish post-catalog invalidation. The
+redirect case observes upstream 307 and the Worker's fresh 502 without a
+Location header, rather than making the Worker expose a raw redirect to the
+client guard. This retirement proof and the new fixture's owning OpenClaw
+TypeScript graph remain pending qualification alongside the full contract.
 
 ## Results and transport
 
