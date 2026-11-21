@@ -69,6 +69,7 @@ export function validateTask(task) {
     throw new Error('invalid_oracle_support_paths');
   }
   validateSourceContext(task);
+  validatePublicTestFiles(task);
   validatePreservationProbes(task.preservationProbes);
   if (task.reproducer !== undefined) validateReproducer(task.reproducer);
   return task;
@@ -143,15 +144,31 @@ export function validateNewPaths(task) {
   return paths;
 }
 
-// Keep the immutable source image exact. Only declared additions get empty
-// placeholders inside each disposable trial, before any model sees the tree.
+export function validatePublicTestFiles(task) {
+  const files = task.publicTestFiles === undefined ? [] : task.publicTestFiles;
+  if (!Array.isArray(files) || (task.publicTestFiles !== undefined && !files.length)
+    || files.length > 12 || new Set(files.map(file => file?.path)).size !== files.length
+    || files.some(file => !file || !safePath(file.path) || !/\.test\.mjs$/.test(file.path)
+      || !task.visibleTests?.includes(file.path) || task.editPaths?.includes(file.path)
+      || typeof file.content !== 'string' || !file.content.trim()
+      || Buffer.byteLength(file.content) > 256 * 1024)
+    || files.reduce((bytes, file) => bytes + Buffer.byteLength(file.content), 0) > 1024 * 1024) {
+    throw new Error('invalid_public_test_files');
+  }
+  return files;
+}
+
+// Keep the immutable source image exact. Apply declared public tests and empty
+// source additions only in disposable trials, before any model sees the tree.
 export async function taskSandbox(task, image, run = command) {
-  const paths = validateNewPaths(task), box = await sandbox(image, run);
+  const paths = validateNewPaths(task), publicTests = validatePublicTestFiles(task);
+  const box = await sandbox(image, run);
   try {
     if (paths.length) await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
 for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
 if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
 fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
+    if (publicTests.length) await writeFiles(box, publicTests);
     return box;
   } catch (error) { await box.close(); throw error; }
 }
@@ -300,8 +317,14 @@ export async function checkOracleVisible(task, image, edits, { makeSandbox = ima
   } finally { await box.close(); }
 }
 
-export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }) {
-  return visible?.passed === true && oracleVisible?.valid === true && oracleVisible?.passed === true
+export function baselineVisibleQualified(task, visible) {
+  const replacements = validatePublicTestFiles(task);
+  return visible?.passed === true || (replacements.length > 0 && visible?.valid === true
+    && visible.passed === false && Number.isSafeInteger(visible.failures) && visible.failures > 0);
+}
+
+export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }, task = {}) {
+  return baselineVisibleQualified(task, visible) && oracleVisible?.valid === true && oracleVisible?.passed === true
     && broken?.valid === true && broken?.passed === false && oracle?.passed === true
     && (reproduction === undefined && oracleReproduction === undefined
       || reproduction?.assertionFailed === true && oracleReproduction?.passed === true);
@@ -354,5 +377,5 @@ export async function qualify(task, options) {
     ...(preservation === undefined ? {} : { preservation }),
     ...(task.reproducer !== undefined ? { reproduction, oracleReproduction } : {}) };
   return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
-    qualified: qualificationSucceeded(evidence) && preservationQualificationMatches(task.preservationProbes, preservation) };
+    qualified: qualificationSucceeded(evidence, task) && preservationQualificationMatches(task.preservationProbes, preservation) };
 }

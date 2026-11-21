@@ -1,5 +1,6 @@
 # Changelog
 
+- Require successful participation from both models and a strong-model rescue before a repeated fusion benchmark passes its pilot screen.
 - Stop paired fusion benchmarks on provider safety notices anywhere in the response, including discarded commentary, while retaining settled usage or unresolved reservations.
 - Allow fusion workload acceptance tests to declare pinned helper modules without exposing or changing them during agent execution.
 
@@ -333,6 +334,7 @@
 - Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
 
 - Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
+- Let fusion repair tasks supply pinned public regression tests consistently to all isolated trials and qualification checks.
 
 - Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
 
