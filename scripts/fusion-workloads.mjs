@@ -129,10 +129,11 @@ export async function sandbox(image, run = command) {
   const id = (await run('docker', sandboxArgs(image))).stdout.toString().trim();
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('invalid_container_id');
   const exec = (args, options = {}) => run('docker', ['exec', '-i', id, ...args], options);
+  const execUnprivileged = (args, options = {}) => run('docker', ['exec', '--user', '65534:65534', '-i', id, ...args], options);
   try {
     await run('docker', ['start', id]);
     await exec(['node', '-e', `const fs=require('node:fs'); for(let i=0;i<200;i++){if(fs.existsSync('/work/.ready'))process.exit(0);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50)}process.exit(1)`]);
-    return { id, exec, close: () => run('docker', ['rm', '-f', id]) };
+    return { id, exec, execUnprivileged, close: () => run('docker', ['rm', '-f', id]) };
   } catch (error) { await run('docker', ['rm', '-f', id]); throw error; }
 }
 
@@ -266,6 +267,39 @@ export async function check(box, paths, timeout = 120000) {
   return { ...testResult(result), feedback: testFeedback(result) };
 }
 
+/** Final acceptance cannot let candidate imports rewrite their own tests. */
+export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000) {
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
+    || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {
+    throw new Error('invalid_acceptance_check');
+  }
+  const watched = [...new Set([...paths, ...supportPaths])];
+  if (watched.length > 36 || !watched.every(safePath)) throw new Error('invalid_acceptance_check');
+  const snapshot = async () => {
+    const result = await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path'),c=require('node:crypto');
+console.log(JSON.stringify(JSON.parse(process.argv[1]).map(name=>{const path=p.resolve('/work',name);if(!path.startsWith('/work/')||fs.realpathSync(path)!==path||!fs.statSync(path).isFile())throw Error('acceptance_path_changed');return c.createHash('sha256').update(fs.readFileSync(path)).digest('hex')})));`, JSON.stringify(watched)], { timeout });
+    const hashes = JSON.parse(result.stdout.toString());
+    if (!Array.isArray(hashes) || hashes.length !== watched.length || !hashes.every(value => /^[a-f0-9]{64}$/.test(value))) {
+      throw new Error('invalid_acceptance_snapshot');
+    }
+    return JSON.stringify(hashes);
+  };
+  const before = await snapshot();
+  await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+function protect(path){const s=fs.lstatSync(path);if(s.isSymbolicLink())return;if(s.uid!==1000)throw Error('unexpected_fixture_owner');fs.chmodSync(path,s.mode&~0o022);if(s.isDirectory())for(const name of fs.readdirSync(path))protect(p.join(path,name));}protect('/work');
+fs.mkdirSync('/work/.artifacts',{recursive:true});fs.chmodSync('/work/.artifacts',0o1777);`], { timeout });
+  const admission = await box.execUnprivileged(['node', '-e', `const fs=require('node:fs'),p=require('node:path');const path=p.resolve('/work',process.argv[1]);
+const denied=fn=>{try{fn();return false}catch(e){if(!['EPERM','EACCES','EROFS'].includes(e.code))throw e;return true}};
+if(process.getuid()!==65534||![denied(()=>fs.writeFileSync(path,'changed')),denied(()=>fs.chmodSync(path,0o666)),denied(()=>fs.renameSync(path,path+'.moved')),denied(()=>fs.renameSync(p.dirname(path),p.dirname(path)+'.moved'))].every(Boolean))throw Error('acceptance_write_access');console.log('protected');`, paths[0]], { timeout });
+  if (admission.stdout.toString().trim() !== 'protected') throw new Error('acceptance_protection_failed');
+  if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
+  try {
+    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout);
+  } finally {
+    if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
+  }
+}
+
 export async function probe(box, source, timeout = 15000) {
   if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_probe');
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_probe');
@@ -318,7 +352,7 @@ export async function verify(task, image, edits, repo) {
     const hidden = await revisionFiles(repo, task.oracle, acceptancePaths);
     await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(acceptancePaths)]);
     await writeFiles(box, hidden);
-    const result = await check(box, [...new Set([...task.visibleTests, ...task.hiddenTests])]);
+    const result = await checkAcceptance(box, [...new Set([...task.visibleTests, ...task.hiddenTests])], task.oracleSupportPaths ?? []);
     const { feedback, ...receipt } = result;
     return receipt;
   } finally { await box.close(); }

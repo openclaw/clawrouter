@@ -1,5 +1,7 @@
 # Changelog
 
+- Protect final fusion acceptance tests and helper modules from candidate writes, and reject changed test bytes after grading.
+
 - Preserve early failing-test diagnostics in bounded fusion benchmark feedback when later passing tests produce long output. Mark omitted output and retain final diagnostics.
 
 - Require successful participation from both models and a strong-model rescue before a repeated fusion benchmark passes its pilot screen.
