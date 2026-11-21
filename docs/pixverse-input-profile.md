@@ -69,7 +69,10 @@ consumer retains its independent pin and coverage.
 
 Hosted SDK qualification is pending. The fixture observes the original guarded
 responses, body and reader cancellation, closed/read promises and releases;
-transport output alone is not retirement proof. Synthetic policy-fixed prices
+transport output alone is not retirement proof. The client returns an exact
+terminal URL and MIME type; the generic runner does not download that URL. The
+fixture rejects unexpected foreign-origin fetches rather than claiming a
+download that the registered provider never performs. Synthetic policy-fixed prices
 are fixture inputs, not vendor tariffs. No paid vendor execution, deployment,
 automatic catalog entitlement or caller-signal/physical pre-header cancellation
 qualification is claimed.

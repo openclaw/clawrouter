@@ -14,7 +14,6 @@ import { overlayPixVerseGuardSource, restorePixVerseGuardSource, pixverseGuardPi
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "b0d33f09ba5d8d0e6db804f01cbf79dcf269a351";
-const video = JSON.parse(readFileSync(new URL("./fixtures/wan-output.json", import.meta.url)));
 const fixture = new URL("./fixtures/openclaw-pixverse-image-contract.test.ts", import.meta.url);
 const asset = "https://example.com/clawrouter-pixverse-fixture.mp4";
 const png64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
@@ -36,7 +35,7 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
   const diagnostics = [];
   await bind(source, createHash("sha256").update(readFileSync(fixture)).digest("hex"), guardContract => invoke({ diagnostic(message) { diagnostics.push(String(message)); t.diagnostic(message); } }, {
     source, sourceHead, fixture, testPath: "extensions/clawrouter/worker-pixverse-image-contract.test.ts",
-    env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_PIXVERSE_IMAGE_CONTRACT: contract, CLAWROUTER_PIXVERSE_GUARD_CONTRACT: guardContract },
+    env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_PIXVERSE_IMAGE_CONTRACT: contract, CLAWROUTER_PIXVERSE_GUARD_CONTRACT: guardContract },
   }));
   const lines = stripVTControlCharacters(diagnostics.join("\n")).split("\n").map(line => line.trim());
   for (const model of ["v6", "c1"]) assert.equal(lines.filter(line => line === "PIXVERSE_IMAGE_RETIRED " + model).length, 1, "exact original SDK completion receipt");
@@ -190,7 +189,7 @@ test("actual registered PixVerse image SDK through Worker and SQLite", { skip: !
     await assertAmbiguousReservation(origin);
     for (const id of denied) assert.equal((await usage(origin, id)).usage.events.length, 0, id);
     const requests = await json(await fetch(origin + "/fixture/requests"));
-    const downloads = requests.filter(row => row.path === "/fixture/output"); assert.equal(downloads.length, 2); assert.ok(downloads.every(row => row.authorization === null));
+    const downloads = requests.filter(row => row.path === "/fixture/output"); assert.equal(downloads.length, 0, "the registered client returns a URL; it does not download the asset");
     const expected = new Set(paid.map(id => "Bearer " + key(id)));
     for (const row of requests.filter(row => row.path.startsWith("/v1/native/"))) assert.ok(expected.has(row.authorization), "exact configured native credential");
   });
@@ -204,7 +203,7 @@ function routerFixture() {
     import { inputRouteDigest } from "./worker/pixverse-input-dispatch.ts";
     import { continuationScope } from "./worker/http-continuation.ts";
     import { backgroundCall } from "./worker/http-background.ts";
-    const requests = [], operations = [], video = Uint8Array.from(atob(${JSON.stringify(video.base64)}), c => c.charCodeAt(0));
+    const requests = [], operations = [];
     function own(promise) { const row = { state: "pending", promise }; operations.push(row); row.tail = promise.then(() => { row.state = "fulfilled"; }, error => { row.state = "rejected"; row.error = error; }); return promise; }
     async function retire() { for (let n = 0; n < operations.length;) { const batch = operations.slice(n); n = operations.length; await Promise.all(batch.map(row => row.tail)); } return { operations: operations.length, pending: operations.filter(row => row.state === "pending").length, rejected: operations.filter(row => row.state === "rejected").length }; }
     export default { ...handler, async fetch(request, env, context) {
@@ -235,7 +234,6 @@ function routerFixture() {
       }
       const recorded = { path: route, method: request.method, authorization: request.headers.get("authorization"), recovery: null };
       if (route !== "/v1/usage") requests.push(recorded);
-      if (route === "/fixture/output") return new Response(video, { headers: { "content-type": "video/mp4" } });
       const response = await own(handler.fetch(request, { ...env, PIXVERSE_API_KEY: "must-not-fallback" }, { ...context, waitUntil(promise) { own(promise); context.waitUntil(promise); } }));
       recorded.recovery = response.headers.get("x-clawrouter-background-recovery");
       if (route === "/v1/catalog" && request.headers.get("authorization") === "Bearer clawrouter-live-piximage_foreignprofile-fixture-secret") {
@@ -382,6 +380,15 @@ test("PixVerse cleanup joins originals and restores mocks after observer admissi
   assert.equal(joined, true); assert.equal(restored, true); assert.equal(context[key], foreign);
 });
 
+test("PixVerse terminal output is an exact URL-only result, not an inferred download", () => {
+  const sdk = readFileSync(fixture, "utf8");
+  const start = sdk.indexOf("expect(result.videos[0])"), end = sdk.indexOf("expect(globalThis.fetch)", start);
+  const check = value => runInNewContext(sdk.slice(start, end), { result: { videos: [value] }, asset,
+    expect(actual) { return { toEqual: expected => assert.equal(JSON.stringify(actual), JSON.stringify(expected)) }; } });
+  check({ url: asset, mimeType: "video/mp4" });
+  for (const value of [{ buffer: [1], mimeType: "video/mp4" }, { url: "https://example.com/foreign.mp4", mimeType: "video/mp4" }, { url: asset, mimeType: "image/png" }, { url: asset, mimeType: "video/mp4", buffer: [1] }]) assert.throws(() => check(value));
+});
+
 test("PixVerse actual runner binds the registered provider, exact pin, environment and completion receipts", async () => {
   const strategy = parse(readFileSync(new URL("../.github/workflows/openclaw-contract.yml", import.meta.url), "utf8")).jobs.consumer.strategy;
   const matrix = strategy.matrix; assert.equal(strategy["max-parallel"], 4);
@@ -394,7 +401,7 @@ test("PixVerse actual runner binds the registered provider, exact pin, environme
   await invokeNative({ diagnostic() {} }, "https://router.example", async (t, options) => {
     assert.equal(options.sourceHead, sourceHead); assert.equal(options.fixture.href, fixture.href);
     assert.equal(options.testPath, "extensions/clawrouter/worker-pixverse-image-contract.test.ts");
-    assert.deepEqual(options.env, { CLAWROUTER_CONTRACT_ORIGIN: "https://router.example", CLAWROUTER_CONTRACT_VIDEO_BASE64: video.base64, CLAWROUTER_PIXVERSE_IMAGE_CONTRACT: contract, CLAWROUTER_PIXVERSE_GUARD_CONTRACT: contractHash });
+    assert.deepEqual(options.env, { CLAWROUTER_CONTRACT_ORIGIN: "https://router.example", CLAWROUTER_PIXVERSE_IMAGE_CONTRACT: contract, CLAWROUTER_PIXVERSE_GUARD_CONTRACT: contractHash });
     t.diagnostic("PIXVERSE_IMAGE_RETIRED v6\nPIXVERSE_IMAGE_RETIRED c1");
   }, bind);
   for (const receipt of ["", "VYDRA_MODELS_RETIRED v6", "PIXVERSE_IMAGE_RETIRED v6\nPIXVERSE_IMAGE_RETIRED v6", "PIXVERSE_IMAGE_RETIRED v6\nPIXVERSE_IMAGE_RETIRED c1\nPIXVERSE_IMAGE_RETIRED c1"]) {

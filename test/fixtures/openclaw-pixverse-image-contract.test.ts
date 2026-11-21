@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 expect(process.env.CLAWROUTER_PIXVERSE_IMAGE_CONTRACT).toBe("pixverse.composed-image.v1");
-const video = Buffer.from(process.env.CLAWROUTER_CONTRACT_VIDEO_BASE64!, "base64");
 const asset = "https://example.com/clawrouter-pixverse-fixture.mp4";
 const nativeFetch = globalThis.fetch;
 const guardContract = process.env.CLAWROUTER_PIXVERSE_GUARD_CONTRACT!;
@@ -80,11 +79,6 @@ beforeEach(() => {
   Object.defineProperty(globalThis, guardKey, { configurable: true, value: guardChannel });
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const request = new Request(input, init);
-    if (request.url === asset) {
-      expect(request.method).toBe("GET");
-      expect([...request.headers]).toEqual([]);
-      return nativeFetch(origin + "/fixture/output", { signal: request.signal });
-    }
     expect(new URL(request.url).origin).toBe(origin);
     return nativeFetch(input, init);
   });
@@ -129,7 +123,8 @@ describe("registered ClawRouter PixVerse composed image through Worker and SQLit
     await withTempHome(async () => {
       const result = await run(model, model);
       expect(result).toMatchObject({ provider: "clawrouter", model: "pixverse/" + model, attempts: [], metadata: { status: 1 } });
-      expect(result.videos).toHaveLength(1); expect(result.videos[0]).toMatchObject({ buffer: video, mimeType: "video/mp4" });
+      expect(result.videos).toHaveLength(1); expect(result.videos[0]).toEqual({ url: asset, mimeType: "video/mp4" });
+      expect(globalThis.fetch).not.toHaveBeenCalledWith(asset, expect.anything());
       expect(acquisitions.length).toBeGreaterThanOrEqual(4);
       retired = model;
     }, environment);
