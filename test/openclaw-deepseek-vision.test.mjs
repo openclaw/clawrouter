@@ -163,7 +163,7 @@ const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
 const assembledFixture = fixtureText.replace(marker, observerSource);
 
-const workerOutcomePins = {"proxy.ts": "f02c58fd7ece776a532d4a63eacc18346aaa71696056ad601e2557663a668289", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "f02c58fd7ece776a532d4a63eacc18346aaa71696056ad601e2557663a668289", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 const { bundleWorkerOutcome: bundleDeepSeekVisionOutcome } = createWorkerOutcomeFixture(workerOutcomePins);
 
 
