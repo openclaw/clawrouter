@@ -1,6 +1,6 @@
 import {HttpError} from './utils.ts';
 import {reportCutTtlMs} from './usage-report-range.ts';
-import type {UsageVisibilityCut} from './usage-report-visibility.ts';
+import type { UsageVisibilityCut } from './usage-report-protocol.ts';
 
 // Private to policy-bindings ACCESS_CONTROL. No persisted roots, copied rows,
 // secret, alarm, or public command protocol. The service supplies verified binding

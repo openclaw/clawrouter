@@ -1,6 +1,9 @@
+import type { UsageGroupIdentity, CompleteUsageEvent } from "../shared/usage-report.ts";
+import { completeUsageLimits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, capacity, invalidSource, exact, boundedText, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow, type UsageReportQuery, type UsageReportMigrationEffect, type UsageReportMigrationOptions, type UsageAggregateRow, type UsageReportHistory, type UsageReportShard, type UsageEventPosition } from "./usage-report-protocol.ts";
 import { usageMetricKeys } from "../shared/usage-report.ts";
-import { ensureUsageVisibility, captureUsageVisibility, validateUsageVisibility, UsageVisibilityError, type UsageVisibilityCut, maintainUsageVisibility } from "./usage-report-visibility.ts";
-import type { PersonalUsageEvent, UsageCostClass, UsageCostLane, UsageGroupBy, UsageMetrics, UsageReportRange } from "../shared/usage-report.ts";
+import { ensureUsageVisibility, captureUsageVisibility, validateUsageVisibility, maintainUsageVisibility } from "./usage-report-visibility.ts";
+import { UsageVisibilityError, type UsageVisibilityCut } from "./usage-report-protocol.ts";
+import type { PersonalUsageEvent, UsageMetrics } from "../shared/usage-report.ts";
 import type { UsageEvent } from "./types.ts";
 import { normalizeEmail } from "./utils.ts";
 import { reportRetentionMs } from "./usage-report-range.ts";
@@ -8,7 +11,6 @@ import { reportingCost, knownBasisClasses, recordedAccountingAmount, usageCounte
 export { reportingCost } from "./usage-report-cost.ts";
 
 export interface ReportSql { exec(query: string, ...bindings: Array<string | number | null>): Iterable<Record<string, unknown>> }
-export interface UsageReportQuery { principal: string | undefined; tenantId: string; policyId: string; range: UsageReportRange; groupBy: UsageGroupBy; filters: Partial<Record<"model" | "provider" | "key" | "status" | "costClass" | "lane", string | null>> }
 export const utilityFormats = new Set(["openai.models", "anthropic.models", "openai.responses_input_tokens", "anthropic.count_tokens", "openai.moderations"]);
 const text = (v: unknown): string | null => typeof v === "string" ? v : null;
 const subsetCounter = (v: unknown, inclusive: number | null): number | null => {
@@ -96,8 +98,6 @@ export function openUsageReportCut(sql: ReportSql, from: number, now = Date.now(
 function visibilityWhere(cut: UsageVisibilityCut | undefined, table: string) {
   return cut ? " AND NOT EXISTS (SELECT 1 FROM usage_report_arrivals AS arrival WHERE arrival.id = " + table + ".id AND arrival.seq > " + cut.seq + ")" : "";
 }
-export interface UsageReportMigrationEffect { lane: UsageCostLane; costClass: UsageCostClass; calls: number; proposedReportingMicros: number | null; recordedChargeMicros: number }
-export interface UsageReportMigrationOptions { apply?: boolean; batchSize?: number; now?: number; afterRowid?: number }
 /** Internal/offline only. Default dry-run does not initialize or update any schema/state.
  * A round pins both an upper rowid and a coverage generation. Unpaired changes
  * restart at zero with a fresh bound (including reused rowids below the cursor).
@@ -189,9 +189,6 @@ export function reportWhere(query: UsageReportQuery) {
     bindings: [query.tenantId, query.policyId, ...(query.principal === undefined ? [] : [query.principal]), from, to, ...filters.bindings] as Array<string | number | null>,
   };
 }
-export interface UsageAggregateRow extends UsageMetrics { recordedChargeMicros: number; chargeReportedCalls: number; dimension: string; value: string | number | null; lane: UsageCostLane; costClass: UsageCostClass; amountMicros: number }
-export interface UsageReportHistory { historyComplete: boolean; projectionComplete?: boolean; historySource?: "projection" | "retained_ledger" }
-export interface UsageReportShard extends UsageReportHistory { rows: UsageAggregateRow[]; groupsTruncated: boolean }
 
 const scalarColumns = "model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros, recorded_charge_micros";
 function reportFilters(query: UsageReportQuery) {
@@ -255,7 +252,6 @@ export function queryUsageReport(sql: ReportSql, query: UsageReportQuery, cut?: 
   const groups = new Set(result.filter(row => row.dimension === "group").map(row => row.value));
   return { rows: result, groupsTruncated: groups.size > 100, ...history };
 }
-export interface UsageEventPosition { at: number; id: string }
 export function queryUsageEvents(sql: ReportSql, query: UsageReportQuery, limit: number, before?: UsageEventPosition, includeEqualId = false, cut?: UsageVisibilityCut): { events: PersonalUsageEvent[] } & UsageReportHistory {
   if (cut) validateUsageVisibility(sql, cut, query.range.from);
   const history = reportHistory(sql, cut), range = reportWhere(query);
@@ -281,65 +277,6 @@ export function queryUsageEvents(sql: ReportSql, query: UsageReportQuery, limit:
   return { events, ...history };
 }
 
-// Complete-query private transport. Only the service constructs these requests;
-// no public HTTP caller can choose a shard, source, clock, fence or work budget.
-import type { CompleteUsageQuery, CompleteUsageEvent, UsageGroupIdentity } from '../shared/usage-report.ts';
-import { usageDateTools, nextUsageDate } from './usage-report-range.ts';
-export const completeUsageLimits = Object.freeze({ shards: 64, fanout: 8, calls: 256, groups: 32768,
-  groupBytes: 16 * 1024 * 1024, candidateRows: 250000, totalRows: 1000000,
-  inputBytes: 64 * 1024 * 1024, visits: 8000000, classifiedBytes: 512 * 1024 * 1024,
-  pageBytes: 1024 * 1024, groupPage: 256, eventPage: 100 });
-export interface UsageShardInput {
-  action: 'capture' | 'preflight' | 'groups' | 'events' | 'validate'; tenantId: string; policyId: string;
-  query: CompleteUsageQuery; cut?: UsageVisibilityCut;
-  after?: UsageGroupIdentity; before?: UsageEventPosition; includeEqualId?: boolean; limit?: number;
-  allowance?: { rows: number; bytes: number };
-}
-export interface UsageCandidateSize { rows: number; bytes: number }
-export interface CompleteAggregateRow extends UsageAggregateRow { owner: string | null }
-export interface UsageGroupPage { rows: CompleteAggregateRow[]; next: UsageGroupIdentity | null; work: UsageCandidateSize }
-export type UsageShardResult = { kind: 'complete'; value: { cut: UsageVisibilityCut; work: UsageCandidateSize } | UsageCandidateSize | UsageGroupPage | { events: CompleteUsageEvent[]; hasMore: boolean; work: UsageCandidateSize } | { valid: true } }
-  | { kind: 'restart' | 'unavailable'; reason: UsageVisibilityError['reason'] };
-const capacity = (): never => { throw new UsageVisibilityError('unavailable', 'capacity'); };
-function invalidSource(): never { throw new UsageVisibilityError('unavailable', 'source'); }
-export function usageJsonBytes(value: unknown): number { return new TextEncoder().encode(JSON.stringify(value)).length; }
-function exact(value: unknown): asserts value is number { if (!Number.isSafeInteger(value) || Number(value) < 0) capacity(); }
-function boundedText(value: unknown, max = 512): asserts value is string {
-  if (typeof value !== 'string' || new TextEncoder().encode(value).length > max) invalidSource();
-}
-export function validateCompleteUsageQuery(input: unknown): asserts input is CompleteUsageQuery {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) invalidSource();
-  const q = input as CompleteUsageQuery;
-  if (Object.keys(q).some(k => !['from','to','timezone','grain','groupBy','rankBy','rankOffset','filters'].includes(k))) invalidSource();
-  exact(q.from); exact(q.to);
-  if (q.from >= q.to || q.to - q.from > reportRetentionMs || !['day','minute'].includes(q.grain)
-    || q.grain === 'minute' && q.to - q.from > 86400000 || !['model','provider','key','user'].includes(q.groupBy)
-    || !['calls','tokens','recordedAmount'].includes(q.rankBy)) invalidSource();
-  if (q.rankOffset !== undefined) { exact(q.rankOffset); if (q.rankOffset > completeUsageLimits.groups) capacity(); }
-  boundedText(q.timezone,100); usageDateTools(q.timezone);
-  if (!q.filters || typeof q.filters !== 'object' || Array.isArray(q.filters)) invalidSource();
-  for (const key of Object.keys(q.filters)) {
-    if (!['user','key','model','provider','status','lane','costClass'].includes(key)) invalidSource();
-    if (key !== 'key') boundedText(q.filters[key as keyof typeof q.filters]);
-  }
-  const k = q.filters.key;
-  if (k !== undefined) {
-    if (!k || typeof k !== 'object' || Array.isArray(k) || Object.keys(k).some(x => !['kind','id'].includes(x))) invalidSource();
-    if (k.kind === 'credential') boundedText(k.id); else if (k.kind !== 'session' || Object.hasOwn(k,'id')) invalidSource();
-  }
-  if (q.filters.lane && !['api','subscription','unattributed'].includes(q.filters.lane)
-    || q.filters.costClass && !['calculated','fixed','estimated','upper_bound','partial','unknown','no_charge'].includes(q.filters.costClass)) invalidSource();
-}
-export function completeUsageBuckets(q: CompleteUsageQuery): UsageReportRange['buckets'] {
-  const buckets: UsageReportRange['buckets'] = [], tools = usageDateTools(q.timezone);
-  let start = q.from;
-  while (start < q.to) {
-    const end = Math.min(q.to, q.grain === 'minute' ? (Math.floor(start / 60000) + 1) * 60000 : tools.midnight(nextUsageDate(tools.label(start))));
-    if (end <= start || buckets.length >= (q.grain === 'minute' ? 1441 : 32)) capacity();
-    buckets.push({ start, end, label: q.grain === 'minute' ? new Date(start).toISOString() : tools.label(start) }); start = end;
-  }
-  return buckets;
-}
 function shardQuery(x: UsageShardInput): UsageReportQuery {
   const { user, key, ...filters } = x.query.filters;
   return { tenantId: x.tenantId, policyId: x.policyId, principal: user, groupBy: 'model',

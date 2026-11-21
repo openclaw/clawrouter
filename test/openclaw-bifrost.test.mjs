@@ -1032,7 +1032,8 @@ export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCrede
 import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
-import {ingestUsage,usageSnapshot} from './worker/ledgers.ts';
+import { ingestUsage } from './worker/ledgers.ts';
+import { usageSnapshot } from './worker/usage-ledger-client.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {InternalHttpAbort} from './worker/http-operation.ts';

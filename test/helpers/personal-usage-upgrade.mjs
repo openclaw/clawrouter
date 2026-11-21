@@ -13,7 +13,8 @@ const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantI
 export function router(source, candidate, proofOffset) { return `
  export * from "${source}/worker/index.ts";
  import handler from "${source}/worker/index.ts";
- import { UsageLedgerObject as Ledger, budgetStatus, usageStub } from "${source}/worker/ledgers.ts";
+ import { UsageLedgerObject as Ledger, budgetStatus } from "${source}/worker/ledgers.ts";
+ import { usageStub } from "${source}/worker/${candidate ? "usage-ledger-client" : "ledgers"}.ts";
  import { authorityCall } from "${source}/worker/authority.ts";
  import { sha256Hex } from "${source}/worker/utils.ts";
  ${candidate ? 'import { migrateUsageReportShard } from "' + source + '/worker/usage-report.ts"; import { usageReportProjectionComplete } from "' + source + '/worker/usage-report-store.ts";' : ''}
@@ -178,6 +179,8 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "worker/proxy-accounting.ts",
     "worker/accounting.ts",
     "worker/ledgers.ts",
+    "worker/usage-ledger-client.ts",
+    "worker/usage-report-protocol.ts",
     "worker/usage-report-cost.ts",
     "worker/usage-report-store.ts",
     "worker/usage-report-range.ts",

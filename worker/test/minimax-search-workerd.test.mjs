@@ -34,7 +34,7 @@ import {authorityCall} from './worker/authority.ts';
 import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {searchControlHeader} from './worker/minimax-search-operation.ts';
 import {configureSearch} from './worker/test/minimax-search-declaration-fixture.mjs';
 const region=REGION,actor={auth:'cloudflare_access',role:'admin',email:'search-admin@example.invalid'},key='oauth/fixture/search';

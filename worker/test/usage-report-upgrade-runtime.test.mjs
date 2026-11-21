@@ -18,5 +18,5 @@ test("workerd baseline upgrade preserves authenticated personal history, setting
  assert.equal(soft.reportingAmountMicros,soft.reportingKnownComponentMicros);assert.equal(soft.budgetSpentMicros,soft.recordedChargeMicros);
  assert.equal(soft.hostedToolCallsComplete,false);assert.equal(soft.hostedToolCostMicros,null);
  assert.equal(soft.eventCsvReportingAmount,"56");assert.equal(soft.rankCsvReportingAmountMicros,"56");
- for(const path of ["worker/index.ts","worker/proxy.ts","worker/anthropic-price-response.ts","worker/proxy-accounting.ts","worker/accounting.ts","worker/ledgers.ts","worker/usage-report-store.ts","worker/usage-report.ts","admin/src/personal-usage.ts","test/helpers/personal-usage-cost-runtime.mjs"]) assert.match(proof.candidateSourceHashes[path],/^[a-f0-9]{64}$/);
+ for(const path of ["worker/index.ts","worker/proxy.ts","worker/anthropic-price-response.ts","worker/proxy-accounting.ts","worker/accounting.ts","worker/ledgers.ts","worker/usage-ledger-client.ts","worker/usage-report-protocol.ts","worker/usage-report-store.ts","worker/usage-report.ts","admin/src/personal-usage.ts","test/helpers/personal-usage-cost-runtime.mjs"]) assert.match(proof.candidateSourceHashes[path],/^[a-f0-9]{64}$/);
 });
