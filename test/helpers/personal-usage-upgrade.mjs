@@ -13,7 +13,8 @@ const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantI
 export function router(source, candidate, proofOffset) { return `
  export * from "${source}/worker/index.ts";
  import handler from "${source}/worker/index.ts";
- import { UsageLedgerObject as Ledger, budgetStatus, usageStub } from "${source}/worker/ledgers.ts";
+ import { UsageLedgerObject as Ledger, budgetStatus } from "${source}/worker/ledgers.ts";
+ import { usageStub } from "${source}/worker/${candidate ? "usage-ledger-client" : "ledgers"}.ts";
  import { authorityCall } from "${source}/worker/authority.ts";
  import { sha256Hex } from "${source}/worker/utils.ts";
  ${candidate ? 'import { migrateUsageReportShard } from "' + source + '/worker/usage-report.ts"; import { usageReportProjectionComplete } from "' + source + '/worker/usage-report-store.ts";' : ''}
@@ -151,10 +152,13 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const sourcePaths = [
     "worker/index.ts",
     "worker/access.ts",
+    "worker/json-measurement.ts",
     "worker/local-auth.ts",
     "worker/proxy.ts",
     "worker/proxy-auth.ts",
+    "worker/published-music-request.ts",
     "worker/proxy-selection.ts",
+    "worker/native-route.ts",
     "worker/providers.ts",
     "worker/provider-catalog.ts",
     "worker/provider-request.ts",
@@ -163,19 +167,27 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "providers/openai.provider.yaml",
     "worker/provider-auth.ts",
     "worker/authority.ts",
+    "worker/grant-owner-facts.ts",
     "worker/authority-admission.ts",
+    "worker/native-decision-json.ts",
     "worker/anthropic-price-response.ts",
     "worker/anthropic-pricing.ts",
+    "worker/native-mp3-response.ts",
     "worker/proxy-response.ts",
     "worker/responses-hosted-usage.ts",
     "worker/responses-tool-evidence.ts",
     "worker/token-usage.ts",
+    "worker/bounded-json-measurement.ts",
     "worker/pricing.ts",
+    "worker/hosted-tool-pricing.ts",
     "worker/soft-budget.ts",
     "worker/budget-scope.ts",
     "worker/proxy-accounting.ts",
     "worker/accounting.ts",
+    "worker/background-record.ts",
     "worker/ledgers.ts",
+    "worker/usage-ledger-client.ts",
+    "worker/usage-report-protocol.ts",
     "worker/usage-report-cost.ts",
     "worker/usage-report-store.ts",
     "worker/usage-report-range.ts",

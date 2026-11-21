@@ -6,7 +6,8 @@ import { nativeOpenRouterMusicResponse } from "./native-openrouter-music.ts";
 import { freezeInlineMusicInput } from "./openrouter-music-input.ts";
 import { prepareOpenRouterMusicBorrowed } from "./openrouter-music.ts";
 import { musicPolicyBinding } from "./openrouter-music-owner.ts";
-import { publishedMusicAccess, publishedMusicRequestDigest } from "./published-music.ts";
+import { publishedMusicAccess } from "./published-music.ts";
+import { publishedMusicRequestDigest, publishedMusicReference, publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader } from "./published-music-request.ts";
 import { resolvePublishedInputUrl } from "./published-input-archive.ts";
 import { assertPublishedInputLive, publishedInputUnavailable, type PublishedInputAttempt, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -15,20 +16,10 @@ import type { AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
 const inputs = new WeakMap<ProxySelection, PublishedMusicInput>();
-export const publishedMusicBodyBytes = 256 * 1024;
-export const publishedMusicDispatchBytes = 640 * 1024;
-export const publishedMusicDispatchHeader = "x-clawrouter-private-asset-dispatch";
 export class PublishedMusicUnsent extends HttpError {
   constructor() { super(409, "published_input_unavailable", "the original published input could not authorize a destination attempt"); }
 }
 export function publishedMusicInput(selection: ProxySelection): PublishedMusicInput | undefined { return inputs.get(selection); }
-export function publishedMusicReference(body: unknown): string | undefined {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return;
-  const messages = (body as Record<string, unknown>).messages;
-  if (!Array.isArray(messages) || !Array.isArray(messages[0]?.content)) return;
-  const url = messages[0].content[1]?.image_url?.url;
-  return typeof url === "string" && url.startsWith("https:") ? url : undefined;
-}
 export function preparePublishedMusicInput(selection: ProxySelection, lease: BodyLease, operation: HttpOperation): PublishedMusicInput | undefined {
   const url = publishedMusicReference(selection.body);
   if (!url || selection.provider.id !== "openrouter" || selection.capability !== "music.generate") return;

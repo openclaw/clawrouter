@@ -1,6 +1,6 @@
 # Changelog
 
-- Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting.
+- Include declared read-only repository context in fusion benchmark planning and review, matching the worker context without changing empty-context prompts.
 
 - Allow fusion benchmark runners to select one fixed-model control without rerunning or reserving budget for the other control. Keep the default two-control run and record single-control limitations.
 
@@ -21,6 +21,10 @@
 - Preserve the registered Perplexity Search client's rejected original body cancellation after an authored post-header abort. Admit only the exact owned body/read/closed reason and completed unlock/release relationship; keep raw rejections, independent faults and Worker acceptance unchanged.
 
 - Exercise registered Perplexity Search through its actual catalog-selected native route, selected and rotated credentials, request-based SQLite receipts, bounded results and joined post-header cancellation. Preserve independent Responses and generic Search pins; retain unexpected-dispatch observer faults even when the client wraps the error.
+
+- Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting.
+
+- Add a pinned registered Google continuation contract through the Worker and SQLite: EOF-bound receipts, two explicit request-bound hops, independent budgets and settlement, changed-authority denials and original-operation retirement. Keep the separate physical pre-header cancellation limitation explicit.
 
 - Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
 

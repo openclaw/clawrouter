@@ -57,3 +57,42 @@ real Worker, original credential, SQLite authority and completed response before
 not prepopulate an unowned token or bypass the ownership check. Fixtures use the
 existing model solely for deterministic protocol/accounting proof; they make no
 live long-decode support claim for that model.
+
+## Registered client contract
+
+The dedicated `google-continuation` consumer pins OpenClaw
+`b6072e63fdf09422ea70ef4bbdc818536d871047`. It keeps the older Google-text
+consumer and its independent pin unchanged. The new fixture selects
+`google/gemini-3.5-flash` from the real credential-owned Worker catalog, runs
+the production embedded-runner selector with its registered Google fallback,
+and retains the registered ClawRouter and final-policy wrappers. It requires
+the `boundary-aware:google-generative-ai` strategy and observes the original
+managed acquisitions, readers and releases. The raw public `llm.stream` facade
+alone selects the generic GenAI adapter and is not this continuation route.
+The fixture uses synthetic Google
+responses through an isolated Worker and SQLite, with no paid provider traffic.
+
+An intermediate checkpoint and a final `CONTINUATION` frame precede a held HTTP
+EOF. The client must withhold its replay receipt while its original read is
+pending. After EOF, the caller explicitly supplies that receipt as
+`GoogleContinuationOptions.googleContinuation` to a second invocation. The
+async final payload policy, original input, model, session, profile, headers and
+selected credentials remain bound. The actual upstream bodies must match except
+for the owned continuation token. There is no automatic second or third call.
+
+Changed input, final policy, key, profile, session or origin must fail in the
+client before another transport. Separate Worker cases revoke or replace the
+original grant, change policy generation, or exhaust caller/provider capacity
+between completed hops. Authenticated denied hops retain their own zero-charge
+receipt; they are not confused with client-only denials that never dispatch.
+Successful hops settle separate observed usage at the manifest tariff, with the
+continuation reserving its conservative full input window independently.
+
+Late SSE/JSON errors, truncation and `DONE` before actual EOF cannot publish a
+receipt. The cancellation case aborts the real caller only after SDK content
+arrives; original SDK, Worker, source, handler and accounting work must retire.
+This is post-response cancellation, not physical pre-header disconnect proof.
+The separate pre-header runtime limitation remains unqualified. Native client
+cleanup admission and build-size qualification are also separate from execution
+of this explicit fixture pin. The direct manifest tests remain Worker-level
+proof; this registered client selects the advertised native route.

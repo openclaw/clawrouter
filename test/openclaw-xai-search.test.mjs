@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { runOpenClawConsumer, consumerTypecheckPlan } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
@@ -70,9 +70,18 @@ function searchLifetimeSource(text) {
   assert.equal(text.split(verdict).length, 2);
   return text.replace(verdict, "sdkAbortDisposition(op) || searchBodyCancelDisposition(op) || sdkProviderErrorDisposition(op)");
 }
-const assembledFixture = fixtureText.replace(marker, searchLifetimeSource(observerSource));
+const sdkObserverSource = searchLifetimeSource(observerSource);
+// Preserve runtime byte equivalence while checking the transplanted observer
+// in the original client's stricter extension test graph.
+const typedSdkObserverSource = sdkObserverSource
+  .replaceAll("function (...args: any[])", "function (this: unknown, ...args: any[])")
+  .replaceAll("function (...operands: any[])", "function (this: unknown, ...operands: any[])")
+  .replaceAll("every(unlock =>", "every((unlock: number) =>")
+  .replace(/\b(cancel|closed|rejectedReads|releases)\[0\]\./g, "$1[0]!.");
+assert.equal(stripTypeScriptTypes(typedSdkObserverSource, { mode: "transform" }), stripTypeScriptTypes(sdkObserverSource, { mode: "transform" }));
+const assembledFixture = fixtureText.replace(marker, typedSdkObserverSource);
 
-const workerOutcomePins = {"proxy.ts": "e415aaa7e449fa901975a014c28b06748f9ec4b19eec0f5886b303b7faa6070a", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "0257510ec1373baab447c1bdcad82b36e6341fce55027c8627af3fccf6e794de", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
@@ -396,6 +405,14 @@ test("xAI Search native assembly binds the actual client, original ledger and in
   assert.equal(new Set(rows.map(row => row.consumer)).size, rows.length);
   assert.deepEqual(rows.filter(row => row.consumer === "xai-search"), [{ consumer: "xai-search", ref: sourceHead, test: "test/openclaw-xai-search.test.mjs" }]);
   assert.equal(workflow.jobs.consumer.strategy["max-parallel"], 4);
+  const testPath = "extensions/clawrouter/worker-xai-search-contract.test.ts";
+  const plan = consumerTypecheckPlan(sourceHead, testPath);
+  assert.equal(plan.project, "test/tsconfig/tsconfig.extensions.test.json");
+  assert.equal(plan.sha256, "b032aa889d4ab5512e57f26871a5839a38ae326b18e765dce2dcec3b4fd80d49");
+  assert.deepEqual(plan.args, ["scripts/run-tsgo.mjs", "-p", plan.project, "--noEmit", "--incremental", "false"]);
+  assert.throws(() => consumerTypecheckPlan("0".repeat(40), testPath));
+  assert.throws(() => consumerTypecheckPlan(sourceHead, "extensions/clawrouter/worker-google-continuation-contract.test.ts"));
+  assert.throws(() => consumerTypecheckPlan("b6072e63fdf09422ea70ef4bbdc818536d871047", testPath));
   for (const [name, hash] of Object.entries(workerOutcomePins)) assert.equal(createHash("sha256").update(readFileSync(new URL("../worker/" + name, import.meta.url))).digest("hex"), hash);
 });
 

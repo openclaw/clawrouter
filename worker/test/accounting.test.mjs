@@ -2,7 +2,8 @@ import { sqliteFixture } from "./sqlite-storage.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
-import { queue, UsageLedgerObject, usageSnapshot } from "../ledgers.ts";
+import { queue, UsageLedgerObject } from "../ledgers.ts";
+import { usageSnapshot } from "../usage-ledger-client.ts";
 import { caughtResponse, HttpError } from "../utils.ts";
 
 const reservation = {

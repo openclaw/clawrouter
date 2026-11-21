@@ -6,7 +6,7 @@ import { backgroundCall, HttpBackground } from "./http-background.ts";
 import { isAccountingAdmissionFailure } from "./json-body.ts";
 import { continuationScope } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
-import type { BackgroundRecord, ManagedAdmission } from "./background-store.ts";
+import type { BackgroundRecord, ManagedAdmission } from "./background-record.ts";
 import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
 import { assertInputOperationPolicy, encodeInputDispatch, inputBytesDigest, inputPlanDigest, inputRouteDigest } from "./pixverse-input-dispatch.ts";
 import { createPixVerseManagedAdapter, preparePixVerseImagePlan, readPixVerseImageUpload } from "./managed-pixverse.ts";

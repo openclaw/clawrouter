@@ -136,7 +136,7 @@ const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
 const assembledFixture = fixtureText.replace(marker, observerSource);
 
-const workerOutcomePins = {"proxy.ts": "e415aaa7e449fa901975a014c28b06748f9ec4b19eec0f5886b303b7faa6070a", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "0257510ec1373baab447c1bdcad82b36e6341fce55027c8627af3fccf6e794de", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };

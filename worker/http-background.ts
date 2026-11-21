@@ -1,7 +1,7 @@
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson } from "./json-body.ts";
 import { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { planBudgetReservation } from "./accounting.ts";
-import { admitBackgroundAdmission, admitInputAllocation, type BackgroundAdmission } from "./background-store.ts";
+import { admitBackgroundAdmission, admitInputAllocation, type BackgroundAdmission } from "./background-record.ts";
 import type { ManagedInputAllocation } from "./managed-input-receipt.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { setBackgroundRecovery } from "./correlation.ts";
