@@ -327,16 +327,16 @@ function parseRetirementRecords(text) {
     for (const value of Object.values(record)) assert.ok(Number.isSafeInteger(value) && value >= 0);
     assert.equal(record.operations, record.settled); assert.equal(record.releases, 2);
     assert.equal(record.readers, 2); assert.equal(record.unlocked, 2);
-    assert.equal(record.rejected, record.qualifiedReadRejections); records.push(record);
+    assert.equal(record.rejected, 3); assert.equal(record.qualifiedReadRejections, 0, "Worker-only disposition counter is not SDK admission"); records.push(record);
   }
   return records;
 }
 test("Google image exact retirement marker cannot borrow failure text or another case", () => {
-  const valid = { operations: 17, settled: 17, rejected: 3, qualifiedReadRejections: 3, readers: 2, unlocked: 2, releases: 2 };
+  const valid = { operations: 17, settled: 17, rejected: 3, qualifiedReadRejections: 0, readers: 2, unlocked: 2, releases: 2 };
   const line = "GOOGLE_IMAGE_RETIRED cancel " + JSON.stringify(valid);
   assert.deepEqual(parseRetirementRecords("\u001b[32m" + line + "\u001b[0m\n"), [valid]);
   for (const text of ["prefix " + line, line.replace("cancel ", "tool_edit "), "GOOGLE_IMAGE_FAILURE cancel " + JSON.stringify(valid)]) assert.deepEqual(parseRetirementRecords(text), []);
-  for (const patch of [{ settled: 16 }, { releases: 1 }, { unlocked: 1 }, { rejected: 4 }, { operations: -1 }, { extra: true }]) assert.throws(() => parseRetirementRecords("GOOGLE_IMAGE_RETIRED cancel " + JSON.stringify({ ...valid, ...patch })));
+  for (const patch of [{ settled: 16 }, { releases: 1 }, { unlocked: 1 }, { rejected: 4 }, { qualifiedReadRejections: 1 }, { operations: -1 }, { extra: true }]) assert.throws(() => parseRetirementRecords("GOOGLE_IMAGE_RETIRED cancel " + JSON.stringify({ ...valid, ...patch })));
 });
 test("Google image delivery witness rejects foreign operation bindings independently", () => {
   const source = routerFixture(), start = source.indexOf("imageInspection.current ="), end = source.indexOf("const originalFetch", start);
@@ -358,7 +358,7 @@ test("actual Google image native consumer through Worker/SQLite",{skip:!source,t
   await preserveFailures(async()=>{
     mf=await startBundledWorkerdFixture(temporary,await bundleRouter(),upstreamFixture(),{directRouter:true});const origin=await setup(mf);
     const fixture=join(temporary,"google-images-contract.test.ts");await writeFile(fixture,assembledFixture,{flag:"wx",mode:0o600});
-    const receipts=[];const observed=new Proxy(t,{get(target,property,receiver){if(property!=="diagnostic")return Reflect.get(target,property,receiver);return value=>{receipts.push(...parseRetirementRecords(String(value)));return target.diagnostic(value);};}});
+    const receipts=[];const observed=new Proxy(t,{get(target,property,receiver){if(property!=="diagnostic")return Reflect.get(target,property,receiver);return value=>{target.diagnostic(value);receipts.push(...parseRetirementRecords(String(value)));};}});
     try{await runOpenClawConsumer(observed,{source,sourceHead,fixture,testPath,typecheck:true,env:{CLAWROUTER_CONTRACT_ORIGIN:origin}});}catch(error){t.diagnostic(String(error.stdout??"")+String(error.stderr??""));throw error;}
     assert.equal(receipts.length, 1); assert.equal(receipts[0].rejected, 3); await verify(mf,origin,t);
   },[()=>mf&&retire(mf,t),()=>mf?.dispose(),()=>rm(temporary,{recursive:true,force:true})]);
