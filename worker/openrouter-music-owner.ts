@@ -1,6 +1,7 @@
 import { grantOwnerIdentity } from "./grant-owner-facts.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { continuationScope } from "./http-continuation.ts";
 import { openRouterMusicModels } from "./openrouter-music.ts";
 import { assertPolicyModel } from "./policy-models.ts";

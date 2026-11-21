@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
+import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, hasNativeSafetyNotice, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
 
 const body = { messages: [{ role: 'system', content: 'format instruction' }, { role: 'user', content: 'task' }], max_tokens: 4096, response_format: { type: 'json_object' } };
 const env = { OPENAI_API_KEY: 'synthetic-openai', ANTHROPIC_API_KEY: 'synthetic-anthropic' };
@@ -88,11 +88,23 @@ test('HTTP error diagnostics retain only finite labels, never echoed content', (
     ['output_config.format schema unsupported', 'structured_output'],
     ['thinking must be supported', 'thinking_parameters'],
     ['This content cannot be displayed: This content can’t be shown', 'safety_notice'],
+    ['Cybersecurity safety notice', 'safety_notice'],
     ['Workspace spend limit exceeded', 'spend_limit'],
     ['Assistant prefill unsupported', 'message_format'],
     ['max_tokens exceeds maximum', 'token_limit'],
     ['service_tier unsupported', 'service_tier'],
   ]) assert.equal(nativeErrorMetadata({ error: { message } }).errorHint, hint);
+});
+
+test('safety notices include discarded response fields without retaining their text', () => {
+  for (const text of ["This content can't be shown", 'This content can’t be shown', 'CYBERSECURITY SAFETY NOTICE', 'Safety refusal']) {
+    const body = { output: [{ channel: 'commentary', content: [{ text }] }], choices: [{ message: { content: 'ordinary answer' } }] };
+    assert.equal(hasNativeSafetyNotice(body), true);
+    assert.equal(nativeErrorMetadata(body).errorHint, 'safety_notice');
+    assert.ok(!JSON.stringify(nativeErrorMetadata(body)).includes(text));
+  }
+  assert.equal(hasNativeSafetyNotice({ output: [{ content: [{ text: 'ordinary answer' }] }] }), false);
+  assert.equal(hasNativeSafetyNotice(null), false);
 });
 
 test('policy prompt rejections use finite safety metadata without retaining echoed text', () => {

@@ -1,7 +1,7 @@
 import { CompactionWitnessProducer } from "./compaction-witness.ts";
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner, EvidenceFinalization, PricingEvidence } from "./continuation-store.ts";
-import type { PinnedGrant } from "./grant-selection.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { createResponseIdentityInspector, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
 import { createResponsesToolEvidence, retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";

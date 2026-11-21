@@ -470,20 +470,6 @@ export async function runBifrostReported(body,cleanups,emit,flush=()=>{}){
  },flush]);
 }
 
-export async function finishBifrostOwned(body, cleanups, observeFailure) {
-  const failures = [], reporting = []; let result;
-  const observe = error => { if (observeFailure) try { observeFailure(error); } catch (error) { reporting.push(error); } };
-  try { result = await body(); } catch (error) { failures.push(error); observe(error); }
-  for (const cleanup of cleanups) try { await cleanup(); } catch (error) { failures.push(error); observe(error); }
-  if (reporting.length) {
-    const primary = failures.length === 1 ? failures[0] : new AggregateError(failures, "Bifrost body and original cleanup failed");
-    throw new AggregateError([...(failures.length ? [primary] : []), ...reporting], "Bifrost original failure and observation failed");
-  }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length) throw new AggregateError(failures, "Bifrost body and original cleanup failed");
-  return result;
-}
-
 // This direct consumer owns its reader, as the pinned SDK's SSE iterator does.
 // Abort plus explicit reader retirement is not abort-only disconnect proof.
 export async function retireBifrostDirectReader(reader, reading, controller, reason) {
@@ -513,6 +499,20 @@ export async function retireBifrostDirectReader(reader, reading, controller, rea
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "direct consumer retirement failed");
   return { reader, reading, closed, cancellation, outcomes };
+}
+
+export async function finishBifrostOwned(body, cleanups, observeFailure) {
+  const failures = [], reporting = []; let result;
+  const observe = error => { if (observeFailure) try { observeFailure(error); } catch (error) { reporting.push(error); } };
+  try { result = await body(); } catch (error) { failures.push(error); observe(error); }
+  for (const cleanup of cleanups) try { await cleanup(); } catch (error) { failures.push(error); observe(error); }
+  if (reporting.length) {
+    const primary = failures.length === 1 ? failures[0] : new AggregateError(failures, "Bifrost body and original cleanup failed");
+    throw new AggregateError([...(failures.length ? [primary] : []), ...reporting], "Bifrost original failure and observation failed");
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Bifrost body and original cleanup failed");
+  return result;
 }
 
 // BEGIN Bifrost owned producer/control retirement helpers.
@@ -1084,7 +1084,8 @@ ${bifrostCheckpointFunctions().createBifrostRetirementReader.toString()}
 ${bifrostCheckpointFunctions().validateBifrostProducerSite.toString()}
 ${bifrostCheckpointFunctions().validateBifrostProducerObservation.toString()}
 ${bifrostCheckpointFunctions().validateBifrostSourceProof.toString()}
-import {resolveGrantCandidates,grantRoutingPolicy} from './worker/grant-selection.ts';
+import { resolveGrantCandidates } from './worker/grant-selection.ts';
+import { grantRoutingPolicy } from './worker/grant-routing.ts';
 const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1',readControl=createBifrostRetirementReader();
 function invoke(s,kind,run,details){return observeBifrostOperation(s,kind,run,details);}
 function observe(s,p,kind,details){return invoke(s,kind,()=>p,details);}

@@ -1,7 +1,8 @@
 import type { PreparationAdmission } from "./provider-templates.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { miniMaxApiKeySecret, qualifyMiniMaxEnvironmentBinding, miniMaxMediaProjection, miniMaxMusicRequirement } from "./native-media-credential.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import type { GrantRequirement } from "./provider-auth.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";

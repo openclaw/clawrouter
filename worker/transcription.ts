@@ -3,7 +3,7 @@ import { assertMultipartDestination, multipartRoute, multipartSelection, prepare
 import { nativeJsonResponse, nativeResponseLease } from "./native-response.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { grantRevision, type PinnedGrant } from "./grant-selection.ts";
+import { grantRevision, type PinnedGrant } from "./grant-eligibility.ts";
 import { accessIdentity } from "./access.ts";
 import { emptyReservation, planBudgetReservation, markBudgetDispatched, reserveBudget, settleBudget, type BudgetReservation } from "./accounting.ts";
 import { correlationMetadata } from "./correlation.ts";
