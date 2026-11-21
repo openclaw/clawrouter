@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow compiler repair callers to apply bounded exact-text edits, preserving unedited bytes and rejecting ambiguous, overlapping or stale changes.
+
 - Add caller-side compiler repair context that limits model input to diagnosed files and preserves unrelated source when applying repairs.
 
 - Add an opt-in caller-side verified repair workflow with bounded model calls, compiler-only handoffs, cancellation, and complete attempt costs.

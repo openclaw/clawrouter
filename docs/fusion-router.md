@@ -296,6 +296,15 @@ run the complete original runtime suite and compiler on the merged artifact.
 The helper does not validate generated code or establish model quality, cost,
 or latency gains.
 
+For small corrections, `applyCompilerTextEdits({ context, files, edits })`
+accepts `{ path, oldText, newText }` entries. Each nonempty `oldText` must occur
+exactly once in its diagnosed file. All entries match the original saved source;
+edits cannot overlap. Unchanged bytes, including line endings, are preserved.
+An empty `newText` deletes the matched text. A missing or ambiguous match,
+stale source, or invalid entry rejects the entire batch without changing inputs.
+The limits are 32 edits, 16 KiB per text field and 64 KiB of text per batch.
+The same full-suite and compiler verification requirements apply.
+
 ## Fixed-choice voting experiments
 
 `scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls

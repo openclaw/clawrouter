@@ -72,3 +72,39 @@ export function applyCompilerRepairs({ context, files, replacements }) {
   sourceFiles(merged, 64, 1024 * 1024);
   return merged;
 }
+
+/** Apply bounded exact-text changes against the saved source, all or nothing. */
+export function applyCompilerTextEdits({ context, files, edits }) {
+  const expected = sourceFiles(context?.editableFiles, 8, 1024 * 1024);
+  if (!Array.isArray(edits) || !edits.length || edits.length > 32) throw new Error('invalid_compiler_text_edits');
+  const changes = new Map(); let bytes = 0;
+  for (const edit of edits) {
+    if (!edit || typeof edit.oldText !== 'string' || !edit.oldText.length
+      || typeof edit.newText !== 'string' || edit.oldText === edit.newText
+      || size(edit.oldText) > 16 * 1024 || size(edit.newText) > 16 * 1024) {
+      throw new Error('invalid_compiler_text_edit');
+    }
+    bytes += size(edit.oldText) + size(edit.newText);
+    if (bytes > 64 * 1024) throw new Error('compiler_text_edit_limit');
+    const path = pathName(edit.path), source = expected.get(path)?.content;
+    if (source === undefined) throw new Error('compiler_repair_outside_scope');
+    const start = source.indexOf(edit.oldText);
+    if (start < 0 || source.indexOf(edit.oldText, start + 1) >= 0) throw new Error('compiler_text_edit_not_unique');
+    const list = changes.get(path) ?? [];
+    list.push({ start, end: start + edit.oldText.length, text: edit.newText });
+    changes.set(path, list);
+  }
+  const replacements = [];
+  for (const [path, list] of changes) {
+    list.sort((a, b) => a.start - b.start);
+    let end = 0, content = '';
+    for (const change of list) {
+      if (change.start < end) throw new Error('overlapping_compiler_text_edits');
+      content += expected.get(path).content.slice(end, change.start) + change.text;
+      end = change.end;
+    }
+    content += expected.get(path).content.slice(end);
+    replacements.push({ path, content });
+  }
+  return applyCompilerRepairs({ context, files, replacements });
+}
