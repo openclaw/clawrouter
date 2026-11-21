@@ -12,7 +12,9 @@ import { grantStickyInput } from "./grant-sticky.ts";
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
-import { currentGrantRuntime, filterGrantCandidates, grantRoutingPolicy, grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { currentGrantRuntime, filterGrantCandidates, grantRevision, grantUsable, type PinnedGrant } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
+import { resolveGrantSelection } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cache.ts";

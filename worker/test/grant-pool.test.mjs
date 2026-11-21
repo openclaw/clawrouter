@@ -1,7 +1,8 @@
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveGrantSelection, selectGrant, selectProviderPolicy, validGrantSegment } from "../grant-selection.ts";
+import { resolveGrantSelection, selectProviderPolicy } from "../grant-selection.ts";
+import { validGrantSegment } from "../grant-routing.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { upstreamAuth } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
@@ -13,16 +14,16 @@ test("grant pools select the lowest-priority usable grant deterministically", as
   await putGrant(env, "oauth/policy_a/openai", primary);
   await putGrant(env, "oauth/policy_a/openai-preferred", preferred);
 
-  const selected = await selectGrant("openai", "policy_a", "tenant_a", "openai", env);
+  const selected = (await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env)).selected;
   assert.equal(selected?.key, "oauth/policy_a/openai-preferred");
 
-  const fallback = await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set([selected.key]));
+  const fallback = (await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set([selected.key]))).selected;
   assert.equal(fallback?.key, "oauth/policy_a/openai");
 });
 
 test("legacy default grants remain selectable without a pool index", async () => {
   const env = mockEnv({ "oauth/policy_a/openai": grant("openai", "legacy") });
-  const selected = await selectGrant("openai", "policy_a", "tenant_a", "openai", env);
+  const selected = (await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env)).selected;
   assert.equal(selected?.grant.label, "legacy");
 });
 
@@ -34,7 +35,7 @@ test("revoked grants leave the pool and policy selection sees indexed grants", a
   assert.equal((await selectProviderPolicy(entries, "openai", env)).policyId, "policy_b");
 
   await revokeGrantCredentials(env, "oauth/policy_b/openai-backup");
-  assert.equal(await selectGrant("openai", "policy_b", "tenant_a", "openai", env), null);
+  assert.equal((await resolveGrantSelection("openai", "policy_b", "tenant_a", "openai", env)).selected, null);
 });
 
 test("grant pools skip cooldowns and prefer stronger quota within one priority", async () => {
@@ -45,7 +46,7 @@ test("grant pools skip cooldowns and prefer stronger quota within one priority",
   env.runtime.set("oauth/policy_a/openai-a", runtime("cooldown", 90, new Date(Date.now() + 60_000).toISOString()));
   env.runtime.set("oauth/policy_a/openai-b", runtime("limited", 20));
   env.runtime.set("oauth/policy_a/openai-c", runtime("available", 80));
-  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env))?.key, "oauth/policy_a/openai-c");
+  assert.equal(((await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env)).selected)?.key, "oauth/policy_a/openai-c");
 });
 
 test("grant updates invalidate runtime state observed for the old credential", async () => {
@@ -54,7 +55,7 @@ test("grant updates invalidate runtime state observed for the old credential", a
   const oldRevision = new Date(Date.now() - 10_000).toISOString();
   await putGrant(env, key, { ...grant("openai", "rotated", 10), updatedAt: new Date(Date.now() - 5_000).toISOString() });
   env.runtime.set(key, { ...runtime("cooldown", 0, new Date(Date.now() + 60_000).toISOString()), grantRevision: oldRevision });
-  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env))?.key, key);
+  assert.equal(((await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env)).selected)?.key, key);
 });
 
 test("policy eligibility and stale-state controls fail closed before selection", async () => {
@@ -63,9 +64,9 @@ test("policy eligibility and stale-state controls fail closed before selection",
   await putGrant(env, "oauth/policy_a/openai-b", grant("openai", "b", 10));
   env.runtime.set("oauth/policy_a/openai-a", runtime("available", 80));
   const routing = { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "deny", staleAfterSeconds: 300, eligibleGrants: { openai: ["openai-b"] } };
-  assert.equal(await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing), null);
+  assert.equal((await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing)).selected, null);
   routing.eligibleGrants.openai = ["openai-a"];
-  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing))?.key, "oauth/policy_a/openai-a");
+  assert.equal(((await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing)).selected)?.key, "oauth/policy_a/openai-a");
 });
 
 test("empty eligibility and stale-state deny policies block environment credential fallback", async () => {
@@ -86,7 +87,7 @@ test("selection delegates strategy, weight, and privacy-safe stickiness to the a
   await putGrant(env, "oauth/policy_a/openai-a", { ...grant("openai", "a", 10), weight: 1 });
   await putGrant(env, "oauth/policy_a/openai-b", { ...grant("openai", "b", 10), weight: 7 });
   const routing = { strategy: "weighted_random", stickiness: "session", failover: false, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: {} };
-  await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing, "a".repeat(64));
+  (await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing, "a".repeat(64))).selected;
   assert.equal(env.selections.length, 1);
   assert.equal(env.selections[0].strategy, "weighted_random");
   assert.equal(env.selections[0].stickyHash, "a".repeat(64));
