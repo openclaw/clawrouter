@@ -29,6 +29,37 @@ function fixture(probes, responses = [{ probe: 'private probe sentinel' }]) {
 const failed = { valid: true, passed: false, assertionFailed: true, feedback: 'invariant failed' };
 const passed = { valid: true, passed: true, assertionFailed: false, feedback: '' };
 
+test('draft, refined and contract runners initialize new modules in every sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts', content = 'export const value = 7;\n';
+  const task = { instruction: 'Create the declared module.', editPaths: [path], newPaths: [path],
+    visibleTests: ['worker/test/accounting.test.mjs'],
+    reproducer: `import assert from 'node:assert/strict'; await import('./worker/test/typescript-setup.mjs');
+      const m = await import('./${path}'); assert.equal(m.value, 7);` };
+  const settings = { maxTurns: 4, outputTokens: 256, deadlineMs: 120000 };
+  let calls = 0;
+  const invoke = async (_id, _role, body) => {
+    calls++;
+    assert.match(body.messages[0].content, /Declared new files start empty/);
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      edits: [{ path, search: '', replace: content }],
+    }) } }] };
+  };
+  for (const runner of [runSingleDraft, runRefinedDraft]) {
+    const result = await runner(task, process.env.FUSION_NATIVE_IMAGE, 'strong', 'new-module', settings, invoke);
+    assert.equal(result.outcome, 'draft_submitted');
+    assert.equal(result.publicPassed, true);
+    assert.deepEqual(result.files, [{ path, content }]);
+  }
+  const contract = await runContractAgent(task, process.env.FUSION_NATIVE_IMAGE, 'new-module', settings, invoke,
+    { providedProbe: task.reproducer, cheapAgent: runSingleDraft });
+  assert.equal(contract.contractPassed, true);
+  assert.equal(contract.escalated, false);
+  assert.deepEqual(contract.files, [{ path, content }]);
+  assert.equal(calls, 3);
+});
+
 test('a reproduced frozen check accepts the cheap candidate without strong repair', async () => {
   const f = fixture([failed, passed]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);

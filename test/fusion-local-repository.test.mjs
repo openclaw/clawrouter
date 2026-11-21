@@ -128,6 +128,7 @@ test('qualification requires matching task digests, passing oracle and failing b
     qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
   const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
   assert.equal(validateLocalQualification([task], q).length, 1);
+  assert.throws(() => validateLocalQualification([task], { ...q, acceptanceVerifier: 'external-fixture' }), /custom_acceptance_verifier_required/);
   for (const change of [{ qualified: 'true' }, { oracleVisible: undefined }, { oracleVisible: { valid: true, passed: false } }, { taskDigest: 'wrong' }, { broken: { valid: true, passed: true } },
     { oracle: { passed: false } }, { oracle: { valid: true, passed: true, tests: 0, skipped: 0 } },
     { oracle: { valid: true, passed: true, tests: 3, skipped: -1 } }]) {

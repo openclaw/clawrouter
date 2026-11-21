@@ -62,6 +62,12 @@ jobs:
           FUSION_DOCKER_QUALIFICATION: ${{ runner.temp }}/workloads-qualification.json
           FUSION_PROVIDED_QUALIFICATION: ${{ runner.temp }}/provided-reproducer-workloads-qualification.json
         run: node --test test/fusion-candidate-ensemble.test.mjs test/fusion-agent-benchmark.test.mjs test/fusion-pair-benchmark.test.mjs
+      - name: Check declared new source modules
+        env:
+          FUSION_DOCKER_QUALIFICATION: ${{ runner.temp }}/workloads-qualification.json
+        run: |
+          export FUSION_NATIVE_IMAGE=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.env.FUSION_DOCKER_QUALIFICATION, "utf8")).receipts[0].image')
+          node --test --test-name-pattern='new source|new module|empty insertion|new modules|declared module' test/fusion-workloads.test.mjs test/fusion-agent-benchmark.test.mjs test/fusion-contract-agent.test.mjs test/fusion-grounded-agent.test.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

@@ -1,5 +1,10 @@
 # Changelog
 
+- Allow fusion workload acceptance tests to declare pinned helper modules without exposing or changing them during agent execution.
+
+- Let repository fusion benchmarks declare new source modules, with isolated initialization and guarded first writes.
+
+- Bind custom fusion acceptance receipts to their matching validator and grader; reject custom receipts in default Git-oracle runners.
 - Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
 - Require an explicit submission before scoring or exporting paired fusion repairs; reject legacy positive scores for unfinished patches during analysis.
 
@@ -126,6 +131,7 @@
 
 - Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.
 - Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
+- Apply the same joined-read cancellation contract to the exact Bifrost partial cases, requiring actual caller abort, a successfully retired bounded producer, original resource ownership and fixed-charge accounting. Retain both original read/observer rejections and all independent failures; this does not identify their native error cause.
 
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
 
@@ -237,7 +243,7 @@
 
 - Reserve complete Bifrost diagnostic groups before optional parent records and join output completion without changing native failure acceptance.
 
-- Bound Bifrost partial-fixture demand to nonterminal SSE comments before holding, retaining the original cancellation lifetime, escape deadline and strict retirement/accounting checks.
+- Bound Bifrost partial fixtures to one nonterminal SSE comment while retaining the independent original producer lifetime and expiry in the request context. Join direct-consumer reader cancellation before release, preserving strict source retirement and accounting without claiming abort-only physical disconnect propagation.
 
 - Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
 

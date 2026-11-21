@@ -96,3 +96,13 @@ The separate pre-header runtime limitation remains unqualified. Native client
 cleanup admission and build-size qualification are also separate from execution
 of this explicit fixture pin. The direct manifest tests remain Worker-level
 proof; this registered client selects the advertised native route.
+
+The required Bifrost sibling suite retains its producer lifetime in the original
+request context, independently of pull completion. It emits one nonterminal
+comment and leaves subsequent reads pending, with the same ten-second expiry.
+Its direct consumer control aborts the caller and explicitly cancels its own
+reader, then joins the original read, closed and cancel outcomes before release,
+matching the pinned SDK's reader ownership. Source cancellation, producer
+settlement, accounting and independent cleanup failures remain separate gates.
+The earlier abort-only direct control reached expiry without an observed ingress
+abort; this repair does not qualify abort-only physical disconnect propagation.

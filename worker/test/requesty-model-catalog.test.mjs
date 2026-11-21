@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 // Native Node loading intentionally does not install the test TS resolver.
-import { REQUESTY_MODELS_FORMAT, requestyCatalogRequest, filterRequestyModels, readRequestyModels } from "../requesty-model-catalog.ts";
+import { requestyCatalogRequest, filterRequestyModels, readRequestyModels } from "../requesty-model-catalog.ts";
+import { REQUESTY_MODELS_FORMAT } from "../model-discovery-formats.ts";
 
 const base = "https://router.requesty.ai/v1", signal = () => new AbortController().signal;
 const row = (id = "synthetic-policy", facts = {}) => ({ id, api: "chat", ...facts });

@@ -1,4 +1,4 @@
-import { sandbox, validateEdits, writeFiles, probe, hash, command } from './fusion-workloads.mjs';
+import { taskSandbox, validateEdits, writeFiles, probe, hash, command } from './fusion-workloads.mjs';
 
 // Candidate source stays in memory; every phase charges the same trial ledger.
 export async function runCandidateEnsemble(task, image, trialId, config, invoke, engine, runAgent) {
@@ -50,7 +50,7 @@ export async function compareCandidates(task, image, candidates, script, timeout
   for (const [index, files] of candidates.entries()) {
     validateEdits(task, files);
     remaining();
-    const box = await sandbox(image, boundedRun);
+    const box = await taskSandbox(task, image, boundedRun);
     try {
       await writeFiles(box, files, remaining());
       const result = await probe(box, script, remaining());
