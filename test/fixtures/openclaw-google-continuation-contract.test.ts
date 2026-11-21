@@ -5,7 +5,8 @@ import * as guardedTransport from "../../src/agents/provider-transport-dispatche
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { selectEmbeddedAgentStream } from "../../src/agents/embedded-agent-runner/stream-resolution.js";
 import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
-import { stream, type AssistantMessage, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import "openclaw/plugin-sdk/llm";
+import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createEmptyPluginRegistry, registerProviderPlugins, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
@@ -133,7 +134,7 @@ async function scenario(id: string) {
     return invocation.run(owner, () => withPluginRuntimeGenerationRegistryScope(registry, () => {
       // Use the real embedded-runner selector, including its registered Google
       // fallback. The raw public facade alone selects the generic GenAI adapter.
-      const selected = selectEmbeddedAgentStream({ llmRuntime: defaultLlmRuntime, currentStreamFn: stream,
+      const selected = selectEmbeddedAgentStream({ llmRuntime: defaultLlmRuntime, currentStreamFn: undefined,
         model: activeModel, sessionId: supplied.sessionId!, authProfileId: supplied.authProfileId,
         resolvedApiKey: supplied.apiKey });
       expect(selected.strategy).toBe("boundary-aware:google-generative-ai");
