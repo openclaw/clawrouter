@@ -1,3 +1,5 @@
+import { hasOriginalBearerBinding } from "./provider-auth.mjs";
+
 // Exact existing discovery/codec pairs, not a naming convention for future
 // formats. Provider-specific validators retain their stricter route/auth rules.
 const catalogContracts = [
@@ -44,14 +46,9 @@ export function validatePublicCatalog(manifest) {
     || Object.hasOwn(bases, manifest.id) && id === "public_models");
   if (!endpoints.length) return;
   const fail = () => { throw new Error("public_catalog requires its manifest-only public_models GET selector, canonical inference origin and original private caller binding"); };
-  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (!Object.hasOwn(bases, manifest.id) || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== bases[manifest.id])
-    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
-    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
-    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
-    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
-    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+    || !hasOriginalBearerBinding(manifest)) fail();
   const [id, endpoint] = endpoints[0], format = `${manifest.id}.public_catalog`;
   if (id !== "public_models" || endpoint.requestFormat !== format || endpoint.responseFormat !== format
     || endpoint.nativeProxy !== false || endpoint.method !== "GET" || endpoint.path !== "/models") fail();
@@ -70,14 +67,9 @@ export function validateNativeModels(manifest, providerId, baseUrl, contract = {
       || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "models.list")));
   if (!endpoints.length) return;
   const fail = () => { throw new Error(`${format}${catalogFormat ? ` or ${catalogFormat}` : ""} requires its qualified GET ${path} route, canonical inference origin and original Bearer API-key binding`); };
-  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (manifest.id !== providerId || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== baseUrl)
-    || manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
-    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
-    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
-    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
-    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length) fail();
+    || !hasOriginalBearerBinding(manifest)) fail();
   const [id, endpoint] = endpoints[0];
   const projection = catalogFormat !== null && id === "catalog", expectedFormat = projection ? catalogFormat : format;
   if (projection && (endpoint.nativeProxy !== false || manifest.models?.entries?.some(model => model.capabilities?.includes("models.list")))) fail();
