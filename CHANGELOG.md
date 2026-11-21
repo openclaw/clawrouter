@@ -1,5 +1,7 @@
 # Changelog
 
+- Add caller-side compiler repair context that limits model input to diagnosed files and preserves unrelated source when applying repairs.
+
 - Add an opt-in caller-side verified repair workflow with bounded model calls, compiler-only handoffs, cancellation, and complete attempt costs.
 
 - Report paired cost and latency uncertainty in Fusion evaluations, preserving failed-run costs, equal case weighting, and undefined ratios.
