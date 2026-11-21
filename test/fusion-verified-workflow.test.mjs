@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runVerifiedWorkflow } from './fusion-verified-workflow.mjs';
+import { runVerifiedWorkflow } from '../scripts/fusion-verified-workflow.mjs';
 const models = { draft: 'provider-a/draft', repair: 'provider-b/repair', compiler: 'provider-c/tiny' };
 const good = { runtimePassed: true, compilerPassed: true };
 const typeError = { runtimePassed: true, compilerPassed: false, feedback: 'type error' };
