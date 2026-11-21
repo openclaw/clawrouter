@@ -77,7 +77,8 @@ const typedSdkObserverSource = sdkObserverSource
   .replaceAll("function (...args: any[])", "function (this: unknown, ...args: any[])")
   .replaceAll("function (...operands: any[])", "function (this: unknown, ...operands: any[])")
   .replaceAll("every(unlock =>", "every((unlock: number) =>")
-  .replace(/\b(cancel|closed|rejectedReads|releases)\[0\]\./g, "$1[0]!.");
+  .replace(/\b(cancel|closed|rejectedReads|releases)\[0\]\./g, "$1[0]!.")
+  .replace(/sdkAbortDisposition\((closed|rejectedReads)\[0\]\)/g, "sdkAbortDisposition($1[0]!)");
 assert.equal(stripTypeScriptTypes(typedSdkObserverSource, { mode: "transform" }), stripTypeScriptTypes(sdkObserverSource, { mode: "transform" }));
 const assembledFixture = fixtureText.replace(marker, typedSdkObserverSource);
 

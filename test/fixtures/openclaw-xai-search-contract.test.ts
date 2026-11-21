@@ -64,7 +64,7 @@ async function runCase(id: string, body: (execute: (args?: Record<string, unknow
     await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
       await Promise.resolve(); assert.strictEqual(getPluginRuntimeGenerationRegistry(), pluginRegistry);
       const selected = resolvePluginWebSearchProviders({ config, onlyPluginIds: ["clawrouter"] });
-      assert.equal(selected.length, 1); assert.strictEqual(selected[0].createTool, providers[0].createTool);
+      assert.equal(selected.length, 1); assert.strictEqual(selected[0]!.createTool, providers[0]!.createTool);
       const tool = createWebSearchTool({ config, agentDir: state!.agentDir(), assertInvocationCurrent() {
         if (id === "retired" && lifetime.guards.some((row: any) => row.owner.kind === "catalog" && row.releaseCalls > 0)) throw new Error("retired synthetic xAI search invocation");
       } });
@@ -124,7 +124,8 @@ describe("registered xAI Search through Worker and SQLite", { concurrent: false 
     const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [{ id: "clawrouter", rootDir,
       providers: ["clawrouter"], contracts: { webSearchProviders: ["clawrouter"] } }] });
     const empty = createEmptyPluginRegistry(), foreign = createEmptyPluginRegistry();
-    foreign.webSearchProviders.push({ ...current.webSearchProviders[0], pluginId: "foreign" });
+    const currentProvider = current.webSearchProviders[0]; assert.ok(currentProvider);
+    foreign.webSearchProviders.push({ ...currentProvider, pluginId: "foreign" });
     const options = { onlyPluginIds: ["clawrouter"] };
     await Promise.all([empty, foreign].map(pluginRegistry => withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
       await Promise.resolve(); assert.strictEqual(getPluginRuntimeGenerationRegistry(), pluginRegistry);
