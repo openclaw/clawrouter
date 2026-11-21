@@ -49,9 +49,11 @@ endpoints:
 models:
   entries:
     - id: deepinfra/Qwen/Qwen3.8-27B
+      displayName: "Qwen3.8 27B"
       upstream: Qwen/Qwen3.8-27B
       capabilities: [llm.chat]
     - id: deepinfra/deepseek-ai/DeepSeek-V4-Flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-ai/DeepSeek-V4-Flash
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -63,6 +65,7 @@ models:
             input: [text]
             contextWindow: 1048576
     - id: deepinfra/deepseek-ai/DeepSeek-V4-Pro
+      displayName: "DeepSeek V4 Pro"
       upstream: deepseek-ai/DeepSeek-V4-Pro
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -74,6 +77,7 @@ models:
             input: [text]
             contextWindow: 1048576
     - id: deepinfra/zai-org/GLM-5.2
+      displayName: "GLM-5.2"
       upstream: zai-org/GLM-5.2
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -85,6 +89,7 @@ models:
             input: [text]
             contextWindow: 1048576
     - id: deepinfra/moonshotai/Kimi-K2.6
+      displayName: "Kimi K2.6"
       upstream: moonshotai/Kimi-K2.6
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -96,6 +101,7 @@ models:
             input: [text, image]
             contextWindow: 262144
     - id: deepinfra/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      displayName: "NVIDIA Nemotron 3 Ultra 550B A55B"
       upstream: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -107,6 +113,7 @@ models:
             input: [text]
             contextWindow: 262144
     - id: deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
+      displayName: "NVIDIA Nemotron 3 Super 120B A12B"
       upstream: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -118,6 +125,7 @@ models:
             input: [text]
             contextWindow: 262144
     - id: deepinfra/deepseek-ai/DeepSeek-V3.2
+      displayName: "DeepSeek V3.2"
       upstream: deepseek-ai/DeepSeek-V3.2
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -129,6 +137,7 @@ models:
             input: [text]
             contextWindow: 163840
     - id: deepinfra/zai-org/GLM-5.1
+      displayName: "GLM-5.1"
       upstream: zai-org/GLM-5.1
       capabilities: []
       availability:

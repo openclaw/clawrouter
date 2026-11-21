@@ -20,14 +20,10 @@ const done = item => ({ type: 'response.output_item.done', output_index: 0, item
 const streamed = output => sse({ type: 'response.created', response: { id: 'resp_fixture', status: 'in_progress' } }, added(search('ws_fixture', null, 'in_progress')), done(output[0]), done(output[0]), frame(terminal(output)), '[DONE]');
 
 function setup(t, { mode = 'soft', limit = 1_000_000, fixedCost = null, tool = 'web_search', model = 'openai/gpt-4.1-mini' } = {}) {
-  const env = usageEnv([], { limit, providerLimit: limit, fixedCost, retainContent: false });
+  const env = usageEnv([], { limit, providerLimit: limit, fixedCost, retainContent: false, budgetMode: mode });
   env.OPENAI_API_KEY = 'fixture-openai-key';
   const authority = env.ACCESS_CONTROL.get(), continuation = continuationAuthority(t, env);
-  env.ACCESS_CONTROL.get = name => name.startsWith('http-continuations:') ? continuation.get(name) : ({ fetch: async (...args) => {
-    const value = await (await authority.fetch(...args)).json();
-    if (value.policy) value.policy.policy.budgetMode = mode;
-    return Response.json(value);
-  } });
+  env.ACCESS_CONTROL.get = name => name.startsWith('http-continuations:') ? continuation.get(name) : ({ fetch: (...args) => authority.fetch(...args) });
   const ledger = sqlBudgetNamespace(t), calls = [], events = [], pending = [];
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => { calls.push({ path: new URL(url).pathname, name, body: init?.body && JSON.parse(init.body) }); return ledger.get(name).fetch(url, init); } }) };
   env.USAGE_QUEUE = { send: async event => events.push(event) };

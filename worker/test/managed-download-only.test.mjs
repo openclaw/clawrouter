@@ -98,7 +98,7 @@ for (const scenario of ["missing-job", "other-job", "other-caller", "unbound-fil
       assert.equal(response.status, 502); assert.equal(failure.error.code, "managed_file_unavailable");
     } else assert.ok([400, 403, 404, 409, 503].includes(response.status), JSON.stringify(failure));
     assert.doesNotMatch(JSON.stringify(failure), /synthetic-original-key|synthetic-replacement/);
-    assert.equal(f.sent.length, 1); assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(f.sent.length, 1); if (scenario === "rotated-grant") await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   });
 }
 
@@ -152,7 +152,7 @@ test("download-only cancellation interrupts the source reader without replay or 
   const pending = f.fileCall(false, { signal: abort.signal }); await reached.promise; abort.abort();
   const response = await pending; await response.text(); assert.ok([499, 502].includes(response.status));
   assert.equal(canceled, true); assert.equal(f.sent.length, 2); assert.deepEqual(state.job(), before);
-  assert.equal((await f.events()).length, 1); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal((await f.events()).length, 1); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
 });
 
 test("download-only credential qualification checks actual content links and retains transport allowlists", { timeout: 10_000 }, async t => {

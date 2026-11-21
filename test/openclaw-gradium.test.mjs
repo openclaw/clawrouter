@@ -19,7 +19,8 @@ const cases = [
 ];
 const denied = ["gradium_denied", "gradium_budget", "gradium_invalid"];
 
-for (const transport of ["native", "manifest"]) {
+{
+  const transport = "native";
   test(`actual Gradium TTS/Talk ${transport} through workerd and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
     const provider = snapshot.providers.find(provider => provider.id === "gradium");
     assert.ok(provider.endpoints.some(endpoint => endpoint.request_format === "gradium.speech" && endpoint.response_format === "audio.binary"));
@@ -27,7 +28,7 @@ for (const transport of ["native", "manifest"]) {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     let mf;
     try {
-      mf = await startWorkerdFixture(temporary, routerFixture(transport), upstreamFixture());
+      mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       for (const id of [...cases.map(entry => entry.id), ...denied]) {
         await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: id === "gradium_denied" ? ["openai"] : ["gradium"], models: null, tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "gradium_budget" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
@@ -35,6 +36,11 @@ for (const transport of ["native", "manifest"]) {
       }
       await kv.put("connections/gradium", JSON.stringify({ providerId: "gradium", enabled: true }));
       const origin = String(await mf.ready);
+      const catalogResponse = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: "Bearer clawrouter-live-gradium_wav-fixture-secret" } });
+      assert.equal(catalogResponse.status, 200);
+      const offers = (await catalogResponse.json()).providers.find(row => row.id === "gradium").offers;
+      assert.ok(offers.some(offer => offer.endpoint === "speech" && offer.routeKind === "native" && offer.eligible));
+      assert.ok(offers.filter(offer => offer.endpoint === "speech").every(offer => offer.routeKind !== "manifest"));
       await runOpenClawConsumer(t, {
         source, sourceHead, fixture: new URL("./fixtures/openclaw-gradium-contract.test.ts", import.meta.url),
         testPath: "src/gateway/talk/worker-contract.test.ts",
@@ -106,10 +112,8 @@ async function settledUsage(origin, id) {
   return usage;
 }
 
-function routerFixture(transport) {
+function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-    import { snapshot } from "./worker/providers.ts";
-    ${transport === "manifest" ? 'for (const endpoint of snapshot.providers.find(provider => provider.id === "gradium").endpoints) endpoint.native_proxy = false;' : ""}
     const requests = [];
     export default { ...handler, fetch(request, env, context) {
       const path = new URL(request.url).pathname;

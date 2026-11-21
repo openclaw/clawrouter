@@ -1,3 +1,4 @@
+import { byteBody, byteResponse, jsonResponse } from "./minimax-search-byte-fixture.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -62,19 +63,19 @@ test("file descriptors come only from successful original tasks and metadata can
   assert.equal(control.path, "/v1/files/retrieve_content"); assert.equal(control.query.get("file_id"), wire.success.file_id);
   assert.equal(control.headers.has("authorization"), false);
   assert.throws(() => prepareMiniMaxVideoFile("download", "https://media.example", wire.success.file_id));
-  const state = await readMiniMaxVideoFileState(Response.json(wire.file), wire.success.file_id, signal());
+  const state = await readMiniMaxVideoFileState(jsonResponse(wire.file), wire.success.file_id, signal());
   assert.equal(state.status, "active"); assert.equal(state.body.file.download_url, undefined);
   assert.equal(state.byteSize, 16);
-  await assert.rejects(readMiniMaxVideoFileState(Response.json(wire.file), "123", signal()));
+  await assert.rejects(readMiniMaxVideoFileState(jsonResponse(wire.file), "123", signal()));
 });
 
 test("native JSON reader preserves unquoted int64 and cancellation without paid replay", async () => {
   const native = '{"task_id":9007199254740993,"status":"Success","file_id":9223372036854775807,"base_resp":{"status_code":0}}';
-  const result = await readMiniMaxVideo(new Response(native, { headers: { "content-type": "application/json" } }), "retrieve", wire.submitted.task_id, signal());
+  const result = await readMiniMaxVideo(byteResponse(native, { headers: { "content-type": "application/json" } }), "retrieve", wire.submitted.task_id, signal());
   assert.equal(result.body.file_id, wire.success.file_id);
-  await assert.rejects(readMiniMaxVideo(Response.json(wire.pending, { status: 404 }), "retrieve", wire.submitted.task_id, signal()));
+  await assert.rejects(readMiniMaxVideo(jsonResponse(wire.pending, { status: 404 }), "retrieve", wire.submitted.task_id, signal()));
   let canceled = false; const controller = new AbortController();
-  const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"task_id":')); }, cancel() { canceled = true; } });
+  const stream = new ReadableStream({ type: "bytes", start(c) { c.enqueue(new TextEncoder().encode('{"task_id":')); }, cancel() { canceled = true; } });
   const pending = readMiniMaxVideo(new Response(stream, { headers: { "content-type": "application/json" } }), "retrieve", wire.submitted.task_id, controller.signal);
   controller.abort(); await assert.rejects(pending); assert.equal(canceled, true);
 });
@@ -82,14 +83,14 @@ test("native JSON reader preserves unquoted int64 and cancellation without paid 
 test("file bytes require an MP4 box despite the primary binary schema's JSON MIME", async () => {
   const mp4Header = Uint8Array.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
   for (const mime of ["video/mp4", "application/octet-stream", "application/json"]) {
-    const bytes = await readMiniMaxVideoFile(new Response(mp4Header, { headers: { "content-type": mime } }), 1024, signal());
+    const bytes = await readMiniMaxVideoFile(byteResponse(mp4Header, { headers: { "content-type": mime } }), 1024, signal());
     assert.deepEqual(bytes, mp4Header);
   }
   for (const response of [
-    Response.json({ base_resp: { status_code: 1004 } }),
-    new Response(mp4Header, { headers: { "content-type": "text/html" } }),
-    new Response(mp4Header, { headers: { "content-type": "video/mp4", "content-length": "17" } }),
-    new Response(mp4Header, { status: 206, headers: { "content-type": "video/mp4" } }),
+    jsonResponse({ base_resp: { status_code: 1004 } }),
+    byteResponse(mp4Header, { headers: { "content-type": "text/html" } }),
+    byteResponse(mp4Header, { headers: { "content-type": "video/mp4", "content-length": "17" } }),
+    byteResponse(mp4Header, { status: 206, headers: { "content-type": "video/mp4" } }),
   ]) await assert.rejects(readMiniMaxVideoFile(response, 1024, signal()));
 });
 

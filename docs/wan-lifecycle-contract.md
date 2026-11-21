@@ -121,3 +121,77 @@ Checked 2026-11-03:
 
 The existing DashScope origins remain documented as functional. Dedicated
 workspace origins do not justify adding models outside the frozen consumer.
+
+## Caller-owned bounded retirement
+
+The Wan profile reserves a constant 72 MiB from the existing 96 MiB body pool.
+`BodyLease.grow(36 * 1024 * 1024)` sets the **total target**, doubled by the
+existing lease API; it does not add 72 MiB to an earlier charge. Admission
+completes before acquiring the input reader. Refusal creates no managed job,
+provider request, unknown outcome or refund.
+
+This is operational allocation accounting, not a measured heap bound:
+
+| Retained representations | MiB |
+| --- | ---: |
+| Request: 8 MiB raw, 16 MiB decoded text, 16 MiB parse/flatten allowance | 40 |
+| Input graph, selection and prepared references | 4 |
+| Canonical digest, prepared HTTP strings and transport copies | 4 |
+| Native response: 1 MiB raw, 2 MiB text, 2 MiB flatten, 4 MiB graph/projection | 9 |
+| At most 2 MiB public output plus bounded serializer/delivery state | 3 |
+| Eight retained control exchanges and bounded records/scratch | 12 |
+
+There is no phase downshift or credit for presumed garbage collection. Control
+accounting covers caller-side exchanges only. Credential-owner internal ledger,
+authority, recovery and forwarding work is not certified by this caller lease.
+
+Intake accepts at most 8 MiB cumulative wire. Native lifecycle responses accept
+at most 1 MiB. Both enforce fatal UTF-8, 16 KiB reader backings, and 8,192 reads
+including empty reads and EOF. The parser consumes bounded feeds before
+`JSON.parse`: depth 32, 4,096 values and members, 128 members per object, 1,024
+entries per array, 65,536 UTF-16 units per string, and 262,144 aggregate decoded
+key/string units. Duplicate and discarded fields count. Numeric lexemes are
+bounded to 128 units. These are local operation limits, not vendor limits.
+
+Canonical digest inputs, prepared HTTP JSON and durable control envelopes have
+a 64 KiB serialized UTF-8 preflight before full stringification, encoding or
+canonical sort copies. The preflight counts escaping, including six-byte control
+escapes and unpaired surrogates. A 64 KiB control wire cap is not applied to
+`/responses/control`: that transport returns the actual 1 MiB native provider
+response. Public JSON is preflighted before headers and streamed without a full
+output serialization.
+
+Each genuine control exchange retains at most 1 MiB: request graph/text/flatten
+128 KiB each, encoded/transport 64 KiB each; response raw 64 KiB,
+text/flatten/graph 128 KiB each; headers/windows/parser 64 KiB. Eight exchanges
+plus sixteen 128 KiB record representations and 2 MiB scratch total 12 MiB.
+The ticket partitions are create 5 ordinary + 3 mandatory, public poll 7 + 1,
+and collector 8 + 0. The whole-operation cap remains eight. A warm environment
+poll uses six ordinary exchanges: all policy-scope lookups (one in the basic
+case), access connection, job read, control connection, fresh caller authority,
+and provider GET. Its one observation is mandatory. Both connection checks
+remain fresh. A grant-owned poll substitutes one credential-owner native transport
+for the final three environment exchanges. More candidate scopes consume actual
+tickets; the whole scan and its remaining tail must fit, or the operation denies.
+Cold connection initialization is not attempted. The collector's acceptance is
+local; environment collection needs connection + GET, and grant collection one
+owner transport. No poll freeze or observe-ACK retry is added.
+
+Tickets are whole-operation and nonrefundable. Two physical slots remain occupied
+through original reads, FIRST cancellation, late response disposal and unlock.
+A public error does not certify physical cleanup, and mandatory settlement does
+not wait on its own ordinary cleanup.
+
+The original admitted grant, model, route, region, generation and lineage remain
+pinned. Wan materialization does not migrate credentials, refresh an alternate,
+adopt a replacement generation, or repair routing projections. Confirmed dispatch
+admission followed by failed fresh authority/deadline checking is known unsent:
+one freeze, zero provider POST. A missing dispatch acknowledgment is uncertain:
+no freeze, POST or replay. The final check precedes construction of the fetch
+promise. Successful dispatch remains independent of caller delivery.
+
+The lease survives parsing, final authority, settlement and downstream EOF or
+cancellation. Tests distinguish pending read, FIRST cancel acknowledgment and
+lock retirement; a completed transport pipe is not a producer cleanup receipt.
+Content URLs stay opaque, image/reference creates stay closed, and native-client
+parity and credential-owner producer cleanup remain separate work.

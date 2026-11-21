@@ -8,7 +8,7 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "1c72f546f839d2790168cd15a9f9d18afaf014ff";
+const sourceHead = "0a5f30f82d33eae69d10c5a5ceecd01bdb9706e7";
 const knownFormats = new Set(["tavily.search", "brave.search", "exa.search", "parallel.search", "searxng.search"]);
 const cases = snapshot.providers.flatMap(provider => provider.endpoints
   .filter(endpoint => knownFormats.has(endpoint.request_format) && endpoint.response_format === endpoint.request_format)

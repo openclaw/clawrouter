@@ -25,17 +25,45 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { alibaba: "task", anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", voyage: "embeddings", vydra: "job" };
+  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", levanto: "decisions", "liquid-ai": "decisions", parallel: "search", pixverse: "video", radius: "config", replicate: "prediction", runway: "text_task", tavily: "search", typesafe: "decisions", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway"].includes(id), id);
+    assert.equal(!!target.unresolved, ["anthropic-vertex", "replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech", "deepgram", "levanto", "liquid-ai", "typesafe"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("Deepgram raw-audio smoke remains unresolved with masked credentials and zero egress", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "deepgram");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { DEEPGRAM_API_KEY: "fixture-private-deepgram-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["DEEPGRAM_API_KEY"]);
+  assert.equal(plan.providers[0].target.endpoint, "listen");
+  assert.match(plan.providers[0].target.unresolved, /no smoke request template for deepgram\.prerecorded/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected raw upload"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["deepgram"], onResult: result => health.push(result) }), /no smoke request template for deepgram\.prerecorded/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-deepgram-key|fixture-proxy-key/);
+});
+
+test("Azure SSML smoke remains unresolved without paid synthesis, secret output or false health", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "azure-speech");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { AZURE_SPEECH_API_KEY: "fixture-private-azure-key", AZURE_SPEECH_REGION: "eastus" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["AZURE_SPEECH_API_KEY", "AZURE_SPEECH_REGION"]);
+  assert.equal(plan.providers[0].target.endpoint, "speech");
+  assert.match(plan.providers[0].target.unresolved, /no smoke request template for azure_speech\.ssml/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["azure-speech"], onResult: result => health.push(result) }), /no smoke request template for azure_speech\.ssml/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-azure-key|fixture-proxy-key/);
 });
 
 test("Runway canonical secret stays masked and smoke cannot create or cancel a task", async t => {
@@ -418,3 +446,27 @@ async function smokeEnvironment(provider, t) {
     } }) },
   };
 }
+
+
+test("Vertex smoke cannot infer private owner authority from environment tokens or report live success", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "anthropic-vertex");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { ANTHROPIC_API_KEY: "fixture-private-anthropic", GOOGLE_API_KEY: "fixture-private-google",
+    GOOGLE_APPLICATION_CREDENTIALS: "fixture-private-adc", CLAWROUTER_OAUTH_READY_ANTHROPIC_VERTEX: "1" });
+  assert.equal(plan.targetCount, 1); assert.equal(plan.configuredCount, 0);
+  assert.deepEqual(plan.providers[0].requiredConfig, []); assert.equal(plan.providers[0].target.ownerGrantRequired, true);
+  assert.equal(plan.providers[0].target.envelope, undefined);
+  assert.match(summarizePlan(plan), /anthropic-vertex.*owner-grant-required.*unresolved=/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected paid request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["anthropic-vertex"], onResult: result => health.push(result) }), /original private owner grant/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-|fixture-proxy-key/);
+});
+
+test("Vertex private smoke disposition does not qualify another provider or origin", () => {
+  const source = catalog.providers.find(provider => provider.id === "anthropic-vertex");
+  for (const patch of [{ id: "foreign-vertex" }, { base_urls: { default: "https://foreign.example" } }]) {
+    const plan = buildProviderSmokePlan({ providers: [{ ...source, ...patch }] }, {});
+    assert.equal(plan.targetCount, 0); assert.equal(plan.providers[0].target, null);
+  }
+});

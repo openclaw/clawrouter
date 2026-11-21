@@ -48,14 +48,51 @@ test("router aliases do not select an overlapping upstream-native operation", { 
   assert.equal(f.sent.length, 0);
 });
 
-test("unknown models retain the existing passthrough endpoint while stopped known models remain denied", { timeout: 10_000 }, async t => {
-  const f = await setup(t), r = routes(f);
-  assert.equal(nativeModelEndpoint(f.provider, r.matching, "/v1beta/models/unregistered-fixture:generateContent", "POST"), undefined);
+for (const reverse of [false, true]) test(`unknown native path models select explicit passthrough while stopped known models remain denied: ${reverse}`, { timeout: 10_000 }, async t => {
+  const f = await setup(t), r = routes(f, reverse);
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, "/v1beta/models/unregistered-fixture:generateContent", "POST"), r.first);
   const unknown = await f.request(original, { model: "unregistered-fixture" }); assert.equal(unknown.status, 200, await unknown.clone().text());
   await unknown.text(); assert.equal(f.sent[0].headers.get("x-fixture-route"), "generic");
-  f.model.availability = { status: "stopped" };
+  f.model.availability = { version: "clawrouter.model-availability.v1", status: "stopped" };
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, r.path, "POST"), undefined);
   const stopped = await f.request(original); assert.equal(stopped.status, 400);
   assert.equal(f.sent.length, 1);
+});
+
+test("unknown native path models require exactly one explicit passthrough candidate", async t => {
+  const f = await setup(t), r = routes(f), path = "/v1beta/models/unregistered-fixture:generateContent";
+  const passthrough = r.first.modelPassthrough;
+  r.first.modelPassthrough = undefined;
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, path, "POST"), undefined);
+  r.first.modelPassthrough = passthrough; r.second.modelPassthrough = passthrough;
+  for (const matching of [r.matching, [...r.matching].reverse()])
+    assert.throws(() => nativeModelEndpoint(f.provider, matching, path, "POST"), error => error.code === "native_route_ambiguous");
+});
+
+for (const reason of ["capability", "protocol", "literal-prefix"]) test(`known ${reason} ineligibility never falls through to an unknown native path model`, async t => {
+  const f = await setup(t), r = routes(f);
+  if (reason === "capability") f.model.capabilities = [];
+  if (reason === "protocol") r.second.request_format = "google.speech_interactions";
+  if (reason === "literal-prefix") {
+    f.model.id = f.provider.routing.modelPrefixes[0] + "literal-card";
+    f.model.upstream = "different-upstream";
+    r.path = "/v1beta/models/literal-card:generateContent";
+  }
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, r.path, "POST"), undefined);
+});
+
+test("unknown body-only Chat identity cannot select native passthrough", async t => {
+  const f = await setup(t), r = routes(f);
+  for (const endpoint of r.matching) Object.assign(endpoint, { path: "/v1/chat/completions", path_params: [],
+    request_format: "openai.chat_completions", response_format: "openai.chat_completions" });
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, "/v1/chat/completions", "POST", { model: "unregistered-fixture" }), undefined);
+});
+
+test("conflicting native path model interpretations cannot select passthrough", async t => {
+  const f = await setup(t), r = routes(f);
+  Object.assign(r.first, { path: "/${model}/${operation}", path_params: ["model", "operation"] });
+  Object.assign(r.second, { path: "/${operation}/${deployment}", path_params: ["operation", "deployment"] });
+  assert.equal(nativeModelEndpoint(f.provider, r.matching, "/unknown-one/unknown-two", "POST"), undefined);
 });
 
 test("disabled native endpoints and wrong methods cannot become model-selected routes", async t => {
@@ -67,7 +104,7 @@ test("disabled native endpoints and wrong methods cannot become model-selected r
 
 test("managed controls, WebSocket bindings and paths without a catalog model keep their existing resolver", async t => {
   const f = await setup(t), r = routes(f);
-  for (const patch of [{ lifecycle: { protocol: "replicate.predictions" } }, { responsesLifecycle: {} }, { websocket: "openai.responses" }, { path_params: ["job_id"] }]) {
+  for (const patch of [{ lifecycle: { protocol: "replicate.predictions" } }, { responsesLifecycle: {} }, { websocket: "openai.responses" }, { inputProfile: {} }, { path_params: ["job_id"] }]) {
     const second = { ...r.second, ...patch };
     assert.equal(nativeModelEndpoint(f.provider, [r.first, second], r.path, "POST"), undefined);
   }

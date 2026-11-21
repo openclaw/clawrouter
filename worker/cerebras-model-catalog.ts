@@ -49,7 +49,7 @@ export function cerebrasPublicCatalogRequest(inferenceBaseUrl: string, signal: A
     throw new HttpError(503, "provider_catalog_not_supported", "Cerebras public catalog requires the canonical inference service");
   }
   return new Request(PUBLIC_MODELS_URL, {
-    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "error", signal,
+    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "manual", signal,
   });
 }
 

@@ -100,7 +100,10 @@ export class GoogleContinuation {
     for (const candidate of value.candidates) {
       const next = googleField(candidate, "continuationToken", "continuation_token");
       if (next == null) continue;
-      if (!token(next) || googleField(candidate, "finishReason", "finish_reason") !== "CONTINUATION") {
+      const reason = googleField(candidate, "finishReason", "finish_reason");
+      // Intermediate stream checkpoints commit usage, not replay ownership.
+      if (this.selection.endpoint.response_format === "google.stream_generate_content" && reason == null && token(next)) continue;
+      if (!token(next) || reason !== "CONTINUATION") {
         this.invalid = true; this.pending.clear(); return;
       }
       if (!this.published.has(next)) this.pending.add(next);

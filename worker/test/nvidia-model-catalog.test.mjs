@@ -18,7 +18,7 @@ test("NVIDIA public requests pin both vendor origins and omit all inference cred
     assert.equal(requests.inventory.url, "https://integrate.api.nvidia.com/v1/models");
     assert.equal(requests.featured.url, "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json");
     for (const r of Object.values(requests)) {
-      assert.equal(r.method, "GET"); assert.equal(r.body, null); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+      assert.equal(r.method, "GET"); assert.equal(r.body, null); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
       assert.deepEqual([...r.headers], [["accept", "application/json"]]);
     }
   }

@@ -34,7 +34,7 @@ test("Baseten native catalog compiles one bodyless GET without remapping, model 
   assert.equal(request.url, "https://inference.baseten.co/v1/models"); assert.equal(request.body, null);
   assert.equal(request.headers.get("authorization"), upstream.headers.get("authorization"));
   assert.equal(request.headers.get("authorization"), "Bearer synthetic-selected-key");
-  assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+  assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
 });
 
 test("Baseten catalog rejects alternate methods, native format aliases, query/body features and duplicate discovery routes", () => {
@@ -72,7 +72,7 @@ test("Baseten catalog rejects foreign origins, transport overrides and caller cr
     m => { m.adapter.injectHeaders = { authorization: "Bearer synthetic" }; },
     m => { m.adapter.injectQuery = { key: "synthetic" }; }, m => { m.adapter.passthroughHeaders = ["authorization"]; },
   ];
-  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten.models|invalid manifest/, String(change)); }
+  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten\.(models|systemone)|invalid manifest/, String(change)); }
 });
 
 test("Baseten compiled discovery composes the original policy filter and excludes the complete decision namespace", () => {

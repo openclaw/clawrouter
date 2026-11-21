@@ -35,7 +35,7 @@ export function buildProviderSmokePlan(snapshot, env = process.env) {
       optionalConfig,
       missingConfig,
       configPresent,
-      configured: configPresent && oauthGrantReady,
+      configured: configPresent && oauthGrantReady && !target?.ownerGrantRequired,
       oauthGrantRequired: oauth,
       oauthGrantReady,
       target,
@@ -253,7 +253,7 @@ export function summarizePlan(plan) {
     `providers=${plan.providerCount} smokeTargets=${plan.targetCount} configured=${plan.configuredCount}`,
   ];
   for (const provider of plan.providers) {
-    const config = provider.configPresent
+    const config = provider.target?.ownerGrantRequired ? "owner-grant-required" : provider.configPresent
       ? "configured"
       : `missing=${provider.missingConfig.join(",")}`;
     const target = provider.target
@@ -270,6 +270,18 @@ export function summarizePlan(plan) {
 }
 
 function smokeTarget(provider, env) {
+  // This private authority is deliberately absent from environment config.
+  // Inventory the missing live fixture without manufacturing an executable grant.
+  if (provider.id === "anthropic-vertex" && provider.base_urls.default === "https://aiplatform.googleapis.com"
+    && provider.config_keys.length === 0 && provider.auth.schemes.length === 1
+    && provider.auth.schemes[0].type === "bearer" && provider.auth.schemes[0].secretKind === "api_token") {
+    const endpoint = provider.endpoints.find(endpoint => endpoint.id === "messages" && endpoint.method === "POST"
+      && endpoint.path === "/v1/messages" && endpoint.request_format === "anthropic.messages" && endpoint.response_format === "anthropic.messages");
+    if (endpoint) return {
+      kind: "manifest_proxy", route: "/v1/proxy/anthropic-vertex/messages", method: "POST", upstreamMethod: "POST", endpoint: endpoint.id,
+      ownerGrantRequired: true, unresolved: "Vertex Messages requires an original private owner grant and a qualified smoke policy; no live fixture is declared",
+    };
+  }
   const chatEndpointId = provider.capabilities.find((capability) => capability.id === "llm.chat")?.endpoint;
   const chatEndpoint = provider.endpoints.find((endpoint) => endpoint.id === chatEndpointId);
   if (chatEndpoint && supportsOpenAiCompatibleProxy(provider, chatEndpoint)) {

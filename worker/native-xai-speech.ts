@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -36,23 +37,44 @@ export function prepareNativeXaiSpeech(selection: ProxySelection): NativeRespons
       if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
         || response.headers.get("content-type")?.trim().toLowerCase() !== mime
         || encoding !== null && encoding.trim().toLowerCase() !== "identity") {
-        void response.body?.cancel().catch(() => undefined); invalid();
+        if (response.body) await inputRetirement(response.body.getReader()).retire("cancel");
+        invalid();
       }
       const headers = new Headers(response.headers);
       // The codec skips length comparison when encoding exists. Identity must
       // be removed from its view while the original Content-Length is retained.
       headers.delete("content-encoding");
+      // workerd's pipe completion can precede source cancellation cleanup.
+      // Retain the original reader independently; this forwarding body adds no
+      // copies or read-ahead, and cannot publish after retirement begins.
+      const inputReader = response.body.getReader(), input = inputRetirement(inputReader);
+      let inputDone = false, inputStopped = false;
+      const inputBody = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await input.read(() => inputReader.read());
+            if (inputStopped) return;
+            if (next.done) { inputDone = true; controller.close(); }
+            else controller.enqueue(next.value);
+          } catch (error) { if (!inputStopped) controller.error(error); }
+        },
+        cancel(reason) { inputStopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
       let chunks = 0, bytes = 0;
-      const bounded = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      const transform = new TransformStream<Uint8Array, Uint8Array>({
         transform(chunk, controller) {
           // Empty chunks count too: the codec retains one object per chunk.
           if (++chunks > chunkLimit || !(chunk instanceof Uint8Array)
             || (bytes += chunk.byteLength) > outputLimit) invalid();
           controller.enqueue(chunk);
         },
-      }));
+      });
+      const pipe = inputBody.pipeTo(transform.writable);
+      void pipe.catch(() => undefined);
+      const bounded = transform.readable;
       try {
         const observed = await readXaiSpeech(new Response(bounded, { status: 200, headers }), prepared, signal);
+        await pipe;
         signal.throwIfAborted();
         const audio = new ReadableStream<Uint8Array>({ start(controller) {
           controller.enqueue(observed.audio); controller.close();
@@ -62,6 +84,11 @@ export function prepareNativeXaiSpeech(selection: ProxySelection): NativeRespons
           "cache-control": "no-store", "x-content-type-options": "nosniff",
         } }), usage: { tokens: null, outcome: "success" as const } };
       } catch { invalid(); }
+      finally {
+        inputStopped = true;
+        const retired = input.retire(inputDone ? "eof" : "cancel", signal.reason);
+        await Promise.all([retired, pipe.catch(() => undefined)]);
+      }
     },
   };
 }

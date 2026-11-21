@@ -74,6 +74,17 @@ for (const stream of [false, true]) for (const evidence of ["wrong-reason", "nes
     const event = (await f.events()).find(event => event.actual_cost_micros === 700); assert.ok(event);
   });
 }
+test("Google SSE intermediate checkpoint never registers; final continuation survives it", async t => {
+  const f = await setup(t, { stream: true });
+  const intermediate = "Y3A=";
+  f.upstream = () => new Response(f.wire({ candidates: [{ continuationToken: intermediate }] }) + f.wire(), { headers: { "content-type": "text/event-stream" } });
+  await (await f.request()).text(); await f.drain();
+  assert.equal(f.continuations().length, 1);
+  await denied(await f.request({ ...original, continuationToken: intermediate }));
+  assert.equal(f.sent.length, 1);
+  const resumed = await f.request(next()); assert.equal(resumed.status, 200); await resumed.text(); await f.drain();
+  assert.deepEqual(await f.sent[1].clone().json(), next());
+});
 test("Google SSE trailing incomplete data and event:error cannot publish a prior candidate token", { timeout: 10_000 }, async t => {
   const f = await setup(t, { stream: true });
   for (const suffix of ['data: {"partial":', 'event: error\ndata: {"message":"synthetic failure"}\n\n']) {

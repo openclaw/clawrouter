@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 // A real workerd multipart -> upstream Worker -> SQL Durable Object boundary.
 test("multipart transcription traverses workerd with exact bytes, authority and durable fixed accounting", { timeout: 30_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-stt-"));
   let mf, phase = "workerd startup";
+  const primary = { failed: false, error: undefined };
   try {
     mf = await startWorkerdFixture(temporary, `
 import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
@@ -46,7 +48,7 @@ export default { async fetch(request,env) {
   await counter.fetch("https://fixture/"+(form.get("prompt") === "synthetic prompt é soft" ? "soft-calls" : "calls"),{method:"POST"});
   if(form.get("prompt") === "synthetic prompt é delayed") await counter.fetch("https://fixture/hold");
   return Response.json({text:"synthetic transcript",credentialSource:credential === "Bearer fixture-pool-upstream-key" ? "pool" : "environment",usage:{type:"tokens",input_tokens:14,input_token_details:{audio_tokens:12,text_tokens:2},output_tokens:45,total_tokens:59}});
-} };`, {upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
+} };`, {directRouter:true,upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
     phase = "authority setup";
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     const secret = "stt-fixture-secret";
@@ -63,7 +65,7 @@ export default { async fetch(request,env) {
     await kv.put("oauth/subscription/openai",JSON.stringify({provider:"openai",kind:"subscription",enabled:true,accessToken:"fixture-subscription-token",accountId:"fixture-account"}));
     const hardHeaders={authorization:"Bearer clawrouter-live-hard-"+secret};
     const headers = { authorization: "Bearer clawrouter-live-fixture-" + secret };
-    const origin = await mf.ready;
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     phase = "multipart routing and formats";
     for (const path of ["/v1/audio/transcriptions", "/v1/native/openai/v1/audio/transcriptions", "/v1/proxy/openai/transcriptions"]) {
       const body = new FormData();
@@ -116,7 +118,10 @@ export default { async fetch(request,env) {
     // A separate isolated policy: hard reserve must not turn a one-context
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
     phase = "unqualified hard-budget upload";
-    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
+    // Pricing also rejects before reading. Preserve the complete multipart
+    // bytes without racing Undici's streaming writer against that rejection.
+    const hardUpload=new Response(makeForm());
+    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{...hardHeaders,"content-type":hardUpload.headers.get("content-type")},body:await hardUpload.arrayBuffer()});
     assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
     phase = "post-validation upstream count";
     assert.equal(await count(),7,"invalid/hard-unqualified requests never reached real upstream Worker");
@@ -183,9 +188,10 @@ export default { async fetch(request,env) {
     assert.equal(await count(),8,"disconnect never replays the upload");
     assert.ok(await softCount()<=1,"denied soft upload is not replayed after terminal cleanup");
   } catch (error) {
-    throw new Error(`transcription fixture failed during ${phase}`, { cause: error });
+    primary.error = new Error(`transcription fixture failed during ${phase}`, { cause: error });
+    primary.failed = true;
+    throw primary.error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive:true, force:true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive:true, force:true })], primary);
   }
 });

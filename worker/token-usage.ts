@@ -2,6 +2,7 @@ import { googleField, googleInt32, googleServiceTier } from "./google-protocol.t
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
 export interface UsageTokens {
+  reasoning?: number | null; // Subset of output, never an additional billable category.
   webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
@@ -17,7 +18,7 @@ export interface UsageTokens {
   billedTokens?: { input: number | null; output: number | null };
 }
 
-export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string }
+export interface UsageTokenContext { providerId: string; requestFormat: string; responseFormat: string; pricedModel?: string; googleCandidates?: number | null }
 
 export function extractUsageTokens(value: unknown, context?: Readonly<UsageTokenContext>): UsageTokens | null {
   const root = record(value);
@@ -28,6 +29,9 @@ export function extractUsageTokens(value: unknown, context?: Readonly<UsageToken
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
+  const outputDetails = record(usage.output_tokens_details ?? usage.completion_tokens_details);
+  const reportedReasoning = outputDetails && Object.hasOwn(outputDetails, "reasoning_tokens")
+    ? subsetCounter(outputDetails.reasoning_tokens, output) : undefined;
   const inclusivePrompt = "prompt_tokens" in usage;
   const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput, context)
     : details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
@@ -47,7 +51,7 @@ export function extractUsageTokens(value: unknown, context?: Readonly<UsageToken
   const modifiers = anthropicModifiers(usage);
   const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
   const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(reportedReasoning !== undefined ? { reasoning: reportedReasoning } : {}), ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 // Cohere reports observed context separately from the units it bills. Missing
@@ -90,7 +94,7 @@ function googleUsageTokens(value: unknown): UsageTokens | null {
   const tier = googleField(value, "serviceTier", "service_tier");
   // Absent/null ProtoJSON fields are unset; null in normalized usage instead
   // records an explicit invalid tier so accounting cannot assume Standard.
-  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: thoughts,
     ...(tier == null ? {} : { serviceTier: googleServiceTier(tier) }) };
 }
 
@@ -152,7 +156,7 @@ function rejectionOnlyEvidence(evidence: SseUsageEvidence, context?: Readonly<Us
   return evidence.kind === "error" || evidence.kind === "done" || root?.type === "message_stop" || responseOutcome(root) === "provider_error";
 }
 
-export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>) {
+export function createSseUsageInspector(revokeRejection?: () => void, acceptJson?: (value: unknown, failed?: boolean) => void, context?: Readonly<UsageTokenContext>, observeFrame?: (frame: SseUsageEvidence) => void) {
   const accumulator = createSseUsageAccumulator(revokeRejection, context);
   function evidence(frame: string | null): SseUsageEvidence | null {
     if (frame === null) return { kind: "unavailable" };
@@ -170,14 +174,15 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
   }
   const frames = createSseFrames(frame => {
     const next = evidence(frame);
-    if (next) accumulator.accept(next);
+    if (next) { accumulator.accept(next); observeFrame?.(next); }
     if (next?.kind === "data") acceptJson?.(next.value);
     else if (next?.kind === "error" || next?.kind === "invalid" || next?.kind === "unavailable") acceptJson?.(undefined, true);
   });
   return {
     push: frames.push,
     end() {
-      if (!acceptJson) return;
+      if (!acceptJson && !observeFrame) return;
+      if (frames.overflowed()) observeFrame?.({ kind: "unavailable" });
       if (frames.overflowed() || frames.pending()?.split("\n").some(line => line.trim() && !line.startsWith(":"))) acceptJson?.(undefined, true);
     },
     result(ended = true): UsageInspection {
@@ -353,6 +358,10 @@ function pickNumber(value: Record<string, unknown>, ...keys: string[]): number |
     if (number != null) return number;
   }
   return null;
+}
+
+function subsetCounter(value: unknown, inclusive: number | null): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && inclusive !== null && value <= inclusive ? value : null;
 }
 
 function searchRequests(value: unknown): number | null {

@@ -16,7 +16,7 @@ test("Chutes documented public discovery omits all inference and OAuth credentia
   for (const base of ["https://llm.chutes.ai/v1", "https://llm.chutes.ai/v1/"]) {
     const controller = new AbortController(), r = chutesCatalogRequest(base, controller.signal);
     assert.equal(r.url, "https://llm.chutes.ai/v1/models"); assert.equal(r.method, "GET"); assert.equal(r.body, null);
-    assert.deepEqual([...r.headers], [["accept", "application/json"]]); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "error");
+    assert.deepEqual([...r.headers], [["accept", "application/json"]]); assert.equal(r.credentials, "omit"); assert.equal(r.redirect, "manual");
     controller.abort(); assert.equal(r.signal.aborted, true);
   }
 });

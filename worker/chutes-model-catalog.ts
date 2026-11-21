@@ -37,7 +37,7 @@ export function chutesCatalogRequest(inferenceBaseUrl: string, signal: AbortSign
     throw new HttpError(503, "provider_catalog_not_supported", "Chutes catalog requires its canonical inference service");
   }
   return new Request("https://llm.chutes.ai/v1/models", {
-    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "error", signal,
+    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "manual", signal,
   });
 }
 

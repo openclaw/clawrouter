@@ -9,6 +9,23 @@ import { fixture, policy } from "./credential-fixture.mjs";
 const { fusionReadiness, fusionCatalogReadiness } = await import("../fusion-readiness.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 
+test("single Fusion preview and storage ignore dormant unregistered advisers", async (t) => {
+  const env = await fixture(t);
+  env.OPENAI_API_KEY = "fixture-openai-key";
+  t.mock.method(globalThis, "fetch", () => { throw new Error("preview must not contact upstream"); });
+  await env.http("/v1/admin/policies/maintainer_access", "PUT", { ...policy, providers: ["openai"], monthlyBudgetMicros: null, requestCostMicros: 7 });
+  const config = { ...DEFAULT_FUSION_CONFIG, strategy: "single", enabled: true, adviserModels: ["retired/unregistered"] };
+  assert.equal((await env.http("/v1/admin/fusion", "PUT", config)).status, 200);
+  const response = await env.http("/v1/admin/fusion/preview", "POST", { policyId: "maintainer_access", config });
+  assert.equal(response.status, 200);
+  const preview = await response.json();
+  assert.equal(preview.executable, true);
+  assert.equal(preview.adviserCount, 0);
+  assert.equal(preview.callCount, 1);
+  assert.equal(preview.estimatedReservationMicros, 7);
+  assert.deepEqual(preview.calls.map(({ stage }) => stage), ["synthesizer"]);
+});
+
 test("Fusion catalog keeps adviser policy ledgers distinct while accounting for a shared provider", () => {
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, aggregatorModel: "fixture/final", adviserModels: ["fixture/adviser"] };
   const auth = (policyId, principalId) => ({ authType: "access", credentialId: null, principalId, policyId, policy: { enabled: true, generation: "g1", tenantId: "default", budgetScope: "principal", monthlyBudgetMicros: 100, requestCostMicros: 7 } });

@@ -1,0 +1,45 @@
+# Regional SSML: https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech
+# Distinct from Azure OpenAI and from the host-local Edge TTS protocol.
+schema: clawrouter.service-provider.v1
+id: azure-speech
+displayName: Azure Speech
+status: experimental
+class: rest_json
+service:
+  platform: azure-speech
+  kind: tool_provider
+  upstreamService: azure-speech
+  configKeys: [AZURE_SPEECH_API_KEY, AZURE_SPEECH_REGION]
+auth:
+  schemes:
+    - type: api_key
+      header: Ocp-Apim-Subscription-Key
+      secretKind: api_key
+baseUrls:
+  default: https://${region}.tts.speech.microsoft.com
+routing:
+  nativePrefixes: [clawrouter-azure-speech, azure-speech]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
+endpoints:
+  speech:
+    path: /cognitiveservices/v1
+    headers:
+      Content-Type: application/ssml+xml
+      User-Agent: ClawRouter
+    requestHeaders: [X-Microsoft-OutputFormat]
+    requestFormat: azure_speech.ssml
+    responseFormat: audio.binary
+    timeoutMs: 120000
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request

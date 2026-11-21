@@ -1,0 +1,62 @@
+# Frozen endpoint variants and model dispositions: docs/qwen-regional-contracts.md.
+# Primary endpoint checked 2026-11-03; no standard API or cross-region key fallback.
+schema: clawrouter.service-provider.v1
+id: qwen-coding-global
+displayName: Qwen Coding Plan (global)
+status: experimental
+class: openai_compatible
+service:
+  platform: qwen
+  kind: model_provider
+  upstreamService: qwen-coding-global
+  configKeys: [QWEN_CODING_GLOBAL_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://coding-intl.dashscope.aliyuncs.com/v1
+routing:
+  nativePrefixes: [clawrouter-qwen-coding-global, qwen-coding-global]
+  modelPrefixes: [qwen-coding-global/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: qwen-coding-global/qwen3.7-plus
+      upstream: qwen3.7-plus
+      capabilities: [llm.chat]
+    - id: qwen-coding-global/qwen3.6-plus
+      upstream: qwen3.6-plus
+      capabilities: [llm.chat]
+    - id: qwen-coding-global/kimi-k2.5
+      upstream: kimi-k2.5
+      capabilities: [llm.chat]
+    - id: qwen-coding-global/glm-5
+      upstream: glm-5
+      capabilities: [llm.chat]
+    - id: qwen-coding-global/MiniMax-M2.5
+      upstream: MiniMax-M2.5
+      capabilities: [llm.chat]
+    - id: qwen-coding-global/qwen3.5-plus
+      upstream: qwen3.5-plus
+      capabilities: [llm.chat]
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]

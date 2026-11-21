@@ -17,7 +17,7 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint & Pick<CompiledEndpoint, "inputProfile">, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint & RequestTariffEndpoint & Pick<CompiledEndpoint, "inputProfile">, observation?: BudgetObservation, body: ProxyRequestBody = {}, providerId?: string): OperationAffordability {
   if (model) model = modelForEndpoint(model, endpoint.id);
   // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
@@ -41,7 +41,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   try {
     cost = endpoint.inputProfile === "clawrouter.pixverse-image-input.v1"
       ? { reserveMicros: pixVerseInputFixedCost(auth.policy), basis: "policy_fixed", inputTokens: null, outputTokens: null }
-      : realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint);
+      : realtime ? { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(auth.policy, capability) ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, policyRequestCost(auth.policy, capability), capability, endpoint, undefined, undefined, providerId);
     if (soft && !isModelDiscovery(endpoint)) {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };
     } else if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };

@@ -60,7 +60,7 @@ test("wrong tool identity, block order, duplicate terminals and contradictory co
 });
 
 test("catalog filtering preserves native model metadata but cannot choose a new credential origin", () => {
-  const model = { id: "tenant/model", name: "Fixture", cost: { input: 1, output: 2 }, reasoning: true };
+  const model = { id: "tenant/model", name: "Fixture", cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1.25 }, reasoning: true };
   const input = { baseUrl: "https://radius.example.com/v1/", models: [model, { id: "private/model" }, { id: "disabled/model", enabled: false }] };
   assert.deepEqual(filterRadiusCatalog(input, "https://radius.example.com/v1", id => id !== "private/model"), { baseUrl: "https://radius.example.com/v1", models: [model] });
   for (const baseUrl of ["https://other.example.com/v1", "http://radius.example.com/v1", "https://user:secret@radius.example.com/v1", "https://radius.example.com/v1?credential=x", "https://radius.example.com/v1#fragment"]) {
