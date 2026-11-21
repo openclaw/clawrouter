@@ -1,10 +1,10 @@
-import { inputRetirement } from "./input-retirement.ts";
+import { nativeMp3ResponseLimit as outputLimit, readNativeMp3Response } from "./native-mp3-response.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { nativeQuerySearch } from "./native-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { HttpError } from "./utils.ts";
 
-const outputLimit = 16 * 1024 * 1024;
+const responseErrors = { invalid: "invalid_elevenlabs_binary_response", limit: "elevenlabs_binary_limit", incomplete: "elevenlabs_binary_incomplete" };
 const speechPath = "/v1/text-to-speech/${voice_id}";
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const finite = (value: unknown, min: number, max: number): boolean => typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
@@ -46,43 +46,6 @@ export function prepareNativeElevenLabsSpeech(selection: ProxySelection): Native
   return {
     origin: "https://api.elevenlabs.io", path: `/v1/text-to-speech/${selection.pathParams.voice_id}`, query: nativeQuery,
     acquire: () => nativeResponseLease(outputLimit),
-    async read(response, signal) {
-      const bytes = await readAudio(response, signal);
-      const audio = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } });
-      return { response: new Response(audio, { status: 200, headers: {
-        "content-type": "audio/mpeg", "content-length": String(bytes.byteLength), "cache-control": "no-store", "x-content-type-options": "nosniff",
-      } }), usage: { tokens: null, outcome: "success" } };
-    },
+    read: (response, signal) => readNativeMp3Response(response, signal, responseErrors),
   };
-}
-
-async function readAudio(response: Response, signal: AbortSignal): Promise<Uint8Array> {
-  const declared = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
-  if (!response.body) throw new Error("invalid_elevenlabs_binary_response");
-  const reader = response.body.getReader(), input = inputRetirement(reader);
-  if (response.status !== 200 || response.redirected || response.headers.has("content-range")
-    || response.headers.get("content-type")?.trim().toLowerCase() !== "audio/mpeg"
-    || encoding !== null && encoding.trim().toLowerCase() !== "identity"
-    || declared !== null && (!/^\d+$/.test(declared) || !Number.isSafeInteger(Number(declared)) || Number(declared) > outputLimit)) {
-    await input.retire("cancel");
-    throw new Error("invalid_elevenlabs_binary_response");
-  }
-  const abort = () => { void input.retire("cancel", signal.reason); };
-  signal.addEventListener("abort", abort, { once: true });
-  let size = 0, eof = false;
-  try {
-    signal.throwIfAborted();
-    const bytes = new Uint8Array(declared === null ? outputLimit : Number(declared));
-    for (;;) {
-      const chunk = await input.read(() => reader.read()); signal.throwIfAborted();
-      if (chunk.done) { eof = true; break; }
-      if (size + chunk.value.byteLength > bytes.byteLength) throw new Error("elevenlabs_binary_limit");
-      bytes.set(chunk.value, size); size += chunk.value.byteLength;
-    }
-    if (!size || declared !== null && Number(declared) !== size) throw new Error("elevenlabs_binary_incomplete");
-    return bytes.subarray(0, size);
-  } catch {
-    await input.retire("cancel", signal.reason);
-    throw new Error("invalid_elevenlabs_binary_response");
-  } finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
