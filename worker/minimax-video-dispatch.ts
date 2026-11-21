@@ -4,7 +4,8 @@ import { miniMaxVideoBindingModel, miniMaxVideoRequiresInline, readMiniMaxVideoB
 import { validateBudgetReservation } from "./accounting.ts";
 import { resolveConnection } from "./authority.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { miniMaxVideoDenied, miniMaxVideoIdentity, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
 import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";

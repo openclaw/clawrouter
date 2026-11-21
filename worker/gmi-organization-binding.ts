@@ -1,5 +1,6 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";

@@ -86,7 +86,8 @@ import {
 import { loadFusionConfig } from "./fusion-config";
 import { shouldFailoverGrant } from "./grant-quota";
 import { observeProviderGrantQuota, providerCreditExhausted } from "./provider-quota.ts";
-import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
+import { grantRoutingPolicy } from "./grant-routing";
+import { type PinnedGrant } from "./grant-eligibility";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";

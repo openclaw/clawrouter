@@ -1,7 +1,7 @@
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { googleField } from "./google-protocol.ts";
-import type { PinnedGrant } from "./grant-selection.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
 import { continuationScope } from "./http-continuation.ts";
 import type { ResponseBodyInspection } from "./proxy-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
