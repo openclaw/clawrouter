@@ -1,6 +1,7 @@
 import { BodyLease } from "./body-budget.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { freezeInlineMusicInput } from "./openrouter-music-input.ts";

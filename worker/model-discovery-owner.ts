@@ -1,7 +1,8 @@
 import { grantOwnerIdentity } from "./grant-owner-facts.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { requestyCatalogRequest } from "./requesty-model-catalog.ts";

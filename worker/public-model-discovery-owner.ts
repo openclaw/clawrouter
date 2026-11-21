@@ -1,5 +1,6 @@
 import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { discoveryAllows } from "./model-discovery.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./model-discovery-formats.ts";

@@ -1084,7 +1084,8 @@ ${bifrostCheckpointFunctions().createBifrostRetirementReader.toString()}
 ${bifrostCheckpointFunctions().validateBifrostProducerSite.toString()}
 ${bifrostCheckpointFunctions().validateBifrostProducerObservation.toString()}
 ${bifrostCheckpointFunctions().validateBifrostSourceProof.toString()}
-import {resolveGrantCandidates,grantRoutingPolicy} from './worker/grant-selection.ts';
+import { resolveGrantCandidates } from './worker/grant-selection.ts';
+import { grantRoutingPolicy } from './worker/grant-routing.ts';
 const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1',readControl=createBifrostRetirementReader();
 function invoke(s,kind,run,details){return observeBifrostOperation(s,kind,run,details);}
 function observe(s,p,kind,details){return invoke(s,kind,()=>p,details);}

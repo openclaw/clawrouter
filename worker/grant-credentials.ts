@@ -27,7 +27,8 @@ import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot
 import { observeProviderGrantQuota } from "./provider-quota.ts";
 import { observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
 import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio } from "../shared/grant-quota.ts";
-import { grantUsable, REFRESH_MARGIN_MS, validGrantSegment } from "./grant-selection.ts";
+import { grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibility.ts";
+import { validGrantSegment } from "./grant-routing.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson, sha256Hex } from "./utils.ts";

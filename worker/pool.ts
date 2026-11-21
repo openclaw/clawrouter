@@ -1,6 +1,6 @@
 import { accessSessionIdentity, sessionPolicies, sessionPolicyIdentity, verifiedAccessSession } from "./access";
 import { upstreamGrantResponses } from "./admin";
-import { grantRoutingPolicy } from "./grant-selection";
+import { grantRoutingPolicy } from "./grant-routing";
 import { grantUsageSnapshot } from "./usage-ledger-client";
 import { policyAllowsModel } from "./policy-models";
 import { authenticateProxyKey, hasProxyKeyIntent } from "./proxy-auth";
