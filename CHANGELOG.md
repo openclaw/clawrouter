@@ -1,5 +1,6 @@
 # Changelog
 
+- Stop paired fusion benchmarks on provider safety notices anywhere in the response, including discarded commentary, while retaining settled usage or unresolved reservations.
 - Allow fusion workload acceptance tests to declare pinned helper modules without exposing or changing them during agent execution.
 
 - Let repository fusion benchmarks declare new source modules, with isolated initialization and guarded first writes.
