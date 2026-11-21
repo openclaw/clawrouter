@@ -41,7 +41,7 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
   for (const model of ["v6", "c1"]) assert.equal(lines.filter(line => line === "PIXVERSE_IMAGE_RETIRED " + model).length, 1, "exact original SDK completion receipt");
 }
 async function json(response, status = 200) { const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text); }
-const collectionSourceSHA = "5cc9f44482c2d134d1c415841645dd7b8d539b4e4175026cb6fbd5f4af0a2d59";
+const collectionSourceSHA = "feceb927ad6dfca59a490ea0095d6a89f14d217b3eb3f9f7c654c9cdd5d1a4e4";
 function collectionPrelude() {
   return `const pixverseCollectionRows = [], pixverseCollectionFaults = [];
 function pixverseCollectInvoke(fn, ...args) {

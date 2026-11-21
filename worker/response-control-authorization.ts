@@ -1,4 +1,4 @@
-import type { BackgroundJob } from "./background-store.ts";
+import type { BackgroundJob } from "./background-record.ts";
 import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { videoControlVersion, videoJsonBytes } from "./minimax-video-operation.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";

@@ -46,7 +46,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
     await operation.wait(assertProviderAccess(provider, binding.auth, env, undefined, wan, video));
     if (protocol) {
       if (!binding.background) throw new HttpError(409, "response_owner_unavailable", "prediction has no original managed job");
-      const job = await operation.wait(backgroundCall<import("./background-store.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, video ?? wan));
+      const job = await operation.wait(backgroundCall<import("./background-record.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, video ?? wan));
       if (!job?.managed || job.managed.protocol !== protocol || job.managed.upstreamId !== responseId
         || (job.managed.providerId ?? "replicate") !== provider.id) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
       const { readManagedControl, observePrediction, bindPredictionFiles, predictionResponse, managedObservationUnavailable } = await import("./managed-predictions.ts");

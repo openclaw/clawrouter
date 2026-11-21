@@ -1343,3 +1343,19 @@ test('custom acceptance binds qualification and grading before inference', async
     assert.equal(agents, 1); assert.equal(grades, 1); assert.equal(state.records[0].score, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+for (const outcome of [undefined, 'turn_limit', 'deadline', 'budget', 'draft_rejected', 'submitted', 'draft_submitted']) {
+  test(`pair scoring and repair export require submission (${outcome})`, async () => {
+    const { root, options } = await fixture();
+    try {
+      const accepted = ['submitted', 'draft_submitted'].includes(outcome);
+      const state = await runPairBenchmark({ ...options, grade, fetcher: success, exportRepairs: true,
+        includeControls: false, policy: 'edit-handoff', agent: async () => ({ ...repaired(), outcome }) });
+      assert.equal(state.complete, true);
+      assert.equal(state.records[0].score, Number(accepted));
+      assert.equal(state.records[0].verdict.passed, true);
+      assert.equal(state.records[0].outcome, outcome);
+      assert.equal(Boolean(state.records[0].repairExport), accepted);
+      assert.equal((await readdir(options.out)).includes('pair-example.repair.json'), accepted);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}

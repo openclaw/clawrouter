@@ -7,7 +7,7 @@ import type { WanManagedOperation } from "./managed-media-json.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { resolveConnection } from "./authority.ts";
-import type { BackgroundAdmission } from "./background-store.ts";
+import type { BackgroundAdmission } from "./background-record.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, managedProbeId } from "./managed-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
