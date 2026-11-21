@@ -208,6 +208,23 @@ test('test feedback keeps small reports unchanged and bounds oversized failures'
   assert.match(bounded.feedback, /# fail 1/);
 });
 
+test('real Node TAP keeps the first failure after hundreds of passing tests', async () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const child = spawnSync(process.execPath, ['--test-reporter=tap', '--input-type=module', '-e',
+    "import {it} from 'node:test'; it('first regression',()=>{throw Error('settlement must happen once')}); for(let i=0;i<400;i++)it('later passing test '+i,()=>{});"],
+  { timeout: 5000, env });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  assert.ok(child.stdout.length > 12000);
+  const result = await check({ exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) }, ['worker/test/repair.test.mjs']);
+  assert.equal(result.tests, 401);
+  assert.equal(result.failures, 1);
+  assert.match(result.feedback, /first regression/);
+  assert.match(result.feedback, /settlement must happen once/);
+  assert.match(result.feedback, /# pass 400/);
+  assert.ok(result.feedback.length <= 12000);
+});
+
 test('long malformed test output retains its tail without inventing failures', async () => {
   const result = await check({ exec: async () => ({ code: 1, stdout: Buffer.from('x'.repeat(20000)), stderr: Buffer.from('import failed') }) }, ['worker/test/repair.test.mjs']);
   assert.equal(result.valid, false);
