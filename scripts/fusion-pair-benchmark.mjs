@@ -227,7 +227,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
             Object.assign(row, { ...trace, verdict, score: 0 });
             throw new Error('incomplete_test_run');
           }
-          Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
+          Object.assign(row, { ...trace, verdict, score: Number(['submitted', 'draft_submitted'].includes(result.outcome)
+            && verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
           if (strategy === 'probe-selection') {
             const diagnosticStart = performance.now();
