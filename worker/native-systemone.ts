@@ -4,7 +4,7 @@ import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./
 import { decisionRecord } from "./provider-decision-wire.ts";
 import { decodeSystemOneResponse, prepareSystemOneRequest } from "./provider-systemone.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function prepareNativeSystemOne(selection: ProxySelection): NativeResponse | undefined {
   const { provider, endpoint, model } = selection;

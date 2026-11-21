@@ -1,6 +1,7 @@
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
-import { HttpError, errorResponse, sha256Hex } from "./utils.ts";
+import { errorResponse, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { copilotInferencePaths, copilotInferenceInput, type CopilotInferenceInput } from "./copilot-inference-dispatch.ts";
 import { currentCopilotPublicIdentity, readCopilotPublicJson, type CopilotPublicIdentityAttestation } from "./copilot-public-identity.ts";
 import type { CopilotCatalogInput } from "./copilot-catalog-flow.ts";

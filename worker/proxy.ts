@@ -102,10 +102,8 @@ import { assertProviderAccess, configuredUpstream, signSigV4, upstreamAuth, type
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
 import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
-import {
-  decodePathSegment,
-  errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
-} from "./utils";
+import { decodePathSegment, errorResponse, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake } from "./utils";
+import { HttpError } from "./http-error";
 
 const MAX_GRANT_ATTEMPTS = 4;
 

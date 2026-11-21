@@ -17,7 +17,8 @@ import { publishedInputCall, publishedInputResponse, publishedInputUrl, publishI
 import { assertPublishedInputLive, publishedInputLifetimeMs, publishedInputUnavailable, samePublishedInput,
   type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import type { Env } from "./types.ts";
-import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function publishedMusicAccess(env: Env, binding: PublishedInputBinding, operation: HttpOperation, admittedPolicy?: string): PublishedInputAccess {
   return { binding, operation,

@@ -2,7 +2,8 @@ import './typescript-setup.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {probeUnknown,releaseProbe,probeCharged,probeBudgetBytes,probeBytes,probeReadBytes} from '../large-http/probe.ts';
-import {readJson,HttpError,maxMediaJsonBodyBytes} from '../utils.ts';
+import { readJson, maxMediaJsonBodyBytes } from '../utils.ts';
+import { HttpError } from '../http-error.ts';
 function request(stream,signal){return new Request('https://router.example/v1/responses',{method:'POST',body:stream,duplex:'half',signal});}
 test('small multichunk unknown upload is preserved byte-for-byte on the Worker route',async()=>{
  const parts=[Uint8Array.of(0,1,255),new TextEncoder().encode('é'.repeat(6000))];

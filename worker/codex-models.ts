@@ -6,7 +6,8 @@ import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { providerById, snapshot } from "./provider-catalog.ts";
 import type { Env } from "./types.ts";
-import { HttpError, privateJson, sha256Hex } from "./utils.ts";
+import { privateJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_CACHED_BYTES = 2 * 1024 * 1024;

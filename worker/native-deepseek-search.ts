@@ -6,7 +6,7 @@ import { nativeJsonResponse, nativeResponseLease, type NativeResponse, type Vali
 import { deepSeekSearchCost } from "./pricing.ts";
 import { selectRequestTariff } from "./request-tariff.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function prepareNativeDeepSeekSearch(selection: ProxySelection): NativeResponse | undefined {
   const { provider, endpoint, model, body } = selection;

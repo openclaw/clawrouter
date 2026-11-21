@@ -19,7 +19,8 @@ import { prepareSoftBudget, startSoftBudget, softBudget, softBudgetPolicy } from
 import { readBinaryUpload, readBounded, readTranscriptionUpload, transcriptionLimits } from "./transcription-body.ts";
 import { transcriptionUsage } from "./transcription-usage.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { decodePathSegment, errorResponse, HttpError } from "./utils.ts";
+import { decodePathSegment, errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 function rawTranscriptionRoute(path: string): { provider: CompiledProvider; endpoint: CompiledEndpoint } | null {
   const match = path.replace(/^\/v1\/playground\//, "/v1/").match(/^\/v1\/(native|proxy)\/([^/]+)(\/.*)$/);

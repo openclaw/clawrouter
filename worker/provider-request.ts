@@ -1,7 +1,7 @@
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { providerConfigurationList, applyTemplateHeaders, resolveTemplate, templateCandidates, PreparationAdmission, preparationValue, preparationHeader, preparationBytes } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface UpstreamPathContext { baseUrl: string; transportPaths: Record<string, string> }
 

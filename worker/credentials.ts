@@ -5,7 +5,8 @@ import { normalizeCopilotPublicIdentity } from "./copilot-public-identity.ts";
 import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
 import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, Env, ProxyCredential, ProxyCredentialEntry } from "./types";
-import { cleanId, decodePathSegment, HttpError, normalizeEmail, privateJson, readJson } from "./utils";
+import { cleanId, decodePathSegment, normalizeEmail, privateJson, readJson } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function credentialMutationResponse(request: Request, env: Env, rest: string | null, session: AccessSession, scope: CredentialMutation["scope"]): Promise<Response> {
   const operation = rest === null ? "create" : rest.endsWith("/revoke") ? "revoke" : rest.endsWith("/rotate") ? "rotate" : rest.endsWith("/rename") ? "rename" : "put";

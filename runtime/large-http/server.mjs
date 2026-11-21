@@ -11,7 +11,7 @@ import {responsePump} from './response-pump.mjs';
 import {spoolUpload} from './spool.mjs';
 import {routerHeaders,largeCreatePath} from '../../worker/large-http/headers.ts';
 import {bodyBudgetCharged} from '../../worker/body-budget.ts';
-import {HttpError} from '../../worker/utils.ts';
+import { HttpError } from '../../worker/http-error.ts';
 import {bindSingleDispatchTransport} from '../../worker/upstream-transport.ts';
 import {runtimeFields} from '../../worker/large-http/provider-config.ts';
 export async function startRuntime({route,providerOrigin='https://api.openai.com',providerOrigins=[providerOrigin],providerFetch,observe=()=>{},healthExtra=()=>({})}){

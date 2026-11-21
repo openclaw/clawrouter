@@ -6,7 +6,8 @@ import { readMiniMaxTokenBody } from "./minimax-token-body.ts";
 import { HttpOperation } from "./http-operation.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { Env } from "./types.ts";
-import { HttpError, privateJson, readJson } from "./utils.ts";
+import { privateJson, readJson } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 type Phase = "begin_unknown" | "poll_unknown" | "pending" | "committed" | "cancelled" | "expired" | "unknown" | "failed";
 export interface MiniMaxDeviceAttempt {

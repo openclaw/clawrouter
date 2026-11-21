@@ -13,7 +13,8 @@ import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-li
 import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
-import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
+import { json, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { assertPublishedVerifier, samePublishedInput, publishedInputUnavailable, type PublishedInputBinding,
   type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 

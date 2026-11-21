@@ -8,7 +8,7 @@ import { parseRealtimeUsage, REALTIME } from './realtime-protocol';
 import type { Json } from './realtime-protocol';
 import type { AuthorizedIdentity, Env, ProviderConnection } from './types';
 import type { ProxySelection } from './proxy-selection';
-import { HttpError } from './utils';
+import { HttpError } from './http-error';
 
 export interface FundedInput {
   settle(terminal: Json | null, sent: boolean, itemId: string | null): Promise<void>;

@@ -4,7 +4,8 @@ import { inspectCopilotJsonText } from "./copilot-json-guard.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { BodyLease } from "./body-budget.ts";
 import type { Env } from "./types.ts";
-import { HttpError, privateJson, sha256Hex } from "./utils.ts";
+import { privateJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const copilotDeviceFlow = "copilot-device.v1";
 export type CopilotDeviceInput =

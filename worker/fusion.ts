@@ -2,7 +2,7 @@ import type { FusionConfig } from "../shared/contracts.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { InternalHttpAbort } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson,

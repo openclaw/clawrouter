@@ -18,7 +18,8 @@ import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface ResponseControlDispatch {
   owner: ContinuationOwner;

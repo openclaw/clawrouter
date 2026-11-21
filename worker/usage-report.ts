@@ -2,7 +2,8 @@ import { emptyUsageMetrics, usageMetricKeys, usageTokenFields } from "../shared/
 import type { PersonalUsageEvents, PersonalUsageReport, PersonalUsageEvent, UsageCostSummary, UsageGroupBy, UsageMetrics, UsageReportGroup } from "../shared/usage-report.ts";
 import { usageStub } from "./usage-ledger-client.ts";
 import type { Env } from "./types.ts";
-import { HttpError, normalizeEmail } from "./utils.ts";
+import { normalizeEmail } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { parseUsageReportRange } from "./usage-report-range.ts";
 import type { UsageAggregateRow, UsageEventPosition, UsageReportQuery, UsageReportShard, UsageReportMigrationOptions, UsageReportMigrationEffect, UsageReportHistory } from "./usage-report-protocol.ts";
 

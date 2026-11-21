@@ -2,7 +2,7 @@ import { withLimitHint } from "./policy-limits.ts";
 import { policyAllowsModel } from "../shared/policy-models.ts";
 import type { AccessPolicy } from "./types";
 import type { ProxySelection } from "./proxy-selection";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export { policyAllowsModel };
 

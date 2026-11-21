@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const PLAN_PROVIDERS = new Set(["xiaomi-token-plan", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams"]);
 

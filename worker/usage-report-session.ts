@@ -2,7 +2,8 @@ import { authorizeAdmin, verifiedAccessSession, verifiedUsageBinding, sessionPol
 import { readCompleteUsage, personalUsage } from "./usage-report.ts";
 import { parseUsageReportRange, usageDateTools, reportRetentionMs } from "./usage-report-range.ts";
 import { sameOrigin } from "./request-origin.ts";
-import { privateJson, errorResponse, HttpError } from "./utils.ts";
+import { privateJson, errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { AccessSession, Env } from "./types.ts";
 import type { CompleteUsageQuery, CompleteUsageOutcome } from "../shared/usage-report.ts";
 

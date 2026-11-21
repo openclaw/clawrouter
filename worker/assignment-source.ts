@@ -1,7 +1,7 @@
 import { jsonMeasurement } from "./json-measurement.ts";
 import { isAccessDenial, parseAccessJson, type UserSourceCounts } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const assignmentSourceHeader = "x-clawrouter-assignment-materialization";
 export const assignmentSourceVersion = "v1";

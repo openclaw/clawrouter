@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { HttpError, readJson } from "../utils.ts";
+import { readJson } from "../utils.ts";
+import { HttpError } from "../http-error.ts";
 
 test("JSON request parsing rejects bodies above the 8 MiB edge limit", async () => {
   const request = new Request("https://example.com/v1/chat/completions", {

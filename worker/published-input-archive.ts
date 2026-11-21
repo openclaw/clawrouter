@@ -4,7 +4,8 @@ import { qualifyImageContainer } from "./pixverse-image-multipart.ts";
 import { assertPublishedInputLive, assertPublishedVerifier, publishedInputKey, publishedInputUnavailable, samePublishedInput,
   validatePublishedObject, type PublishedInputBinding, type PublishedInputObject, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import type { Env } from "./types.ts";
-import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const windowBytes = 16 * 1024;
 const maxReads = 8192;

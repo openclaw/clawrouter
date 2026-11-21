@@ -1,7 +1,7 @@
 import { resolveMiniMaxResource, type MiniMaxApiCredential, type MiniMaxOAuthCredential, type MiniMaxRegion } from "./provider-minimax-oauth.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface MiniMaxAnthropicBinding {
   version: "clawrouter.minimax-anthropic.v1";

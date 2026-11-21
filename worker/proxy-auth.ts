@@ -18,7 +18,8 @@ import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
-import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import { errorResponse, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();

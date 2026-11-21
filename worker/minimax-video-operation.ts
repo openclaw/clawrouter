@@ -5,7 +5,7 @@ import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { jsonBodyTransport } from "./json-body.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const KiB = 1024;
 export const videoControlHeader = "x-clawrouter-video-control";

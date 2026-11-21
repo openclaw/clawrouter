@@ -4,7 +4,7 @@ import { setImmediate as turn } from 'node:timers/promises';
 import { fixture, credential, digest, session, adminActor } from './credential-fixture.mjs';
 
 const { credentialMutationResponse } = await import('../credentials.ts');
-const { HttpError } = await import('../utils.ts');
+const { HttpError } = await import('../http-error.ts');
 const lists = ['/credentials/list', '/policies/list', '/users/list', '/list'];
 
 async function controlled(t, scope, hook) {

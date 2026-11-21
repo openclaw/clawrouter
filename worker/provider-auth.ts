@@ -13,7 +13,8 @@ import { isModelDiscovery, publicCatalogProvider } from "./model-discovery-forma
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate, PreparationAdmission, preparationValue, preparationHeader, preparationReplace } from "./provider-templates.ts";
 import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
-import { envValue, HttpError } from "./utils.ts";
+import { envValue } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { assertXiaomiTokenPlanCredential } from "./xiaomi-plan-credentials.ts";
 import { assertQwenCodingPlanCredential } from "./qwen-plan-credentials.ts";
 

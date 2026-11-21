@@ -1,5 +1,6 @@
 import { CompactionWitnessStore, type CompactionWitness, type WitnessInput } from "./compaction-witness-store.ts";
-import { HttpError, json } from "./utils.ts";
+import { json } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { isToolKnowledge, type ToolKnowledge } from "./responses-tool-evidence.ts";
 
 export interface ContinuationOwner {

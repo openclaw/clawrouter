@@ -4,7 +4,7 @@ import { prepareNativeAzureSpeech } from "./native-azure-speech.ts";
 import { assertNativeResponseDestination } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { readBounded } from "./transcription-body.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface AzureInput { body: string; bytes: number; contentType: string; outputFormat: string }
 // Only authenticated intake can establish this binding. A JSON field cannot

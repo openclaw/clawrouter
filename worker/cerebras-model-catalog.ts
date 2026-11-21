@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const PUBLIC_MODELS_URL = "https://api.cerebras.ai/public/v1/models";
 const MAX_CATALOG_BYTES = 2 * 1024 * 1024;

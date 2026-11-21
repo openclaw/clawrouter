@@ -3,7 +3,7 @@ import { isAccessDenial, parseAccessJson, type UserSourceCounts } from "./access
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { DEFAULT_GRANT_ROUTING, validGrantSegment } from "./grant-routing.ts";
 import { boundedPercent, GRANT_SELECTION_STRATEGIES } from "./grant-selection-strategies.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { AccessPolicyEntry, BudgetOverride, Env, PolicyBinding } from "./types";
 
 export const policyCollectionHeader = "x-clawrouter-policy-collection";

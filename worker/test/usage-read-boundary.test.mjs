@@ -23,7 +23,7 @@ test("the reporting service loads without ledger implementations or SQL owners",
 
 test("the read client preserves scoped URLs, results and grant failures", async () => {
   const { usageSnapshot, grantUsageSnapshot } = await import("../usage-ledger-client.ts");
-  const { HttpError } = await import("../utils.ts");
+  const { HttpError } = await import("../http-error.ts");
   const { emptyUsageSnapshot } = await import("../usage-sharding.ts");
   const calls = [];
   let response = () => Response.json(emptyUsageSnapshot());

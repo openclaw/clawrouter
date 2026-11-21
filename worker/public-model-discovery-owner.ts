@@ -8,7 +8,8 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { authorizeResponseControl, assertControlCallerLive, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function assertPublicDiscoveryEnvelope(value: unknown): void {
   if (!value || typeof value !== "object" || Array.isArray(value)

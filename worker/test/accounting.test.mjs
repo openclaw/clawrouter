@@ -4,7 +4,8 @@ import test from "node:test";
 import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
 import { queue, UsageLedgerObject } from "../ledgers.ts";
 import { usageSnapshot } from "../usage-ledger-client.ts";
-import { caughtResponse, HttpError } from "../utils.ts";
+import { caughtResponse } from "../utils.ts";
+import { HttpError } from "../http-error.ts";
 
 const reservation = {
   reservations: [{ reservationId: "reservation", objectName: "tenant:policy" }],
