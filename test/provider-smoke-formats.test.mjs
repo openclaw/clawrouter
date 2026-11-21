@@ -2,7 +2,8 @@ import { sqliteFixture } from "../worker/test/sqlite-storage.mjs";
 import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "../scripts/provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, summarizePlan } from "../scripts/provider-smoke-planning.mjs";
+import { runLiveProviderSmokes } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
 
 const { default: handler } = await import("../worker/index.ts");

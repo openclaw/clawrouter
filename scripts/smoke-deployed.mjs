@@ -1,14 +1,8 @@
 import assert from "node:assert/strict";
 import { createVersionFetch } from "./smoke-version.mjs";
 import packageMetadata from "../package.json" with { type: "json" };
-import {
-  buildProviderSmokePlan,
-  inspectSmokeKeyProviderAccess,
-  liveProviderList,
-  runLiveProviderSmokes,
-  selectLiveProviderPlans,
-  summarizePlan,
-} from "./provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, liveProviderList, selectLiveProviderPlans, summarizePlan } from "./provider-smoke-planning.mjs";
+import { inspectSmokeKeyProviderAccess, runLiveProviderSmokes } from "./provider-smoke-plan.mjs";
 import { assertAccessGateResponse, isAccessRedirect } from "./smoke-access-gate.mjs";
 import {
   smokeReadinessTimeoutMs,

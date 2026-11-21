@@ -1,11 +1,8 @@
-import {
-  liveProviderList,
-  selectLiveProviderPlans,
-} from "./provider-smoke-plan.mjs";
+import { liveProviderList, selectLiveProviderPlans } from "./provider-smoke-planning.mjs";
 import {
   configuredProviderSecrets,
   providerSecretNames,
-} from "./put-provider-secrets.mjs";
+} from "./provider-secret-inputs.mjs";
 
 const providerSecretNameSet = new Set(providerSecretNames);
 
