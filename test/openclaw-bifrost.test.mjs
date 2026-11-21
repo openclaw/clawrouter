@@ -571,9 +571,9 @@ export function createBifrostProducerJoin(state, request, call) {
   return owner;
 }
 
-// Demand-driven partial response only. The unchanged prefix precedes at most
-// 64 KiB of nonterminal SSE comments. The budget can exhaust before disconnect
-// is observed: at the cap, hold. Only genuine cancel resolves the lifetime.
+// The prefix and first comment stay readable while the original producer
+// lifetime applies backpressure. Forced reentrant pulls still have a fatal
+// 64 KiB cap. Only genuine cancel resolves the lifetime.
 export function createBifrostPartialProducer(s, request, owner, prefix, io) {
   const first = io.encode(prefix), chunk = io.encode(": " + "x".repeat(1020) + "\n\n");
   if (first.byteLength > 1024 || chunk.byteLength !== 1024) throw Error("invalid bounded producer bytes");
@@ -623,7 +623,8 @@ export function createBifrostPartialProducer(s, request, owner, prefix, io) {
       }
       try { controller.enqueue(chunk); chunks++; bytes += chunk.byteLength; }
       catch (error) { failure(3, error); const failed = finish([error], true); throw failed.error; }
-      // Return permits the next requested pull; it does not complete the source.
+      // Do not let read-ahead exhaust the finite cap before caller cancellation.
+      return lifetime;
     },
     cancel() {
       if (ended) throw Error("duplicate partial producer cancellation");
@@ -1433,9 +1434,9 @@ export async function bifrostDemandProducerInertCases(assert, source) {
   const callbacks=createBifrostPartialProducer(s,request,owner,prefix,io);callbacks.start(controller);
   return {s,owner,request,call,chunks,timers,cleared,errors,controller,io,callbacks,pull:()=>callbacks.pull(controller),cancel:reason=>callbacks.cancel(reason),expire:()=>timers[0].callback()};
  }
- await run("unchanged prefix and one exact nonterminal comment per demanded pull",async()=>{const h=harness();assert.equal(h.chunks[0].toString(),prefix);assert.equal(h.timers.length,0);for(let i=0;i<3;i++){assert.equal(h.pull(),undefined);assert.equal(h.chunks.length,i+2);}assert.equal(h.timers.length,1);for(const b of h.chunks.slice(1)){assert.equal(b.length,1024);assert.equal(b.toString(),": "+"x".repeat(1020)+"\n\n");assert.doesNotMatch(b.toString(),/data:|DONE|usage|finish_reason/);}assert.equal(h.s.completed,0);h.cancel();await h.owner.drain();});
+ await run("unchanged prefix and exact original lifetime from forced pulls",async()=>{const h=harness();assert.equal(h.chunks[0].toString(),prefix);assert.equal(h.timers.length,0);for(let i=0;i<3;i++){assert.equal(h.pull(),h.s.producer);assert.equal(h.chunks.length,i+2);}assert.equal(h.timers.length,1);for(const b of h.chunks.slice(1)){assert.equal(b.length,1024);assert.equal(b.toString(),": "+"x".repeat(1020)+"\n\n");assert.doesNotMatch(b.toString(),/data:|DONE|usage|finish_reason/);}assert.equal(h.s.completed,0);h.cancel();await h.owner.drain();});
  await run("no pull means no progression or timer",async()=>{const h=harness();await Promise.resolve();await Promise.resolve();assert.equal(h.chunks.length,1);assert.equal(h.timers.length,0);h.cancel();await h.owner.drain();assert.equal(h.owner.observation().roles.length,0);assert.equal(h.s.settled,0);});
- await run("finite chunk byte budget holds the exact lifetime and remains fatal",async()=>{const h=harness();for(let i=0;i<64;i++)assert.equal(h.pull(),undefined);const original=h.s.producer;assert.equal(h.pull(),original);assert.equal(h.pull(),original);assert.equal(h.chunks.length,65);assert.equal(h.chunks.slice(1).reduce((n,b)=>n+b.length,0),65536);let done=false;const joined=outcome(h.owner.drain()).then(r=>{done=true;return r;});await Promise.resolve();assert.equal(done,false);let failed=false;try{h.cancel();}catch{failed=true;}assert.ok(failed);assert.equal((await joined).failed,true);assert.equal(h.s.completed,0);assert.equal(h.timers.length,1);assert.equal(h.cleared.length,1);});
+ await run("finite chunk byte budget holds the exact lifetime and remains fatal",async()=>{const h=harness();for(let i=0;i<64;i++)assert.equal(h.pull(),h.s.producer);const original=h.s.producer;assert.equal(h.pull(),original);assert.equal(h.pull(),original);assert.equal(h.chunks.length,65);assert.equal(h.chunks.slice(1).reduce((n,b)=>n+b.length,0),65536);let done=false;const joined=outcome(h.owner.drain()).then(r=>{done=true;return r;});await Promise.resolve();assert.equal(done,false);let failed=false;try{h.cancel();}catch{failed=true;}assert.ok(failed);assert.equal((await joined).failed,true);assert.equal(h.s.completed,0);assert.equal(h.timers.length,1);assert.equal(h.cleared.length,1);});
  await run("cancel is the sole successful lifetime completion",async()=>{const h=harness();h.pull();const original=h.s.producer,observer=h.s.producerObserver;assert.equal(observer.original,original);assert.notEqual(observer.pending,original);assert.ok(Object.isFrozen(observer));let done=false;const joined=h.owner.drain().then(()=>{done=true;});await Promise.resolve();assert.equal(done,false);h.cancel({});await joined;assert.equal(h.s.producer,original);assert.equal(h.s.canceled,1);assert.equal(h.s.expired,0);assert.equal(h.s.settled,1);assert.equal(h.s.held,0);assert.deepEqual(h.owner.observation().roles,[["producer","fulfilled",null]]);assert.throws(()=>h.cancel());assert.equal(h.cleared.length,1);});
  for(const reason of [undefined,{}])await run("cancel operand preserved without manufacturing a failure "+(reason===undefined?"undefined":"defined"),async()=>{const h=harness();h.pull();h.cancel(reason);await h.owner.drain();assert.equal(h.owner.observation().failures,0);});
  for(const reason of [undefined,{}])await run("cancel cleanup rejection retained "+(reason===undefined?"undefined":"defined"),async()=>{const h=harness({clearFailure:true,clearReason:reason});h.pull();let thrown=false;try{h.cancel();}catch(e){thrown=true;assert.equal(e,reason);}assert.ok(thrown);const result=await outcome(h.owner.drain());assert.ok(result.failed);assert.equal(result.error,reason);assert.equal(h.owner.observation().failures,1);assert.equal(h.cleared.length,1);});
@@ -1447,7 +1448,7 @@ export async function bifrostDemandProducerInertCases(assert, source) {
  await run("held immediate observer must join after original fulfillment",async()=>{const request={},call={},s={id:"case",mode:"partial",calls:[call],settled:0},owner=createBifrostProducerJoin(s,request,call),body={};owner.attach({body},body);const original=deferred(),tail=deferred();s.producer=original.promise;s.producerObserver=Object.freeze({original:original.promise,pending:original.promise.then(()=>tail.promise,()=>tail.promise)});owner.capture("producer",s.producer,request,s.producerObserver);let done=false;const joined=owner.drain().then(()=>{done=true;});original.resolve();await Promise.resolve();await Promise.resolve();assert.equal(done,false);tail.resolve();await joined;assert.equal(owner.observation().joined,true);});
  await run("observer rejection including undefined stays fatal once",async()=>{const request={},call={},s={id:"case",mode:"partial",calls:[call],settled:0},owner=createBifrostProducerJoin(s,request,call),body={};owner.attach({body},body);s.producer=Promise.resolve();s.producerObserver=Object.freeze({original:s.producer,pending:s.producer.then(()=>{throw undefined;})});owner.capture("producer",s.producer,request,s.producerObserver);for(let i=0;i<2;i++){const r=await outcome(owner.drain());assert.ok(r.failed);assert.equal(r.error,undefined);assert.equal(owner.observation().faults,1);assert.equal(owner.observation().undefinedFailures,1);}});
  await run("foreign original or request cannot acquire companion ownership",async()=>{for(const foreign of ["request","original"]){const h=harness(),p=Promise.resolve(),q=p.then(()=>{});h.s.producer=p;h.s.producerObserver=Object.freeze({original:foreign==="original"?Promise.resolve():p,pending:q});assert.throws(()=>h.owner.capture("producer",p,foreign==="request"?{}:h.request,h.s.producerObserver));await q;}});
- await run("actual registered partial branch uses the owned factory",async()=>{const marker=" if(s.mode==='partial'){",at=source.indexOf(marker,source.indexOf("const upstream =")),end=source.indexOf("\n }\n  const owner=createBifrostProducerJoin",at)+4;assert.ok(at>0);const branch=source.slice(at,end);assert.ok(branch.includes("createBifrostPartialProducer"));const h=harness();const state={id:"registered",mode:"partial",calls:[h.call],held:0,canceled:0,expired:0,settled:0,completed:0};let callbacks,constructed=0;class Stream {constructor(value){callbacks=value;constructed++;value.start(h.controller);}}class Response {constructor(body){this.body=body;}}class Encoder {encode(value){return Buffer.from(value);}}const response=new Function("s","request","call","prefix","createBifrostProducerJoin","createBifrostPartialProducer","ReadableStream","Response","TextEncoder","globalThis",branch)(state,h.request,h.call,prefix,createBifrostProducerJoin,createBifrostPartialProducer,Stream,Response,Encoder,{setTimeout:h.io.setTimeout,clearTimeout:h.io.clearTimeout});assert.equal(constructed,1);assert.equal(response.body,state.producerBody);assert.equal(state.producerRequest,h.request);assert.equal(callbacks.pull(h.controller),undefined);callbacks.cancel();await state.producerJoin.drain();assert.equal(state.settled,1);});
+ await run("actual registered partial branch uses the owned factory",async()=>{const marker=" if(s.mode==='partial'){",at=source.indexOf(marker,source.indexOf("const upstream =")),end=source.indexOf("\n }\n  const owner=createBifrostProducerJoin",at)+4;assert.ok(at>0);const branch=source.slice(at,end);assert.ok(branch.includes("createBifrostPartialProducer"));const h=harness();const state={id:"registered",mode:"partial",calls:[h.call],held:0,canceled:0,expired:0,settled:0,completed:0};let callbacks,constructed=0;class Stream {constructor(value){callbacks=value;constructed++;value.start(h.controller);}}class Response {constructor(body){this.body=body;}}class Encoder {encode(value){return Buffer.from(value);}}const response=new Function("s","request","call","prefix","createBifrostProducerJoin","createBifrostPartialProducer","ReadableStream","Response","TextEncoder","globalThis",branch)(state,h.request,h.call,prefix,createBifrostProducerJoin,createBifrostPartialProducer,Stream,Response,Encoder,{setTimeout:h.io.setTimeout,clearTimeout:h.io.clearTimeout});assert.equal(constructed,1);assert.equal(response.body,state.producerBody);assert.equal(state.producerRequest,h.request);assert.equal(callbacks.pull(h.controller),state.producer);callbacks.cancel();await state.producerJoin.drain();assert.equal(state.settled,1);});
  return names;
 }
 
@@ -1480,7 +1481,7 @@ export async function bifrostProducerSiteInertCases(assert, source) {
  }
  const site=proof=>Array.from(proof.value.producer.site??[]);
  await run("generated scope preserves timer receiver, exact arguments and handle",async()=>{
-  const h=await harness();assert.equal(h.calls.length,0);assert.equal(h.pull(),undefined);assert.equal(h.pull(),undefined);assert.equal(h.calls.length,1);
+  const h=await harness();assert.equal(h.calls.length,0);const original=h.pull();assert.equal(typeof original.then,"function");assert.equal(h.pull(),original);assert.equal(h.calls.length,1);
   h.cancel();const proof=await h.proof();assert.equal(proof.status,200);assert.equal(h.clears.length,1);assert.deepEqual(site(proof),[0,2,2048,7,0,0]);
   assert.equal(proof.value.calls.length,1);assert.equal(proof.value.canceled,1);assert.equal(proof.value.expired,0);assert.equal(proof.value.settled,1);
   assert.equal(h.chunks.length,3);assert.ok(h.chunks[0].toString().startsWith("data: "));assert.equal(h.chunks[1].toString(),": "+"x".repeat(1020)+"\n\n");
@@ -1687,6 +1688,31 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   test("Bifrost SDK and controls share the owned direct router (inert)", async () => { assert.equal((await bifrostDirectRouterInertCases(assert)).length, 6); });
  test("Bifrost original producer, observer and control retirement (inert)", async () => {
   const cases = await bifrostRetirementInertCases(assert); assert.ok(cases.length >= 30);
+ });
+ test("Bifrost partial ReadableStream exposes queued bytes without pulling past its original lifetime", {timeout:2000}, async()=>{
+  const request={},call={},s={id:"real-partial",mode:"partial",calls:[call],held:0,canceled:0,expired:0,settled:0,completed:0};
+  const owner=createBifrostProducerJoin(s,request,call),prefix="data: synthetic-prefix\n\n";
+  const source=createBifrostPartialProducer(s,request,owner,prefix,{
+   encode:value=>new TextEncoder().encode(value),setTimeout,clearTimeout,
+  });
+  let pulls=0,returned;
+  const body=new ReadableStream({...source,pull(controller){pulls++;returned=source.pull(controller);return returned;}});
+  owner.attach(new Response(body),body);
+  const reader=body.getReader();
+  await finishBifrostOwned(async()=>{
+   assert.equal(new TextDecoder().decode((await reader.read()).value),prefix);
+   assert.equal(new TextDecoder().decode((await reader.read()).value),": "+"x".repeat(1020)+"\n\n");
+   assert.equal(returned,s.producer);assert.equal(s.producerObserver.original,returned);
+   let settled=false;const pending=reader.read().then(value=>{settled=true;return value;});
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(pulls,1);assert.equal(settled,false);assert.equal(s.held,1);assert.equal(s.settled,0);
+   await reader.cancel(Object.freeze({owned:"real-partial"}));
+   assert.deepEqual(await pending,{done:true,value:undefined});await reader.closed;await owner.drain();
+   assert.equal(pulls,1);assert.equal(s.canceled,1);assert.equal(s.held,0);assert.equal(s.expired,0);assert.equal(s.settled,1);
+   assert.deepEqual(owner.observation().roles,[["producer","fulfilled",null]]);
+   assert.deepEqual(owner.observation().site,[0,1,1024,7,0,0]);
+  },[async()=>{if(s.canceled===0)await reader.cancel();},()=>owner.drain(),()=>reader.releaseLock()]);
+  assert.equal(body.locked,false);
  });
  test("Bifrost bounded partial producer keeps original cancellation ownership (inert)",async()=>{assert.equal((await bifrostDemandProducerInertCases(assert,readFileSync(new URL("./openclaw-bifrost.test.mjs",import.meta.url),"utf8"))).length,20);});
  test("Bifrost generated timer wiring and joined producer sites (inert)",async()=>{assert.equal((await bifrostProducerSiteInertCases(assert,readFileSync(new URL("./openclaw-bifrost.test.mjs",import.meta.url),"utf8"))).length,18);});
