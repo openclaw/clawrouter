@@ -2,7 +2,7 @@ import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
 import { isPublishedMusicInputSupport } from "../shared/native-capabilities.ts";
 import { readPublishedInputOrigin } from "./published-input-receipt.ts";
-import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
+import { manifestOnlyPublicCatalog } from "./model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";

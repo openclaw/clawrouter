@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
+import { taskSandbox, readSource, writeFiles, command, verify } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -20,6 +24,85 @@ test('agent edits cannot change graders, add executable paths or exceed file bou
   assert.deepEqual(validateEdits(task, [{ path: task.editPaths[0], content: 'source' }]), [{ path: task.editPaths[0], content: 'source' }]);
   for (const edits of [[{ path: 'test/verifier.mjs', content: '' }], [{ path: task.editPaths[0], content: 'x'.repeat(262145) }],
     [{ path: task.editPaths[0], content: '' }, { path: task.editPaths[0], content: '' }]]) assert.throws(() => validateEdits(task, edits));
+});
+
+test('oracle support is bounded to distinct non-test helper modules and stays outside agent edits/context', () => {
+  const helper = 'worker/test/usage-snapshot-fixture.mjs';
+  assert.equal(validateTask({ ...task, oracleSupportPaths: [helper] }).oracleSupportPaths[0], helper);
+  for (const paths of [helper, [helper, helper], Array.from({ length: 13 }, (_, i) => `test/helper-${i}.mjs`),
+    ['worker/example.ts'], ['worker/test/../example.mjs'], ['worker/test/x.test.mjs'], ['worker/test/x.json'],
+    ['/tmp/helper.mjs'], ['worker/test//helper.mjs']]) {
+    assert.throws(() => validateTask({ ...task, oracleSupportPaths: paths }), /invalid_oracle_support_paths/);
+  }
+  assert.throws(() => validateEdits({ ...task, oracleSupportPaths: [helper] }, [{ path: helper, content: '' }]));
+  assert.throws(() => validateTask({ ...task, oracleSupportPaths: [helper], sourceContext: [{ path: helper, query: 'fixture' }] }));
+});
+
+test('oracle support is installed only in isolated acceptance, for baseline and repaired source', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'fusion-support-test-'));
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+    '-c', 'user.email=fixture@example.invalid', ...args], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const source = 'worker/fusion-support-source.mjs', helper = 'worker/test/fusion-support-helper.mjs';
+  const checkPath = 'worker/test/fusion-support.test.mjs';
+  try {
+    git('init', '--quiet');
+    await writeFile(join(repo, 'README.md'), 'isolated acceptance test\n');
+    git('add', '.'); git('commit', '--quiet', '-m', 'base'); const base = git('rev-parse', 'HEAD');
+    await mkdir(join(repo, 'worker/test'), { recursive: true });
+    await writeFile(join(repo, source), 'export const value = 42;\n');
+    await writeFile(join(repo, helper), 'export const expected = 42;\n');
+    await writeFile(join(repo, checkPath), "import test from 'node:test'; import assert from 'node:assert/strict'; import {value} from '../fusion-support-source.mjs'; import {expected} from './fusion-support-helper.mjs'; test('expected value',()=>assert.equal(value,expected));\n");
+    git('add', '.'); git('commit', '--quiet', '-m', 'oracle');
+    const fixture = { id: 'oracle-support-test', split: 'development', base, oracle: git('rev-parse', 'HEAD'),
+      instruction: 'Export value 42.', editPaths: [source], newPaths: [source],
+      visibleTests: [checkPath], hiddenTests: [checkPath], oracleSupportPaths: [helper] };
+    const image = process.env.FUSION_NATIVE_IMAGE;
+    const box = await taskSandbox(fixture, image);
+    try {
+      await box.exec(['node', '-e', `if(require('node:fs').existsSync('/work/${helper}'))throw Error('helper visible before grading')`]);
+    } finally { await box.close(); }
+    const baseline = await verify(fixture, image, [], repo);
+    assert.equal(baseline.valid, true); assert.equal(baseline.passed, false);
+    const repaired = await verify(fixture, image, [{ path: source, content: 'export const value = 42;\n' }], repo);
+    assert.equal(repaired.valid, true); assert.equal(repaired.passed, true); assert.equal(repaired.tests, 1);
+  } finally { await rm(repo, { recursive: true, force: true }); }
+});
+
+test('new source paths must be unique declared edits and cannot name tests or escape the tree', async () => {
+  const path = 'worker/fusion-new-module.ts';
+  assert.equal(validateTask({ ...task, editPaths: [path], newPaths: [path] }).newPaths[0], path);
+  for (const paths of [[path, path], ['worker/../escape.ts'], ['worker/test/hidden.ts'], ['worker/new.json'], ['worker/undeclared.ts'], 'worker/new.ts']) {
+    const invalid = { ...task, editPaths: [path], newPaths: paths };
+    assert.throws(() => validateTask(invalid), /invalid_new_paths/);
+    await assert.rejects(taskSandbox(invalid, `sha256:${'a'.repeat(64)}`, () => { throw Error('must not allocate'); }), /invalid_new_paths/);
+  }
+});
+
+test('declared new source files are empty, editable, and never replace existing source', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts';
+  const addition = { ...task, editPaths: [path], newPaths: [path] };
+  const box = await taskSandbox(addition, process.env.FUSION_NATIVE_IMAGE);
+  try {
+    assert.deepEqual(await readSource(box, [path]), [{ path, content: '' }]);
+    await writeFiles(box, validateEdits(addition, [{ path, content: 'export const answer = 42;\n' }]));
+    assert.equal((await readSource(box, [path]))[0].content, 'export const answer = 42;\n');
+  } finally { await box.close(); }
+  await assert.rejects(taskSandbox({ ...task, newPaths: [task.editPaths[0]] }, process.env.FUSION_NATIVE_IMAGE), /command_failed/);
+  const linked = 'worker/new-parent/new.ts';
+  let prepared = false;
+  const run = async (program, args, options) => {
+    const result = await command(program, args, options);
+    if (!prepared && args[0] === 'exec') {
+      prepared = true;
+      await command('docker', ['exec', args[2], 'ln', '-s', '/tmp', '/work/worker/new-parent']);
+    }
+    return result;
+  };
+  await assert.rejects(taskSandbox({ ...task, editPaths: [linked], newPaths: [linked] }, process.env.FUSION_NATIVE_IMAGE, run), /command_failed/);
 });
 
 test('sandbox requires immutable image and excludes host mounts, credentials and network', () => {

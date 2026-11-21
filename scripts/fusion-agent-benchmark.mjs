@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, validatePreservationProbes, sandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
+import { loadTasks, hash, validatePreservationProbes, taskSandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
@@ -78,8 +78,13 @@ export function replaceEdits(task, files, edits) {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
   const current = new Map(files.map(file => [file.path, file.content]));
   for (const [editIndex, edit] of edits.entries()) {
-    if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string' || !edit.search.length
+    if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string'
       || typeof edit.replace !== 'string' || !current.has(edit.path)) throw new Error('invalid_edit');
+    if (!edit.search.length) {
+      if (!task.newPaths?.includes(edit.path) || current.get(edit.path) !== '') throw new Error('invalid_edit');
+      current.set(edit.path, edit.replace);
+      continue;
+    }
     const original = current.get(edit.path), index = original.indexOf(edit.search);
     if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) {
       const error = new Error('search_must_match_once', { cause: {
@@ -246,7 +251,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     || !Number.isSafeInteger(options.handoffMaxTurns) || options.handoffMaxTurns < 1
     || !Number.isSafeInteger(config.maxTurns) || options.handoffMaxTurns >= config.maxTurns)) throw new Error('invalid_handoff_turn_limit');
   const verificationHandoff = options.handoffAfterEdit === true || options.handoffOnFinish === true;
-  const box = await sandbox(image), started = performance.now();
+  const box = await taskSandbox(task, image), started = performance.now();
   const actions = [];
   let memory = '';
   let regressionProbes = [...preservationProbes], regressionSnapshot, regressionFailure;
@@ -262,6 +267,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   if (options.probeRegressionGate) messages[0].content += ' Before submission, at least one passing behavior probe is required. The first four distinct passing probes of at most 4096 UTF-8 bytes are pinned and replayed against the final source in fresh sandboxes. Preserve their behavior across edits; passing probes are regression checks, not proof of task correctness.';
   if (options.handoffProbeGate) messages[0].content += ' Before a normal handoff, run a behavior probe of at most 4096 UTF-8 bytes that fails with an assertion on original source and passes on your current repair. Passing existing tests or a probe that also passes on the original source is insufficient. An explicitly configured turn limit can still transfer incomplete work.';
   messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Use up to 12 selectors across at most three files; several line ranges may reference the same file. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
+  if (task.newPaths?.length) messages[0].content += ` Declared new files start empty: ${JSON.stringify(task.newPaths)}. Only while one remains empty, use an empty search string to write its initial content.`;
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
