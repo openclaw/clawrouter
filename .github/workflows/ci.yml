@@ -235,7 +235,19 @@ jobs:
           DEPLOYMENT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: node scripts/check-deployment-compatibility.mjs
       - name: Script tests with bounded failure identities
-        run: node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs
+        run: |
+          remaining=()
+          for file in test/*.test.mjs; do
+            if [[ "$file" != test/realtime-cadence-workerd.test.mjs ]]; then
+              remaining+=("$file")
+            fi
+          done
+          # Keep wall-clock cadence proof out of the concurrent file pool.
+          # Each phase retains its bounded diagnostics; either failure fails CI.
+          status=0
+          node --test --test-concurrency=1 --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/realtime-cadence-workerd.test.mjs || status=$?
+          node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout "${remaining[@]}" || status=$?
+          exit "$status"
       - name: Validate native preflight workflow expression contexts
         run: |
           set -euo pipefail
