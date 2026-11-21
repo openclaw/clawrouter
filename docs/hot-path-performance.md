@@ -1166,7 +1166,8 @@ implementation's full-body work):
 
 ```sh
 node --import ./worker/test/typescript-setup.mjs --input-type=module <<'JS'
-import { transformRequestBody, providerById } from './worker/providers.ts';
+import { transformRequestBody } from './worker/providers.ts';
+import { providerById } from './worker/provider-catalog.ts';
 const body = { model: 'fixture', messages: [{ role: 'user', content: 'x'.repeat(262144) }] };
 const provider = providerById('anthropic');
 for (const [name, transform] of [
