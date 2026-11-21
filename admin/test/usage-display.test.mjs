@@ -186,3 +186,34 @@ test('access and catalogue rendering do not import the usage screen', async () =
     assert.ok(!modules.has(root + 'src/screens/users-usage.tsx'), name + ' imports the usage screen');
   }
 });
+
+
+test('shared components load without browser initialization or demo data', async () => {
+  assert.equal(typeof window, 'undefined');
+  assert.equal(typeof document, 'undefined');
+  const modules = new Set();
+  const output = await mkdtemp(root + 'test/.component-owner-');
+  try {
+    await build({
+      root, configFile: false, publicDir: false, logLevel: 'error',
+      plugins: [{ name: 'component-owner', moduleParsed(info) { modules.add(info.id); } }],
+      build: { ssr: true, outDir: output, minify: false, rollupOptions: {
+        input: root + 'src/components.tsx', output: { entryFileNames: 'components.mjs' },
+      } },
+    });
+    for (const name of ['ui-config.ts', 'demo-data.ts']) {
+      assert.ok(!modules.has(root + 'src/' + name), 'shared components import ' + name);
+    }
+    const { navItems, viewIcon, Metric } = await import(pathToFileURL(output + '/components.mjs'));
+    assert.deepEqual(navItems.map(({ id, label, section }) => [id, label, section]), [
+      ['home', 'Dashboard', 'workspace'], ['my-usage', 'My usage', 'workspace'],
+      ['catalog', 'Catalog', 'workspace'], ['playground', 'Playground', 'workspace'],
+      ['policies', 'Access', 'admin'], ['users', 'Users', 'admin'],
+      ['subscriptions', 'Subscriptions', 'admin'], ['usage', 'Usage', 'admin'],
+    ]);
+    for (const item of navItems) assert.equal(viewIcon(item.id), item.icon);
+    assert.equal(renderToStaticMarkup(createElement(Metric, { label: 'Calls', value: '0', meta: 'Recorded' })), '<div class="metric"><span>Calls</span><strong>0</strong><small>Recorded</small></div>');
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
+});

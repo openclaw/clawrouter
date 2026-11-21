@@ -77,6 +77,17 @@ export function viewSubtitle(view: View) {
   }[view];
 }
 
+export const navItems: Array<{ id: View; label: string; icon: IconComponent; section: "workspace" | "admin" }> = [
+  { id: "home", label: "Dashboard", icon: LayoutDashboard, section: "workspace" },
+  { id: "my-usage", label: "My usage", icon: BarChart3, section: "workspace" },
+  { id: "catalog", label: "Catalog", icon: Boxes, section: "workspace" },
+  { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
+  { id: "policies", label: "Access", icon: KeyRound, section: "admin" },
+  { id: "users", label: "Users", icon: Users, section: "admin" },
+  { id: "subscriptions", label: "Subscriptions", icon: Boxes, section: "admin" },
+  { id: "usage", label: "Usage", icon: BarChart3, section: "admin" },
+];
+
 export function viewIcon(view: View): IconComponent {
   return navItems.find((item) => item.id === view)?.icon ?? Boxes;
 }
@@ -87,9 +98,8 @@ export function kindIcon(kind: string): IconComponent {
   return Boxes;
 }
 import React from "react";
-import { Boxes, CheckCircle2, CircleSlash2, FlaskConical, Moon, ServerCog, Sun } from "lucide-react";
+import { BarChart3, Boxes, CheckCircle2, CircleSlash2, FlaskConical, KeyRound, LayoutDashboard, Moon, ServerCog, Sun, Users } from "lucide-react";
 import { readinessLabel, readinessTone } from "./domain";
-import { navItems } from "./ui-config";
 import type { BrandIcon, IconComponent, OutcomeTone, ProviderReadiness, ServiceOutcome, Theme, View } from "./ui-types";
 
 export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[]; detail?: React.ReactNode }> }) {
