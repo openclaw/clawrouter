@@ -81,8 +81,6 @@ export function initialAccessTab(): AccessTab {
   const resource = new URLSearchParams(window.location.search).get("resource");
   return resource === "credentials" || resource === "bindings" || resource === "upstream" || resource === "assignments" || resource === "fusion" ? resource : "policies";
 }
-export const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
-export const demoMissingConfigProviderIds = new Set(["azure-openai"]);
 export const demo = demoData();
 export const demoServiceRoute = demo.routes.manifestProxy.find((route) => route.provider === "tavily") ?? demo.routes.manifestProxy[0];
 export const demoServicePreset = playgroundServicePreset(demoServiceRoute);

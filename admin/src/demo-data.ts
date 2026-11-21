@@ -1,6 +1,5 @@
 import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, readinessMap, tenantSummaryFallback } from "./domain";
 import { demoCatalog } from "./demo-catalog";
-import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type { ClientCatalog } from "../../shared/contracts";
@@ -9,6 +8,9 @@ import type {
   ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
   UsageAuditEvent, UsageSnapshot,
 } from "./ui-types";
+
+const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
+const demoMissingConfigProviderIds = new Set(["azure-openai"]);
 
 export function demoClientCatalog(principalId: string): ClientCatalog {
   // Demo identities simulate Access sessions; no synthetic executable offers
