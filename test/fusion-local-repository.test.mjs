@@ -136,6 +136,24 @@ test('qualification requires matching task digests, passing oracle and failing b
   }
 });
 
+test('updated public tests permit valid original failures without weakening reference qualification', () => {
+  const task = { id: 'updated-tests', visibleTests: ['test/updated.test.mjs'], editPaths: ['worker/example.ts'],
+    publicTestFiles: [{ path: 'test/updated.test.mjs', content: "import 'node:test';\n" }] };
+  const receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
+    qualified: true, visible: { valid: true, passed: false, failures: 2 }, oracleVisible: { valid: true, passed: true },
+    oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+  const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
+  assert.equal(validateLocalQualification([task], q).length, 1);
+  for (const change of [{ visible: { valid: false, passed: false, failures: 2 } },
+    { visible: { valid: true, passed: false, failures: 0 } }, { oracleVisible: { valid: true, passed: false } },
+    { oracle: { valid: true, passed: false, tests: 3, skipped: 0 } }]) {
+    assert.throws(() => validateLocalQualification([task], { ...q, receipts: [{ ...receipt, ...change }] }), /unqualified_local_task/);
+  }
+  const undeclared = { ...task }; delete undeclared.publicTestFiles;
+  assert.throws(() => validateLocalQualification([undeclared], { ...q, receipts: [{ ...receipt,
+    taskDigest: hash(JSON.stringify(undeclared)) }] }), /unqualified_local_task/);
+});
+
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'local-repository-test-'));
   const task = { id: 'test-task', split: 'development', base: 'a'.repeat(40), oracle: 'b'.repeat(40),
