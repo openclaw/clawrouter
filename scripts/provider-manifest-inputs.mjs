@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { loadProviderPlugins } from "./provider-plugin-loader.ts";
-import { PROVIDER_MANIFEST_SCHEMA } from "../packages/provider-plugin-contract/src/index.ts";
+import { PROVIDER_MANIFEST_SCHEMA } from "../packages/provider-plugin-contract/src/plugin-descriptor.ts";
 
 /** Preserve legacy ordering; package inputs are explicit and sorted by provider ID. */
 export function loadProviderManifestInputs(manifestPaths, pluginPaths = []) {
