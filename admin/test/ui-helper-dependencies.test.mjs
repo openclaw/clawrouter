@@ -72,3 +72,19 @@ test("demo timelines preserve scoped totals and UTC days", async (t) => {
     }
   }
 });
+
+test("default configuration loads without browser globals or theme initialization", async () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const modules = new Set();
+  const bundle = await build({
+    root, configFile: false, publicDir: false, logLevel: "error",
+    plugins: [{ name: "headless-config", moduleParsed(info) { modules.add(info.id); } }],
+    build: { write: false, ssr: true, minify: false, rollupOptions: { input: root + "src/ui-config.ts" } },
+  });
+  assert.ok(!modules.has(root + "src/theme.ts"));
+  const entry = bundle.output.find(value => value.type === "chunk" && value.isEntry);
+  const config = await import("data:text/javascript;base64," + Buffer.from(entry.code).toString("base64"));
+  assert.equal(config.emptySession.authenticated, false);
+  assert.ok(config.demo.providers.length > 0);
+  assert.equal(config.viewPaths.home, "/dashboard/home");
+});

@@ -12,7 +12,7 @@ const hookSource = stripTypeScriptTypes(await readFile(new URL("../src/hooks/acc
   .replace(/^import .*;\n/gm, "").replace("export function usePolicyAdmin", "function usePolicyAdmin");
 const config = await readFile(new URL("../src/ui-config.ts", import.meta.url), "utf8");
 const defaultPolicy = evaluate(config.slice(config.indexOf("export const defaultPolicy"), config.indexOf("export const defaultAccess")), "defaultPolicy");
-const rolePresets = evaluate(config.slice(config.indexOf("export const rolePresets"), config.indexOf("export const navItems")), "rolePresets");
+const rolePresets = evaluate(config.slice(config.indexOf("export const rolePresets"), config.indexOf("export const adminViews")), "rolePresets");
 const helpers = await readFile(new URL("../src/ui-helpers.ts", import.meta.url), "utf8");
 const policyFormFromPolicy = new Function("currencyInput", "requestPriceInput", "requestPricesInput", `${stripTypeScriptTypes(helpers.slice(helpers.indexOf("export function policyFormFromPolicy"), helpers.indexOf("export function adminOverviewFromPolicies"))).replace("export function", "function")}\nreturn policyFormFromPolicy;`)(currencyInput, requestPriceInput, requestPricesInput);
 

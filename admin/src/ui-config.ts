@@ -1,4 +1,3 @@
-import { BarChart3, Boxes, FlaskConical, KeyRound, LayoutDashboard, Users } from "lucide-react";
 import { playgroundServicePreset } from "./domain";
 import { demoData } from "./demo-data";
 import type {
@@ -8,34 +7,13 @@ import type {
   BindingForm,
   CredentialForm,
   FusionConfig,
-  IconComponent,
   PolicyForm,
   RouteCatalog,
   SessionResponse,
-  Theme,
   UpstreamGrantForm,
   UsageSnapshot,
   View,
 } from "./ui-types";
-
-const themeStorageKey = "clawrouter-theme";
-
-export function readTheme(): Theme {
-  try {
-    const stored = window.localStorage.getItem(themeStorageKey);
-    if (stored === "light" || stored === "dark") return stored;
-  } catch { /* storage can be unavailable in privacy-restricted contexts */ }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-export function applyTheme(theme: Theme) {
-  document.documentElement.dataset.theme = theme;
-  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0c0e11" : "#f2f0ea");
-  try { window.localStorage.setItem(themeStorageKey, theme); } catch { /* preference still applies for this page */ }
-}
-
-export const initialTheme = readTheme();
-applyTheme(initialTheme);
 
 export const pathViews: Record<string, View> = {
   "/": "home",
@@ -155,14 +133,4 @@ export const rolePresets = {
   ops: { budget: "", request: "0", providers: [] },
 };
 
-export const navItems: Array<{ id: View; label: string; icon: IconComponent; section: "workspace" | "admin" }> = [
-  { id: "home", label: "Dashboard", icon: LayoutDashboard, section: "workspace" },
-  { id: "my-usage", label: "My usage", icon: BarChart3, section: "workspace" },
-  { id: "catalog", label: "Catalog", icon: Boxes, section: "workspace" },
-  { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
-  { id: "policies", label: "Access", icon: KeyRound, section: "admin" },
-  { id: "users", label: "Users", icon: Users, section: "admin" },
-  { id: "subscriptions", label: "Subscriptions", icon: Boxes, section: "admin" },
-  { id: "usage", label: "Usage", icon: BarChart3, section: "admin" },
-];
 export const adminViews = new Set<View>(["policies", "users", "usage", "subscriptions"]);
