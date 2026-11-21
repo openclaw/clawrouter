@@ -151,6 +151,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const sourcePaths = [
     "worker/index.ts",
     "worker/access.ts",
+    "worker/json-measurement.ts",
     "worker/local-auth.ts",
     "worker/proxy.ts",
     "worker/proxy-auth.ts",
