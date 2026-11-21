@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceReadPaths, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('compact actions put the decision before bounded notes without mutating legacy requests', () => {
@@ -10,7 +10,7 @@ test('compact actions put the decision before bounded notes without mutating leg
   assert.deepEqual(Object.keys(compact.properties), ['action', 'paths', 'edits', 'query', 'memory']);
   assert.deepEqual(compact.required, Object.keys(compact.properties));
   assert.equal(compact.properties.memory.maxLength, 512);
-  assert.equal(compact.properties.paths.maxItems, 3);
+  assert.equal(compact.properties.paths.maxItems, 12);
   assert.equal(compact.properties.edits.maxItems, 8);
   assert.equal(compact.properties.query.maxLength, 4096);
   compact.properties.edits.items.properties.path.type = 'number';
@@ -559,6 +559,18 @@ test('large-file source navigation preserves line locations and literal search',
   assert.equal(sourceView(files, ['scripts/compile.mjs:1-1000'])[0].truncated, true);
   assert.equal(sourceView(files, ['scripts/compile.mjs'])[0].content, files[0].content);
   assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
+});
+
+test('source reads batch multiple ranges while retaining file and selector limits', () => {
+  const files = Array.from({ length: 3 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: 'first\nsecond\nthird' }));
+  const selectors = files.flatMap(file => [`${file.path}:1-1`, `${file.path}:3-3`]);
+  assert.deepEqual(sourceReadPaths(selectors), files.map(file => file.path));
+  assert.deepEqual(sourceView(files, selectors).map(view => view.content), ['first', 'third', 'first', 'third', 'first', 'third']);
+  assert.equal(sourceView(files, Array(12).fill(selectors[0])).length, 12);
+  for (const invalid of [Array(13).fill(selectors[0]), [...selectors, 'worker/fourth.ts'], [null], 'worker/source-0.ts']) {
+    assert.throws(() => sourceReadPaths(invalid), /invalid_source_view/);
+    assert.throws(() => sourceView(files, invalid), /invalid_source_view/);
+  }
 });
 
 test('literal source search resumes without losing matches after the result limit', () => {

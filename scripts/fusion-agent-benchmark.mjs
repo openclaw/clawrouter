@@ -22,7 +22,7 @@ export function repositoryActionSchema(profile = 'legacy') {
   schema.required = ['action', 'paths', 'edits', 'query', 'memory'];
   schema.properties = {
     action: p.action,
-    paths: { ...p.paths, maxItems: 3 },
+    paths: { ...p.paths, maxItems: 12 },
     edits: { ...p.edits, maxItems: 8 },
     query: { ...p.query, maxLength: 4096 },
     memory: { ...p.memory, maxLength: 512 },
@@ -107,9 +107,18 @@ export const executorModel = (strategy, turn, forced = false) => ['claude', 'pla
 
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
+export function sourceReadPaths(selectors) {
+  if (!Array.isArray(selectors) || selectors.length > 12
+    || selectors.some(selector => typeof selector !== 'string')) throw new Error('invalid_source_view');
+  const paths = [...new Set(selectors.map(selector => selector.split(':')[0]))];
+  if (paths.length > 3) throw new Error('invalid_source_view');
+  return paths;
+}
+
 export function sourceView(files, selectors, query = '', pageLines = null) {
   if (pageLines !== null && (!Number.isSafeInteger(pageLines) || pageLines < 1 || pageLines > 400)) throw new Error('invalid_source_page_lines');
-  if (typeof query !== 'string' || query.length > 200 || !Array.isArray(selectors) || selectors.length > 3) throw new Error('invalid_source_view');
+  if (typeof query !== 'string' || query.length > 200) throw new Error('invalid_source_view');
+  sourceReadPaths(selectors);
   const views = selectors.map(selector => {
     if (typeof selector !== 'string') throw new Error('invalid_source_view');
     const [path, range, extra] = selector.split(':');
@@ -198,7 +207,7 @@ function bodyFor(messages, config, actionSchemaProfile) {
 
 export function actionFeedback(code, action, task) {
   if (['read', 'search'].includes(action) && ['invalid_read_paths', 'invalid_source_view', 'command_failed'].includes(code)) {
-    return `Tool error: ${code}. Use at most three existing file paths, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
+    return `Tool error: ${code}. Use at most 12 selectors across three existing files, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges; several ranges may reference the same file. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
   }
   if (['invalid_edits', 'invalid_edit', 'search_must_match_once'].includes(code)) {
     return `Tool error: ${code}. Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
@@ -242,7 +251,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   if (preservationProbes.length) messages[1].content += `\nSupplied preservation probes are already pinned for final replay; no model call is needed to register them. Keep their behavior while fixing the task. These checks are incomplete, and independent acceptance still applies:\n${JSON.stringify(preservationProbes)}`;
   if (options.probeRegressionGate) messages[0].content += ' Before submission, at least one passing behavior probe is required. The first four distinct passing probes of at most 4096 UTF-8 bytes are pinned and replayed against the final source in fresh sandboxes. Preserve their behavior across edits; passing probes are regression checks, not proof of task correctness.';
   if (options.handoffProbeGate) messages[0].content += ' Before a normal handoff, run a behavior probe of at most 4096 UTF-8 bytes that fails with an assertion on original source and passes on your current repair. Passing existing tests or a probe that also passes on the original source is insufficient. An explicitly configured turn limit can still transfer incomplete work.';
-  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
+  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Use up to 12 selectors across at most three files; several line ranges may reference the same file. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
@@ -399,7 +408,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         if (action.action === 'read' || action.action === 'search') {
           const implicitPaths = !action.paths?.length;
           const paths = action.paths?.length ? action.paths : task.editPaths;
-          const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
+          const files = await readSource(box, implicitPaths ? paths : sourceReadPaths(paths), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
           const query = action.action === 'search' ? action.query : '';
           messages.push({ role: 'user', content: JSON.stringify(implicitPaths ? editableSourceView(files, query, sourcePageLines) : sourceView(files, paths, query, sourcePageLines)) });
