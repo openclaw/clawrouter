@@ -2,7 +2,7 @@ import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, ident
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { HttpError } from "./utils.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
-import { grantQuotaRatio } from "./grant-quota.ts";
+import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { rankingStaleAfterMs } from "./grant-routing.ts";
 export * from "./grant-eligibility.ts";
 import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
