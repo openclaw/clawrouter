@@ -1,9 +1,8 @@
 import { googleCandidateCount } from "./google-hop-billing.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure } from "./identity-admission.ts";
-import { providerConfigurationList } from "./provider-connections.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
-import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
+import { providerConfigurationList, PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
