@@ -105,29 +105,31 @@ their intended music, Omni, speech or understanding guard. Positive fixtures
 still compile the full manifest; rejection patterns and mutations are unchanged.
 Frozen dependency inputs match the existing qualified install.
 
-Fourteen unchanged actual image-host cases are enrolled in hosted CI against
-public OpenClaw `4d052fa8347c97e876eb885789a82730e860a62f`, tree
-`ad0cbb314cb080588bc6d6b1b676f6bd1b8da8c2`. This candidate has scoped offline
-image execution qualification; its pending broader native SDK/CI is separate.
-No earlier SDK artifact or test result is transferred to this new source.
+The registered-client follow-through pins OpenClaw
+`d173f1ae09324d1fb94e445fa4235a87fc175373`. Its fixture runs in an exclusive
+checkout and validates the original extension TypeScript test graph before
+native execution. Local qualification passes the owning graph and 15 actual SDK cases, including
+the tool edit and host cancellation, through the shipping Worker and SQLite.
+Fresh hosted checks remain pending; no earlier client result is transferred.
 
-Seven cases execute separately through native and manifest-only Worker/SQLite
-isolates. They cover actual registered ClawRouter selection, both exact models,
-text/edit, original key binding, byte-exact PNG delivery, unknown-dollar and
-invalid-key denial, already-aborted requests, and incomplete paid output without
-replay. The tests import the real `generateImage` host and provider; no parser is
-copied, fetch stub installed or request patched.
+The shipping catalog advertises the native Google image offer. The fixture
+uses that actual offer for both exact models and text/inline-edit requests, plus
+an actual `createImageGenerateTool` invocation with its acquired provider
+registry. Edit input and persisted output have distinct PNG bytes. Direct
+manifest Worker coverage remains separate; this fixture does not claim a
+registered SDK manifest offer.
 
-The actual registration exposes `imageGenerationProviders`; the image host
-returns `{ provider, model, images, ... }`. The qualified Google adapter uses
-its runtime fetch and supplies manifest `pathParams.model` itself. This replaces
-the prior candidate's ambient-fetch dispatcher mismatch. The manifest harness
-checks eligible image offers without prohibiting unrelated native capabilities.
-Every outer policy retains its real 100-micro cap, positive seven-micro
-`policy_fixed` receipts and null token counters.
+The native Worker validates the complete upstream JSON before returning
+headers. The host cancellation case therefore aborts during delivery of that
+validated response, after an original SDK read returns bytes. It observes the
+actual Worker delivery outcome and original SDK/Worker/source retirement; it
+does not claim physical cancellation before headers or that the background
+image tool forwards its preparation signal. Upstream EOF is expected before
+this post-acquisition host abort.
 
-Both exact-head actual-client/SQLite contracts must pass before qualification;
-native router checks alone do not establish client proof. No SDK report rerender,
-new local install, live inference or account change is performed. The declaration
-preserves frozen GenerateContent transport; current examples or an available
-model ID do not prove live entitlement or backwards compatibility.
+Fresh catalog scope, selected proxy/upstream credentials, stale and foreign
+negative controls, original reader/body cancellation and release, and separate
+SQLite settlement remain required. Dispatched malformed/uncertain results
+retain the explicit seven-micro `policy_fixed` charge with null token usage;
+SDK parse failure is not a free receipt. No vendor tariff, live entitlement,
+paid call, default-client deployment or upstream physical-stop proof is claimed.

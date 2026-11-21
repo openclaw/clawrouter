@@ -24,6 +24,8 @@
 
 - Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting. Qualify the registered client through native and manifest Worker/SQLite routes with original-operation retirement.
 
+- Qualify the registered Google image host and acquired image tool through native Worker/SQLite offers, distinct inline edit bytes, fresh credential scope and original-operation retirement. Keep validated-response host cancellation separate from background-tool preparation and physical upstream cancellation.
+
 - Add a pinned registered Google continuation contract through the Worker and SQLite: EOF-bound receipts, two explicit request-bound hops, independent budgets and settlement, changed-authority denials and original-operation retirement. Keep the separate physical pre-header cancellation limitation explicit.
 
 - Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
