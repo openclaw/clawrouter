@@ -452,12 +452,12 @@ export function bifrostProgressQualified(f:any):boolean {
 }
 export function bifrostProgressWitness(w:any,proof:any,allowed:any[],worker:boolean,workerFailures:unknown[]):any {
  const c=w.caller,vector=bifrostStoredErrorVector(w);
-  const ts=w.transports.filter(t=>t.method==="POST"),t=ts.length===1?ts[0]:undefined,source=proof?.source;
+  const ts=w.transports.filter((t:any)=>t.method==="POST"),t=ts.length===1?ts[0]:undefined,source=proof?.source;
   const events=proof?.events?.filter((e:any)=>e.capability==="llm.chat")??[],event=events[0];
   return {uniqueRequest:!!t?.socketRequest&&!!t.socket,callerAborted:c.abortedAfter===true,actualText:c.delivered>0,nativeQualified:allowed.length===3&&vector?.length===3&&allowed.every(o=>vector.includes(o)),
    workerRetired:worker,inboundAborted:proof?.inboundChatAborted===true,sourceCanceled:source?.canceled===1,sourceJoined:source?.settled===1,
    noExpiry:source?.expired===0,onePost:source?.calls?.filter((v:any)=>v.chat).length===1,accounting:events.length===1&&event.provider==="bifrost"&&event.policy_id===w.owner.id&&event.credential_id===w.owner.id&&event.model==="tenant/opaque-a"&&event.status==="client_error"&&event.status_code===200&&event.actual_cost_micros===7&&event.reserved_cost_micros===7&&event.input_tokens===null&&event.output_tokens===null&&event.total_tokens===null&&proof?.charged===0,
-   allOriginalsJoined:w.originals.every(o=>o.state==="fulfilled"||allowed.includes(o)),restored:w.restored,singleProgress:source?.progressCalls===1,
+   allOriginalsJoined:w.originals.every((o:any)=>o.state==="fulfilled"||allowed.includes(o)),restored:w.restored,singleProgress:source?.progressCalls===1,
    nonterminal:source?.progressTerminal===false&&source?.completed===0&&[0,1].includes(source?.progressEnqueued)&&c.progress?.accepted===true&&c.progress?.enqueued===(source?.progressEnqueued===1)&&c.progress?.alreadyCanceled===(source?.progressEnqueued===0),
    delivered:c.delivered,abortInvoke:c.abortInvoke,socketClosed:t?.socketClosedAt,controlInvoke:c.controlInvoke,failures:w.failures.length+w.observerFailures.length+w.syncFailures.length+workerFailures.length};
 }
@@ -488,7 +488,7 @@ export function validateBifrostWorkerResidual(v:any):boolean {
 }
 export function bifrostObserveRetirementVerdict(c:any,response:any,value:any):boolean {
  const status200=response.status===200,retired=value.retired;
- c.verdict=[status200,retired,value.disposition==="strict"?1:value.disposition==="provisional_worker_deadline_read"?2:value.disposition==="owned_worker_progress_read"?3:0];
+ c.verdict=[status200,retired,value.disposition==="strict"?1:value.disposition==="provisional_worker_deadline_read"?2:value.disposition==="owned_worker_progress_read"?3:value.disposition==="owned_worker_partial_read"?4:0];
  return status200&&retired===true;
 }
 export function bifrostSignalEvidence(signal:unknown):any {
@@ -587,10 +587,10 @@ export function validateBifrostEvidence(record:any):void {
   router:(v:any)=>v===null||Array.isArray(v)&&v.length===4&&v.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null)),
   usage:(v:any)=>v===null||Array.isArray(v)&&v.length===3&&typeof v[0]==="boolean"&&(v[0]?v.slice(1).every((n:any)=>n!==null&&number(n)):v[1]===null&&v[2]===null),
  };
-  // Mandatory only in the two progress cases under this source-bound schema.
-  if(record?.part==="postlude"&&[30,31].includes(record.case))fields.postlude.worker=(v:any)=>Array.isArray(v)&&v.length===5&&v[0]===1&&
+  // Progress retains its mandatory schema. Partial adds only an observed residual.
+  if(record?.part==="postlude"&&([30,31].includes(record.case)||record.case===2&&Object.hasOwn(record,"worker")))fields.postlude.worker=(v:any)=>Array.isArray(v)&&v.length===5&&v[0]===1&&
     (v[1]===null?v[2]===null&&v[3]===null:validateBifrostWorkerResidual(v.slice(0,4)))&&
-    (v[4]===null||Array.isArray(v[4])&&v[4].length===3&&typeof v[4][0]==="boolean"&&typeof v[4][1]==="boolean"&&[1,2,3].includes(v[4][2]));
+    (v[4]===null||Array.isArray(v[4])&&v[4].length===3&&typeof v[4][0]==="boolean"&&typeof v[4][1]==="boolean"&&[1,2,3,4].includes(v[4][2]));
   // Optional only for the source-owned stream-partial control; not a success predicate.
  if(record?.part==="postlude"&&Object.hasOwn(record,"transport")){
   if(record.case!==2)throw Error("foreign transport witness");
@@ -776,7 +776,7 @@ export function validateBifrostProducerObservation(value:any):boolean {
  for(const row of value.roles){const at=Array.isArray(row)?roles.indexOf(row[0]):-1;
   if(at<=prior||row.length!==3||!["pending","fulfilled","rejected"].includes(row[1])||
    (row[1]==="rejected"?typeof row[2]!=="boolean":row[2]!==null))return false;prior=at;}
- return (!value.joined||value.roles.every(r=>r[1]!=="pending"))&&value.failures===value.roles.filter(r=>r[1]==="rejected").length+value.faults;
+ return (!value.joined||value.roles.every((r:any)=>r[1]!=="pending"))&&value.failures===value.roles.filter((r:any)=>r[1]==="rejected").length+value.faults;
 }
 export function validateBifrostSourceProof(value:any,id:string):boolean {
  return !!value&&value.owner===id&&Array.isArray(value.calls)&&["held","canceled","expired","settled","completed","progressCalls","progressEnqueued"].every(k=>Number.isSafeInteger(value[k])&&value[k]>=0&&value[k]<=1000000)&&
@@ -784,10 +784,10 @@ export function validateBifrostSourceProof(value:any,id:string):boolean {
 }
 export function validateBifrostRetirementProof(value:any,id:string):boolean {
  return !!value&&value.owner===id&&typeof value.retired==="boolean"&&Array.isArray(value.calls)&&Array.isArray(value.operations)&&Array.isArray(value.readers)&&Array.isArray(value.events)&&
-  Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read","owned_worker_progress_read"].includes(value.disposition)&&
-  (value.disposition!=="owned_worker_progress_read"||Array.isArray(value.progressRead)&&value.progressRead.length===2&&value.progressRead.every(x=>Number.isSafeInteger(x)&&x>=0)&&value.progressRead[0]!==value.progressRead[1])&&
+  Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read","owned_worker_progress_read","owned_worker_partial_read"].includes(value.disposition)&&
+  (!["owned_worker_progress_read","owned_worker_partial_read"].includes(value.disposition)||Array.isArray(value.progressRead)&&value.progressRead.length===2&&value.progressRead.every((x:number)=>Number.isSafeInteger(x)&&x>=0)&&value.progressRead[0]!==value.progressRead[1])&&
   (value.source===null||validateBifrostSourceProof(value.source,id))&&!!value.observation&&value.observation.owner===id&&
-  Array.isArray(value.observation.phases)&&value.observation.phases.length===4&&value.observation.phases.every(r=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null))&&
+  Array.isArray(value.observation.phases)&&value.observation.phases.length===4&&value.observation.phases.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null))&&
    (value.observation.producer===null||validateBifrostSourceProof(value.observation.producer,id))&&typeof value.observation.usageObserved==="boolean"&&
    (!Object.hasOwn(value.observation,"residual")||value.observation.residual===null||validateBifrostWorkerResidual(value.observation.residual));
 }
@@ -798,7 +798,7 @@ export function bifrostPostludeEvidence(c:any,proof:any,index?:number):any {
   producer:p?[p.joined,p.roles.map((r:any)=>[["producer","progressTask","progressObserved","progressCommand"].indexOf(r[0]),["pending","fulfilled","rejected"].indexOf(r[1])+1,r[2]]),p.faults,p.failures,p.undefinedFailures,
    source.held,source.canceled,source.expired,source.settled,...(Object.hasOwn(p,"site")?[p.site]:[])]:null,
    router:observation?.phases??null,usage:observation?[observation.usageObserved,observation.usageObserved?proof.events.length:null,observation.usageObserved?proof.charged:null]:null,
-   ...([30,31].includes(index as number)?{worker:[...(observation?.residual??[1,null,null,null]),c?.verdict??null]}:{})};
+   ...(([30,31].includes(index as number)||index===2&&observation?.residual)?{worker:[...(observation?.residual??[1,null,null,null]),c?.verdict??null]}:{})};
 }
 
 const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"),true);
@@ -807,7 +807,7 @@ afterAll(async()=>{await checkpoints.drain();checkpoints.finish();throwFailures(
 function checkpointCase(row:Case):number {
  const inventory=[...JSON.parse(process.env.CLAWROUTER_BIFROST_CONTROLS!),...cases,...JSON.parse(process.env.CLAWROUTER_BIFROST_PROGRESS!)];
  const matches=inventory.map((r:Case,i:number)=>r.id===row.id?i:-1).filter((i:number)=>i>=0);
- if(matches.length!==1||matches[0]>=32)throw Error("ambiguous diagnostic case");return matches[0];
+ if(matches.length!==1||matches[0]!>=32)throw Error("ambiguous diagnostic case");return matches[0]!;
 }
 async function command(id:string,kind:string,body:unknown={}) {
  const response=await nativeFetch(origin+"/__bifrost/"+kind+"/"+id,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
@@ -861,7 +861,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
    isProxy:types.isProxy,objectPrototype:Object.prototype,next:()=>++w.sequence,fault:(e:unknown)=>w.observerFailures.push(e),observer,
    signal:bifrostSignalEvidence,pendingRead:()=>{const pending=originals.filter(o=>o.kind==="read"&&o.reader?.transport?.method==="POST"&&o.state==="pending");return pending.length===1?pending[0]:undefined;},
    uint8:types.isUint8Array,length:(v:Uint8Array)=>Reflect.apply(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),"byteLength")!.get!,v,[]),copy:(v:Uint8Array)=>{const n=Reflect.apply(Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),"byteLength")!.get!,v,[]);
-    const out=new Uint8Array(n);for(let i=0;i<n;i++)out[i]=v[i];return out;},wire:(chunks:Uint8Array[])=>Buffer.concat(chunks).toString("utf8"),expectedWire});
+    const out=new Uint8Array(n);for(let i=0;i<n;i++)out[i]=v[i]!;return out;},wire:(chunks:Uint8Array[])=>Buffer.concat(chunks).toString("utf8"),expectedWire});
   w.origin=providerOrigin;
  }
  const setupCaller=()=>{
@@ -873,7 +873,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
    try{c.evidenceAbort=bifrostSignalEvidence(control.signal);}catch(e){w.observerFailures.push(e);}return value;}catch(e){w.syncFailures.push(e);throw e;}});
  callerWitnesses.set(control.signal,{begin:()=>{c.inferenceInvoked=++w.sequence;c.completed=false;c.postsBefore=transports.filter(t=>t.method==="POST").length;},delivered:()=>{c.delivered=++w.sequence;},
   invoke:(fn:Function,receiver:unknown,args:any[])=>ownership.invoke(c,"inference",fn,receiver,args),
-  progress:async()=>{const ts=transports.filter(t=>t.method==="POST"&&t.caller===c);expect(ts).toHaveLength(1);const t=ts[0];
+  progress:async()=>{const ts=transports.filter(t=>t.method==="POST"&&t.caller===c);expect(ts).toHaveLength(1);const t=ts[0]!;
    expect(c.abortCalled).toBe(true);expect(t.socketClosed).toBeDefined();await t.socketClosed;
    c.controlInvoke=++w.sequence;c.progress=await invoke("progress_control",()=>command(row.id,"progress"));}});
  restores.push(()=>{if(!callerWitnesses.has(control.signal))throw Error("missing caller binding");callerWitnesses.delete(control.signal);});
@@ -911,11 +911,11 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  const sent=channel("undici:client:sendHeaders");
  const onSent=(message:unknown)=>{try{const {request,socket}=message as any;
   if(row.mode!=="progress"||new URL(request.origin).origin!==origin||request.method!=="POST"||request.path!=="/v1/native/bifrost/v1/chat/completions")return;
-  const hs=request.headers;if(!Array.isArray(hs))throw Error("unsupported Undici headers");const auth=[];
+  const hs=request.headers;if(!Array.isArray(hs))throw Error("unsupported Undici headers");const auth:unknown[]=[];
   for(let i=0;i<hs.length;i+=2)if(String(hs[i]).toLowerCase()==="authorization")auth.push(hs[i+1]);
   if(auth.length!==1||auth[0]!=="Bearer "+key(row.id))return;
-  const ts=transports.filter(t=>t.method==="POST"&&t.credential===auth[0]&&t.path===request.path);if(ts.length!==1||ts[0].socketRequest)throw Error("ambiguous owned socket");
-  const t=ts[0];t.socketRequest=request;t.socket=socket;t.socketClosed=new Promise<void>(resolve=>{const closed=()=>{t.socketClosedAt=++w.sequence;resolve();};socket.once("close",closed);restores.push(()=>socket.removeListener("close",closed));});
+  const ts=transports.filter(t=>t.method==="POST"&&t.credential===auth[0]&&t.path===request.path);if(ts.length!==1||ts[0]!.socketRequest)throw Error("ambiguous owned socket");
+  const t=ts[0]!;t.socketRequest=request;t.socket=socket;t.socketClosed=new Promise<void>(resolve=>{const closed=()=>{t.socketClosedAt=++w.sequence;resolve();};socket.once("close",closed);restores.push(()=>socket.removeListener("close",closed));});
  }catch(e){w.observerFailures.push(e);}};
  try{
   setupBoundary.enter("caller_install");
@@ -940,7 +940,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
    const input=args[0],a:any={guard:nativeGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};providerOrigin?.guard(a);a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof nativeGuard>;
    try{pending=returned(o,ownership.guard(nativeGuard,this,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
-   observer(pending.then(result=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
+   observer(pending.then(result=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0]!;
     expect(new URL(input.url).pathname).toBe(t.path);expect(input.init?.method??"GET").toBe(t.method);expect(new Headers(input.init?.headers).get("authorization")).toBe(t.credential);
     ownership.attach(a,result);
     const release=result.release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const o=record("guard_release",{acquisition:a,receiver:this,args:params});t.release=o;
@@ -999,7 +999,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   await retirementReader(retirementOwner,nativeFetch,undefined,[origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"}],"text",(_kind:string,start:Function)=>start(),retirementTicket);
   retirementReader.parse(retirementTicket);proof=retirementReader.validate(retirementTicket,validateBifrostRetirementProof);
   w.sourceExpired=proof.source?.expired??null;w.retirementProof=proof;
-  retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=row.mode==="progress"?bifrostObserveRetirementVerdict(retirementReader.inspect(retirementTicket),response,value):response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
+  retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=(row.mode==="progress"||caseIndex===2)?bifrostObserveRetirementVerdict(retirementReader.inspect(retirementTicket),response,value):response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
  }catch(e){workerFailures.push(e);}
  w.workerRetired=worker&&workerFailures.length===0;
  checkpoints.mark(caseIndex,"worker_retirement",workerFailures.length?"rejected":"fulfilled",workerFailures[0]);
@@ -1028,7 +1028,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  finishBifrostCheckpointCase(checkpoints,caseIndex,failures);throwFailures(failures);
 }
 
-function inference(provider:any,row:Case,signal:AbortSignal,inferenceKey:string) {
+function inference(provider:any,row:Case,signal:AbortSignal,inferenceKey:string):ReturnType<typeof stream> {
   expect(provider.baseUrl).toBe(origin+"/v1/native/bifrost/v1");expect(provider.apiKey).toBe(row.mode==='profile'?"bifrost:selected":key(row.id));expect(inferenceKey).toBe(key(row.id));
   expect(provider.models.length).toBe(1);
   const actual=provider.models[0];expect(actual.id).toBe(row.mode==='account_b'?"tenant/opaque-b":"tenant/opaque-a");
