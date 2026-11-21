@@ -432,6 +432,57 @@ test("xAI Search native runner requires its exact phase and receipt", async () =
   }
 });
 
+test("xAI Search body cancellation requires the original owned abort and complete independent cleanup", async () => {
+  const { createLifetimeObserver: createSearchObserver, createRequestBindings: createBindings } = new Function(stripTypeScriptTypes(searchLifetimeSource(observerSource)) + "; return { createLifetimeObserver, createRequestBindings };")();
+  async function scenario(mode) {
+    const bindings = createBindings(), caller = new AbortController(), reason = new Error("synthetic caller");
+    let succeeded = false, controller, releaseHeld, joined = false, released = 0;
+    const life = createSearchObserver({ bindings: bindings.bindings, bodySucceeded: () => succeeded });
+    const owner = bindings.expect(mode === "foreign-owner" ? "foreign" : "cancel", "chat", "https://fixture.example/v1/responses", "POST", "fixture", caller.signal);
+    bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture" } }, "chat");
+    owner.callerObservation = {}; life.signal(owner.callerObservation, caller.signal); life.signal(owner, caller.signal);
+    const response = new Response(new ReadableStream({ start(value) { controller = value; value.enqueue(new Uint8Array([1])); } }));
+    const original = Promise.resolve({ response, release: async () => {
+      released++;
+      if (mode.startsWith("release-")) throw mode === "release-undefined" ? undefined : mode === "release-null" ? null : reason;
+    } });
+    assert.strictEqual(life.guard(() => original, undefined, [], owner), original);
+    const acquired = await original, reader = response.body.getReader();
+    await reader.read(); const pending = reader.read(), closed = reader.closed, settled = Promise.allSettled([pending, closed]);
+    if (mode !== "no-progress") life.partial(owner);
+    if (mode === "preexisting-error") { controller.error(reason); await settled; caller.abort(reason); }
+    else {
+      caller.abort(reason);
+      controller.error(mode === "wrong-reason" ? new Error("synthetic independent failure") : mode === "undefined-reason" ? undefined : reason);
+      await settled;
+    }
+    if (mode === "premature") await response.body.cancel().catch(() => {});
+    reader.releaseLock();
+    if (mode === "foreign-body") {
+      const other = new ReadableStream({ start(value) { value.error(reason); } });
+      await response.body.cancel.call(other).catch(() => {});
+    } else if (mode === "overlap") {
+      const canceling = response.body.cancel(), releasing = acquired.release();
+      await Promise.allSettled([canceling, releasing]);
+    } else if (mode !== "premature") {
+      await response.body.cancel().catch(() => {});
+      if (mode === "duplicate") await response.body.cancel().catch(() => {});
+    }
+    if (mode !== "overlap") await acquired.release().catch(() => {});
+    if (mode === "independent" || mode === "independent-undefined") life.watch("waitUntil", Promise.reject(mode === "independent" ? reason : undefined), owner);
+    if (mode === "observer-undefined") life.errors.push(undefined);
+    if (mode === "held") life.watch("source.completion", new Promise(resolve => { releaseHeld = resolve; }), owner);
+    succeeded = true;
+    const joining = life.join().then(() => { joined = true; return { accepted: true }; }, error => { joined = true; return { accepted: false, error }; });
+    if (mode === "held") { await Promise.resolve(); await Promise.resolve(); assert.equal(joined, false); releaseHeld(); }
+    const result = await joining;
+    assert.equal(released, 1);
+    assert.ok(life.operations.some(op => op.kind === "body.cancel" && op.state === "rejected"), "raw rejected original is preserved");
+    assert.equal(result.accepted, mode === "owned" || mode === "held" || mode === "overlap", mode);
+    await life.restore();
+  }
+  for (const mode of ["owned", "held", "overlap", "foreign-body", "foreign-owner", "wrong-reason", "undefined-reason", "preexisting-error", "no-progress", "premature", "duplicate", "release-same", "release-null", "release-undefined", "independent", "independent-undefined", "observer-undefined"]) await scenario(mode);
+});
 test("xAI Search cleanup retains independent falsey failures and unknown original work", async () => {
   const attempted = [];
   await assert.rejects(preserveFailures(() => { throw undefined; }, [() => { attempted.push(1); throw null; }, () => attempted.push(2)]), error => error.errors[0] === undefined && error.errors[1] === null);
