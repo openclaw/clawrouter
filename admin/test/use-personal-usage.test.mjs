@@ -40,12 +40,12 @@ function mount({full=true,audience='personal',controls=false}={}){
  const useMemo=(create,deps)=>{const memo=useRef();if(!memo.current||deps.some((v,i)=>!Object.is(v,memo.current.deps[i])))memo.current={deps,value:create()};return memo.current.value;};
  const dependencies={useState,useRef,useEffect,useMemo,emptyFilters,parseUsageRangeInput,...api,downloadUsageFile:file=>downloads.push(file),setTimeout:fn=>{timeouts.set(++id,fn);return id;},clearTimeout:i=>timeouts.delete(i),setInterval:fn=>{intervals.set(++id,fn);return id;},clearInterval:i=>intervals.delete(i)};
  const hooks=new Function(...Object.keys(dependencies),source+'; return {useUsageReport,usePersonalUsage};')(...Object.values(dependencies));
- const render=()=>{cursor=0;const data=audience==='personal'?hooks.usePersonalUsage(props):hooks.useUsageReport(props,audience);if(controls){bindControls({useState,useEffect});tree=Controls({data:data.complete??data,keys:[]});}while(pending.length)pending.shift()();return data;};
+ const render=()=>{cursor=0;const data=audience==='personal'?hooks.usePersonalUsage(props):hooks.useUsageReport(props,audience);if(controls){bindControls({useState,useEffect});tree=Controls({data:data,keys:[]});}while(pending.length)pending.shift()();return data;};
  return {props,requests,downloads,render,get tree(){return tree;},tick:()=>{for(const [i,fn]of [...timeouts]){timeouts.delete(i);fn();}},interval:()=>{for(const fn of intervals.values())fn();},retire:()=>{alive=false;for(const e of effects)e?.cleanup?.();},reads:()=>requests.filter(r=>r.resolve)};
 }
 async function opened(f,value=report({},f.props.scope.session.role==='admin'?'admin':'personal')){f.render();f.render();f.tick();f.reads().at(-1).resolve(outcome(value));await flush();return f.render();}
 test('personal presentation retains ranges and fields without asserting exhaustive history',async()=>{
- const f=mount(),value=report();let h=await opened(f,value);assert.equal(h.report.value.range.from,value.query.from);assert.equal('historyComplete' in h.report.value,false);assert.equal(h.complete.report.value,value);assert.equal(h.query.from,new Date(value.query.from).toISOString());const query=h.query,view=h.report.value;for(let i=0;i<5;i++)h=f.render();assert.equal(h.query,query);assert.equal(h.report.value,view);assert.equal(f.reads().length,1);f.retire();
+ const f=mount(),value=report();let h=await opened(f,value);assert.equal(h.report.value.query.from,value.query.from);assert.equal('historyComplete' in h.report.value,false);assert.equal(h.report.value,value);assert.equal(h.controls.from,new Date(value.query.from).toISOString());const query=h.controls,view=h.report.value;for(let i=0;i<5;i++)h=f.render();assert.equal(h.controls,query);assert.equal(h.report.value,view);assert.equal(f.reads().length,1);f.retire();
 });
 test('Home forty refresh ticks use summary without any retained cut; detail opens browse',async()=>{
  const f=mount({full:false});await opened(f,report({cut:null}));for(let i=0;i<40;i++){f.interval();f.render();f.tick();const r=f.reads().at(-1),p=new URL(r.path,'https://console.example').searchParams;assert.equal(p.get('intent'),'summary');assert.equal(p.has('cut'),false);assert.equal(p.get('days'),'7');r.resolve(outcome(report({cut:null})));await flush();f.render();}
@@ -57,14 +57,14 @@ test('presets coalesce and superseded responses cannot publish; late roots relea
 for(const audience of ['personal','admin'])test(audience+' refine/back and pages retain exact server bounds, page size and cut; retry retains cursor',async()=>{
  const f=mount({audience});let h=await opened(f);h.showEvents(true);f.render();const first=f.reads().at(-1),p=new URL(first.path,'https://console.example').searchParams;assert.equal(p.get('limit'),'100');assert.equal(p.get('cut'),'a'.repeat(43));assert.equal(p.get('from'),new Date(now-3600000).toISOString());assert.equal(p.has('user'),audience==='admin');
  first.resolve(outcome({events:[{id:'first'}],nextCursor:'c'.repeat(43)}));await flush();h=f.render();h.nextPage();f.render();const second=f.reads().at(-1);assert.match(second.path,/cursor=c{43}/);second.reject(Error('temporary'));await flush();h=f.render();assert.equal(h.page,2);h.retryEvents();f.render();assert.equal(f.reads().at(-1).path,second.path);f.reads().at(-1).resolve(outcome({events:[{id:'second'}],nextCursor:null}));await flush();h=f.render();h.previousPage();h=f.render();h=f.render();assert.equal(h.events.value.events[0].id,'first');
- h.refine({...(h.complete?.query??h.query),filters:{...report().query.filters,model:'different'}});f.render();f.tick();assert.equal(f.render().events.value,undefined);const refined=f.reads().at(-1);assert.match(refined.path,/cut=a{43}/);refined.resolve(outcome(report({query:{...report().query,filters:{user:'alice@example.com',model:'different'}}})));await flush();h=f.render();h.back();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('model'),false);f.retire();
+ h.refine({...(h.query),filters:{...report().query.filters,model:'different'}});f.render();f.tick();assert.equal(f.render().events.value,undefined);const refined=f.reads().at(-1);assert.match(refined.path,/cut=a{43}/);refined.resolve(outcome(report({query:{...report().query,filters:{user:'alice@example.com',model:'different'}}})));await flush();h=f.render();h.back();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('model'),false);f.retire();
 });
 for(const field of ['epoch','origin','email','subject','tenantId'])test('auth scope transition retires cached reports/cursors: '+field,async()=>{
  const f=mount();let h=await opened(f);h.showEvents(true);f.render();const pending=f.reads().at(-1);if(field==='epoch')f.props.scope.epoch++;else if(field==='origin')f.props.scope.origin='https://another.example';else f.props.scope.session={...f.props.scope.session,[field]:'changed'};
  assert.equal(f.render().report.value,undefined);f.render();f.tick();assert.equal(pending.init.signal.aborted,true);pending.resolve(outcome({events:[{id:'leak'}],nextCursor:null}));await flush();assert.equal(f.render().events.value,undefined);f.retire();
 });
 test('navigation releases retained root, reentry never reuses released selection, no stale late errors',async()=>{
- const f=mount();let h=await opened(f);h.refine({...h.complete.query,filters:{model:'selected'}});f.render();f.tick();const pending=f.reads().at(-1);f.props.active=false;f.render();assert.ok(pending.init.signal.aborted);assert.ok(f.requests.some(r=>r.init.method==='DELETE'));pending.reject(Error('late'));await flush();f.props.active=true;f.render();f.render();f.tick();const p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.has('cut'),false);assert.equal(f.render().report.error,'');f.retire();
+ const f=mount();let h=await opened(f);h.refine({...h.query,filters:{model:'selected'}});f.render();f.tick();const pending=f.reads().at(-1);f.props.active=false;f.render();assert.ok(pending.init.signal.aborted);assert.ok(f.requests.some(r=>r.init.method==='DELETE'));pending.reject(Error('late'));await flush();f.props.active=true;f.render();f.render();f.tick();const p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.has('cut'),false);assert.equal(f.render().report.error,'');f.retire();
 });
 test('admin and personal are distinct request and cache owners',async()=>{
  const a=mount({audience:'admin'}),p=mount();await opened(a,report({query:{...report().query,groupBy:'user',filters:{}}}));await opened(p);assert.ok(a.reads()[0].path.startsWith('/v1/admin/'));assert.ok(p.reads()[0].path.startsWith('/v1/session/'));a.render().refine({...report().query,filters:{user:'retired@example.com'},groupBy:'key'});a.render();a.tick();assert.match(a.reads().at(-1).path,/user=retired%40example.com/);assert.equal(p.reads().length,1);a.retire();p.retire();
@@ -78,7 +78,7 @@ test('410 keeps old report labelled via event failure; refresh creates new root 
 
 async function exporting(f){const h=f.render(),work=h.startExport('json');const r=f.reads().at(-1);assert.equal(new URL(r.path,'https://console.example').searchParams.get('intent'),'export');const fresh=report({cut:'e'.repeat(43)});r.resolve(outcome(fresh));await flush();assert.equal(f.render().exportState.report,fresh);assert.equal(f.downloads.length,0);const p=f.reads().at(-1);assert.match(p.path,/events/);p.resolve(outcome({events:[],nextCursor:null,coverage:fresh.coverage}));await flush();assert.match(f.reads().at(-1).path,/validate/);assert.equal(f.downloads.length,0);return {work,final:f.reads().at(-1)};}
 test('hook downloads only after final validation and keeps fresh export totals separate from displayed snapshot',async()=>{
- const f=mount();await opened(f);const displayed=f.render().complete.report.value,{work,final}=await exporting(f);assert.equal(f.render().complete.report.value,displayed);final.resolve(outcome({valid:true}));await work;assert.equal(f.downloads.length,1);assert.match(f.render().exportState.message,/downloaded/);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));f.retire();
+ const f=mount();await opened(f);const displayed=f.render().report.value,{work,final}=await exporting(f);assert.equal(f.render().report.value,displayed);final.resolve(outcome({valid:true}));await work;assert.equal(f.downloads.length,1);assert.match(f.render().exportState.message,/downloaded/);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));f.retire();
 });
 for(const reason of ['cancel','navigation','auth','validateFailure'])test('hook export '+reason+' creates no file, no stale panel and releases root',async()=>{
  const f=mount();await opened(f);const {work,final}=await exporting(f);
@@ -88,40 +88,40 @@ for(const reason of ['cancel','navigation','auth','validateFailure'])test('hook 
 });
 
 test('failed refinement retains a labelled old report and requires refresh instead of continuing old cut',async()=>{
- const f=mount();let h=await opened(f);h.refine({...h.complete.query,filters:{model:'selected'}});f.render();f.tick();f.reads().at(-1).reject(Error('Refresh required (410)'));await flush();h=f.render();assert.match(h.report.error,/Refresh required/);assert.equal(h.complete.report.value.query.filters.model,undefined);const count=f.reads().length;h.refine({...h.complete.query,groupBy:'provider'});f.render();f.tick();assert.equal(f.reads().length,count);h.reload();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);f.retire();
+ const f=mount();let h=await opened(f);h.refine({...h.query,filters:{model:'selected'}});f.render();f.tick();f.reads().at(-1).reject(Error('Refresh required (410)'));await flush();h=f.render();assert.match(h.report.error,/Refresh required/);assert.equal(h.report.value.query.filters.model,undefined);const count=f.reads().length;h.refine({...h.query,groupBy:'provider'});f.render();f.tick();assert.equal(f.reads().length,count);h.reload();f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);f.retire();
 });
 test('preset preserves draft exact filters/timezone, typed session key survives grouping; widening opens fresh base',async()=>{
- const f=mount();let h=await opened(f);assert.equal(h.query.rollingDays,7);h.choosePreset(30,{...h.query,timezone:'Pacific/Auckland',filters:{...h.query.filters,model:'draft + exact',lane:'api'}});f.render();f.tick();let p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('days'),'30');assert.equal(p.has('from'),false);assert.equal(p.has('cut'),false);assert.equal(p.get('model'),'draft + exact');assert.equal(p.get('timezone'),'Pacific/Auckland');
- const v=report({query:{...report().query,filters:{user:'alice@example.com',key:{kind:'session'}}}});f.reads().at(-1).resolve(outcome(v));await flush();h=f.render();h.setQuery({...h.query,groupBy:'provider'});f.render();f.tick();p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('keyKind'),'session');assert.equal(p.has('key'),false);assert.equal(p.get('cut'),v.cut);f.reads().at(-1).resolve(outcome({...v,query:{...v.query,groupBy:'provider'}}));await flush();h=f.render();h.refine({...h.complete.query,filters:{}});f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);f.retire();
+ const f=mount();let h=await opened(f);assert.equal(h.controls.rollingDays,7);h.choosePreset(30,{...h.controls,timezone:'Pacific/Auckland',filters:{...h.controls.filters,model:'draft + exact',lane:'api'}});f.render();f.tick();let p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('days'),'30');assert.equal(p.has('from'),false);assert.equal(p.has('cut'),false);assert.equal(p.get('model'),'draft + exact');assert.equal(p.get('timezone'),'Pacific/Auckland');
+ const v=report({query:{...report().query,filters:{user:'alice@example.com',key:{kind:'session'}}}});f.reads().at(-1).resolve(outcome(v));await flush();h=f.render();h.setControls({...h.controls,groupBy:'provider'});f.render();f.tick();p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('keyKind'),'session');assert.equal(p.has('key'),false);assert.equal(p.get('cut'),v.cut);f.reads().at(-1).resolve(outcome({...v,query:{...v.query,groupBy:'provider'}}));await flush();h=f.render();h.refine({...h.query,filters:{}});f.render();f.tick();assert.equal(new URL(f.reads().at(-1).path,'https://console.example').searchParams.has('cut'),false);f.retire();
 });
 test('outside-retention response preserves custom controls and can recover with a new valid custom range',async()=>{
- const f=mount();let h=await opened(f);const from=new Date(now-30*86400000).toISOString(),to=new Date(now-29*86400000).toISOString();h.setQuery({...h.query,rollingDays:undefined,from,to});f.render();f.tick();f.reads().at(-1).resolve({kind:'outside_retained_range'});await flush();h=f.render();assert.equal(h.report.value,undefined);assert.equal(h.query.from,from);assert.equal(h.query.to,to);h.setQuery({...h.query,from:new Date(now-60000).toISOString(),to:new Date(now).toISOString()});f.render();f.tick();const p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('from'),new Date(now-60000).toISOString());assert.equal(p.has('cut'),false);f.retire();
+ const f=mount();let h=await opened(f);const from=new Date(now-30*86400000).toISOString(),to=new Date(now-29*86400000).toISOString();h.setControls({...h.controls,rollingDays:undefined,from,to});f.render();f.tick();f.reads().at(-1).resolve({kind:'outside_retained_range'});await flush();h=f.render();assert.equal(h.report.value,undefined);assert.equal(h.controls.from,from);assert.equal(h.controls.to,to);h.setControls({...h.controls,from:new Date(now-60000).toISOString(),to:new Date(now).toISOString()});f.render();f.tick();const p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('from'),new Date(now-60000).toISOString());assert.equal(p.has('cut'),false);f.retire();
 });
 
 // Calendar regressions exercise the shipped hook, not a mirror of its parser.
 for (const from of ['2026-02-30T00:00:00Z','2026-04-31T01:00:00+05:45','2025-02-29','2026-02-28T24:00:00Z']) test('custom input rejects calendar normalization: '+from,async()=>{
  const f=mount();try{const h=await opened(f),before=f.reads().length;
-  h.setQuery({...h.query,rollingDays:undefined,from,to:'2026-05-01T00:00:00Z'});f.render();f.tick();
+  h.setControls({...h.controls,rollingDays:undefined,from,to:'2026-05-01T00:00:00Z'});f.render();f.tick();
   assert.equal(f.reads().length,before,'invalid original input must not dispatch a normalized report');
   const invalid=f.render();assert.match(invalid.report.error,/calendar|RFC3339|range/i);assert.equal(invalid.report.value,undefined);
   await invalid.startExport('json');assert.equal(f.reads().length,before);assert.equal(f.downloads.length,0);
  }finally{f.retire();}
 });
 test('date-only input resolves chosen timezone and custom controls preserve the original selection',async()=>{
- const f=mount();try{let h=await opened(f);h.setQuery({...h.query,rollingDays:undefined,from:'2024-02-29',to:'2024-03-01',timezone:'Asia/Kathmandu'});f.render();f.tick();
+ const f=mount();try{let h=await opened(f);h.setControls({...h.controls,rollingDays:undefined,from:'2024-02-29',to:'2024-03-01',timezone:'Asia/Kathmandu'});f.render();f.tick();
   const read=f.reads().at(-1),p=new URL(read.path,'https://console.example').searchParams;
   assert.equal(p.get('from'),'2024-02-29');assert.equal(p.get('to'),'2024-03-01');assert.equal(p.get('timezone'),'Asia/Kathmandu');
   const query={...report().query,from:Date.parse('2024-02-28T18:15:00Z'),to:Date.parse('2024-02-29T18:15:00Z'),timezone:'Asia/Kathmandu'};
-  read.resolve(outcome(report({query})));await flush();h=f.render();assert.equal(h.query.from,'2024-02-29');assert.equal(h.query.to,'2024-03-01');
-  h.setQuery({...h.query,groupBy:'provider'});f.render();f.tick();assert.match(f.reads().at(-1).path,/cut=a{43}/);
+  read.resolve(outcome(report({query})));await flush();h=f.render();assert.equal(h.controls.from,'2024-02-29');assert.equal(h.controls.to,'2024-03-01');
+  h.setControls({...h.controls,groupBy:'provider'});f.render();f.tick();assert.match(f.reads().at(-1).path,/cut=a{43}/);
  }finally{f.retire();}
 });
 for(const audience of ['personal','admin'])test(audience+' clipped controls and refreshed export keep original selected bounds',async()=>{
  const f=mount({audience});try{let h=await opened(f);const selected={...report().query,from:now-2*3600000};
-  if(audience==='personal')h.setQuery({...h.query,rollingDays:undefined,from:new Date(selected.from).toISOString(),to:new Date(selected.to).toISOString()});else h.newRange(selected);
+  if(audience==='personal')h.setControls({...h.controls,rollingDays:undefined,from:new Date(selected.from).toISOString(),to:new Date(selected.to).toISOString()});else h.newRange(selected);
   f.render();f.tick();const clipped=report({query:{...selected,from:now-3600000},coverage:{...report({},audience).coverage,clippedFrom:selected.from,effectiveFrom:now-3600000}},audience);
   f.reads().at(-1).resolve(outcome(clipped));await flush();h=f.render();
-  if(audience==='personal')assert.equal(h.query.from,new Date(selected.from).toISOString());
+  if(audience==='personal')assert.equal(h.controls.from,new Date(selected.from).toISOString());
   h.showEvents(true);f.render();let request=f.reads().at(-1);assert.equal(new URL(request.path,'https://console.example').searchParams.get('from'),new Date(clipped.query.from).toISOString());request.resolve(outcome({events:[],nextCursor:null}));await flush();h=f.render();
   const work=h.startExport('json');request=f.reads().at(-1);assert.equal(new URL(request.path,'https://console.example').searchParams.get('from'),new Date(selected.from).toISOString());
   const fresh={...clipped,cut:'e'.repeat(43)};request.resolve(outcome(fresh));await flush();request=f.reads().at(-1);
@@ -176,15 +176,15 @@ for(const audience of ['personal','admin'])test(audience+' invalid custom end is
 });
 test('invalid custom input cancels an in-flight export instead of downloading stale selection',async()=>{
  const f=mount();try{let h=await opened(f);const work=h.startExport('json'),r=f.reads().at(-1);
-  h.setQuery({...h.query,from:'2026-02-30',to:'2026-03-01'});f.render();assert.equal(r.init.signal.aborted,true);
+  h.setControls({...h.controls,from:'2026-02-30',to:'2026-03-01'});f.render();assert.equal(r.init.signal.aborted,true);
   r.resolve(outcome(report({cut:'e'.repeat(43)})));await work;assert.equal(f.downloads.length,0);assert.match(f.render().report.error,/calendar/);assert.ok(f.requests.some(r=>r.init.method==='DELETE'&&r.path.includes('e'.repeat(43))));
  }finally{f.retire();}
 });
 
 test('clear filters cannot bypass invalid input and preserves a clipped original interval on widening',async()=>{
  const f=mount();try{const filtered={...report().query,filters:{model:'base-filter'}};let h=await opened(f,report({query:filtered}));
-  h.setQuery({...h.query,from:'2026-02-30',to:'2026-03-01'});h=f.render();const before=f.reads().length;h.clearFilters();f.render();f.tick();h=f.render();
-  assert.equal(f.reads().length,before);assert.match(h.report.error,/calendar/);assert.equal(h.query.from,'2026-02-30');
+  h.setControls({...h.controls,from:'2026-02-30',to:'2026-03-01'});h=f.render();const before=f.reads().length;h.clearFilters();f.render();f.tick();h=f.render();
+  assert.equal(f.reads().length,before);assert.match(h.report.error,/calendar/);assert.equal(h.controls.from,'2026-02-30');
   const input={from:new Date(now-2*3600000).toISOString(),to:new Date(now).toISOString(),timezone:filtered.timezone};h.customRange(filtered,input,true);f.render();f.tick();
   const clipped=report({query:filtered,coverage:{...report().coverage,clippedFrom:now-2*3600000}});f.reads().at(-1).resolve(outcome(clipped));await flush();h=f.render();h.clearFilters();f.render();f.tick();
   const p=new URL(f.reads().at(-1).path,'https://console.example').searchParams;assert.equal(p.get('from'),input.from);assert.equal(p.has('model'),false);assert.equal(p.has('cut'),false);
@@ -196,7 +196,7 @@ for(const audience of ['personal','admin'])for(const recovery of ['custom','pres
   f.render();f.render();f.tick();f.reads()[0].reject(Error('Usage capacity unavailable; narrow the range or filters (422)'));await flush();let h=f.render();
   assert.match(h.report.error,/capacity/);assert.equal(h.report.value,undefined);await h.startExport('json');assert.equal(f.reads().length,1);assert.equal(f.downloads.length,0);
   const input={from:'2026-11-08',to:'2026-11-09',timezone:'Asia/Kathmandu'},filters={model:'draft + exact',provider:'openai',status:'success',lane:'api',costClass:'unknown'};
-  if(audience==='personal'){const next={...h.query,...input,groupBy:'provider',filters:{...emptyFilters,...filters,key:'own-key'}};if(recovery==='custom')h.setQuery(next);else h.choosePreset(7,next);}
+  if(audience==='personal'){const next={...h.controls,...input,groupBy:'provider',filters:{...emptyFilters,...filters,key:'own-key'}};if(recovery==='custom')h.setControls(next);else h.choosePreset(7,next);}
   else {
    const fields={'Start':input.from,'End':input.to,'Timezone':input.timezone,'Group by':'provider'};
    for(const [key,value]of Object.entries({...filters,user:'retired@example.com'}))fields[key+' (exact)']=value;
@@ -239,10 +239,10 @@ for(const audience of ['personal','admin'])test(audience+' calendar UI transport
   const f=mount({audience,full,controls:audience==='admin'}),requests=[];let drained=0;
   f.props.request=(_origin,path,init={})=>{const work=server.read(path,Date.now(),init.method??'GET');requests.push({path,init,work});return work;};
   const settle=async()=>{for(let i=0;i<20;i++){const batch=requests.slice(drained);drained=requests.length;await Promise.allSettled(batch.map(r=>r.work));await flush();if(drained===requests.length)return;}assert.fail('request cascade must settle boundedly');};
-  const complete=()=>{const h=f.render();return h.complete??h;},lastParams=()=>new URL(requests.filter(r=>r.init.method!=='DELETE').at(-1).path,'https://console.example').searchParams;
+  const complete=()=>{const h=f.render();return h;},lastParams=()=>new URL(requests.filter(r=>r.init.method!=='DELETE').at(-1).path,'https://console.example').searchParams;
   try{
    f.render();f.render();f.tick();await settle();let h=f.render();
-   if(audience==='personal'){if(full)h.setQuery({...h.query,...input,rollingDays:undefined,filters:{...h.query.filters,model:'cursor-model',provider:'openai'}});else h.customRange({...h.complete.query,filters:{model:'cursor-model',provider:'openai'}},input,true);}
+   if(audience==='personal'){if(full)h.setControls({...h.controls,...input,rollingDays:undefined,filters:{...h.controls.filters,model:'cursor-model',provider:'openai'}});else h.customRange({...h.query,filters:{model:'cursor-model',provider:'openai'}},input,true);}
    else{for(const [label,value]of Object.entries({Start:input.from,End:input.to,Timezone:input.timezone,'model (exact)':'cursor-model','provider (exact)':'openai'})){labelControl(f.tree,label).props.onChange({target:{value}});f.render();}if(full)f.tree.props.onSubmit({preventDefault(){}});else nodes(f.tree).find(n=>n.type==='button'&&n.props.children==='Open as new base').props.onClick({preventDefault(){}});}
    f.render();f.tick();await settle();let data=complete();
    assert.equal(data.report.error,'','date-only UI selection must pass the real HTTP parser');

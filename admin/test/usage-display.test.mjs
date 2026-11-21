@@ -36,10 +36,9 @@ try {
   await rm(output, { recursive: true, force: true });
 }
 const emptyMetrics = { calls: 0, generationCalls: 0, utilityCalls: 0, successfulCalls: 0, errorCalls: 0, deniedCalls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0, inputReportedCalls: 0, outputReportedCalls: 0, cacheReadReportedCalls: 0, cacheWriteReportedCalls: 0, reasoningReportedCalls: 0 };
-const range = { from: 1000, to: 2000, timezone: 'UTC', retentionStart: 500, clampedStart: false };
-const report = (extra = {}) => ({ range, metrics: emptyMetrics, costs: [], groupBy: 'model', groups: [], buckets: [{ start: 1000, end: 2000, label: 'idle', metrics: emptyMetrics, costs: [] }], historyComplete: true, groupsTruncated: false, generatedAt: 2000, ...extra });
+const report = (extra = {}) => completeData(extra).report.value;
 const noop = () => {};
-const data = value => ({ report: { value, loading: false, error: '' }, query: { rollingDays: 7, from: '', to: '', timezone: 'UTC', groupBy: 'model', filters: {} }, reload: noop, setQuery: noop, showEvents: noop, events: { loading: false, error: '' }, page: 1 });
+const data = value => ({ ...completeData(), report: { value, loading: false, error: '' }, query: value?.query, controls: { rollingDays: 7, from: '', to: '', timezone: 'UTC', groupBy: 'model', filters: {} }, setControls: noop, choosePreset: noop, clearFilters: noop });
 const summary = value => renderToStaticMarkup(createElement(PersonalUsageSummary, { data: data(value) }));
 const apiCard = html => html.match(/<dt>Known API cost<\/dt>([\s\S]*?)<dt>Model calls<\/dt>/)?.[1];
 
@@ -63,10 +62,10 @@ test('subscription-only calls are not unavailable or a zero-dollar API invoice',
 
 test('incomplete, clipped, outside-retention and missing price coverage do not invent emptiness', () => {
   for (const value of [
-    report({ historyComplete: false }),
-    report({ historyComplete: undefined }),
-    report({ range: { ...range, clampedStart: true } }),
-    report({ range: { ...range, retentionStart: 1500 } }),
+    report({ coverage: { ...report().coverage, allDiscoveredSourcesAnswered: false } }),
+    report({ coverage: { ...report().coverage, allDiscoveredSourcesAnswered: undefined } }),
+    report({ coverage: { ...report().coverage, clippedFrom: 500 } }),
+    report({ coverage: { ...report().coverage, effectiveFrom: 1500 } }),
     report({ metrics: { ...emptyMetrics, calls: 1 } }),
     report({ metrics: { ...emptyMetrics, calls: 2 }, costs: [{ lane: 'subscription', costClass: 'fixed', calls: 1, amountMicros: 1 }] }),
     report({ metrics: { ...emptyMetrics, calls: 1 }, costs: [{ lane: 'unattributed', costClass: 'fixed', calls: 1, amountMicros: 1 }] }),
@@ -105,7 +104,7 @@ function completeData(extra={},audience='personal'){
  const v={query:{from:1000,to:2000,timezone:'UTC',grain:'day',groupBy:audience==='admin'?'user':'model',rankBy:'calls',rankOffset:0,filters:{}},cut:'a'.repeat(43),metrics:emptyMetrics,costs:[],recordedChargeMicros:0,chargeReportedCalls:0,groups:[],buckets:[{start:1000,end:2000,label:'idle',metrics:emptyMetrics,costs:[]}],remainder:{metrics:emptyMetrics,costs:[],recordedChargeMicros:0,chargeReportedCalls:0},rank:{offset:0,distinctGroups:0,hasMore:false,exact:true},coverage:{authority:audience==='admin'?'admin_retained':'current_access',scope:audience==='admin'?'admin_current_plus_tracked_retired':'personal_current_access',discoveredScopeEnumeration:'complete',allDiscoveredSourcesAnswered:true,retainedAttributionComplete:true,historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',effectiveFrom:1000,clippedFrom:null,capturedBetween:{from:3000,to:3001},captureAudit:{startedAt:500,verifiedSince:500,captureGapObserved:false}},...extra};
  return {audience,report:{value:v,error:'',loading:false},query:v.query,events:{error:'',loading:false},exportState:{busy:false,message:''},page:1,eventsShown:false,reload:noop,refine:noop,back:noop,newRange:noop,preset:noop,showEvents:noop,startExport:noop,cancelExport:noop};
 }
-function personalData(extra={}){const c=completeData(extra),v=c.report.value;return {...data(report({metrics:v.metrics,costs:v.costs,historyComplete:undefined,discoveredScopeAnswered:v.coverage.allDiscoveredSourcesAnswered,range:{...range,retentionStart:v.coverage.effectiveFrom,clampedStart:v.coverage.clippedFrom!==null}})),complete:c};}
+function personalData(extra={}){return data(completeData(extra).report.value);}
 test('new discovered-scope personal zero preserves zero chart values and never promises exhaustive history',()=>{
  const html=renderToStaticMarkup(createElement(MyUsageScreen,{data:personalData()}));
  assert.match(html,/<dt>Total tokens<\/dt><dd>0<\/dd>/);assert.match(html,/<title>idle: 0 tokens<\/title>/);assert.match(html,/For your current access/);assert.match(html,/No calls in discovered locations for this range/);assert.match(html,/Not all historical locations have been assessed/);assert.doesNotMatch(html,/History complete|Gaps: not reported/);assert.match(html,/Export refreshed snapshot/);
@@ -114,7 +113,7 @@ test('new personal missing fields remain unknown, known zero money remains zero 
  const m={...emptyMetrics,calls:1,generationCalls:1,successfulCalls:1};
  const value=personalData({metrics:m,costs:[{lane:'api',costClass:'unknown',calls:1,amountMicros:0}],recordedChargeMicros:0,chargeReportedCalls:1});
  const html=renderToStaticMarkup(createElement(PersonalUsageSummary,{data:value}));assert.match(html,/<dt>Total tokens<\/dt><dd>Not reported<\/dd>/);assert.match(apiCard(html),/Unavailable/);assert.match(html,/Recorded accounting amount/);assert.match(html,/\$0\.00/);assert.match(html,/not proof of upstream price or completed budget settlement/);
- value.complete.report.value.coverage={...value.complete.report.value.coverage,effectiveFrom:1500,clippedFrom:1000,captureAudit:{startedAt:1600,verifiedSince:1600,captureGapObserved:true}};value.report.value.range={...range,retentionStart:1500,clampedStart:true};const clipped=renderToStaticMarkup(createElement(MyUsageScreen,{data:value}));assert.match(clipped,/Start clipped/);assert.match(clipped,/predates the verified tracking interval/);assert.match(clipped,/affected usage is unknown/);assert.match(clipped,/Not all historical locations have been assessed/);
+ value.report.value.coverage={...value.report.value.coverage,effectiveFrom:1500,clippedFrom:1000,captureAudit:{startedAt:1600,verifiedSince:1600,captureGapObserved:true}};const clipped=renderToStaticMarkup(createElement(MyUsageScreen,{data:value}));assert.match(clipped,/Start clipped/);assert.match(clipped,/predates the verified tracking interval/);assert.match(clipped,/affected usage is unknown/);assert.match(clipped,/Not all historical locations have been assessed/);
 });
 test('admin zero, missing values, retained identities, exact remainder and stale states are honest in rendered output',()=>{
  const d=completeData({},'admin');let html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));assert.match(html,/Usage in discovered locations/);assert.match(html,/No calls in discovered locations for this range/);assert.match(html,/Other former locations may contain retained calls/);assert.match(html,/Not all historical locations have been assessed/);assert.match(html,/Recorded accounting amount/);assert.match(html,/Not reported/);
@@ -129,7 +128,7 @@ test('invalid original calendar input remains visible as an alert with no report
  let html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
  assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
  assert.doesNotMatch(html,/Export refreshed snapshot JSON/);
- const p={...personalData(),query:{...data().query,...input,rollingDays:undefined},report:state,complete:{...d,audience:'personal'}};
+ const p={...data(),...d,audience:'personal',controls:{...data().controls,...input,rollingDays:undefined}};
  html=renderToStaticMarkup(createElement(MyUsageScreen,{data:p}));assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
  assert.ok(html.includes('<button type="button" disabled="">Export refreshed snapshot JSON</button>'));
 });
