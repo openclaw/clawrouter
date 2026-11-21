@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { credentialExpiryLabel, keyTierChoices } = await import("../src/member-key-options.ts");

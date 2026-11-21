@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";

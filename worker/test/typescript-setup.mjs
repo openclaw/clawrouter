@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import * as diagnostics from "node:diagnostics_channel";
 
 // Workers provides FixedLengthStream for known-length streamed bodies; Node does not.

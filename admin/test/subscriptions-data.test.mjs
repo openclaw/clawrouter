@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { canProbeGrant, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } = await import("../src/subscriptions-data.ts");
