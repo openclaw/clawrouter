@@ -205,6 +205,9 @@ export function nativeErrorMetadata(body) {
   const param = typeof body?.error?.param === 'string' ? body.error.param : '';
   const providerParam = parameters.find(name => param === name || param.startsWith(name + '.') || param.startsWith(name + '[')) ?? 'unknown';
   const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
+  const policyRejection = body?.error?.type === 'invalid_request_error'
+    && body.error.code === 'invalid_prompt'
+    && message.includes('prompt was flagged as potentially violating our usage policy');
   const hints = [
     ['safety_notice', /this content can[’']t be shown|safety refusal/],
     ['credit_balance', /credit balance/], ['spend_limit', /spend(?:ing)? (?:limit|cap)/],
@@ -214,6 +217,6 @@ export function nativeErrorMetadata(body) {
     ['service_tier', /service_tier|service tier/],
   ];
   return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
-    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
+    errorHint: policyRejection ? 'safety_notice' : hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
     providerCode: codes.has(body?.error?.code) ? body.error.code : 'unknown', providerParam };
 }
