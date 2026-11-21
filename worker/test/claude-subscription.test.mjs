@@ -3,7 +3,7 @@ import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuotaProbe } from "../grant-quota.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, transformTransportBody, transportForGrant } from "../provider-auth.ts";
-import { snapshot } from "../providers.ts";
+import { snapshot } from "../provider-catalog.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 const anthropic = snapshot.providers.find((provider) => provider.id === "anthropic");

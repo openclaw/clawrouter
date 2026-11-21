@@ -5,7 +5,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
-const { providerModel } = await import("../providers.ts");
+const { providerModel } = await import("../provider-catalog.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { estimateModelCost, actualModelCost } = await import("../pricing.ts");

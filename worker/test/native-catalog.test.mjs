@@ -11,7 +11,7 @@ import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { authorityCall } = await import("../authority.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const networkFetch = globalThis.fetch;
 const sol = "openai/gpt-6.1-sol";
 

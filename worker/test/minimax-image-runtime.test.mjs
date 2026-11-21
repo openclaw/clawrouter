@@ -4,7 +4,7 @@ import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { configureImage, imageBody, imageModel, imageResult } from "./minimax-image-runtime-fixture.mjs";
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../../shared/minimax-image-binding.ts";
 import { minimaxSpeechBinding } from "../../shared/native-media-binding.ts";
-import { snapshot } from "../providers.ts";
+import { snapshot } from "../provider-catalog.ts";
 import { grantSupports } from "../provider-auth.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, materializeGrantCredentials, inspectGrantCredentials, revokeGrantCredentials, secretlessGrant } from "../grant-credentials.ts";

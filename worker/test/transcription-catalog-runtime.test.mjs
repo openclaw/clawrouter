@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot, providerById } = await import("../providers.ts");
+const { snapshot, providerById } = await import("../provider-catalog.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");
 
 async function setup(t, id, native = true) {

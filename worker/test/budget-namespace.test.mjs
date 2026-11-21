@@ -10,7 +10,7 @@ import { emptyUsageSnapshot } from "../usage-sharding.ts";
 
 const { default: handler } = await import("../index.ts");
 const { normalizePolicy } = await import("../admin.ts");
-const { modelRoute } = await import("../providers.ts");
+const { modelRoute } = await import("../provider-catalog.ts");
 const minute = 60_000, day = 86_400_000;
 const policy = normalizePolicy({ providers: ["openai"], tenantId: "provider", monthlyBudgetMicros: 100, budgetMode: "reserve" }, undefined, false);
 const auth = { policyId: "openai", policy };

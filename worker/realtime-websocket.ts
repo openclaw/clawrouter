@@ -2,7 +2,7 @@ import { fundRealtimeUnit, type FundedInput } from './realtime-accounting';
 import { authenticateProxyKey, proxyKeyVerification } from './proxy-auth';
 import { prepareSelected } from './proxy';
 import { PreparationAdmission } from './provider-templates';
-import { providerById } from './providers';
+import { providerById } from './provider-catalog';
 import type { ProxySelection } from './proxy-selection';
 import type { AuthorizedIdentity, Env } from './types';
 import { HttpError, errorResponse } from './utils';

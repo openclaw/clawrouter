@@ -41,7 +41,7 @@ import { validateImageEdit } from "./image-edits.ts";
 import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate, PreparationAdmission, isPreparationLimit } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody, unifiedPathForEndpoint } from "./providers";
+import { transformRequestBody } from "./providers"; import { endpointForPath, modelRoute, providerForModel, providerModel, unifiedPathForEndpoint } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export interface ProxySelection {

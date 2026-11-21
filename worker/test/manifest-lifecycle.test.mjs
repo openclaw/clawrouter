@@ -8,7 +8,7 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 
 const { default: handler } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 
 const providerId = "manifest-lab";

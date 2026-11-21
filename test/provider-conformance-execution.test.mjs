@@ -143,7 +143,7 @@ test("all packages validate before execution and failures produce no partial rep
 
 test("failed host execution restores global transport and the bundled provider registry", async t => {
   const { runProviderConformance } = await import("../scripts/run-provider-conformance.mjs");
-  const { snapshot } = await import("../worker/providers.ts");
+  const { snapshot } = await import("../worker/provider-catalog.ts");
   const before = { fetch: globalThis.fetch, providers: snapshot.providers, models: snapshot.model_index };
   const f = fixture(t); f.scenario(s => { s.response.status = 201; });
   await assert.rejects(runProviderConformance([f.descriptor]), /client response status mismatch/);

@@ -122,7 +122,7 @@ for (const cause of ["deadline", "caller"]) for (const late of ["admit", "reject
   try {
     mf = await startWorkerdFixture(temporary, `
       import handler from "./worker/index.ts";
-      import { providerById } from "./worker/providers.ts";
+      import { providerById } from "./worker/provider-catalog.ts";
       import { putGrantCredentials } from "./worker/grant-credentials.ts";
       import { HttpOperation } from "./worker/http-operation.ts";
       export * from "./worker/index.ts";

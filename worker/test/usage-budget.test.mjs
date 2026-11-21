@@ -377,7 +377,7 @@ test("dispatched pre-header HTTP and native failures retain estimates through in
   // Mid-month: advancing past lease expiry must never cross a budget window.
   let now = Date.parse("2026-10-10T12:00:00Z");
   t.mock.method(Date, "now", () => now);
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const endpointTimeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
   const setTimer = globalThis.setTimeout;
   let deadline;
@@ -482,7 +482,7 @@ test("known nonbillable responses stay readable and zero across tariffs and brok
 
 test("settlement bases distinguish nonbillable work from tariffs, fallback charges, and free rates", async () => {
   const { createProxyAccounting } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { extractUsageTokens } = await import("../token-usage.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("anthropic/claude-haiku-4-5");
@@ -666,7 +666,7 @@ test("Anthropic client-owned tools settle both ledgers from token usage", async 
 
 test("incomplete pricing preserves fixed tariffs, free counting, and known nonbillable outcomes", async () => {
   const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra"), body = { tools: [{ type: "web_search" }] };
   assert.equal(estimateCost(route.model, body, 7, "llm.responses", { request_format: "openai.responses" }).basis, "policy_fixed");

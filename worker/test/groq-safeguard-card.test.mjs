@@ -7,7 +7,7 @@ import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 const { actualModelCost, estimateModelCost, requestPricingGap } = await import("../pricing.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { default: handler } = await import("../index.ts");
 const source = compileProviderSnapshot([parse(readFileSync(new URL("../../providers/groq.provider.yaml", import.meta.url), "utf8"))]);
 const model = source.providers[0].models.find(value => value.id === "groq/gpt-oss-safeguard-20b");

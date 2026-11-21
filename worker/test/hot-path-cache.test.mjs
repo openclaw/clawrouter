@@ -11,7 +11,7 @@ import { resolveGrantSelection } from '../grant-selection.ts';
 import { HotCache, hotCacheConfig, hotCacheNow, pendingBackgroundWork, setHotCacheClock, tryRunInBackground, backgroundMark, clearHotCaches, BACKGROUND_WORK_LIMIT, BACKGROUND_WORK_BOUND_MS, DRAIN_BOUND_MS } from '../hot-cache.ts';
 import { applyLocalGrantRuntime, resolveAdmission } from '../admission-cache.ts';
 import { cachedGrantCredentials } from '../credential-cache.ts';
-import { providerById } from '../providers.ts';
+import { providerById } from '../provider-catalog.ts';
 import { sha256Hex } from '../utils.ts';
 const { default: worker } = await import('../index.ts');
 const { captureGrantRuntime } = await import('../proxy.ts');

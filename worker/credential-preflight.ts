@@ -10,7 +10,7 @@ import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackgroun
 import { ownsCredentialPrefetchPermit, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { grantRevision } from "./grant-eligibility.ts";
-import { snapshot as providerSnapshot } from "./providers.ts";
+import { snapshot as providerSnapshot } from "./provider-catalog.ts";
 import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";

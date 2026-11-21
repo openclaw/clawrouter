@@ -1,4 +1,4 @@
-import {snapshot} from '../providers.ts';
+import { snapshot } from '../provider-catalog.ts';
 import {resolveTemplate} from '../provider-templates.ts';
 import type {Env} from '../types.ts';
 

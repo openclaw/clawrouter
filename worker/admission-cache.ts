@@ -11,7 +11,7 @@ import { coloGet, coloPut } from "./colo-cache.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { mergeGrantRuntimeState } from "./grant-runtime.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { snapshot } from "./providers.ts";
+import { snapshot } from "./provider-catalog.ts";
 import type { Env, GrantRuntimeState, UpstreamGrant } from "./types";
 import { prefetchGrantCredentials } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";

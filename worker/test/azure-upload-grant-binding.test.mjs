@@ -5,7 +5,7 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { overrideHotCacheConfig, HOT_CACHE_DISABLED } = await import("../hot-cache.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");

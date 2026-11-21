@@ -7,7 +7,7 @@ import { runLiveProviderSmokes } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
 
 const { default: handler } = await import("../worker/index.ts");
-const { snapshot } = await import("../worker/providers.ts");
+const { snapshot } = await import("../worker/provider-catalog.ts");
 const { sha256Hex } = await import("../worker/utils.ts");
 const { UsageLedgerObject } = await import("../worker/ledgers.ts");
 

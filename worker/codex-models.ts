@@ -4,7 +4,7 @@ import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-c
 import { HttpOperation } from "./http-operation.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
-import { assertProviderAccess, providerById, snapshot, upstreamAuth } from "./providers.ts";
+import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { providerById, snapshot } from "./provider-catalog.ts";
 import type { Env } from "./types.ts";
 import { HttpError, privateJson, sha256Hex } from "./utils.ts";
 

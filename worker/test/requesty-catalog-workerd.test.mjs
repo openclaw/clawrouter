@@ -8,7 +8,7 @@ import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
@@ -112,7 +112,7 @@ async function catalogRetirementBarriers(t) {
 const retirementRouter = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';

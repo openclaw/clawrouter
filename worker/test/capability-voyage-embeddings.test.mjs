@@ -11,7 +11,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const ids = ["voyage"];
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/voyage/embeddings.json", import.meta.url), "utf8"));
 const compiled = compileProviderSnapshot(ids.map(id => `providers/${id}.provider.yaml`).toSorted().map(file => parse(readFileSync(file, "utf8"))));

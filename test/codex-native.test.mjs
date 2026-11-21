@@ -10,7 +10,7 @@ import test from "node:test";
 import { nativeCodexClient } from "./helpers/native-codex.mjs";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 
-const { providerById } = await import("../worker/providers.ts");
+const { providerById } = await import("../worker/provider-catalog.ts");
 
 function nativeFixtureCatalog(provider, bundled) {
   const nativeBaseUrl = `/v1/native/${provider.id}`;

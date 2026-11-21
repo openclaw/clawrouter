@@ -159,7 +159,7 @@ test('owned auth common pressure precedes derived factories and preserves the bo
 const { selectAdmissionCandidate, selectGenerationAdmissionCandidate } = await import('../authority-grant-selection.ts');
 const { chooseGrantKey, normalizedChoiceCandidates } = await import('../grant-selection-strategies.ts');
 const { normalizePolicyRecord } = await import('../authority-policy.ts');
-const { snapshot: providerSnapshot } = await import('../providers.ts');
+const { snapshot: providerSnapshot } = await import('../provider-catalog.ts');
 const { GenerationAdvisoryState } = await import('../admission-cache.ts');
 const { admissionScratchBytes, GenerationConsumptionLease } = await import('../credential-preflight-arena.ts');
 for (const strategy of ['priority', 'round_robin', 'least_used', 'most_remaining', 'threshold', 'weighted_random']) {

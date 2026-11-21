@@ -6,7 +6,7 @@ import { backgroundCall } from "./http-background.ts";
 import { continuationScope, identityKey } from "./http-continuation.ts";
 import { managedJobKey } from "./managed-prediction-identity.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { assertProviderAccess, providerById } from "./providers.ts";
+import { assertProviderAccess } from "./providers.ts"; import { providerById } from "./provider-catalog.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
 import { responseIdentity } from "./response-identities.ts";
