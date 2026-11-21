@@ -70,7 +70,7 @@ import { authorityCall } from './worker/authority.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { sha256Hex } from './worker/utils.ts';
 import { bodyBudgetCharged } from './worker/body-budget.ts';
-import { usageStub } from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import { HttpOperation } from './worker/http-operation.ts';
 // This is the published source1 composition dependency, not a substitute selector.
 import { configureMusic, musicBody } from './worker/test/openrouter-music-runtime-fixture.mjs';

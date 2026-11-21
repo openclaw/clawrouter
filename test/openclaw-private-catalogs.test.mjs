@@ -308,7 +308,8 @@ import worker from './worker/index.ts';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
-import {ingestUsage,usageSnapshot} from './worker/ledgers.ts';
+import { ingestUsage } from './worker/ledgers.ts';
+import { usageSnapshot } from './worker/usage-ledger-client.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {sha256Hex} from './worker/utils.ts';
 ${createPrivateOperationLedger.toString()}

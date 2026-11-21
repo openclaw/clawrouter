@@ -58,7 +58,7 @@ export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCrede
 import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
 import {WanManagedOperation,readWanJson} from './worker/managed-media-json.ts';

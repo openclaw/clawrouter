@@ -60,7 +60,8 @@ const cancellations = new Map();
 import worker, { BudgetLedgerObject as Budget } from "./worker/index.ts";
 export * from "./worker/index.ts";
 import { sha256Hex } from "./worker/utils.ts";
-import { ingestUsage, usageStub } from "./worker/ledgers.ts";
+import { ingestUsage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
 export class BudgetLedgerObject extends Budget {
   constructor(state) { super(state); this.sql = state.storage.sql; }
   async fetch(request) { if (new URL(request.url).pathname === "/rows") return Response.json([...this.sql.exec("SELECT * FROM budget_reservations")]); return super.fetch(request); }
