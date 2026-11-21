@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 
 test("the reporting service loads without ledger implementations or SQL owners", async () => {
   const forbidden = /\/worker\/(?:ledgers|usage-report-store|usage-report-visibility|usage-rollups)\.ts(?:\?|$)/;
