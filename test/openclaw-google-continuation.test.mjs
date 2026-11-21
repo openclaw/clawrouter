@@ -152,6 +152,12 @@ function assertProof(proof) {
   assert.equal(proof.accepted, true, JSON.stringify(proof)); assert.equal(proof.operations, proof.settled);
   assert.equal(proof.readers, proof.unlocked); assert.equal(proof.rejected, proof.qualifiedReadRejections ?? 0);
 }
+function googleCaseReceipts(receipts, rows, id) {
+  const expectedIds = rows.filter(row => row.id === id).map(row => "gcont_" + row.id + "_" + row.hop);
+  const owned = receipts.filter(row => expectedIds.includes(row.id));
+  assert.deepEqual(owned.map(row => row.id).sort(), [...expectedIds].sort(), id + " exact case/hop receipts");
+  return owned;
+}
 async function verify(mf, origin, rows = expected) {
   const selectedIds = [...new Set(rows.map(row => row.id))];
   const calls = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/calls")).json();
@@ -168,7 +174,7 @@ async function verify(mf, origin, rows = expected) {
   assert.deepEqual(receipts.map(row => row.id).sort(), rows.map(row => "gcont_" + row.id + "_" + row.hop).sort());
   assert.equal(new Set(receipts.map(row => row.requestId)).size, receipts.length);
   for (const id of selectedIds) {
-    const owned = receipts.filter(row => row.id.startsWith("gcont_" + id + "_")); let usage;
+    const owned = googleCaseReceipts(receipts, rows, id); let usage;
     for (let attempt = 0; attempt < 150; attempt++) {
       usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + key(id) } })).json();
       if (usage.usage?.events.length === owned.length && usage.budget.spentMicros === usage.usage.events.reduce((n, event) => n + event.actual_cost_micros, 0)) break;
@@ -259,6 +265,15 @@ test("actual registered Google continuation through Worker and SQLite", { skip: 
   }, () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 
+test("Google receipt ownership separates overlapping case names and exact hops", () => {
+  const rows = [{ id: "policy", hop: 0 }, { id: "policy_generation", hop: 0 }, { id: "policy_generation", hop: 1 }];
+  const receipts = rows.map(row => ({ id: "gcont_" + row.id + "_" + row.hop, requestId: {} }));
+  assert.deepEqual(googleCaseReceipts(receipts, rows, "policy"), [receipts[0]]);
+  assert.deepEqual(googleCaseReceipts(receipts, rows, "policy_generation"), receipts.slice(1));
+  assert.throws(() => googleCaseReceipts(receipts.slice(1), rows, "policy"));
+  assert.throws(() => googleCaseReceipts([...receipts, receipts[0]], rows, "policy"));
+  assert.throws(() => googleCaseReceipts([{ ...receipts[0], id: "gcont_policy_1" }], rows, "policy"));
+});
 test("Google continuation bindings retain original input and reject missing, duplicate and foreign requests", () => {
   for (const mode of ["good", "foreign", "method", "duplicate", "missing"]) {
     const bindings = createGoogleBindings(), row = bindings.expect("one", "chat", "https://fixture.example/path", "POST", "synthetic-key");

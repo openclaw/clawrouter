@@ -2371,7 +2371,13 @@ test("wrapper delivery actual emitter helper relay and callback retain clean mul
   const helper = readFileSync("test/helpers/openclaw-consumer.mjs", "utf8");
   const outer = readFileSync("test/openclaw-litellm.test.mjs", "utf8");
   const emitterLine = sdk.split("\n").find(line => line.includes("process.stdout.write(wire.prefix + JSON.stringify(record)"));
-  const relayLine = helper.split("\n").find(line => line.includes("t.diagnostic(`OpenClaw"));
+  const nativeCall = '    const result = await promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {';
+  assert.equal(helper.split(nativeCall).length, 2, "one default native runner call");
+  const nativeBlock = helper.slice(helper.indexOf(nativeCall), helper.indexOf("  }, () => rm(clientTest));"));
+  const relayLines = nativeBlock.split("\n").filter(line => line.includes("t.diagnostic(`OpenClaw"));
+  assert.equal(relayLines.length, 1, "one stdout relay for the actual default native runner");
+  const [relayLine] = relayLines;
+  assert.match(relayLine, /native test wall time/);
   const callback = outer.match(/await runOpenClawConsumer\(\{ diagnostic\(value\) \{ records\.push\(\.\.\.wire\.parse\(value, delivery\)\); \} \}/)?.[0];
   assert.ok(emitterLine && relayLine && callback);
   const emit = new Function("wire", "record", "process", emitterLine.slice(emitterLine.indexOf("process.stdout.write"), emitterLine.lastIndexOf(";") + 1));
