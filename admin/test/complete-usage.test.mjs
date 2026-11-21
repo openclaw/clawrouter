@@ -1,7 +1,8 @@
 import '../../scripts/typescript-resolver.mjs';
+import { usageMetricKeys as metricKeys } from '../../shared/usage-report.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-const {exportRefreshedUsage,completeQueryString,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,metricKeys,usageCaveats}=await import('../src/complete-usage.ts');
+const {exportRefreshedUsage,completeQueryString,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,usageCaveats}=await import('../src/complete-usage.ts');
 import {parseUsageRangeInput} from '../src/usage-range.ts';
 const ok=value=>({kind:'complete',value});
 const metrics=()=>Object.fromEntries(metricKeys.map(k=>[k,0]));

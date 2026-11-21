@@ -8,7 +8,7 @@ import { clearHotCaches } from '../hot-cache.ts';
 import { flushSelections } from '../admission-cache.ts';
 import { observeProviderGrantQuota } from '../provider-quota.ts';
 import { mergeGrantRuntimeState } from '../grant-runtime.ts';
-import { providerById } from '../providers.ts';
+import { providerById } from '../provider-catalog.ts';
 import { grantQuotaExhausted } from '../grant-quota.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
 import { bindSingleDispatchTransport } from '../upstream-transport.ts';

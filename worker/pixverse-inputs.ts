@@ -1,4 +1,4 @@
-import { assertProviderAccess, modelSupportsEndpoint, upstreamAuth } from "./providers.ts";
+import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { planBudgetReservation } from "./accounting.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";

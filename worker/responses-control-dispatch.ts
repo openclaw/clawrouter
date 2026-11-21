@@ -13,7 +13,7 @@ import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, mana
 import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
 import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
-import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, type UpstreamAuth } from "./providers.ts";
+import { configuredUpstream, copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts"; import { providerById } from "./provider-catalog.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";

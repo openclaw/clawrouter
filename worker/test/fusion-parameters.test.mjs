@@ -1,7 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 import { normalizeFusionConfig } from "../fusion.ts";
 import { sha256Hex } from "../utils.ts";
 const { default: worker } = await import("../index.ts");

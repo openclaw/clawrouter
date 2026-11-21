@@ -6,7 +6,7 @@ import test from "node:test";
 import { buildProviderSmokePlan } from "../../scripts/provider-smoke-plan.mjs";
 
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { BudgetLedgerObject } = await import("../ledgers.ts");
 const { sha256Hex } = await import("../utils.ts");
 const providerId = "cloudflare-ai-gateway";

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fixture } from "./managed-runtime-fixture.mjs";
 const { observeUsage } = await import("../proxy-response.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/voyage/embeddings.json", import.meta.url)));
 const output = { ...wire.response, usage: { total_tokens: 7 } };
 const text = JSON.stringify(output), encoder = new TextEncoder();

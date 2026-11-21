@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { actualModelCost, estimateModelCost } from "../pricing.ts";
-import { modelRoute, providerById } from "../providers.ts";
+import { modelRoute, providerById } from "../provider-catalog.ts";
 import { extractUsageTokens } from "../token-usage.ts";
 
 const sonnet = "anthropic/claude-sonnet-5-5", haiku = "anthropic/claude-haiku-5-5";

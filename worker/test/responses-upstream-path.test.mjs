@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot, upstreamPath, configuredUpstream } = await import("../providers.ts");
+const { upstreamPath, configuredUpstream } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { assertOperationConfiguration } = await import("../provider-auth.ts");
 const { configuredEndpointPath } = await import("../endpoint-path.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");

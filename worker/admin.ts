@@ -39,7 +39,7 @@ import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshot
 import { startOAuth } from "./oauth";
 import { miniMaxDeviceAuthorize } from "./minimax-device-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
-import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
+import { listGrantRecords, listHealth, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota } from "./providers"; import { endpointForPath, modelRoute, snapshot } from "./provider-catalog";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessSession, AssignmentRule, Env, PolicyBinding,

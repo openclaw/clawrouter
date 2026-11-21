@@ -4,7 +4,7 @@ import { crc32, deflateSync, inflateSync } from "node:zlib";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const test = (name, run) => nodeTest(name, { timeout: 15000 }, run);
 const { default: worker } = await import("../index.ts");
-const { snapshot, upstreamAuth } = await import("../providers.ts");
+const { upstreamAuth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { inputRouteDigest } = await import("../pixverse-input-dispatch.ts");
 const { putGrantCredentials, revokeGrantCredentials, GrantCredentialObject } = await import("../grant-credentials.ts");

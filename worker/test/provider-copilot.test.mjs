@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCopilotRuntimeHeaders, copilotCatalogRequest, copilotAccountRequest, copilotGithubDomain, copilotModelFormats, filterCopilotModels, isCopilotCatalogModelVisible, prepareCopilotRequest, qualifyCopilotIdentity } from "../provider-copilot.ts";
+import { buildCopilotRuntimeHeaders, copilotCatalogRequest, copilotAccountRequest, copilotGithubDomain, copilotModelFormats, isCopilotCatalogModelVisible, prepareCopilotRequest, qualifyCopilotIdentity } from "../provider-copilot.ts";
 
 const secret = "synthetic-github-token", owner = "fixture-grant:version-2";
 const runtimeIdentity = Object.freeze({ ownerBinding: owner, integrationId: "fixture-integration", editorVersion: "FixtureEditor/1.0", editorPluginVersion: "fixture-plugin/1.0", userAgent: "FixtureCopilotClient/1.0" });
@@ -27,9 +27,6 @@ test("account endpoint selection allows product hosts and the selected enterpris
 test("discovered endpoints authorize transports without guessing from model names", () => {
   assert.deepEqual(copilotModelFormats(model), ["openai.chat_completions", "openai.responses", "anthropic.messages"]);
   assert.deepEqual(copilotModelFormats({ id: "claude-looking-name" }), []);
-  const response = { object: "list", data: [model, { ...model, id: "private" }, { ...model, id: "disabled", policy: { state: "disabled" } }, { id: "no-transport" }] };
-  assert.deepEqual(filterCopilotModels(response, id => id !== "private"), { object: "list", data: [model] });
-  assert.equal(response.data.length, 4);
 });
 
 test("native request uses the bound original credential, model and selected supported protocol", async () => {
@@ -65,24 +62,11 @@ for (const [name, policy, picker, visible] of [
   test(`native picker visibility: ${name}`, () => {
     const row = { ...model, policy, model_picker_enabled: picker };
     assert.equal(isCopilotCatalogModelVisible(row), visible);
-    assert.deepEqual(filterCopilotModels({ data: [row] }, () => true), { data: visible ? [row] : [] });
-    assert.deepEqual(filterCopilotModels({ data: [row] }, () => false), { data: [] });
     if (!visible) {
       assert.throws(() => prepareCopilotRequest({}, qualifyCopilotIdentity({}, "github.com", owner), owner, secret, row, "openai.responses", runtimeIdentity, requestContext), /invalid_copilot_model_transport/);
     }
   });
 }
-
-test("empty, denied and unconfigured catalogs never resurrect static model seeds", () => {
-  assert.deepEqual(filterCopilotModels({ data: [] }, () => true), { data: [] });
-  assert.deepEqual(filterCopilotModels({ data: [
-    { ...model, id: "disabled", policy: { state: "disabled" } },
-    { ...model, id: "consent-required", policy: { state: "unconfigured" } },
-    { ...model, id: "hidden", model_picker_enabled: false },
-  ] }, () => true), { data: [] });
-  assert.throws(() => filterCopilotModels({ data: [model, model] }, () => false), /invalid_copilot_model/);
-  assert.throws(() => filterCopilotModels({ data: [null] }, () => true), /invalid_copilot_model/);
-});
 
 // Frozen native manifest IDs/API/status only; no inherited vendor prices or limits.
 const frozenModels = [
@@ -112,7 +96,6 @@ for (const [id, format, status] of frozenModels) {
     const row = { id, ...(status ? { status } : {}), model_picker_enabled: true, policy: { state: "enabled" }, supported_endpoints: [nativePaths[format]] };
     assert.deepEqual(copilotModelFormats(row), [format]);
     assert.deepEqual(copilotModelFormats({ ...row, supported_endpoints: [] }), []);
-    assert.deepEqual(filterCopilotModels({ data: [row] }, candidate => candidate === id), { data: [row] });
     const identity = qualifyCopilotIdentity({}, "github.com", owner);
     const request = prepareCopilotRequest({ model: "caller-alias" }, identity, owner, secret, row, format, runtimeIdentity, requestContext);
     assert.equal(request.url, identity.apiBaseUrl + nativePaths[format]);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceReadPaths, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('compact actions put the decision before bounded notes without mutating legacy requests', () => {
@@ -10,7 +10,7 @@ test('compact actions put the decision before bounded notes without mutating leg
   assert.deepEqual(Object.keys(compact.properties), ['action', 'paths', 'edits', 'query', 'memory']);
   assert.deepEqual(compact.required, Object.keys(compact.properties));
   assert.equal(compact.properties.memory.maxLength, 512);
-  assert.equal(compact.properties.paths.maxItems, 3);
+  assert.equal(compact.properties.paths.maxItems, 12);
   assert.equal(compact.properties.edits.maxItems, 8);
   assert.equal(compact.properties.query.maxLength, 4096);
   compact.properties.edits.items.properties.path.type = 'number';
@@ -544,6 +544,28 @@ test('targeted edits reject ambiguity and preserve untouched source', () => {
   assert.throws(() => replaceEdits(task, files, [{ path: 'test/hidden.mjs', search: 'wrong', replace: '' }]), /invalid_edit/);
 });
 
+test('edit feedback identifies the failed anchor without applying a partial batch', () => {
+  const task = { editPaths: ['worker/example.ts'] }, files = [{ path: task.editPaths[0], content: 'before\nwrong\nafter\n' }];
+  for (const [search, reason] of [['missing private anchor', 'no match'], ['\n', 'multiple matches']]) {
+    let failure;
+    try {
+      replaceEdits(task, files, [
+        { path: task.editPaths[0], search: 'wrong', replace: 'correct' },
+        { path: task.editPaths[0], search, replace: '' },
+      ]);
+    } catch (error) { failure = error; }
+    assert.equal(failure?.message, 'search_must_match_once');
+    assert.deepEqual(failure.cause, { index: 1, path: task.editPaths[0], match: reason === 'no match' ? 'missing' : 'ambiguous' });
+    const feedback = actionFeedback(failure.message, 'edit', task, failure);
+    assert.ok(feedback.includes(`Edit 2 in worker/example.ts: ${reason}`));
+    assert.match(feedback, /batch was not applied/);
+    assert.equal(feedback.includes('missing private anchor'), false);
+    assert.equal(files[0].content, 'before\nwrong\nafter\n');
+  }
+  const forged = Object.assign(new Error('search_must_match_once'), { ordinal: 2, path: 'private', reason: 'forged' });
+  assert.equal(actionFeedback(forged.message, 'edit', task, forged).includes('forged'), false);
+});
+
 test('native JSON schema actions remain identical across providers', () => {
   const schema = { type: 'object', properties: { action: { type: 'string' } } };
   const body = { messages: [], max_tokens: 2048, response_format: { type: 'json_schema', json_schema: { name: 'action', strict: true, schema } } };
@@ -559,6 +581,18 @@ test('large-file source navigation preserves line locations and literal search',
   assert.equal(sourceView(files, ['scripts/compile.mjs:1-1000'])[0].truncated, true);
   assert.equal(sourceView(files, ['scripts/compile.mjs'])[0].content, files[0].content);
   assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
+});
+
+test('source reads batch multiple ranges while retaining file and selector limits', () => {
+  const files = Array.from({ length: 3 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: 'first\nsecond\nthird' }));
+  const selectors = files.flatMap(file => [`${file.path}:1-1`, `${file.path}:3-3`]);
+  assert.deepEqual(sourceReadPaths(selectors), files.map(file => file.path));
+  assert.deepEqual(sourceView(files, selectors).map(view => view.content), ['first', 'third', 'first', 'third', 'first', 'third']);
+  assert.equal(sourceView(files, Array(12).fill(selectors[0])).length, 12);
+  for (const invalid of [Array(13).fill(selectors[0]), [...selectors, 'worker/fourth.ts'], [null], 'worker/source-0.ts']) {
+    assert.throws(() => sourceReadPaths(invalid), /invalid_source_view/);
+    assert.throws(() => sourceView(files, invalid), /invalid_source_view/);
+  }
 });
 
 test('literal source search resumes without losing matches after the result limit', () => {

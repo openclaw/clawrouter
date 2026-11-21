@@ -4,7 +4,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { prepareNativeDeepSeekSearch } = await import("../native-deepseek-search.ts");

@@ -20,6 +20,22 @@ export interface UsageMetrics {
   cacheWriteReportedCalls: number;
   reasoningReportedCalls: number;
 }
+/** Ordered fields shared by reporting SQL, reconciliation, and presentation. */
+export function emptyUsageMetrics(): UsageMetrics {
+  return {
+    calls: 0, generationCalls: 0, utilityCalls: 0,
+    successfulCalls: 0, errorCalls: 0, deniedCalls: 0,
+    inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0,
+    inputReportedCalls: 0, outputReportedCalls: 0, cacheReadReportedCalls: 0, cacheWriteReportedCalls: 0, reasoningReportedCalls: 0,
+  };
+}
+export const usageMetricKeys = Object.keys(emptyUsageMetrics()) as Array<keyof UsageMetrics>;
+export const usageTokenFields = [
+  ['inputTokens', 'inputReportedCalls'], ['outputTokens', 'outputReportedCalls'],
+  ['cachedInputTokens', 'cacheReadReportedCalls'], ['cacheWriteInputTokens', 'cacheWriteReportedCalls'],
+  ['reasoningOutputTokens', 'reasoningReportedCalls'],
+] as const satisfies readonly (readonly [keyof UsageMetrics, keyof UsageMetrics])[];
+
 export interface UsageCostSummary {
   lane: UsageCostLane;
   costClass: UsageCostClass;

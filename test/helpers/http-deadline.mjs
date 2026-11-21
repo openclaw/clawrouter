@@ -323,7 +323,7 @@ async function until(predicate, signal, diagnostics = () => "") {
 
 function routerFixture() { return `
 import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
-import { providerById } from "./worker/providers.ts";
+import { providerById } from "./worker/provider-catalog.ts";
 export * from "./worker/index.ts";
 // Only this isolated fixture declares a short endpoint timeout.
 providerById("openai").endpoints.find(endpoint => endpoint.id === "responses").timeout_ms = ${endpointMs};

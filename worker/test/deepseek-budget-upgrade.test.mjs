@@ -9,7 +9,7 @@ const { resolveConnection } = await import("../authority.ts");
 const { budgetStatus, providerBudgetStatus } = await import("../ledgers.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
-const { modelRoute } = await import("../providers.ts");
+const { modelRoute } = await import("../provider-catalog.ts");
 const { default: handler } = await import("../index.ts");
 
 // Frozen providers/deepseek.provider.yaml at a28a8df335642ec609e85397dfb73c452980ee42.

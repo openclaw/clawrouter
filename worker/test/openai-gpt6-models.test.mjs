@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assessModelRequest } from "../../shared/model-request-parameters.ts";
 import { actualModelCost, estimateModelCost } from "../pricing.ts";
-import { modelRoute, providerById, transformRequestBody } from "../providers.ts";
+import { transformRequestBody } from "../providers.ts"; import { modelRoute, providerById } from "../provider-catalog.ts";
 import snapshot from "../generated/provider-snapshot.json" with { type: "json" };
 
 const provider = providerById("openai");

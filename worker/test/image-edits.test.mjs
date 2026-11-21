@@ -53,7 +53,7 @@ for (const [name, path, body, fixedCost] of [
   assert.equal(f.retained.length, 0, "uploaded images are not retained by the edit route");
 });
 
-const { providerById, routeCatalog } = await import("../providers.ts");
+const { providerById, routeCatalog } = await import("../provider-catalog.ts");
 const { grantSupports } = await import("../provider-auth.ts");
 const { shouldFailoverGrant } = await import("../grant-quota.ts");
 const { estimateModelCost, actualModelCost, requestPricingGap } = await import("../pricing.ts");

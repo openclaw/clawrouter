@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { eventFrame } from "./bedrock-eventstream-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const model = "anthropic.claude-sonnet-4-5-20250929-v1:0", region = "us-east-1";

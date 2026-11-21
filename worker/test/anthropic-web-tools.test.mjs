@@ -6,7 +6,7 @@ import { anthropicWebPrice, requestPricingGap } from "../pricing.ts";
 import { extractUsageTokens, extractSseUsageTokens, usageInspectionLimit } from "../token-usage.ts";
 import { observeUsage } from "../proxy-response.ts";
 const { validateBudgetReservation } = await import("../accounting.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 import { sse } from "./usage-budget-fixture.mjs";
 
 const provider = snapshot.providers.find(row => row.id === "anthropic");

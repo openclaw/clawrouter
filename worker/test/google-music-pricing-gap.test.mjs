@@ -5,7 +5,7 @@ const { actualModelCost, estimateModelCost, requestPricingGap } = await import("
 const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { googleMusicModels, prepareGoogleMusic } = await import("../google-music.ts");
 const format = "google.music_generate", endpoint = { request_format: format };
 const body = { contents: [{ role: "user", parts: [{ text: "Synthetic music fixture" }] }],

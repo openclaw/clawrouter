@@ -7,7 +7,7 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
-const { snapshot, configuredUpstream } = await import("../providers.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");

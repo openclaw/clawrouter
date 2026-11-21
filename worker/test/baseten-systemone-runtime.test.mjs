@@ -4,7 +4,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { BASETEN_SYSTEMONE_MODELS: models } = await import("../provider-baseten-systemone.ts");
 const { basetenSystemOneRequest: input, basetenSystemOneResponse: output } = await import("./baseten-systemone-fixtures.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");

@@ -8,7 +8,7 @@ const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { publicControlAuthorization } = await import("../response-control-authorization.ts");
 const { verifiedAccessSession, sessionPolicyIdentity } = await import("../access.ts");
 import { sha256Hex } from "../utils.ts";
-const { snapshot, configuredUpstream, copyRequestHeaders, upstreamPath } = await import("../providers.ts");
+const { configuredUpstream, copyRequestHeaders, upstreamPath } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { responseRouteDigest, dispatchResponseControl } = await import("../responses-control-dispatch.ts");
 
 async function fixture(t, oauth = false) {

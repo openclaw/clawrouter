@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { qualifyNativeQuery, nativeDispatchQuery } = await import("../native-query.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");

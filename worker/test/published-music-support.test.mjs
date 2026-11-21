@@ -5,7 +5,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { overrideHotCacheConfig, clearHotCaches } = await import("../hot-cache.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");
 

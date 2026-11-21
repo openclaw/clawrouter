@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
-const { configuredUpstream, endpointForPath, unifiedPathForEndpoint, upstreamPath, providerModel } = await import("../providers.ts");
+const { configuredUpstream, upstreamPath } = await import("../providers.ts"); const { endpointForPath, unifiedPathForEndpoint, providerModel } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/cohere.provider.yaml", import.meta.url), "utf8"));

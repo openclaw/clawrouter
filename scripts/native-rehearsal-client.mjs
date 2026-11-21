@@ -6,7 +6,7 @@ import {mkdir,readFile,writeFile,rm,rename} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as sleep} from 'node:timers/promises';
-import {nativeCodexClient} from '../test/helpers/native-codex.mjs';
+import {nativeCodexClient} from './native-codex-client.mjs';
 import {readCodexCatalog} from './codex-catalog.mjs';
 import {isolatedNativeTarget} from './deploy-native-target.mjs';
 import {createNativeControl,nativeWarm,nativeDrained,observeNativeControl} from './deploy-native-cutover.mjs';

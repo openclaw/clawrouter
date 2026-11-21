@@ -41,7 +41,7 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
   for (const model of ["v6", "c1"]) assert.equal(lines.filter(line => line === "PIXVERSE_IMAGE_RETIRED " + model).length, 1, "exact original SDK completion receipt");
 }
 async function json(response, status = 200) { const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text); }
-const collectionSourceSHA = "fc2dcf75ee41a4ad89a1885fb42442a311551ca00654bcdf2ff01b71df58510b";
+const collectionSourceSHA = "5cc9f44482c2d134d1c415841645dd7b8d539b4e4175026cb6fbd5f4af0a2d59";
 function collectionPrelude() {
   return `const pixverseCollectionRows = [], pixverseCollectionFaults = [];
 function pixverseCollectInvoke(fn, ...args) {
@@ -245,7 +245,8 @@ function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
     import { putGrantCredentials } from "./worker/grant-credentials.ts";
     import { authenticateProxyKey } from "./worker/proxy-auth.ts";
-    import { providerById, upstreamAuth } from "./worker/providers.ts";
+    import { providerById } from "./worker/provider-catalog.ts";
+    import { upstreamAuth } from "./worker/providers.ts";
     import { inputRouteDigest } from "./worker/pixverse-input-dispatch.ts";
     import { continuationScope } from "./worker/http-continuation.ts";
     import { backgroundCall } from "./worker/http-background.ts";

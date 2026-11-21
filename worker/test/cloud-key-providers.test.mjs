@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
-import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
+import { configuredUpstream, upstreamPath } from "../providers.ts"; import { providerModel } from "../provider-catalog.ts";
 import { resolveTemplate } from "../provider-templates.ts";
 
 const contracts = [

@@ -6,7 +6,7 @@ import test from "node:test";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
-const { listHealth, snapshot } = await import("../providers.ts");
+const { listHealth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);

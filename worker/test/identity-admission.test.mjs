@@ -8,7 +8,7 @@ const { admitIdentity, admitAdmission, identityJson, identityPlan, copyIdentity,
 const { parseAccessJson } = await import('../access-json.ts');
 const { authenticateProxyKey, admittedGrantSelection, proxyAdmission } = await import('../proxy-auth.ts');
 const { admissionFixture, admissionHeaders, admissionProvider } = await import('./admission-fixture.mjs');
-const { providerById } = await import('../providers.ts');
+const { providerById } = await import('../provider-catalog.ts');
 const { coloGet } = await import('../colo-cache.ts');
 const denied = error => { assert.ok(isIdentityFailure(error)); assert.equal(error.status, 503); assert.equal(error.code, 'identity_admission_unavailable'); assert.equal(Object.hasOwn(error, 'cause'), false); return true; };
 const empty = () => ({ credential: null, policy: null, owner: null, connections: [], pools: {} });

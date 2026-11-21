@@ -97,7 +97,7 @@ export {BudgetLedgerObject,UsageLedgerObject} from './worker/index.ts';
 import {PolicyBindingIndexObject as PolicyBase} from './worker/index.ts';
 export class PolicyBindingIndexObject extends PolicyBase { async fetch(request){if(new URL(request.url).pathname==='/fixture/alarm'){await this.alarm();return Response.json({settled:true});}return super.fetch(request);} }
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {configureVideo} from './worker/test/minimax-video-declaration-fixture.mjs';
 import {authorityCall} from './worker/authority.ts';
 import {GrantCredentialObject as BaseGrantCredentialObject,putGrantCredentials,inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';

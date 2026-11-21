@@ -1,3 +1,4 @@
+import { usageMetricKeys } from "../shared/usage-report.ts";
 import { ensureUsageVisibility, captureUsageVisibility, validateUsageVisibility, UsageVisibilityError, type UsageVisibilityCut, maintainUsageVisibility } from "./usage-report-visibility.ts";
 import type { PersonalUsageEvent, UsageCostClass, UsageCostLane, UsageGroupBy, UsageMetrics, UsageReportRange } from "../shared/usage-report.ts";
 import type { UsageEvent } from "./types.ts";
@@ -169,9 +170,7 @@ const metricExpressions: Record<keyof UsageMetrics, string> = {
   inputTokens: "SUM(input_tokens)", outputTokens: "SUM(output_tokens)", cachedInputTokens: "SUM(cached_input_tokens)", cacheWriteInputTokens: "SUM(cache_write_input_tokens)", reasoningOutputTokens: "SUM(reasoning_output_tokens)",
   inputReportedCalls: "COUNT(input_tokens)", outputReportedCalls: "COUNT(output_tokens)", cacheReadReportedCalls: "COUNT(cached_input_tokens)", cacheWriteReportedCalls: "COUNT(cache_write_input_tokens)", reasoningReportedCalls: "COUNT(reasoning_output_tokens)",
 };
-export const usageMetricKeys = Object.keys(metricExpressions) as Array<keyof UsageMetrics>;
-export function emptyUsageMetrics(): UsageMetrics { return Object.fromEntries(usageMetricKeys.map(key => [key, 0])) as unknown as UsageMetrics; }
-const metricSql = Object.entries(metricExpressions).map(([key, expr]) => 'COALESCE(' + expr + ', 0) AS "' + key + '"').join(", ");
+const metricSql = usageMetricKeys.map(key => 'COALESCE(' + metricExpressions[key] + ', 0) AS "' + key + '"').join(", ");
 const filterColumns = { model: "model", provider: "provider", key: "key_id", status: "status", costClass: "cost_class", lane: "lane" };
 function filterTerms(query: UsageReportQuery) {
   const terms: string[] = [], bindings: Array<string | number | null> = [];

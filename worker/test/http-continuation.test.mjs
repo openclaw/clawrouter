@@ -276,7 +276,7 @@ for (const phase of ["selection", "body_cancel"]) {
 
 test("the request deadline during alternate selection prevents another dispatch", async t => {
   const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
   const setTimer = globalThis.setTimeout;
   let deadline, selections = 0, canceled = false;
@@ -576,7 +576,7 @@ for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(
 });
 
 async function endpointDeadline(t) {
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
   const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout;
   let timer;

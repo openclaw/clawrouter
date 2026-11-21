@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { nativeCodexClient } from "../scripts/native-codex-client.mjs";
 
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const model = "gpt-6.1-sol";

@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
+import { configuredUpstream, upstreamPath } from "../providers.ts"; import { providerModel } from "../provider-catalog.ts";
 import { prepareSageRequest, decodeSageResponse } from "../provider-sage.ts";
 import { prepareSystemOneRequest, decodeSystemOneResponse } from "../provider-systemone.ts";
 const { prepareNativeSage } = await import("../native-sage.ts");

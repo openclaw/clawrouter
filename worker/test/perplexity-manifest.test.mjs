@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
-const { configuredUpstream, endpointForPath, upstreamPath, unifiedPathForEndpoint } = await import("../providers.ts");
+const { configuredUpstream, upstreamPath } = await import("../providers.ts"); const { endpointForPath, unifiedPathForEndpoint } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { configureMusic, musicBody, musicModels, musicWire } from "./openrouter-music-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { bodyBudgetCharged, BodyLease } = await import("../body-budget.ts");
 const nativePath = "/v1/native/openrouter/v1/chat/completions", manifestPath = "/v1/proxy/openrouter/music_generate";

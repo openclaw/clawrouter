@@ -7,7 +7,7 @@ import { authenticateProxyKey } from "./proxy-auth";
 import { admitAccountingFacts, createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
-import { assertProviderAccess, providerById } from "./providers";
+import { assertProviderAccess } from "./providers"; import { providerById } from "./provider-catalog";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
 import { prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";

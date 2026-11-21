@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { observeProviderGrantQuota } from "../provider-quota.ts";
 import { observeGrantQuotaProbe, grantQuotaExhausted, grantQuotaRatio, validGrantQuotaSnapshot } from "../grant-quota.ts";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 
 const now = Date.parse("2030-01-01T00:00:00Z"), iso = offset => new Date(now + offset).toISOString();
 const provider = providerById("anthropic"), prefix = "anthropic-ratelimit-unified-";

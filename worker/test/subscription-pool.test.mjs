@@ -9,7 +9,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuota, observeGrantQuotaProbe, grantQuotaExhausted, grantQuotaRatio } from "../grant-quota.ts";
 import { resolveGrantSelection, recordGrantRuntime, DEFAULT_GRANT_ROUTING } from "../grant-selection.ts";
-import { providerById, upstreamAuth, refreshStoredGrantQuota } from "../providers.ts";
+import { upstreamAuth, refreshStoredGrantQuota } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
 import { authorityCall } from "../authority.ts";
 import { UsageLedgerObject, ingestUsage } from "../ledgers.ts";
 import { sha256Hex } from "../utils.ts";

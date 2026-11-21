@@ -12,7 +12,7 @@ import { inputRetirement } from "./input-retirement.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
-import { assertProviderAccess, configuredUpstream, upstreamAuth, modelSupportsEndpoint, providerById, providerModel } from "./providers.ts";
+import { assertProviderAccess, configuredUpstream, upstreamAuth } from "./providers.ts"; import { providerById, providerModel } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { prepareSelected, captureGrantRuntime } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { prepareSoftBudget, startSoftBudget, softBudget, softBudgetPolicy } from "./soft-budget.ts";

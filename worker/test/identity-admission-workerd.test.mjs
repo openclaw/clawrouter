@@ -13,7 +13,7 @@ export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './work
 import {PolicyBindingIndexObject as Base,authorityCall} from './worker/authority.ts';
 import {authenticateProxyKey,admittedGrantSelection,proxyAdmission} from './worker/proxy-auth.ts';
 import {readIdentityResponse,isIdentityFailure} from './worker/identity-admission.ts';
-import {providerById} from './worker/providers.ts';
+import { providerById } from './worker/provider-catalog.ts';
 import {normalizePolicyRecord} from './worker/authority-policy.ts';
 import {clearHotCaches} from './worker/hot-cache.ts';
 import {sha256Hex} from './worker/utils.ts';

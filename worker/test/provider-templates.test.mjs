@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyTemplateHeaders, resolveHeaderTemplate, resolveTemplate } from "../provider-templates.ts";
-import { copyRequestHeaders, providerById } from "../providers.ts";
+import { copyRequestHeaders } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
 
 const provider = {
   ...providerById("openrouter"),

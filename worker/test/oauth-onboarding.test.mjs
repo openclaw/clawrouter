@@ -13,7 +13,7 @@ registerHooks({
 });
 
 const { startOAuth, oauthCallback } = await import("../oauth.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 
 test("bundled OpenAI rejects browser onboarding before creating state or contacting the provider", async (context) => {
   context.mock.method(globalThis, "fetch", () => assert.fail("unsupported onboarding must not contact the provider"));

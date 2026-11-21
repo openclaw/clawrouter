@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { modelRoute, providerById, providerReadinessFromState, routeCatalog } from "../providers.ts";
+import { providerReadinessFromState } from "../providers.ts"; import { modelRoute, providerById, routeCatalog } from "../provider-catalog.ts";
 
 const { prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");

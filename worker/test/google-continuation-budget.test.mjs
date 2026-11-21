@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 const { estimateModelCost, actualModelCost } = await import("../pricing.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const provider = providerById("google-gemini");
 const model = provider.models.find(row => row.upstream === "gemini-3.5-flash");
 const endpoint = provider.endpoints.find(row => row.id === "generate_content");

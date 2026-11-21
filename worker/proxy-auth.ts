@@ -7,7 +7,7 @@ import { effectiveBudgetPolicy } from "./budget-overrides.ts";
 import { markLocalError } from "./native-errors.ts";
 import { recordAdmissionDuration } from "./admission-timing.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
-import { snapshot } from "./providers.ts";
+import { snapshot } from "./provider-catalog.ts";
 import { budgetStatus } from "./ledgers.ts";
 import { budgetPrincipal } from "./budget-scope.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";

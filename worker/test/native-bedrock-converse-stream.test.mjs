@@ -7,7 +7,7 @@ import { eventFrame } from "./bedrock-eventstream-fixture.mjs";
 const { prepareNativeBedrockConverseStream } = await import("../native-bedrock-converse-stream.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
-const { providerById, signSigV4 } = await import("../providers.ts");
+const { signSigV4 } = await import("../providers.ts"); const { providerById } = await import("../provider-catalog.ts");
 const { prepareUpstreamRequest } = await import("../proxy-upstream-request.ts");
 const origin = "https://bedrock-runtime.us-east-1.amazonaws.com", limit = 2 * 1024 * 1024;
 const model = "anthropic.claude-sonnet-4-5-20250929-v1:0", format = "aws_bedrock.converse_stream";
