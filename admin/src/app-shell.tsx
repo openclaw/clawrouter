@@ -8,7 +8,9 @@ import { ThemeToggle, navItems, viewIcon, viewSubtitle, viewTitle } from "./comp
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
-import { CompleteAdminUsageScreen, UsageScreen, UsersScreen } from "./screens/users-usage";
+import { UsageScreen } from "./screens/users-usage";
+import { UsersScreen } from "./screens/users";
+import { CompleteUsageScreen } from "./screens/complete-usage";
 import { applyTheme, readTheme } from "./theme";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
@@ -18,7 +20,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, personalUsage, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -304,7 +306,7 @@ export function AppShell() {
 
         {view === "subscriptions" && session.role === "admin" ? <SubscriptionsScreen data={subscriptions} policies={keys} grants={upstreamGrants} providers={providers} refreshQuota={refreshUpstreamGrantQuota} busy={upstream.busy} actionError={upstream.error} /> : null}
 
-        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><CompleteAdminUsageScreen/><details><summary>Authoritative allowances and legacy diagnostics</summary><UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></details></> : null}
+        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><CompleteUsageScreen data={adminUsage}/><details><summary>Authoritative allowances and legacy diagnostics</summary><UsageScreen request={request} keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></details></> : null}
       </section>
     </main>
   );
