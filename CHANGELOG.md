@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow interactive fusion pair benchmarks to opt into the existing bounded action schema for every comparison arm, and record the selected profile in the result.
+
 - Let fusion benchmark agents read up to twelve source ranges across three files, and identify rejected edit anchors without exposing source text. Preserve atomic edit batches and existing error metadata.
 
 - Activate the three finite Baseten SystemOne DecisionV2 models through the existing native adapter. Preserve Chat, selected credentials, bounded complete JSON and unknown-price budget denial. Add a pinned registered-client Worker/SQLite contract with original acquisition, reader, release and source retirement; physical pre-response disconnect propagation remains separately unqualified.

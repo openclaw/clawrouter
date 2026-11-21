@@ -447,3 +447,24 @@ test('repeated comparisons bind the OpenAI route and interpret missing legacy me
   runs[0].openAiApi = 'unknown';
   assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
 });
+
+
+test('action schema profiles stay distinct while absent legacy metadata remains compatible', () => {
+  const runs = repeats();
+  for (const run of runs) { run.policy = 'architect'; run.executor = 'interactive'; }
+  assert.equal(analyzePairRun(runs[0]).actionSchemaProfile, 'legacy');
+  runs[1].actionSchemaProfile = 'legacy';
+  assert.equal(analyzePairRepeats(runs).actionSchemaProfile, 'legacy');
+  runs[0].actionSchemaProfile = 'compact';
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  runs[1].actionSchemaProfile = 'compact';
+  assert.equal(analyzePairRepeats(runs).actionSchemaProfile, 'compact');
+  assert.equal(analyzePairRun(runs[0]).actionSchemaProfile, 'compact');
+  for (const actionSchemaProfile of ['unknown', null, false, 0]) {
+    assert.throws(() => analyzePairRun({ ...runs[0], actionSchemaProfile }), /invalid_pair_run/);
+  }
+  for (const policy of ['contract', 'probe-selection', 'draft-sampling']) {
+    assert.throws(() => analyzePairRun({ ...runs[0], policy }), /invalid_pair_run/);
+  }
+  assert.throws(() => analyzePairRun({ ...runs[0], executor: 'single-draft' }), /invalid_pair_run/);
+});

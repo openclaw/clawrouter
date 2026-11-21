@@ -771,6 +771,17 @@ them in configuration files.
 node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
 ```
 
+For interactive pair runs, set `FUSION_PAIR_ACTION_SCHEMA_PROFILE=compact`
+to use the existing bounded action schema. It limits each response to eight
+edits and twelve path selectors, and puts the action before working notes.
+The setting applies to both fixed-model controls and the fusion arm and is
+recorded in `pair.json`. Repeat analysis rejects mixed schema profiles; old
+receipts without the field retain their legacy meaning. The default remains
+`legacy`. Single-draft, contract,
+probe-selection and draft-sampling executors reject `compact` because they
+use separate action contracts. Freeze this setting before comparing runs;
+changing it does not establish a quality improvement.
+
 The configuration must contain every field below. Set `priorCostMicros` to the
 campaign's accumulated spend and unresolved reservations before starting.
 

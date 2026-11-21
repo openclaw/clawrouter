@@ -721,6 +721,45 @@ test('cheap reasoning calibration is explicit, recorded and validated before inf
 });
 
 
+for (const actionSchemaProfile of ['legacy', 'compact']) {
+  test(`pair action schema is recorded and shared by all arms: ${actionSchemaProfile}`, async () => {
+    const { root, options } = await fixture();
+    const seen = [];
+    try {
+      const state = await runPairBenchmark({ ...options,
+        ...(actionSchemaProfile === 'compact' ? { actionSchemaProfile } : {}),
+        grade, fetcher: success,
+        agent: async (_task, _image, _strategy, _id, _settings, _invoke, _engine, agentOptions) => {
+          seen.push(agentOptions.actionSchemaProfile ?? 'legacy');
+          return repaired();
+        } });
+      assert.deepEqual(seen, Array(3).fill(actionSchemaProfile));
+      assert.equal(state.actionSchemaProfile, actionSchemaProfile);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+      assert.equal(saved.actionSchemaProfile, actionSchemaProfile);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test('unsupported pair action schemas fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    for (const setting of [
+      { actionSchemaProfile: 'unknown' },
+      { actionSchemaProfile: 'compact', executor: 'single-draft', controlsOnly: true },
+      { actionSchemaProfile: 'compact', policy: 'contract' },
+      { actionSchemaProfile: 'compact', policy: 'probe-selection' },
+      { actionSchemaProfile: 'compact', policy: 'draft-sampling' },
+    ]) {
+      await assert.rejects(runPairBenchmark({ ...options, ...setting,
+        preflight: async () => { preflights++; } }), /(?:invalid|unsupported)_action_schema_profile/);
+    }
+    assert.equal(preflights, 0);
+    assert.deepEqual((await readdir(root)).sort(), ['qualification.json', 'tasks.json']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('source preload applies equally to every comparison arm and rejects invalid configuration', async () => {
   const { root, options } = await fixture();
   try {
