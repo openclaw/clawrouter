@@ -22,7 +22,7 @@
 
 - Exercise registered Perplexity Search through its actual catalog-selected native route, selected and rotated credentials, request-based SQLite receipts, bounded results and joined post-header cancellation. Preserve independent Responses and generic Search pins; retain unexpected-dispatch observer faults even when the client wraps the error.
 
-- Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting.
+- Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting. Qualify the registered client through native and manifest Worker/SQLite routes with original-operation retirement.
 
 - Add a pinned registered Google continuation contract through the Worker and SQLite: EOF-bound receipts, two explicit request-bound hops, independent budgets and settlement, changed-authority denials and original-operation retirement. Keep the separate physical pre-header cancellation limitation explicit.
 

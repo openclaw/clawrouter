@@ -41,9 +41,9 @@ unified Responses admission is unchanged. Catalog projection never probes xAI.
 An enforced dollar budget without a qualified hosted-tool bound reports
 `pricing_required` and dispatch stays zero-egress/zero-charge. Explicit
 `policy_fixed` admission retains that separate accounting basis; it does not
-establish a vendor tool tariff. Registered OpenClaw search through Worker and
-SQLite still requires separate exact-client qualification. No live vendor or
-default-client parity is established by these catalog tests.
+establish a vendor tool tariff. The registered OpenClaw contract below qualifies
+its explicit client pin through Worker and SQLite. No live vendor or
+default-client parity is established by these tests.
 
 The registered-client contract is pinned separately to OpenClaw
 `3206356e0fff73751495ca6a5c8cd4f3e97caf04` in
@@ -56,14 +56,23 @@ catalog acquisition; it does not fabricate an eligible offer.
 This contract requires separate native and manifest executions, exact selected
 credentials, safe wrapped citations, attempt-bound SQLite receipts and joined
 original SDK, Worker and upstream operations. Post-content cancellation is
-distinct from physical pre-response disconnect propagation. The source fixture
-is prepared; its exact-client runtime qualification is still pending.
+distinct from physical pre-response disconnect propagation. Local execution with
+Node 24.22.1 and pnpm 12.15.0 passed all 19 SDK cases in each phase, both
+Worker/SQLite oracles and the pinned extension TypeScript graph. Each phase
+checks 10 original upstream requests and 11 unique request-bound receipts,
+including the direct budget denial. Eight explicit fixed-policy charges of
+7 microdollars settle per phase; malformed and canceled dispatched responses
+retain that charge. This is synthetic fixed-policy proof, not vendor pricing.
+The same-head hosted matrix remains required before landing.
 The current rotation and revocation cases change the selected grant before
 catalog acquisition. They do not establish post-catalog invalidation. The
 redirect case observes upstream 307 and the Worker's fresh 502 without a
 Location header, rather than making the Worker expose a raw redirect to the
-client guard. This retirement proof and the new fixture's owning OpenClaw
-TypeScript graph remain pending qualification alongside the full contract.
+client guard. Both phases proved original SDK acquisition/release and joined
+Worker/upstream retirement: one source cancellation and return, no expiry,
+no pending or failed source work, and no unqualified rejected operations.
+The oversized original reader crossed the client's 1 MiB limit; its error
+does not erase the dispatched fixed-policy charge.
 
 ## Results and transport
 
