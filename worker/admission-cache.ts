@@ -179,7 +179,9 @@ function localSelection(env: Env, admission: AdmissionResult, request: Admission
 }
 
 function chooseLocally(env: Env, admission: AdmissionResult, snap: AdmissionPoolSnapshot, input: GrantChoiceInput): { selectedKey: string } {
-  const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), { cursorKey: snap.cursorKey, counts: new Map(Object.entries(snap.counts)) });
+  const candidates = normalizedChoiceCandidates(input.candidates);
+  const counts = new Map(Object.entries(snap.counts));
+  const choice = chooseGrantKey(input, candidates, snap.cursorKey, key => counts.get(key));
   const now = Date.now(), next = { count: (snap.counts[choice.selectedKey]?.count ?? 0) + 1, lastMs: now };
   const plan = identityPlan();
   plan.object(0, field => {
@@ -402,7 +404,7 @@ export function planGenerationSelection(env: Env, admission: AdmissionResult, ov
       const counts = new Map<string, { count: number; lastMs: number }>();
       for (const key in snap.counts) if (Object.hasOwn(snap.counts, key)) counts.set(key, snap.counts[key]);
       for (const value of overlay.counts.values()) if (value.providerId === request.providerId) counts.set(value.key, value);
-      const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), { cursorKey: overlay.cursors.get(request.providerId) ?? snap.cursorKey, counts });
+      const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), overlay.cursors.get(request.providerId) ?? snap.cursorKey, key => counts.get(key));
       selectedKey = choice.selectedKey; cursorKey = choice.cursorKey;
       count = (counts.get(selectedKey)?.count ?? 0) + 1; lastMs = Date.now();
       return choice;

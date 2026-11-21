@@ -108,7 +108,7 @@ import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
 import {MiniMaxVideoOperation,readVideoJson,inspectVideoJson} from './worker/minimax-video-operation.ts';
 import {collectManagedPrediction} from './worker/managed-predictions.ts';
 import {resolveResponseControlOwner} from './worker/response-controls.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 const provider=snapshot.providers.find(p=>p.id==='minimax');configureVideo(provider,miniMaxFrozenVideoModels);const videoCards=provider.models.map(card=>({...card}));
 const key='oauth/fixture/video',actor={auth:'cloudflare_access',role:'admin',email:'video-admin@example.invalid'};
 const raw=globalThis.fetch.bind(globalThis),release=BodyLease.prototype.release,deferred=()=>Promise.withResolvers();

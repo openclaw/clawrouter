@@ -1,3 +1,4 @@
+import { grantOwnerIdentity } from "./grant-owner-facts.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -17,7 +18,7 @@ export async function prepareOpenRouterPcmOwner(env: Env, auth: AuthorizedIdenti
     || url.href !== "https://openrouter.ai/api/v1/audio/speech"
     || !safeEqual(headers.get("authorization") ?? "", `Bearer ${grant.credential}`)
     || headers.get("authorization") !== upstream.headers.get("authorization")) unavailable();
-  const original = identity(grant), caller = publicControlAuthorization(auth);
+  const original = grantOwnerIdentity(grant), caller = publicControlAuthorization(auth);
   const owner = { providerId: "openrouter", endpointId: selection.endpoint.id, grantKey,
     lineage: grant.credentialLineage!, policyGeneration: auth.policy.generation,
     routeSha256: await sha256Hex(JSON.stringify([url.href, selection.model?.id, selection.model?.upstream])) };
@@ -27,7 +28,7 @@ export async function prepareOpenRouterPcmOwner(env: Env, auth: AuthorizedIdenti
     assertPolicyModel(policy, selection);
     const current = await inspectGrantCredentials(env, grantKey, signal);
     signal.throwIfAborted(); assertControlCallerLive(caller);
-    if (!qualified(current) || identity(current) !== original || !qualified(grant)
+    if (!qualified(current) || grantOwnerIdentity(current) !== original || !qualified(grant)
       || !filterGrantCandidates("openrouter", [{ key: grantKey, grant: current, runtimeState: null }], new Set(),
         grantRoutingPolicy(policy.grantRouting), grantKey, undefined, Date.now()).available.length) unavailable();
   };
@@ -39,9 +40,7 @@ function qualified(grant: UpstreamGrant | null): grant is UpstreamGrant {
     && Number.isSafeInteger(grant.credentialGeneration) && !!grant.credentialLineage
     && (!grant.expiresAt || Number.isFinite(Date.parse(grant.expiresAt)) && Date.parse(grant.expiresAt) > Date.now());
 }
-function identity(grant: UpstreamGrant): string {
-  return JSON.stringify([grant.provider, grant.kind, grant.credentialGeneration, grant.credentialLineage, grant.accountId ?? null]);
-}
+
 function unavailable(): never {
   throw new HttpError(503, "native_pcm_owner_unavailable", "the original OpenRouter PCM caller, credential or destination is unavailable");
 }

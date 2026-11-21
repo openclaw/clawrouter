@@ -4,7 +4,6 @@ import type { PersonalUsageEvent, UsageCostSummary, UsageMetrics } from '../../.
 import { UsageCoverage, CompleteExport, ExactRanking } from './complete-usage';
 import { usageCaveats, prepareUsageFile, downloadUsageFile } from '../complete-usage';
 import type { CompleteUsageReport } from '../../../shared/usage-report';
-import type { PersonalUsageView as PersonalUsageReport } from '../personal-usage-view';
 import type { PersonalUsageData } from '../hooks/use-personal-usage';
 import { PersonalUsageTimeSeries } from '../analytics-charts';
 import { formatCount } from '../ui-helpers';
@@ -97,10 +96,6 @@ function UsageHelp({ label, children, attention = false, icon = false, ariaLabel
   </details>;
 }
 
-function ReportRange({ value, complete }: { value: PersonalUsageReport; complete?: CompleteUsageReport }) {
-  return complete ? <UsageCoverage value={complete}/> : <p>Recorded interval: {iso(value.range.from)} → {iso(value.range.to)}. Historical locations have not been exhaustively assessed.</p>;
-}
-
 function MoneyValue({ label, micros }: { label: string; micros: number | null }) {
   return <dd title={usageMoney(micros)} aria-label={micros === null ? label + ' unavailable' : label + ' ' + usageMoney(micros)}>{personalGlanceMoney(micros)}</dd>;
 }
@@ -112,12 +107,12 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
   const api = value ? knownLaneCost(value.costs, 'api', complete ? value.metrics.calls : undefined) : null;
   const noApiCalls = api?.value === 0 && !api.present;
   const subscription = value ? knownLaneCost(value.costs, 'subscription') : null;
-  const filters = Object.entries(data.query.filters).filter(([, filter]) => filter);
+  const filters = Object.entries(data.controls.filters).filter(([, filter]) => filter);
   return <section className="dashboardPanel personalUsageSummary" aria-label="Your personal usage">
     <header className="personalSectionHeader">
       <div className="personalSummaryHeading">
         <h2>For your current access</h2>
-        {value ? <ReportRange value={value} complete={data.complete?.report.value} /> : <p>Only your signed-in identity</p>}
+        {value ? <UsageCoverage value={value} /> : <p>Only your signed-in identity</p>}
       </div>
       {onOpen ? <button type="button" className="buttonSecondary" onClick={onOpen}>Open My usage</button> : null}
     </header>
@@ -172,7 +167,7 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
           </dd>
         </div> : null}
       </dl>
-      {data.complete?.report.value ? <details className="personalAccounting personalNote"><summary>Recorded accounting amount: {data.complete.report.value.chargeReportedCalls ? usageMoney(data.complete.report.value.recordedChargeMicros) : 'Not reported'} · not a price or confirmed settlement</summary><p>{data.complete.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p><p>{usageCaveats.accounting}</p></details> : null}
+      {data.report.value ? <details className="personalAccounting personalNote"><summary>Recorded accounting amount: {data.report.value.chargeReportedCalls ? usageMoney(data.report.value.recordedChargeMicros) : 'Not reported'} · not a price or confirmed settlement</summary><p>{data.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p><p>{usageCaveats.accounting}</p></details> : null}
       {!value.metrics.calls ? <p className="personalEmpty">No calls in discovered locations for this range for your current access.</p> : null}
     </> : null}
   </section>;
@@ -278,13 +273,13 @@ const chartHelp: Record<PersonalUsageMetric, string> = {
 };
 const legendLabel: Record<PersonalUsageMetric, string> = { tokens: 'Input + output tokens', apiCost: 'Known API cost', calls: 'Model calls' };
 
-function UsageOverview({ value, query, setQuery, keys, metric, onMetricChange }: { value: PersonalUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; keys: readonly UsageKeyName[]; metric: PersonalUsageMetric; onMetricChange: (metric: PersonalUsageMetric) => void }) {
+function UsageOverview({ value, query, setQuery, keys, metric, onMetricChange }: { value: CompleteUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; keys: readonly UsageKeyName[]; metric: PersonalUsageMetric; onMetricChange: (metric: PersonalUsageMetric) => void }) {
   const points = useMemo(() => personalTrendRows(value, metric), [value, metric]);
   const ranking = useMemo(() => personalRankedGroups(value, metric), [value, metric]);
   const peak = personalPeak(points);
   const maximum = Math.max(1, ...ranking.rows.map(row => row.value ?? 0));
   const format = (amount: number | null) => amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : count(amount) + (metric === 'tokens' ? ' tokens' : ' calls');
-  const groupNoun = value.groupBy === 'key' ? 'keys' : value.groupBy + 's';
+  const groupNoun = value.query.groupBy === 'key' ? 'keys' : value.query.groupBy + 's';
   return <>
     <div className="personalOverviewToolbar"><MetricSwitch metric={metric} onChange={onMetricChange} /></div>
     <div className="personalChartsGrid">
@@ -296,10 +291,10 @@ function UsageOverview({ value, query, setQuery, keys, metric, onMetricChange }:
           </div>
           <UsageHelp label="Chart info" icon ariaLabel="Chart metrics and coverage">
             <p>{chartHelp[metric]}</p>
-            <p>Gaps mean no reported value, never free or zero usage. Bucket labels use {value.range.timezone}; inspect a point for exact clipped bounds. Only this period is available, so no previous-period comparison is inferred.</p>
+            <p>Gaps mean no reported value, never free or zero usage. Bucket labels use {value.query.timezone}; inspect a point for exact clipped bounds. Only this period is available, so no previous-period comparison is inferred.</p>
           </UsageHelp>
         </header>
-        <PersonalUsageTimeSeries points={points} label={personalMetricLabels[metric] + ' by bucket in ' + value.range.timezone} formatValue={format} formatAxis={amount => metric === 'apiCost' ? costAxis(amount) : formatCount(amount)} />
+        <PersonalUsageTimeSeries points={points} label={personalMetricLabels[metric] + ' by bucket in ' + value.query.timezone} formatValue={format} formatAxis={amount => metric === 'apiCost' ? costAxis(amount) : formatCount(amount)} />
         <div className="personalChartLegend">
           <span><i />{legendLabel[metric]}</span>
           {points.some(point => point.partial && point.value !== null) ? <span><i className="partial" />Partial coverage</span> : null}
@@ -320,9 +315,9 @@ function UsageOverview({ value, query, setQuery, keys, metric, onMetricChange }:
         {!ranking.rows.length ? <p className="personalRankEmpty">No groups in this period.</p> : <ol className="personalRankList">
           {ranking.rows.map(({ group, value: amount, partial, index }) => <li key={index}>
             <div className="personalRankLabel">
-              {group.value === null
-                ? <strong>{usageGroupLabel(value.groupBy, null)}</strong>
-                : <button type="button" className="personalGroupButton" onClick={() => setQuery({ ...query, filters: { ...query.filters, [value.groupBy]: group.value! } })}>{value.groupBy === 'key' ? usageKeyLabel(group.value, keys) : group.value}</button>}
+              {group.identity.value === null
+                ? <strong>{usageGroupLabel(value.query.groupBy as PersonalUsageQuery['groupBy'], null)}</strong>
+                : <button type="button" className="personalGroupButton" onClick={() => setQuery({ ...query, filters: { ...query.filters, [value.query.groupBy]: group.identity.value! } })}>{value.query.groupBy === 'key' ? usageKeyLabel(group.identity.value, keys) : group.identity.value}</button>}
               <span>{amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : formatCount(amount)}{partial && amount !== null ? <small>partial</small> : null}</span>
             </div>
             <div className={'personalRankTrack' + (amount === null ? ' missing' : '')} aria-hidden="true">{amount !== null ? <span style={{ width: (amount / maximum * 100) + '%' }} /> : null}</div>
@@ -370,13 +365,13 @@ function UsageActivity({ data, timezone, keys }: { data: PersonalUsageData; time
   </section>;
 }
 
-function UsageDetails({ value, data }: { value: PersonalUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; keys: readonly UsageKeyName[]; data: PersonalUsageData }) {
+function UsageDetails({ value, data }: { value: CompleteUsageReport; data: PersonalUsageData }) {
   const page = data.events.value;
   const complete = personalHistoryComplete(value);
   return <div className="personalDetailsGrid">
     <div className="personalExportBar">
       <div><h2>Report details</h2><p className="personalNote">CSV exports use the exact report scope and the currently loaded activity page.</p></div>
-      <button type="button" className="buttonSecondary" disabled={!page?.events.length || data.events.loading} onClick={() => data.complete.report.value && downloadUsageFile(prepareUsageFile(data.complete.report.value, data.complete.events.value!.events, 'personal', 'csv', 'current page '+data.page))}>Export activity page {data.page} CSV</button>
+      <button type="button" className="buttonSecondary" disabled={!page?.events.length || data.events.loading} onClick={() => data.report.value && downloadUsageFile(prepareUsageFile(data.report.value, data.events.value!.events, 'personal', 'csv', 'current page '+data.page))}>Export activity page {data.page} CSV</button>
     </div>
     <section className="dashboardPanel personalSection">
       <header className="personalSectionHeader"><div><h2>Costs & field coverage</h2><p>Reporting values, not an invoice. No grand total across lanes.</p></div></header>
@@ -384,12 +379,12 @@ function UsageDetails({ value, data }: { value: PersonalUsageReport; query: Pers
       <TokenStats metrics={value.metrics} complete={complete} />
       <p className="personalNote">Coverage counts calls reporting each field, not inferred zeros. Cache and reasoning can overlap input/output. Subscription amounts are usage equivalents, not additional charges. Estimates, upper bounds, partial and unknown prices stay outside the known subtotal.</p>
     </section>
-    <ExactRanking data={data.complete}/>
+    <ExactRanking data={data}/>
     <section className="dashboardPanel personalSection" aria-label="Time bucket data">
       <h2>Time bucket data</h2>
       <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Time bucket model calls">
         <table className="personalTable">
-          <caption>Exact clipped time buckets · {value.range.timezone}</caption>
+          <caption>Exact clipped time buckets · {value.query.timezone}</caption>
           <thead><tr>{['Bucket', 'Model calls', 'Successful', 'Errors / denied', 'Input / output tokens', 'Reporting costs by lane & quality'].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
           <tbody>
             {value.buckets.map(bucket => <tr key={bucket.start}>
@@ -411,7 +406,7 @@ const panels = ['overview', 'activity', 'details'] as const;
 type Panel = typeof panels[number];
 
 export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: PersonalUsageData; keys?: readonly UsageKeyName[] }) {
-  const { report, query, setQuery, showEvents } = data, value = report.value;
+  const { report, controls: query, setControls: setQuery, showEvents } = data, value = report.value;
   const keys: readonly UsageKeyName[] = []; // Current names do not rename retained history.
   const [panel, setPanel] = useState<Panel>('overview');
   const [metric, setMetric] = useState<PersonalUsageMetric>('tokens');
@@ -428,14 +423,14 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     tabs.current[next]?.focus();
   }
   function panelContent(name: Panel) {
-    if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.range.timezone} keys={keys} />;
+    if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.query.timezone} keys={keys} />;
     if (!value) return <p className="personalNote">{report.loading ? 'Loading report…' : 'A usage report is needed for this view. Use Retry report above if the read failed.'}</p>;
     if (name === 'overview') return <UsageOverview value={value} query={query} setQuery={setQuery} keys={keys} metric={metric} onMetricChange={setMetric} />;
-    return <UsageDetails value={value} query={query} setQuery={setQuery} keys={keys} data={data} />;
+    return <UsageDetails value={value} data={data} />;
   }
   return <div className="personalUsageCanvas">
     <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} loading={report.loading}>
-    {data.complete?.query ? <><button type="button" onClick={data.back}>Back to base</button><label>Grain<select value={data.complete.query.grain} onChange={event=>data.refine({...data.complete.query!,grain:event.target.value as 'day'|'minute',rankOffset:0})}><option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option></select></label><label>Current own-key selector<select value={data.complete.query.filters.key?.kind === 'session' ? 'session' : data.complete.query.filters.key?.kind === 'credential' ? 'key:'+data.complete.query.filters.key.id : ''} onChange={event=>{const q=data.complete.query!,filters={...q.filters};delete filters.key;if(event.target.value==='session')filters.key={kind:'session'};else if(event.target.value)filters.key={kind:'credential',id:event.target.value.slice(4)};data.refine({...q,filters,rankOffset:0});}}><option value="">All keys in base</option><option value="session">Dashboard session</option>{data.complete.query.filters.key?.kind==='credential'&&!currentKeys.some(k=>k.credentialId===(data.complete.query!.filters.key as {id:string}).id)?<option value={'key:'+data.complete.query.filters.key.id}>Retained key: {data.complete.query.filters.key.id} (not in current own-key list)</option>:null}{currentKeys.map(key=><option key={key.credentialId} value={'key:'+key.credentialId}>{key.name?'Current name: '+key.name+' — ':''}{key.credentialId}</option>)}</select></label></> : null}
+    {data.query ? <><button type="button" onClick={data.back}>Back to base</button><label>Grain<select value={data.query.grain} onChange={event=>data.refine({...data.query!,grain:event.target.value as 'day'|'minute',rankOffset:0})}><option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option></select></label><label>Current own-key selector<select value={data.query.filters.key?.kind === 'session' ? 'session' : data.query.filters.key?.kind === 'credential' ? 'key:'+data.query.filters.key.id : ''} onChange={event=>{const q=data.query!,filters={...q.filters};delete filters.key;if(event.target.value==='session')filters.key={kind:'session'};else if(event.target.value)filters.key={kind:'credential',id:event.target.value.slice(4)};data.refine({...q,filters,rankOffset:0});}}><option value="">All keys in base</option><option value="session">Dashboard session</option>{data.query.filters.key?.kind==='credential'&&!currentKeys.some(k=>k.credentialId===(data.query!.filters.key as {id:string}).id)?<option value={'key:'+data.query.filters.key.id}>Retained key: {data.query.filters.key.id} (not in current own-key list)</option>:null}{currentKeys.map(key=><option key={key.credentialId} value={'key:'+key.credentialId}>{key.name?'Current name: '+key.name+' — ':''}{key.credentialId}</option>)}</select></label></> : null}
     </UsageControls>
     <PersonalUsageSummary data={data} keys={keys} />
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>
@@ -446,6 +441,6 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     {panels.map(name => <div key={name} role="tabpanel" id={id + '-panel-' + name} aria-labelledby={id + '-tab-' + name} hidden={panel !== name} tabIndex={0}>
       {panel === name ? panelContent(name) : null}
     </div>)}
-    {data.complete ? <CompleteExport data={data.complete}/> : null}
+    <CompleteExport data={data}/>
   </div>;
 }

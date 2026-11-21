@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, shouldFailoverGrant } from "../grant-quota.ts";
+import { observeGrantQuota, observeGrantQuotaProbe, shouldFailoverGrant } from "../grant-quota.ts";
+import { grantCoolingDown, grantQuotaRatio } from "../../shared/grant-quota.ts";
 
 const NOW = Date.parse("2026-07-06T12:00:00.000Z");
 

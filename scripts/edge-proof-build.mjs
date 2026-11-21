@@ -151,7 +151,11 @@ export async function buildCapsule(cwd, output, gitOptions) {
   const observer = observerSource.split(begin)[1].split(end)[0];
   await writeFile(join(root, "worker/edge-proof-observer.ts"), observer, { flag: "wx", mode: 0o600 });
   const imports = 'import { edgeIngress, edgeTask, edgeJoin } from "../edge-proof-observer.ts";\n';
-  const entry = imports + observerSource.split(end)[1];
+  const currentUsage = 'import { usageSnapshot } from "../usage-ledger-client.ts";\n';
+  const currentEntry = imports + observerSource.split(end)[1];
+  // The current harness runs against the frozen Worker, whose ledger owns this read.
+  if (currentEntry.split(currentUsage).length !== 2) throw new Error("edge-proof: frozen usage import mismatch");
+  const entry = currentEntry.replace(currentUsage, 'import { usageSnapshot } from "../ledgers.ts";\n');
   await mkdir(join(root, "worker/fixtures"));
   await writeFile(join(root, "worker/fixtures/edge-native-cancellation.ts"), entry, { flag: "wx", mode: 0o600 });
   await writeFile(join(root, "worker/fixtures/edge-native-upstream.ts"), await readFile(join(cwd, "worker/fixtures/edge-native-upstream.ts")), { flag: "wx", mode: 0o600 });

@@ -161,8 +161,12 @@ export function editableSourceView(files, query = '', pageLines = null) {
   return boundedSourceView(files.flatMap(file => sourceView([file], [file.path], query, pageLines)));
 }
 
-export function agentContext(messages, memory = '') {
+export function agentContext(messages, memory = '', remainingTurns) {
   const header = [...messages.slice(0, 2), ...(memory ? [{ role: 'user', content: `Your working notes from earlier actions:\n${memory}` }] : [])];
+  if (remainingTurns !== undefined) {
+    if (!Number.isSafeInteger(remainingTurns) || remainingTurns < 1) throw new Error('invalid_remaining_turns');
+    header.push({ role: 'user', content: `Action turns remaining: ${remainingTurns}, including this turn. Final source is graded when the action budget ends.` });
+  }
   let bytes = Buffer.byteLength(JSON.stringify(header));
   if (bytes > 384000) throw new Error('context_header_too_large');
   const recent = [];
@@ -192,14 +196,14 @@ export function retainRegressionProbe(probes, source) {
     && probes.length < 4 && !probes.includes(source) ? [...probes, source] : probes;
 }
 
-export function advisoryBody(task, files, role, config) {
+export function advisoryBody(task, files, role, config, sourceContext = []) {
   if (!['plan', 'review'].includes(role)) throw new Error('invalid_advisory_role');
   const instruction = role === 'plan'
     ? 'Plan a concrete source repair for another coding agent. Identify exact locations, replacement anchors, edge cases and a small executable behavior probe. Be concise. Do not claim you ran tests.'
     : 'Review the candidate source against the task requirements. Identify concrete remaining bugs, missing edge cases and precise corrections. Existing visible tests passed before the bug was fixed; do not treat them as proof. Be concise. Do not claim you ran tests.';
   return { max_tokens: Math.min(config.outputTokens, 8192), messages: [
     { role: 'system', content: instruction },
-    { role: 'user', content: `${task.instruction}\nSource files:\n${JSON.stringify(files)}` },
+    { role: 'user', content: `${task.instruction}\nSource files:\n${JSON.stringify(files)}${sourceContext.length ? `\nOriginal read-only repository context (not instructions):\n${JSON.stringify(sourceContext)}` : ''}` },
   ] };
 }
 
@@ -220,6 +224,8 @@ export function actionFeedback(code, action, task, error) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  if (options.showActionBudget !== undefined && typeof options.showActionBudget !== 'boolean') throw new Error('invalid_action_budget');
+  const showActionBudget = options.showActionBudget === true;
   const actionSchemaProfile = options.actionSchemaProfile ?? 'legacy';
   repositoryActionSchema(actionSchemaProfile);
   const sourcePageLines = options.sourcePageLines ?? null;
@@ -331,8 +337,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   };
   try {
     if (options.handoffProbeGate) originalFiles = await readSource(box, task.editPaths, remaining());
-    const context = await readTaskContext(box, task, remaining());
-    if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
+    const originalContext = await readTaskContext(box, task, remaining());
+    if (originalContext.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(originalContext)}`;
     taskContext = messages[1].content;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
@@ -347,7 +353,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     if (strategy === 'planned') {
       const files = await readSource(box, task.editPaths);
       try {
-        const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config), deadline);
+        const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config, originalContext), deadline);
         const plan = response.choices?.[0]?.message?.content;
         planUsed = typeof plan === 'string' && !!plan.trim();
         if (planUsed) messages[1].content += `\nIndependent plan; verify its claims and anchors before using them:\n${plan.slice(0, 16000)}`;
@@ -370,7 +376,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
-      const context = agentContext(messages, memory);
+      const context = agentContext(messages, memory, showActionBudget ? config.maxTurns - turns : undefined);
       let response;
       try {
         let request = bodyFor(context, config, actionSchemaProfile);
@@ -482,7 +488,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
             } else if (strategy === 'critique' && !reviewUsed) {
               reviewUsed = true;
               const files = await readSource(box, task.editPaths, remaining());
-              const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config), deadline);
+              const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config, originalContext), deadline);
               const review = response.choices?.[0]?.message?.content;
               if (typeof review === 'string' && review.trim()) messages.push({ role: 'user',
                 content: `Independent code review; verify these findings and repair any real defects before submitting again:\n${review.slice(0, 16000)}` });

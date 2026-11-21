@@ -75,10 +75,8 @@ import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
-import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
-  prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
-} from "./proxy-selection";
+import { concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection } from "./proxy-selection";
+import { nativeMatch, nativeModelEndpoint, nativeParams } from "./native-route";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";

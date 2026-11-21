@@ -1,10 +1,10 @@
 import { emptyUsageMetrics, usageMetricKeys, usageTokenFields } from "../shared/usage-report.ts";
 import type { PersonalUsageEvents, PersonalUsageReport, PersonalUsageEvent, UsageCostSummary, UsageGroupBy, UsageMetrics, UsageReportGroup } from "../shared/usage-report.ts";
-import { usageStub } from "./ledgers.ts";
+import { usageStub } from "./usage-ledger-client.ts";
 import type { Env } from "./types.ts";
 import { HttpError, normalizeEmail } from "./utils.ts";
 import { parseUsageReportRange } from "./usage-report-range.ts";
-import type { UsageAggregateRow, UsageEventPosition, UsageReportQuery, UsageReportShard, UsageReportMigrationOptions, UsageReportMigrationEffect, UsageReportHistory } from "./usage-report-store.ts";
+import type { UsageAggregateRow, UsageEventPosition, UsageReportQuery, UsageReportShard, UsageReportMigrationOptions, UsageReportMigrationEffect, UsageReportHistory } from "./usage-report-protocol.ts";
 
 const filterNames = ["model", "provider", "key", "status", "costClass", "lane"] as const;
 const classes = new Set(["calculated", "fixed", "estimated", "upper_bound", "partial", "unknown", "no_charge"]);
@@ -125,9 +125,9 @@ export async function migrateUsageReportShard(env: Env, policy: Policy, options:
 // tests prove mechanics, NOT authentication. Scope is resolved here, never input.
 import type { AccessSession } from './types.ts';
 import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, CompleteUsageGroup, UsageGroupIdentity, UsageCoverage } from '../shared/usage-report.ts';
-import type { UsageVisibilityCut } from './usage-report-visibility.ts';
-import { UsageVisibilityError } from './usage-report-visibility.ts';
-import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-store.ts';
+import type { UsageVisibilityCut } from './usage-report-protocol.ts';
+import { UsageVisibilityError } from './usage-report-protocol.ts';
+import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
 import { sha256Hex } from './utils.ts';
 interface VerifiedUsageCaller { session: AccessSession; actor: string; sessionBinding: string; audience: 'admin' | 'personal' }
 type UsageVerifier = () => Promise<VerifiedUsageCaller | null>;
