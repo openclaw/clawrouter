@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { prepareModelDiscovery, validateDiscoveryQuery, discoveryAllows } = await import("../model-discovery.ts");
 const { REQUESTY_MODELS_FORMAT, requestyCatalogRequest, readRequestyModels } = await import("../requesty-model-catalog.ts");

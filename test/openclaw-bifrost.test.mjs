@@ -11,7 +11,7 @@ import { createRequire, stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";

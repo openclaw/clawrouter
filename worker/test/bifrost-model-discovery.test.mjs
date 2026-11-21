@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {readFileSync} from "node:fs";
 import {parse} from "yaml";
-import {compileProviderSnapshot} from "../../scripts/compile-providers.mjs";
+import {compileProviderSnapshot} from "../../scripts/provider-compiler.mjs";
 import snapshot from "../generated/provider-snapshot.json" with {type:"json"};
 import {startBifrostFixture,finishBifrostOwned,assertBifrostRetired,bifrostKey,bifrostDiscoveryKey} from "../../test/openclaw-bifrost.test.mjs";
 import {bifrostWorkerEvidence} from "../../scripts/worker-test-failure-reporter.mjs";

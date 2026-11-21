@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { bedrockEmbeddingModels, isBedrockEmbeddingModel, prepareBedrockEmbedding } = await import("../provider-bedrock-embeddings.ts");
 const { prepareNativeBedrockEmbedding } = await import("../native-bedrock-embeddings.ts");
 const { prepareManifestRequest, prepareNativeRequest, nativeMatch, nativeModelEndpoint, validateSelectedInput } = await import("../proxy-selection.ts");

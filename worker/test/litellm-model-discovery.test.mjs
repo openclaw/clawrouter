@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 import { workerAbortEvidence } from "../../scripts/worker-test-failure-reporter.mjs";
 import snapshot from "../generated/provider-snapshot.json" with { type: "json" };

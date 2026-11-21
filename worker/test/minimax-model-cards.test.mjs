@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { estimateModelCost } from "../pricing.ts";
 
 const manifest = parse(readFileSync(new URL("../../providers/minimax.provider.yaml", import.meta.url), "utf8"));

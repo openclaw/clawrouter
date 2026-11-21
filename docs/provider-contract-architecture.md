@@ -49,7 +49,9 @@ The current implementation already has strong foundations:
 
 - `providers/*.provider.yaml` declares endpoints, models, auth, billing, quota,
   and exceptional grant transports.
-- `scripts/compile-providers.mjs` validates and compiles the declarations.
+- `scripts/provider-compiler.mjs` validates and compiles parsed declarations.
+  `scripts/compile-providers.mjs` owns CLI file input/output and preserves its
+  original `compileProviderSnapshot` export for existing importers.
 - `worker/provider-auth.ts` checks operation/grant compatibility, including
   HTTP versus WebSocket and lifecycle requirements.
 - `worker/discovery.ts` builds credential-scoped offers. A public model list is

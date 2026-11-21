@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { configuredUpstream, providerModel, transformRequestBody, upstreamPath } from "../providers.ts";
 
 // The optional fifth field is the public catalog ID when it differs from upstream.
