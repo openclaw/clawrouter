@@ -203,6 +203,63 @@ execute client tools or repository regression checks. Executable repair policies
 in the benchmark require a caller-side agent and are not deployed by selecting
 `clawrouter/fusion`.
 
+## Caller-side verified repair
+
+`scripts/fusion-verified-workflow.mjs` exports `runVerifiedWorkflow`. Use it in
+a caller that can generate repair artifacts and verify them in an isolated
+environment. It is separate from the Worker chat model described above.
+
+```js
+import { runVerifiedWorkflow } from './scripts/fusion-verified-workflow.mjs';
+
+export function repairTask({ invoke, verify, signal }) {
+  return runVerifiedWorkflow({
+    models: {
+      draft: 'provider/draft-model',
+      repair: 'provider/strong-model',
+      compiler: 'provider/small-model',
+    },
+    invoke,
+    verify,
+    signal,
+    deadlineMs: 900_000,
+  });
+}
+```
+
+The caller supplies two adapters:
+
+- `invoke({ stage, model, draft, feedback, signal })` reserves a conservative
+  budget before dispatch and returns `{ artifact, costMicros }`. Use `null`
+  for an unusable artifact. Report the full attempt cost, including failed
+  attempts. Model identifiers are passed through to this adapter.
+- `verify({ artifact, stage, model, signal })` returns boolean `runtimePassed`
+  and `compilerPassed` fields, plus optional `feedback` for the next repair.
+  Both checks must pass before the workflow accepts an artifact. The caller
+  defines and isolates these checks; the module does not execute code itself.
+
+Artifacts and feedback must support `structuredClone`. Each adapter receives a
+copy so a failed repair cannot mutate the saved draft. Both adapters must honor
+the abort signal and clean up their own resources. A callback error, invalid
+receipt, or cancellation stops execution without trying another model. Work
+already dispatched can still incur charges after cancellation; its adapter
+must settle those charges even if the workflow has stopped waiting.
+
+The workflow keeps a passing draft. A draft that passes runtime checks but
+fails compilation gets one compiler-model repair. Otherwise, or if that repair
+fails, the strong model repairs the saved original draft. A strong repair with
+only compiler failures also gets one compiler-model pass. If this sequence
+fails, the strong model starts again from the original task and can make one
+final repair. The maximum is six model calls. Set `strategy: 'strong'` for a
+two-call control using only the repair model.
+
+The result includes `passed`, the final `artifact` and `verification`, all
+attempt costs, and elapsed time including callbacks. Optional `onStep` receives
+only stage, model, cost, check verdicts, and timing; it receives no artifact or
+feedback content. The default deadline is 15 minutes and the maximum is 30.
+This opt-in workflow does not establish quality, cost, or latency gains for a
+model configuration; measure those against a matched control on your tasks.
+
 ## Fixed-choice voting experiments
 
 `scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls
