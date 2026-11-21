@@ -2,7 +2,7 @@
 // rehearsal entry, ordinary Worker router, authorization and native pool.
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import './typescript-resolver.mjs';
+import '../../scripts/typescript-resolver.mjs';
 const hooks = registerHooks({ resolve(specifier, context, next) {
   if (specifier === 'cloudflare:workers') return { shortCircuit: true, url: 'data:text/javascript,' + encodeURIComponent(
     'export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env;}}; export class WorkerEntrypoint {}') };

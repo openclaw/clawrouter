@@ -1,4 +1,4 @@
-import '../../test/helpers/typescript-resolver.mjs';
+import '../../scripts/typescript-resolver.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 const {exportRefreshedUsage,completeQueryString,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,metricKeys,usageCaveats}=await import('../src/complete-usage.ts');

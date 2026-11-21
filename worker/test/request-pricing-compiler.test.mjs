@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const source = parse(readFileSync(new URL("../../providers/perplexity.provider.yaml", import.meta.url), "utf8"));
 function fixture() {
   const manifest = structuredClone(source);

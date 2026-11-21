@@ -10,7 +10,7 @@ import { build } from 'vite';
 // This is server-rendered output coverage, not browser or interaction proof.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = await mkdtemp(root + 'test/.usage-display-');
-let PersonalUsageSummary, MyUsageScreen, UsageScreen, CompleteUsageScreen, ExactRanking;
+let PersonalUsageSummary, MyUsageScreen, UsageScreen, CompleteUsageScreen, ExactRanking, EntityTable, Metric, UsageFreshness;
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 try {
@@ -24,13 +24,15 @@ try {
       load(id) { if (id === '\0test-console') return 'export function useConsole() { return { request() { throw new Error("Unexpected console request"); } }; }'; },
     }],
     build: { ssr: true, outDir: output, minify: false, rollupOptions: {
-      input: { personal: root + 'src/screens/my-usage.tsx', admin: root + 'src/screens/users-usage.tsx', complete: root + 'src/screens/complete-usage.tsx' },
+      input: { personal: root + 'src/screens/my-usage.tsx', admin: root + 'src/screens/users-usage.tsx', complete: root + 'src/screens/complete-usage.tsx', components: root + 'src/components.tsx', analytics: root + 'src/analytics-charts.tsx' },
       output: { entryFileNames: '[name].mjs' },
     } },
   });
   ({ PersonalUsageSummary, MyUsageScreen } = await import(pathToFileURL(output + '/personal.mjs')));
   ({ UsageScreen } = await import(pathToFileURL(output + '/admin.mjs')));
   ({ CompleteUsageScreen, ExactRanking } = await import(pathToFileURL(output + '/complete.mjs')));
+  ({ EntityTable, Metric } = await import(pathToFileURL(output + '/components.mjs')));
+  ({ UsageFreshness } = await import(pathToFileURL(output + '/analytics.mjs')));
 } finally {
   if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
   else delete globalThis.window;
@@ -149,4 +151,69 @@ for(const audience of ['personal','admin'])test(audience+' initial failure keeps
  assert.match(html,/<label>Start<input required="" value=""/);assert.match(html,/<label>End<input required="" value=""/);
  assert.match(html,new RegExp('<option selected="">'+(audience==='admin'?'user':'model')+'</option>'));
  assert.equal(html.includes('user (exact)'),audience==='admin');assert.doesNotMatch(html,/No calls in discovered locations|Exact usage over time|Export refreshed snapshot|<dt>Model calls/);
+});
+
+test('shared table and metric markup preserve interaction, details, and labels', () => {
+  const table = renderToStaticMarkup(createElement(EntityTable, {
+    columns: ['Name'], columnTemplate: '1fr', rows: [
+      { id: 'one', active: true, onClick() {}, cells: ['First'], detail: 'Details' },
+      { id: 'two', cells: ['Second'] },
+    ],
+  }));
+  assert.match(table, /style="--cols:1;--columns:1fr"/);
+  assert.match(table, /<button type="button" class="tableRow selected interactive"><span data-label="Name">First<\/span><\/button>/);
+  assert.match(table, /<div class="tableRowDetail">Details<\/div>/);
+  assert.match(table, /<div class="tableRow"><span data-label="Name">Second<\/span><\/div>/);
+  assert.equal(renderToStaticMarkup(createElement(Metric, { label: 'Calls', value: '0', meta: 'Recorded' })), '<div class="metric"><span>Calls</span><strong>0</strong><small>Recorded</small></div>');
+});
+
+test('shared freshness preserves loading, unavailable, stale, and fresh states', () => {
+  const render = props => renderToStaticMarkup(createElement(UsageFreshness, props));
+  assert.equal(render({ loaded: true, stale: false, error: '', updatedAt: 1000 }), '');
+  assert.match(render({ loaded: false, stale: false, error: '', updatedAt: null }), /Loading usage/);
+  assert.match(render({ loaded: false, stale: true, error: 'failed', updatedAt: null }), /Spend and remaining balances are unknown/);
+  assert.match(render({ loaded: true, stale: true, error: 'failed', updatedAt: 1000 }), /<time dateTime="1970-01-01T00:00:01.000Z">.*<\/time>. Balances may have changed/);
+});
+
+test('access and catalogue rendering do not import the usage screen', async () => {
+  for (const name of ['access', 'dashboard-catalog']) {
+    const modules = new Set();
+    await build({
+      root, configFile: false, publicDir: false, logLevel: 'error',
+      plugins: [{ name: 'presentation-owners', moduleParsed(info) { modules.add(info.id); } }],
+      build: { write: false, ssr: true, rollupOptions: { input: root + 'src/screens/' + name + '.tsx' } },
+    });
+    assert.ok(!modules.has(root + 'src/screens/users-usage.tsx'), name + ' imports the usage screen');
+  }
+});
+
+
+test('shared components load without browser initialization or demo data', async () => {
+  assert.equal(typeof window, 'undefined');
+  assert.equal(typeof document, 'undefined');
+  const modules = new Set();
+  const output = await mkdtemp(root + 'test/.component-owner-');
+  try {
+    await build({
+      root, configFile: false, publicDir: false, logLevel: 'error',
+      plugins: [{ name: 'component-owner', moduleParsed(info) { modules.add(info.id); } }],
+      build: { ssr: true, outDir: output, minify: false, rollupOptions: {
+        input: root + 'src/components.tsx', output: { entryFileNames: 'components.mjs' },
+      } },
+    });
+    for (const name of ['ui-config.ts', 'demo-data.ts']) {
+      assert.ok(!modules.has(root + 'src/' + name), 'shared components import ' + name);
+    }
+    const { navItems, viewIcon, Metric } = await import(pathToFileURL(output + '/components.mjs'));
+    assert.deepEqual(navItems.map(({ id, label, section }) => [id, label, section]), [
+      ['home', 'Dashboard', 'workspace'], ['my-usage', 'My usage', 'workspace'],
+      ['catalog', 'Catalog', 'workspace'], ['playground', 'Playground', 'workspace'],
+      ['policies', 'Access', 'admin'], ['users', 'Users', 'admin'],
+      ['subscriptions', 'Subscriptions', 'admin'], ['usage', 'Usage', 'admin'],
+    ]);
+    for (const item of navItems) assert.equal(viewIcon(item.id), item.icon);
+    assert.equal(renderToStaticMarkup(createElement(Metric, { label: 'Calls', value: '0', meta: 'Recorded' })), '<div class="metric"><span>Calls</span><strong>0</strong><small>Recorded</small></div>');
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
 });

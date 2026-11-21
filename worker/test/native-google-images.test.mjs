@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { crc32 } from "node:zlib";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeGoogleImage } = await import("../native-google-images.ts");
 const { observeGoogleImage } = await import("../google-images.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");

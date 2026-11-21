@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { managedCreateAdapter } = await import("../managed-lifecycle-adapters.ts");
 const { managedPaths } = await import("../managed-routes.ts");
 const { responsesControls } = await import("../responses-lifecycle.ts");

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { Validator } from "@cfworker/json-schema";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { deepSeekSearchReserve, deepSeekSearchCost, requestOutcomeCost } = await import("../pricing.ts");
 const { deepSeekSearchTariff, prepareDeepSeekSearch, readDeepSeekSearch } = await import("../deepseek-search.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");

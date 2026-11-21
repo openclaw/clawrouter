@@ -15,7 +15,7 @@ import { inflateSync } from "node:zlib";
 import { privateExecutionSources, overlayPrivateExecutionSource, withPrivateExecutionOverlay } from "./helpers/openclaw-private-execution-observer.mjs";
 
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";

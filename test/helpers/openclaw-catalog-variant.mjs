@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const snapshotPath = fileURLToPath(new URL("../../worker/generated/provider-snapshot.json", import.meta.url));

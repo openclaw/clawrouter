@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { Validator } from "@cfworker/json-schema";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const schema = JSON.parse(readFileSync(new URL("../../providers/_schema/service-provider.schema.json", import.meta.url)));
 const validator = new Validator(schema), profile = "clawrouter.pixverse-image-input.v1";

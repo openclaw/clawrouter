@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import { managedCreateAdapter } from "../worker/managed-lifecycle-adapters.ts";
 const manifest = parse(readFileSync(new URL("../providers/pixverse.provider.yaml", import.meta.url), "utf8"));
 const compile = input => compileProviderSnapshot([input]);
