@@ -33,7 +33,12 @@ const { preserveFailures, createLifetimeObserver } = new Function(observerCode +
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
 assert.equal(sha(outcomeSource), "2f8c481b8f13174b2c8fdaee756044239fefa1f2e0cc9e584fbc235731e6dbf7");
-const { bundleResponsesOutcome } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", outcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
+// Google does not enter ownOrdinaryResponse. Its original fetched reader is
+// owned directly by observeUsage, as in the donor's embeddings branch.
+const directReaderFormat = 'responseFormat === "openai.embeddings"';
+assert.equal(outcomeSource.split(directReaderFormat).length, 5);
+const googleOutcomeSource = outcomeSource.replaceAll(directReaderFormat, 'responseFormat === "google.stream_generate_content"');
+const { bundleResponsesOutcome, workerOutcomeOverlay } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", googleOutcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome, workerOutcomeOverlay };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
 const fixtureText = readFileSync(new URL("./fixtures/openclaw-google-continuation-contract.test.ts", import.meta.url), "utf8");
 const provider = snapshot.providers.find(row => row.id === "google-gemini");
 const model = provider.models.find(row => row.upstream === "gemini-3.5-flash");
@@ -308,6 +313,13 @@ test("Google native runner binds the exact pin, provider, controls and post-join
   assert.throws(() => consumerTypecheckPlan("0".repeat(40), path));
   assert.throws(() => consumerTypecheckPlan(sourceHead, "test/foreign.test.ts"));
 });
+test("Google original direct reader uses all four pinned outcome hooks", () => {
+  const original = readFileSync("worker/proxy-response.ts", "utf8"), overlaid = workerOutcomeOverlay(original);
+  const prefix = 'if (responseFormat === "google.stream_generate_content") qianfanOutcome.current.';
+  for (const method of ["bind", "readStart", "readDone", "failure"]) assert.equal(overlaid.split(prefix + method + "(").length, 2, method);
+  assert.equal(overlaid.includes(directReaderFormat), false);
+  assert.throws(() => workerOutcomeOverlay(original + "\n"));
+});
 test("Google claims cannot credit a foreign invocation or hide a falsey observer fault", () => {
   const claimSource = stripTypeScriptTypes(fixtureText.slice(fixtureText.indexOf("// BEGIN GOOGLE CLAIM"), fixtureText.indexOf("// END GOOGLE CLAIM")));
   for (const reason of [undefined, false, null]) {
@@ -366,9 +378,9 @@ test("Google control bridge retains falsey failures independently of the caller"
   }
 });
 
-test("Google real Worker binds EOF authority, both budgets and original grant across two HTTP hops", { timeout: 60000 }, async () => {
-  const rows = expected.filter(row => ["complete", ...workerDenials].includes(row.id)).flatMap(row => row.id === "complete" && row.hop === 0 ? [row, { id: "complete", hop: 9, denied: true }] : [row]);
-  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-authority-")); let mf;
+test("Google real Worker binds EOF authority, both budgets and original grant across two HTTP hops", { timeout: 60000 }, async t => {
+  const rows = expected.filter(row => ["complete", ...workerDenials, "cancel"].includes(row.id)).flatMap(row => row.id === "complete" && row.hop === 0 ? [row, { id: "complete", hop: 9, denied: true }] : [row]);
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-authority-")); let mf, acceptedControl = false;
   await preserveFailures(async () => {
     mf = await startBundledWorkerdFixture(temporary, await bundleResponsesOutcome(routerFixture(rows)), upstreamFixture(rows.filter(row => !row.denied)), { directRouter: true, preventEviction: true });
     const origin = await setup(mf, [...new Set(rows.map(row => row.id))]), upstream = await mf.getWorker("upstream");
@@ -394,9 +406,37 @@ test("Google real Worker binds EOF authority, both budgets and original grant ac
       const wire = await second.text(); assert.equal(second.status, id === "complete" ? 200 : ["caller_budget", "provider_budget"].includes(id) ? 402 : 409, id + ": " + wire);
       if (id === "complete") assert.match(wire, /synthetic-second/);
     }
-    await verify(mf, origin, rows);
+    const caller = new AbortController(), reason = new Error("synthetic-local-post-content-abort");
+    const response = await fetch(origin + nativePath, { method: "POST", signal: caller.signal,
+      headers: { authorization: "Bearer " + key("cancel"), "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Synthetic continuation cancel" }] }], generationConfig: { temperature: 0.25, maxOutputTokens: 128 } }) });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    await preserveFailures(async () => {
+      let content = "";
+      while (!content.includes("\n\n")) { const next = await reader.read(); assert.equal(next.done, false); content += new TextDecoder().decode(next.value); }
+      assert.match(content, /checkpoint/);
+      const pending = reader.read(); caller.abort(reason);
+      await assert.rejects(pending); assert.equal(caller.signal.reason, reason);
+    }, [() => reader.releaseLock()]);
+    let canceled;
+    for (let attempt = 0; attempt < 150; attempt++) {
+      canceled = (await (await upstream.fetch("https://fixture.example/calls")).json()).find(call => call.id === "cancel");
+      if (canceled.cancelled || canceled.expired) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(canceled.cancelled, true); assert.equal(canceled.expired, false);
+    await verify(mf, origin, rows); acceptedControl = true;
   }, [async () => {
     if (!mf) return;
-    await preserveFailures(async () => assertProof(await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/retire")).json()), [async () => assertProof(await (await mf.dispatchFetch("https://fixture.example/fixture/retire", { method: "POST", body: JSON.stringify({ acceptedConsumer: true }) })).json())]);
+    let upstream;
+    await preserveFailures(async () => {
+      upstream = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/retire")).json(); assertProof(upstream);
+      assert.deepEqual(upstream.sourceCancellation, { ownerId: "gcont_cancel_0", claimed: true, cancelled: true, expired: false, cancelCalls: 1, cancelReturned: 1, pending: 0, failed: 0 });
+    }, [async () => {
+      const proof = await (await mf.dispatchFetch("https://fixture.example/fixture/retire", { method: "POST", body: JSON.stringify({ acceptedConsumer: acceptedControl, sourceCancellation: upstream?.sourceCancellation }) })).json();
+      assertProof(proof); assert.equal(proof.qualifiedReadRejections, 1, "actual owned pending read retains its rejected state");
+      t.diagnostic("Google local Worker retirement " + JSON.stringify({ operations: proof.operations, settled: proof.settled, rejected: proof.rejected, qualifiedReadRejections: proof.qualifiedReadRejections, readers: proof.readers, unlocked: proof.unlocked, source: upstream.sourceCancellation }));
+    }]);
   }, () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
