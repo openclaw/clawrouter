@@ -1,5 +1,5 @@
 import { pathToFileURL } from "node:url";
-import { parseProviderConformanceScenario, PROVIDER_CONFORMANCE_VALIDATION_SCHEMA } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderConformanceScenario, PROVIDER_CONFORMANCE_VALIDATION_SCHEMA } from "../packages/provider-plugin-contract/src/conformance.ts";
 import { compileProviderSnapshot } from "./provider-compiler.mjs";
 import { providerPluginManifest } from "./provider-manifest-inputs.mjs";
 import { loadProviderPlugins } from "./provider-plugin-loader.ts";

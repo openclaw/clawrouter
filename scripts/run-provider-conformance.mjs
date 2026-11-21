@@ -1,7 +1,7 @@
 import "./typescript-resolver.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { PROVIDER_CONFORMANCE_EXECUTION_SCHEMA } from "../packages/provider-plugin-contract/src/index.ts";
+import { PROVIDER_CONFORMANCE_EXECUTION_SCHEMA } from "../packages/provider-plugin-contract/src/conformance.ts";
 import { loadProviderConformancePlan } from "./validate-provider-conformance.mjs";
 
 const secret = "synthetic-conformance-key";
@@ -100,7 +100,7 @@ async function environment(provider, sha256Hex) {
 
 /**
  * Dedicated-process test harness. Never call concurrently or from the Worker.
- * @returns {Promise<import('../packages/provider-plugin-contract/src/index.ts').ProviderConformanceExecution>}
+ * @returns {Promise<import('../packages/provider-plugin-contract/src/conformance.ts').ProviderConformanceExecution>}
  */
 export async function runProviderConformance(pluginPaths) {
   const plan = loadProviderConformancePlan(pluginPaths);
