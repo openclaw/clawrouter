@@ -27,14 +27,23 @@ Input text is limited locally to 32,768 UTF-16 units, `max_turns` to 1–10.
 Neither is a monetary bound. No extra tools, history, raw file IDs, streaming,
 background work, secret fields, or automatic paid POST replay enter this slice.
 
-Source3: qualify the existing xAI provider's `/v1/responses` declaration with the
-existing `openai.responses` wire format and explicit native hosted-tool policy;
-do not invent a raw-result search endpoint or another provider ID. The currently
-bundled manifest only declares Chat Completions. Source1 owns actual dispatch,
-admission, selected credential, deadline/abort, dispatch acknowledgment, usage
-and settlement. Source2 owns the actual native search consumer and untrusted
-external-content wrapping; source6 owns Worker-to-consumer acceptance proof.
-This focused source contract does not activate those routes or finish parity.
+The bundled xAI provider declares `/v1/responses` with the existing
+`openai.responses` wire format. Its qualified Grok 4.7 model declares
+`web_search` support; that model fact does not authorize a request.
+
+The authenticated catalog retains this support and computes
+`clawrouter.hosted-tool-admission.v1` from the selected credential, policy and
+current budget observation. Admission belongs only to the eligible selected
+native offer, or the manifest offer when native routing is disabled. It is not
+model metadata or a second advertised native/manifest route. OpenAI's existing
+unified Responses admission is unchanged. Catalog projection never probes xAI.
+
+An enforced dollar budget without a qualified hosted-tool bound reports
+`pricing_required` and dispatch stays zero-egress/zero-charge. Explicit
+`policy_fixed` admission retains that separate accounting basis; it does not
+establish a vendor tool tariff. Registered OpenClaw search through Worker and
+SQLite still requires separate exact-client qualification. No live vendor or
+default-client parity is established by these catalog tests.
 
 ## Results and transport
 

@@ -209,7 +209,7 @@ export function* copilotDiscoveryPieces(view: CopilotPublicDiscoveryView, varian
 function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, endpointId: string): boolean {
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === endpointId);
   const facts = model.nativeCapabilities?.endpoints[endpointId];
-  return provider.id === "openai" && endpointId === "responses" && endpoint?.path === "/v1/responses"
+  return ["openai", "xai"].includes(provider.id) && endpointId === "responses" && endpoint?.path === "/v1/responses"
     && endpoint.method === "POST" && endpoint.request_format === "openai.responses" && endpoint.response_format === "openai.responses"
     && model.capabilities.includes("llm.responses") && modelSupportsEndpoint(provider, model, endpoint)
     && model.nativeCapabilities?.version === "clawrouter.native-capabilities.v1"
@@ -623,13 +623,14 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog" && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
-        if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
+        if (keyScope && mode === "http" && common.eligible && model && (provider.id === "xai" || unified === "/v1/responses") && supportsHostedSearch(provider, model, endpoint.id)) {
           const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] }, provider.id);
           if (hosted.status !== "exact-blocked" || hosted.reasonCode === "pricing_required") hostedToolAdmission = {
             version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
           };
         }
-        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+        if (provider.id === "xai" && hostedToolAdmission) native.hostedToolAdmission = hostedToolAdmission;
+        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(provider.id === "openai" && hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
       });
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];

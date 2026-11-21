@@ -84,11 +84,14 @@ for (const proxy of [false, true]) test(`declared xAI ${proxy ? "manifest" : "na
 
 test("declared xAI hosted tools stay zero-egress under hard-dollar budgets independently of the outcome tariff", async t => {
   const f = await fixture(t);
-  for (const type of ["web_search", "x_search", "code_execution", "attachment_search", "collections_search", "view_image", "view_x_video"]) {
-    const response = await f.request({ ...input, tools: [{ type }], max_turns: 1, max_tool_calls: 1 });
+  for (const proxy of [false, true]) for (const type of ["web_search", "x_search", "code_execution", "attachment_search", "collections_search", "view_image", "view_x_video"]) {
+    const response = await f.request({ ...input, tools: [{ type }], max_turns: 1, max_tool_calls: 1 }, proxy);
     assert.equal(response.status, 400); assert.equal((await response.json()).error.code, "pricing_required");
   }
   assert.equal(f.sent.length, 0);
+  await Promise.all(f.pending); assert.equal(f.events.length, 14);
+  assert.equal(new Set(f.events.map(event => event.request_id)).size, 14);
+  for (const event of f.events) { assert.equal(event.actual_cost_micros, 0); assert.equal(event.cost_basis, "none"); }
 });
 
 test("declared xAI client functions named x_search remain ordinary inference", async t => {
