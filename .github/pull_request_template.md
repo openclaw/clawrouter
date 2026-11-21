@@ -4,6 +4,15 @@
 Start with the problem, task, or value for callers, operators, or maintainers.
 Then explain the implementation. Keep it specific to this change.
 
+In 1–3 plain sentences, say who is affected, what happens today, and why it
+matters to them. For a bug, name the trigger if known. For a feature or internal
+work, describe the need in the actual workflow without inventing harm.
+Could a reader understand the problem without knowing your proposed fix?
+
+Good: "Background checks can use up a new user's model allowance before they've
+asked the assistant to monitor anything."
+Bad: "Turn off periodic checks on fresh installs."
+
 Illustrative pairs (not claims about this PR):
 - Implementation-first: "Update grant selection."
   Reader-first: "Requests can fail when a spent grant is selected despite another
