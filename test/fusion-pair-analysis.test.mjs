@@ -12,7 +12,7 @@ function fixture(outcomes = [[1, 1, 1], [0, 1, 1]], costs = [10, 100, 40]) {
     const taskId = `case-${i}`;
     run.receipts.push({ taskId, oracleTests: 2, oracleSkipped: 0 });
     strategies.forEach((strategy, j) => {
-      run.records.push({ taskId, strategy, status: 'complete', score: scores[j], calls: 1,
+      run.records.push({ taskId, strategy, status: 'complete', outcome: 'submitted', score: scores[j], calls: 1,
         costMicros: costs[j], publicPassed: true, verdict: { valid: true, passed: Boolean(scores[j]), tests: 2, skipped: 0 },
         privateSource: 'do not copy this sentinel' });
       run.calls.push({ trialId: `${taskId}:${strategy}`, model: j === 0 ? 'cheap-model' : 'strong-model', costMicros: costs[j] });
@@ -251,6 +251,7 @@ test('submission failures stay distinct from budget stops and passing partial pa
   rows[1].outcome = 'turn_limit';
   rows[2].outcome = 'budget'; rows[2].verdict.passed = true;
   // An older receipt without an outcome cannot establish submission.
+  delete rows[3].outcome;
   const signals = report => report.totals.find(row => row.strategy === 'scope');
   assert.equal(signals(analyzePairRun(runs[0])).falseAccepts, 1);
   assert.equal(signals(analyzePairRun(runs[1])).falseAccepts, 0);
@@ -467,4 +468,23 @@ test('action schema profiles stay distinct while absent legacy metadata remains 
     assert.throws(() => analyzePairRun({ ...runs[0], policy }), /invalid_pair_run/);
   }
   assert.throws(() => analyzePairRun({ ...runs[0], executor: 'single-draft' }), /invalid_pair_run/);
+});
+
+for (const outcome of [undefined, 'turn_limit', 'deadline', 'budget', 'draft_rejected']) {
+  test(`passing partial patches cannot enter gain analysis (${outcome})`, () => {
+    const run = fixture();
+    run.records[0].outcome = outcome;
+    assert.throws(() => analyzePairRun(run), /unverified_pair_score/);
+    const blocks = repeats();
+    blocks[1].records[0].outcome = outcome;
+    assert.throws(() => analyzePairRepeats(blocks), /unverified_pair_score/);
+  });
+}
+
+test('submitted single drafts contribute to analysis and false-accept diagnostics', () => {
+  const run = fixture([[1, 1, 0]]);
+  for (const row of run.records) row.outcome = 'draft_submitted';
+  const report = analyzePairRun(run);
+  assert.equal(report.totals[0].solved, 1);
+  assert.equal(report.totals[2].falseAccepts, 1);
 });
