@@ -1883,3 +1883,15 @@ Reasoner used identical prompts; the pair reused the matching full-context
 Reader and question-only Reasoner prompts. These hashes identify private local
 receipts, not a bundled reproduction suite. No runtime, deployment or default
 policy changed.
+
+### Optional action-budget feedback
+
+Custom runners calling `runAgent` can pass `{ showActionBudget: true }` in the
+options argument. Each worker request then includes the remaining action turns,
+including the current turn. This counts worker action turns, not every planner
+or panel API call. The default is off, and enforcement limits do not change.
+
+Record this option in the experiment protocol and use the same value for every
+comparison arm. Budget disclosure is an experimental prompt intervention, not
+a demonstrated quality improvement. Keep the static task and system prompt
+unchanged when comparing it with the default.

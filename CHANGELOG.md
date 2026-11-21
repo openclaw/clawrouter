@@ -6,6 +6,8 @@
 
 - Let fusion benchmark agents read up to twelve source ranges across three files, and identify rejected edit anchors without exposing source text. Preserve atomic edit batches and existing error metadata.
 
+- Let custom fusion benchmark runners opt into remaining-action-turn feedback, including after handoff and context eviction. Default prompts and execution limits stay unchanged.
+
 - Surface provider prompt-policy rejections in fusion benchmark diagnostics while preserving the stop, full reservation, and private response boundary.
 
 - Activate the three finite Baseten SystemOne DecisionV2 models through the existing native adapter. Preserve Chat, selected credentials, bounded complete JSON and unknown-price budget denial. Add a pinned registered-client Worker/SQLite contract with original acquisition, reader, release and source retirement; physical pre-response disconnect propagation remains separately unqualified.
