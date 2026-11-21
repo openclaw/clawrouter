@@ -8,6 +8,7 @@ import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
 import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
 import { runProbeSelection } from '../scripts/fusion-probe-selection.mjs';
+import { validateLocalQualification } from '../scripts/fusion-local-repository.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -183,11 +184,19 @@ test('probe selection meters cheap proposals and author before a strong fallback
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('pair persists post-selection diagnostics after final grading without additional inference', async () => {
+for (const custom of [false, true]) test(`pair persists post-selection diagnostics with ${custom ? 'custom' : 'default'} acceptance`, async () => {
   const { root, options } = await fixture();
   let drafts = 0, requests = 0;
   const grades = [];
+  const grading = async (_task, _image, files) => {
+    grades.push({ source: files[0].content, requests });
+    return { valid: true, passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
+  };
   try {
+    if (custom) {
+      const q = JSON.parse(await readFile(options.qualificationPath));
+      await writeFile(options.qualificationPath, JSON.stringify({ ...q, acceptanceVerifier: 'probe-fixture' }));
+    }
     const state = await runPairBenchmark({ ...options, policy: 'probe-selection',
       config: { ...config, maxCalls: 4 },
       fetcher: async (url, request) => {
@@ -214,10 +223,14 @@ test('pair persists post-selection diagnostics after final grading without addit
         intact: async () => true,
         runProbe: async box => ({ passed: box.files[0].content === 'candidate 2', assertionFailed: true }),
       }),
-      grade: async (_task, _image, files) => {
-        grades.push({ source: files[0].content, requests });
-        return { valid: true, passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
-      },
+      ...(custom ? { acceptance: {
+        validate(tasks, qualification) {
+          const { acceptanceVerifier, ...standard } = qualification;
+          assert.equal(acceptanceVerifier, 'probe-fixture');
+          return validateLocalQualification(tasks, standard);
+        },
+        grade: grading,
+      } } : { grade: grading }),
     });
     const row = state.records[2];
     assert.equal(row.score, 1);
@@ -1303,6 +1316,33 @@ for (const openAiApi of ['chat-completions', 'responses']) {
   });
 }
 
+test('custom acceptance binds qualification and grading before inference', async () => {
+  const { root, options } = await fixture();
+  let validations = 0, grades = 0, agents = 0;
+  try {
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.acceptanceVerifier = 'fixture-v1';
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    await assert.rejects(runPairBenchmark({ ...options, fetcher: success }), /custom_acceptance_verifier_required/);
+    for (const acceptance of [{}, { validate() {} }, { grade() {} }]) {
+      await assert.rejects(runPairBenchmark({ ...options, acceptance }), /invalid_acceptance_adapter/);
+    }
+    const acceptance = {
+      validate(tasks, supplied) {
+        validations++;
+        assert.equal(supplied.acceptanceVerifier, 'fixture-v1');
+        assert.equal(tasks[0].id, supplied.receipts[0].taskId);
+        return [{ taskId: tasks[0].id, image: supplied.receipts[0].image, oracleTests: 3, oracleSkipped: 0 }];
+      },
+      async grade() { grades++; return grade(); },
+    };
+    await assert.rejects(runPairBenchmark({ ...options, acceptance, grade }), /invalid_acceptance_adapter/);
+    const state = await runPairBenchmark({ ...options, acceptance, controlsOnly: true, controlStrategy: 'cheap',
+      fetcher: success, agent: async () => { agents++; assert.equal(validations, 1); return repaired(); } });
+    assert.equal(state.complete, true); assert.equal(validations, 1);
+    assert.equal(agents, 1); assert.equal(grades, 1); assert.equal(state.records[0].score, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 for (const outcome of [undefined, 'turn_limit', 'deadline', 'budget', 'draft_rejected', 'submitted', 'draft_submitted']) {
   test(`pair scoring and repair export require submission (${outcome})`, async () => {
     const { root, options } = await fixture();
