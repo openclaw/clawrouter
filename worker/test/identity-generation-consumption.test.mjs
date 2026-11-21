@@ -173,7 +173,7 @@ for (const strategy of ['priority', 'round_robin', 'least_used', 'most_remaining
       policy: { policyId: 'fixture', policy: normalizePolicyRecord({ grantRouting: { strategy } }, false) }, poolKey: 'fixture', candidates, states: {},
       identityHash: 'ab'.repeat(32), fallbackSessionHash: 'cd'.repeat(32) };
     t.mock.method(crypto, 'getRandomValues', array => { array.fill(1234567); return array; });
-    const choose = value => chooseGrantKey(value, normalizedChoiceCandidates(value.candidates), { cursorKey: 'oauth/fixture/key100', counts: new Map() });
+    const choose = value => chooseGrantKey(value, normalizedChoiceCandidates(value.candidates), 'oauth/fixture/key100', () => undefined);
     const baseline = bodyBudgetCharged(), working = GenerationConsumptionLease.reserve(1048576);
     try {
       const ordinary = selectAdmissionCandidate({}, input, choose, () => 7);
