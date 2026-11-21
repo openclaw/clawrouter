@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { googleContinuationFixture as setup, googleOriginalRequest as original } from "./google-continuation-fixture.mjs";
-const { nativeModelEndpoint } = await import("../proxy-selection.ts");
+const { nativeModelEndpoint } = await import("../native-route.ts");
 
 function routes(f, reverse = false) {
   const first = f.provider.endpoints.find(endpoint => endpoint.id === "generate_content");

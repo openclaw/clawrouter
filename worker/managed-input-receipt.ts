@@ -1,4 +1,4 @@
-import type { BackgroundAdmission, BackgroundJob, BackgroundRecord } from "./background-store.ts";
+import type { BackgroundAdmission, BackgroundJob, BackgroundRecord } from "./background-record.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { pixVerseOrigins, validatePixVerseId } from "./managed-pixverse.ts";
 import { HttpError } from "./utils.ts";
