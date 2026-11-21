@@ -1,5 +1,6 @@
 # Changelog
 
+- Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
 - Require an explicit submission before scoring or exporting paired fusion repairs; reject legacy positive scores for unfinished patches during analysis.
 
 - Include declared read-only repository context in fusion benchmark planning and review, matching the worker context without changing empty-context prompts.
