@@ -1,7 +1,7 @@
+import { providerPluginFixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -26,9 +26,7 @@ test("package and legacy versions of the same manifest compile equivalently", ()
 });
 
 test("plugin inputs enforce descriptor identity and supported manifest schema", t => {
-  const root = mkdtempSync(join(tmpdir(), "provider-compiler-test-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(fileURLToPath(new URL("../examples/provider-plugin/", import.meta.url)), root, { recursive: true });
+  const { root } = providerPluginFixture(t);
   const path = join(root, "example.provider.yaml");
   const original = readFileSync(path, "utf8");
   writeFileSync(path, original.replace("id: example", "id: different"));

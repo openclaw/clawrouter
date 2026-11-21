@@ -1,17 +1,10 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { loadProviderPlugin, loadProviderPlugins, PROVIDER_PLUGIN_LIMITS } from "../scripts/provider-plugin-loader.ts";
 
-function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "provider-plugin-test-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(fileURLToPath(new URL("../examples/provider-plugin", import.meta.url)), root, { recursive: true });
-  return { root, descriptor: join(root, "clawrouter.plugin.json") };
-}
 
 test("loader captures deterministic data and changes its digest with resource content", t => {
   const { root, descriptor } = fixture(t);

@@ -1,29 +1,14 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parse, stringify } from "yaml";
 import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { validateProviderConformance } from "../scripts/validate-provider-conformance.mjs";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 
-function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "provider-conformance-validation-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(fileURLToPath(new URL("../examples/provider-plugin/", import.meta.url)), root, { recursive: true });
-  const change = (path, format, update) => {
-    const value = format === "yaml" ? parse(readFileSync(join(root, path), "utf8")) : JSON.parse(readFileSync(join(root, path), "utf8"));
-    update(value);
-    writeFileSync(join(root, path), format === "yaml" ? stringify(value) : JSON.stringify(value));
-  };
-  return { root, descriptor: join(root, "clawrouter.plugin.json"),
-    scenario: update => change("fixtures/request.json", "json", update),
-    manifest: update => change("example.provider.yaml", "yaml", update),
-    metadata: update => change("clawrouter.plugin.json", "json", update) };
-}
 
 test("report binds scenarios to captured package identity without exposing fixture contents", t => {
   const f = fixture(t);
