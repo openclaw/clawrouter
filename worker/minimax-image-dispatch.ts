@@ -1,5 +1,6 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { miniMaxImageDenied, miniMaxImageIdentity, miniMaxImageRequirement } from "./minimax-image-credential.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import { assertPolicyModel } from "./policy-models.ts";

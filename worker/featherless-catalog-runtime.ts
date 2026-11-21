@@ -1,6 +1,7 @@
 import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
 import { fetchFeatherlessModelCatalog } from "./featherless-catalog-scan.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { jsonBodyStream } from "./json-body.ts";

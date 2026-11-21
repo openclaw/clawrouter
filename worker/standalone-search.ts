@@ -1,7 +1,7 @@
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { continuationScope } from "./http-continuation.ts";
-import type { PinnedGrant } from "./grant-selection.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
