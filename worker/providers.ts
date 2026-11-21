@@ -1,3 +1,4 @@
+import { awsEncode } from "./provider-request.ts";
 import { providerById, snapshot } from "./provider-catalog.ts";
 import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -8,7 +9,6 @@ import { miniMaxSearchDenied, miniMaxSearchIdentity } from "./minimax-search-cre
 import type { WanManagedOperation } from "./managed-media-json.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
-import { configuredEndpointPath } from "./endpoint-path.ts";
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
@@ -24,8 +24,7 @@ import type {
   ProviderConnection, ProviderHealth, UpstreamGrant,
 } from "./types.ts";
 import { envValue, HttpError, sha256Hex } from "./utils.ts";
-import { providerConfigurationList } from "./provider-connections.ts";
-import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates, PreparationAdmission, isPreparationLimit, preparationValue, preparationHeader, preparationBytes, preparationEncodedBytes } from "./provider-templates.ts";
+import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates, PreparationAdmission, isPreparationLimit, preparationValue, preparationEncodedBytes } from "./provider-templates.ts";
 
 export interface Readiness {
   id: string;
@@ -200,55 +199,6 @@ export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGr
     transportPaths: transport?.endpointPaths ?? {},
     transport,
   };
-}
-
-export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth, owner?: PreparationAdmission): string {
-  owner?.paths(pathParams, endpoint.path_param_styles);
-  const transportPath = auth.transportPaths[endpoint.id as keyof typeof auth.transportPaths];
-  let path = configuredEndpointPath(endpoint, transportPath, auth.baseUrl);
-  for (const name of endpoint.path_params) {
-    const raw = pathParams[name];
-    if (!raw) throw new HttpError(400, "missing_path_param", `path parameter ${name} is required`);
-    const style = endpoint.path_param_styles[name as keyof typeof endpoint.path_param_styles] ?? "segment";
-    const placeholder = `\${${name}}`;
-    if (owner) {
-      const encoded = owner.path(raw, style === "relative_path", style === "opaque_segment" || style === "relative_path");
-      owner.text(path, 16384);
-      if (path.includes(placeholder)) {
-        if (path.length - placeholder.length + encoded > 16384 || preparationBytes(path) - preparationBytes(placeholder) + encoded > 16384) owner.fail();
-        owner.substitute(1);
-      }
-    }
-    path = path.replace(placeholder, encodePathParam(raw, style));
-  }
-  return resolveTemplate(provider, path, env, owner);
-}
-
-export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider, endpoint: CompiledEndpoint, target: Headers, env: Env, owner?: PreparationAdmission): void {
-  for (const name of [...provider.adapter.passthroughHeaders, ...endpoint.request_headers]) {
-    const lower = name.toLowerCase();
-    // Caller-selected tenancy, profile trust grants and replay keys have no
-    // authorized owner binding. A manifest allowlist cannot grant authority.
-    if (["x-clawrouter-background-recovery", "anthropic-workspace-id", "anthropic-user-profile-id", "idempotency-key"].includes(lower)) continue;
-    const value = incoming.get(name);
-    if (value) preparationHeader(target, name, value, owner);
-  }
-  preparationHeader(target, "content-type", incoming.get("content-type") ?? "application/json", owner);
-  applyTemplateHeaders(provider, endpoint.headers, env, target, owner);
-}
-
-export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env, owner?: PreparationAdmission): Record<string, unknown> {
-  // Renames only replace top-level fields; nested prompt/tool data is read-only.
-  const transformed = { ...body };
-  for (const rename of provider.adapter.requestTransforms.renameFields) {
-    if (rename.paths.length && !rename.paths.includes(path)) continue;
-    const allowed = rename.upstreams.length === 0 || rename.upstreams.includes(model) || (!!rename.upstreamConfig && configuredList(provider, rename.upstreamConfig, env, owner).includes(model));
-    if (allowed && rename.from in transformed && !(rename.to in transformed)) {
-      transformed[rename.to] = transformed[rename.from];
-      delete transformed[rename.from];
-    }
-  }
-  return transformed;
 }
 
 export function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date(), owner?: PreparationAdmission): Promise<string | undefined> {
@@ -505,26 +455,4 @@ function endpointTemplatesConfigured(provider: CompiledProvider, endpoint: Compi
 
 async function hmac(key: Uint8Array, value: string): Promise<Uint8Array> { const cryptoKey = await crypto.subtle.importKey("raw", key.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value))); }
 function hex(value: Uint8Array): string { return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
-function awsEncode(value: string): string { return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`); }
 function compareAscii(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
-
-function configuredList(provider: CompiledProvider, name: string, env: Env, owner?: PreparationAdmission): string[] {
-  let selected: string | null = null;
-  const key = templateCandidates(provider, name, owner).find(candidate => (selected = preparationValue(env, candidate, owner, true)));
-  return key ? providerConfigurationList(selected!, owner, key, undefined, !!owner) : [];
-}
-
-function encodePathParam(value: string, style: string): string {
-  if (style === "opaque_segment") {
-    if (/^[.]{1,2}$/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, "invalid_path_param", "opaque path parameter is unsafe");
-    return awsEncode(value);
-  }
-  if (style === "relative_path") {
-    if (value.startsWith("/") || value.endsWith("/") || value.includes("\\") || value.includes("?") || value.includes("#")) throw new HttpError(400, "invalid_path_param", "relative path parameter is unsafe");
-    const segments = value.split("/");
-    if (segments.some((segment) => !segment || segment === "." || segment === "..")) throw new HttpError(400, "invalid_path_param", "relative path parameter is unsafe");
-    return segments.map(encodeURIComponent).join("/");
-  }
-  if (value.includes("/") || value === "." || value === "..") throw new HttpError(400, "invalid_path_param", "path parameter must be one segment");
-  return encodeURIComponent(value);
-}

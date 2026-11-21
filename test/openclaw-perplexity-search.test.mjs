@@ -72,7 +72,7 @@ function searchLifetimeSource(text) {
 }
 const assembledFixture = fixtureText.replace(marker, searchLifetimeSource(observerSource));
 
-const workerOutcomePins = {"proxy.ts": "03aae280d322b27c39f0a39f004bf894dfee39328cb380633d749eddf09f1312", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "e415aaa7e449fa901975a014c28b06748f9ec4b19eec0f5886b303b7faa6070a", "proxy-response.ts": "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 function workerOutcomeOverlay(text, name = "proxy-response.ts") {
   assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
   const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };

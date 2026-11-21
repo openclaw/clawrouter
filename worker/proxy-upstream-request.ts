@@ -4,7 +4,7 @@ import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
-import { copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts";
+import { type UpstreamAuth } from "./providers.ts"; import { copyRequestHeaders, upstreamPath } from "./provider-request.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
 import { HttpError, maxJsonBodyBytes } from "./utils.ts";
