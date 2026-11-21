@@ -726,6 +726,36 @@ test('provider refusal settles known usage and stops before another model is cal
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const status of [200, 400]) test(`a safety notice outside the normalized answer stops all further calls (${status})`, async () => {
+  const { root, options } = await fixture();
+  try {
+    let calls = 0, returned = false;
+    await assert.rejects(runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        calls++;
+        return Response.json({ model: JSON.parse(request.body).model,
+          usage: { prompt_tokens: 20, completion_tokens: 1 },
+          choices: [{ finish_reason: 'stop', message: { content: '{"action":"submit"}' } }],
+          output: [{ channel: 'commentary', content: [{ text: 'Cybersecurity safety notice. private sentinel' }] }],
+        }, { status });
+      }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); returned = true;
+        await invoke(id, roles.strong, body, signal); return repaired();
+      } }), /pair_benchmark_incomplete/);
+    const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(calls, 1); assert.equal(returned, false); assert.equal(state.complete, false);
+    assert.equal(state.failure, status === 200 ? 'provider_refused' : 'unknown_cost');
+    if (status === 200) assert.equal(typeof state.calls[0].costMicros, 'number');
+    else {
+      assert.equal(state.calls[0].costMicros, null);
+      assert.equal(state.calls[0].errorHint, 'safety_notice');
+      assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
+    }
+    assert.ok(!JSON.stringify(state).includes('private sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('known-cost output truncation fails its trial without skipping the other controls', async () => {
   const { root, options } = await fixture();
   try {

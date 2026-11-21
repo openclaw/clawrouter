@@ -2,7 +2,7 @@ import { readFile, mkdir, writeFile, rename, rm, open, link } from 'node:fs/prom
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runAgent, repositoryActionSchema, SpendLedger, toolErrorCode, finishReason, agentFailureTrace } from './fusion-agent-benchmark.mjs';
-import { nativeModels, validateOpenAiApi, nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
+import { nativeModels, validateOpenAiApi, nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, nativeErrorMetadata, hasNativeSafetyNotice, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
@@ -154,16 +154,18 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     attempt.promptDigest = hash(JSON.stringify(body.messages));
     // The attempt exists before dispatch; all transport/parse failures leave it reserved.
     await save();
-    let normalized;
+    let normalized, safetyNotice = false;
     try {
       const response = await fetcher(request.url, { method: 'POST', headers: request.headers,
         body: requestBody, signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
       Object.assign(attempt, nativeResponseMetadata(model, response));
       const raw = await response.json();
+      safetyNotice = hasNativeSafetyNotice(raw);
+      if (safetyNotice) console.error("Provider safety notice: This content can't be shown.");
       if (!response.ok) {
         Object.assign(attempt, nativeErrorMetadata(raw));
-        if (attempt.errorHint === 'safety_notice') console.error("Provider safety notice: This content can't be shown.");
+        if (!safetyNotice && attempt.errorHint === 'safety_notice') console.error("Provider safety notice: This content can't be shown.");
         throw new Error('unknown_cost');
       }
       normalized = nativeResult(model, raw, openAiApi);
@@ -180,10 +182,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       await save();
       throw new Error('unknown_cost');
     }
-    if (/this content can[’']t be shown|safety refusal/i.test(normalized.result.choices?.[0]?.message?.content ?? '')) {
-      console.error("Provider safety notice: This content can't be shown.");
-      throw new Error('provider_refused');
-    }
+    if (safetyNotice) throw new Error('provider_refused');
     requireCompleteResponse(normalized.result);
     return normalized.result;
   };
