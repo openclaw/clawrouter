@@ -153,3 +153,40 @@ test("playground request honors an explicit endpoint timeout", async (context) =
   await playgroundRequest("https://console.example/", "/v1/proxy/openai/chat", {}, 180_000);
   assert.deepEqual(timeouts, [180_000]);
 });
+
+for (const contentType of ["application/json", "application/problem+json"]) {
+  for (const [status, statusText] of [[200, "OK"], [204, "No Content"], [502, "Bad Gateway"]]) {
+    test(`Playground preserves the status fallback for empty ${status} ${contentType}`, async (context) => {
+      context.mock.method(globalThis, "fetch", async () => new Response(null, {
+        status, statusText, headers: { "content-type": contentType },
+      }));
+      const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+      assert.equal(response.raw, `HTTP ${status} ${statusText}`);
+      assert.equal(response.status, status);
+      assert.equal(response.ok, status < 400);
+      assert.equal(response.contentType, contentType);
+    });
+  }
+}
+
+test("Playground preserves the fallback when an empty JSON response has no status text", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response(null, { status: 204, headers: { "content-type": "application/json" } }));
+  const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+  assert.equal(response.raw, "HTTP 204 No Content");
+});
+
+for (const [name, contentType, body, expected] of [
+  ["JSON", "application/json", '{"ok":true}', '{\n  "ok": true\n}'],
+  ["problem JSON", "application/problem+json", '{"detail":"unavailable"}', '{\n  "detail": "unavailable"\n}'],
+  ["malformed JSON", "application/json", "not json", "not json"],
+  ["plain text", "text/plain", "plain response", "plain response"],
+  ["binary", "application/octet-stream", "abc", "HTTP 200 OK\napplication/octet-stream response (3 bytes)"],
+]) {
+  test(`Playground keeps nonempty ${name} response rendering`, async (context) => {
+    context.mock.method(globalThis, "fetch", async () => new Response(body, {
+      status: 200, statusText: "OK", headers: { "content-type": contentType },
+    }));
+    const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+    assert.equal(response.raw, expected);
+  });
+}
