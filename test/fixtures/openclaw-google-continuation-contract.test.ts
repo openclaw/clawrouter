@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as catalogTransport from "../../src/infra/net/fetch-guard.js";
-import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
 import { stream, type AssistantMessage, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -42,9 +41,48 @@ assert.equal(contract.provider, "google-gemini");
 assert.equal(contract.model, "google/gemini-3.5-flash");
 const invocation = new AsyncLocalStorage<any>();
 const originalCatalog = catalogTransport.fetchWithSsrFGuard;
-const originalGuard = guardedTransport.fetchWithProviderHttpGuard;
 const key = (id: string) => "clawrouter-live-gcont_" + id + "-fixture-secret";
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createGoogleBindings>, bodySucceeded: boolean;
+const guardContract = process.env.CLAWROUTER_GOOGLE_GUARD_CONTRACT!;
+assert.match(guardContract, /^[a-f0-9]{64}$/);
+const guardKey = Symbol.for("clawrouter.google.guard." + guardContract);
+type GuardModule = { faults: unknown[] };
+let guardIdentity: { module: GuardModule; callee: Function } | undefined;
+let guardChannel: { modules: Set<GuardModule>; observe: typeof observeCompiledGuard };
+
+// BEGIN GOOGLE EXECUTED GUARD
+function observeCompiledGuard(module: GuardModule, callee: (...args: any[]) => any, receiver: unknown, args: any[], returned: boolean, value: unknown) {
+  assert.equal(typeof callee, "function"); assert.equal(receiver, undefined); assert.equal(args.length, 1);
+  assert(Array.isArray(module.faults));
+  if (!guardIdentity) guardIdentity = { module, callee };
+  assert.equal(module, guardIdentity.module); assert.equal(callee, guardIdentity.callee);
+  const input = args[0];
+  // These are data properties of the original source-owned guard input. An
+  // accessor cannot become diagnostic permission for another SDK getter call.
+  for (const field of ["url", "init", "signal"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, field);
+    assert(!descriptor || Object.hasOwn(descriptor, "value"), "accessor guard input is unqualified");
+  }
+  const initSignal = input.init && Object.getOwnPropertyDescriptor(input.init, "signal");
+  assert(!initSignal || Object.hasOwn(initSignal, "value"), "accessor init signal is unqualified");
+  const owner = claimOwned(input.url, input.init, "chat");
+  lifetime.signal(owner, input.signal ?? initSignal?.value);
+  lifetime.observedGuard(callee, receiver, args, owner, returned, value);
+}
+// END GOOGLE EXECUTED GUARD
+
+function restoreGuardChannel() {
+  const failures: unknown[] = [];
+  try {
+    assert.equal(guardChannel.modules.size, 1, "one actual Google guard module required");
+    for (const module of guardChannel.modules) assert.deepEqual(module.faults, []);
+  } catch (error) { failures.push(error); }
+  try {
+    assert.equal(Object.getOwnPropertyDescriptor(globalThis, guardKey)?.value, guardChannel);
+    assert(Reflect.deleteProperty(globalThis, guardKey), "Google guard channel restoration failed");
+  } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "Google guard observation and restoration failed");
+}
 
 // BEGIN GOOGLE CLAIM
 function claimOwned(url: any, init: any, kind: string) {
@@ -57,9 +95,18 @@ function claimOwned(url: any, init: any, kind: string) {
 // END GOOGLE CLAIM
 
 async function runCase(body: () => unknown) {
-  await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
-    () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(),
-  ]);
+  try {
+    await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
+      () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => restoreGuardChannel(),
+    ]);
+  } catch (error) {
+    try {
+      console.log("GOOGLE_CONTINUATION_FAILURE " + JSON.stringify({ v: 1, bodySucceeded,
+        bindings: bindings.bindings.map(row => ({ id: row.id, kind: row.kind, claimed: row.claimed })),
+        guards: lifetime.guards.length, modules: guardChannel.modules.size, work: lifetime.summary(), join: lifetime.joinDiagnostic() }));
+    } catch (reportError) { throw new AggregateError([error, reportError], "Google failure and diagnostic capture failed"); }
+    throw error;
+  }
   expect(lifetime.guards.length).toBe(bindings.bindings.length);
   expect(lifetime.summary().releases).toBe(bindings.bindings.length);
   expect(lifetime.guards.length).toBeGreaterThan(0);
@@ -149,12 +196,12 @@ describe("registered Google continuation through Worker and SQLite", { concurren
   beforeEach(() => {
     bodySucceeded = false; bindings = createGoogleBindings();
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore() });
+    assert.equal(Object.getOwnPropertyDescriptor(globalThis, guardKey), undefined);
+    guardChannel = Object.freeze({ modules: new Set<GuardModule>(), observe: observeCompiledGuard });
+    Object.defineProperty(globalThis, guardKey, { configurable: true, value: guardChannel });
     vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (this: unknown, ...args) {
       const input = args[0]; if (input.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalog, this, args);
       const owner = claimOwned(input.url, input.init, "catalog"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalCatalog, this, args, owner);
-    });
-    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args) {
-      const input = args[0], owner = claimOwned(input.url, input.init, "chat"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalGuard, this, args, owner);
     });
   });
   it("publishes only after HTTP EOF and makes exactly two explicit owned hops", async () => {
