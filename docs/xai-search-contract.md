@@ -45,6 +45,24 @@ establish a vendor tool tariff. Registered OpenClaw search through Worker and
 SQLite still requires separate exact-client qualification. No live vendor or
 default-client parity is established by these catalog tests.
 
+The registered-client contract is pinned separately to OpenClaw
+`3206356e0fff73751495ca6a5c8cd4f3e97caf04` in
+`test/openclaw-xai-search.test.mjs`. It uses the actual `web_search` tool and
+ClawRouter registration with a private metadata-backed plugin generation.
+The Worker produces the offers from its compiled catalog. The manifest phase
+changes only the existing Responses endpoint's `native_proxy` setting before
+catalog acquisition; it does not fabricate an eligible offer.
+
+This contract requires separate native and manifest executions, exact selected
+credentials, safe wrapped citations, attempt-bound SQLite receipts and joined
+original SDK, Worker and upstream operations. Post-content cancellation is
+distinct from physical pre-response disconnect propagation. The source fixture
+is prepared; its exact-client runtime qualification is still pending.
+The current rotation and revocation cases change the selected grant before
+catalog acquisition. They do not establish post-catalog invalidation. Redirect
+retirement and the new fixture's owning OpenClaw TypeScript graph remain pending
+qualification alongside the full runtime contract.
+
 ## Results and transport
 
 `observeXaiSearch(body, request, complete)` and
