@@ -1,5 +1,7 @@
 # Changelog
 
+- Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
+
 - Run the realtime cadence proof before the concurrent CI script suite, retaining every test, deadline, bounded diagnostic and failure status.
 
 - Allow interactive fusion pair benchmarks to opt into the existing bounded action schema for every comparison arm, and record the selected profile in the result.
