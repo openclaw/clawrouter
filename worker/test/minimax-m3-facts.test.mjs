@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { configuredUpstream, providerModel } = await import("../providers.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");

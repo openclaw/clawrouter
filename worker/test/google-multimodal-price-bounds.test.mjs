@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 const { default: handler } = await import("../index.ts");

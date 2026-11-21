@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { openRouterVideoProtocol, prepareOpenRouterVideo, prepareOpenRouterVideoControl,
   observeOpenRouterVideo, prepareOpenRouterVideoContent, readOpenRouterVideoContent } = await import("../openrouter-video.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/openrouter/video.json", import.meta.url), "utf8"));

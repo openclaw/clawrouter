@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 const bases = { baseten: "https://inference.baseten.co/v1", arcee: "https://api.arcee.ai/api/v1",
   novita: "https://api.novita.ai/openai/v1" };

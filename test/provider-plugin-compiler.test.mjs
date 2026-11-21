@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import { loadProviderManifestInputs, parseProviderCompilerArgs } from "../scripts/provider-manifest-inputs.mjs";
 
 const plugin = fileURLToPath(new URL("../examples/provider-plugin/clawrouter.plugin.json", import.meta.url));

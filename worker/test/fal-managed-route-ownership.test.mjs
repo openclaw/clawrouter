@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const seedance = JSON.parse(readFileSync(new URL("../../providers/_fixtures/fal/seedance.json", import.meta.url)));

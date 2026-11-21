@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 
 const source = parse(readFileSync(new URL("../providers/openai.provider.yaml", import.meta.url), "utf8"));
 function compile(mutate = () => {}) {

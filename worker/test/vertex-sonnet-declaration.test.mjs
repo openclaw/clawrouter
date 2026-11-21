@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture } from "./managed-runtime-fixture.mjs";
 import { vertexAuthorization, vertexBody, vertexJson, vertexSse, vertexModel, vertexModelId } from "./vertex-runtime-fixture.mjs";
 const { sha256Hex } = await import("../utils.ts");

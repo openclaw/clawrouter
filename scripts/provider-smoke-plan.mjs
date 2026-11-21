@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
-import { compileProviderSnapshot as compileManifests } from "./compile-providers.mjs";
+import { compileProviderSnapshot as compileManifests } from "./provider-compiler.mjs";
 import { runWithinDeadline } from "./smoke-readiness.mjs";
 
 export class SmokeKeyInspectionUnavailableError extends Error {}
