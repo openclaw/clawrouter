@@ -79,6 +79,11 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     try { return await pending; }
     catch (error) { operation.stop("publication", error); throw error; }
   }
+  function inspectJson(value: unknown): UsageInspection {
+    return { tokens: responseFormat === "voyage.embeddings"
+      ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
+      : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+  }
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
     if (finished) return;
     finished = true;
@@ -94,9 +99,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         text += decoder.decode();
         const value: unknown = JSON.parse(text);
         if (searchTariff && mime === "application/json") requestTariffOutcome = perplexitySearchOutcome(value, response.status);
-        inspection = { tokens: responseFormat === "voyage.embeddings"
-          ? response.ok && mime === "application/json" ? extractVoyageEmbeddingUsage(value) : null
-          : extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+        inspection = inspectJson(value);
       } catch { inspection.outcome = "provider_error"; }
     }
     if (responseFormat === "perplexity.search") inspection.tokens = null;
@@ -144,7 +147,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
             try {
               text += decoder.decode();
               const value: unknown = JSON.parse(text);
-              completedJson = { tokens: extractUsageTokens(value, usageContext), outcome: responseOutcome(value) };
+              completedJson = inspectJson(value);
               bodyInspection.acceptJson(value);
             } catch { completedJson = { tokens: null, outcome: "provider_error" }; }
             text = ""; inspect = false;

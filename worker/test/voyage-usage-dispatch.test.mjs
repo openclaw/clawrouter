@@ -8,19 +8,22 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/voyage/e
 const output = { ...wire.response, usage: { total_tokens: 7 } };
 const text = JSON.stringify(output), encoder = new TextEncoder();
 
-for (const fragmented of [false, true]) test(`Voyage ${fragmented ? "fragmented" : "unary"} observer preserves bytes and derives input usage only after EOF`, async () => {
+for (const inspected of [false, true]) for (const fragmented of [false, true]) test(`Voyage ${fragmented ? "fragmented" : "unary"}/${inspected ? "inspected" : "direct"} observer preserves bytes and derives input usage only after EOF`, async () => {
   const bytes = encoder.encode(text), stream = new ReadableStream({ start(controller) {
     if (fragmented) for (let index = 0; index < bytes.length; index += 3) controller.enqueue(bytes.slice(index, index + 3));
     else controller.enqueue(bytes); controller.close();
   } });
-  const observed = observeUsage(new Response(stream, { headers: { "content-type": "application/json" } }), undefined, undefined, "voyage.embeddings");
+  let accepted = 0;
+  const inspection = inspected ? { async push() {}, async end() {}, acceptJson(value) { accepted++; assert.deepEqual(value, output); } } : undefined;
+  const observed = observeUsage(new Response(stream, { headers: { "content-type": "application/json" } }), undefined, inspection, "voyage.embeddings");
   assert.equal(await observed.response.text(), text);
   const usage = await observed.result; assert.equal(usage.delivery, "complete");
   assert.deepEqual(usage.tokens, { input: 7, output: 0, total: 7, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+  assert.equal(accepted, inspected ? 1 : 0); await observed.retired;
 });
 
-for (const scenario of ["generic", "http-error", "native-error", "missing", "malformed", "wrong-mime", "oversized", "truncated", "interrupted", "canceled"]) {
-  test(`Voyage ${scenario} evidence cannot invent an embedding input/output split`, async () => {
+for (const inspected of [false, true]) for (const scenario of ["generic", "http-error", "native-error", "missing", "malformed", "wrong-mime", "oversized", "truncated", "interrupted", "canceled"]) {
+  test(`Voyage ${scenario}/${inspected ? "inspected" : "direct"} evidence cannot invent an embedding input/output split`, async () => {
     let bytes = encoder.encode(scenario === "missing" ? JSON.stringify({ ...output, usage: undefined })
       : scenario === "malformed" ? JSON.stringify({ ...output, usage: { total_tokens: "7" } })
       : scenario === "native-error" ? JSON.stringify({ ...output, error: { message: "synthetic" } })
@@ -34,15 +37,36 @@ for (const scenario of ["generic", "http-error", "native-error", "missing", "mal
     }, cancel() { canceled = true; } });
     const observed = observeUsage(new Response(stream, { status: scenario === "http-error" ? 429 : 200,
       headers: { "content-type": scenario === "wrong-mime" ? "application/problem+json" : "application/json" } }),
-      undefined, undefined, scenario === "generic" ? "openai.embeddings" : "voyage.embeddings");
+      undefined, inspected ? { async push() {}, async end() {}, acceptJson() {} } : undefined,
+      scenario === "generic" ? "openai.embeddings" : "voyage.embeddings");
     if (scenario === "canceled") { const reader = observed.response.body.getReader(); await reader.read(); await reader.cancel(); assert.equal(canceled, true); }
     else if (scenario === "interrupted") await assert.rejects(observed.response.text());
     else await observed.response.text();
     const usage = await observed.result;
     assert.equal(usage.tokens?.input ?? null, null); assert.equal(usage.tokens?.output ?? null, null);
     if (scenario === "generic") assert.equal(usage.tokens.total, 7, "generic totals keep their original unknown split");
+    await observed.retired;
   });
 }
+
+test("Voyage inspected usage waits for the pending publication before settlement and retirement", async () => {
+  let entered, release;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  const observed = observeUsage(Response.json(output), undefined, {
+    async push() {}, acceptJson() {}, async end() { entered(); await pending; },
+  }, "voyage.embeddings");
+  const delivered = observed.response.text();
+  let settled = false, retired = false;
+  void observed.result.then(() => { settled = true; });
+  void observed.retired.then(() => { retired = true; });
+  try {
+    await ready; await Promise.resolve();
+    assert.equal(settled, false); assert.equal(retired, false);
+  } finally { release(); }
+  assert.equal(await delivered, text);
+  assert.equal((await observed.result).tokens.input, 7); await observed.retired;
+});
 
 for (const manifest of [false, true]) for (const pooled of [false, true]) test(`Voyage actual ${manifest ? "manifest" : "native"}/${pooled ? "grant" : "environment"} dispatch settles observed 7/0 without changing policy-fixed cost`, { timeout: 10_000 }, async t => {
   const original = snapshot.providers, source = structuredClone(original.find(provider => provider.id === "voyage"));
