@@ -179,6 +179,43 @@ test('qualification rejects empty/malformed reports and distinguishes broken tes
   assert.equal(testResult({ code: 0, stdout: Buffer.from('success'), stderr: Buffer.alloc(0) }).valid, false);
 });
 
+test('long test feedback preserves early nested failure diagnostics and final output', async () => {
+  const failure = '    not ok 1 - early regression\r\n      ---\r\n      error: expected one settlement\r\n      stack: |\r\n        repair.test.mjs:12:3\r\n      ...\r\n';
+  const output = failure + '    ok 2 - later passing test\r\n'.repeat(1000);
+  const report = { code: 1, stdout: Buffer.concat([Buffer.from(output), tap(1000, 1)]), stderr: Buffer.from('final diagnostic') };
+  const result = await check({ exec: async () => report }, ['worker/test/repair.test.mjs']);
+  assert.equal(result.valid, true);
+  assert.equal(result.tests, 1001);
+  assert.equal(result.failures, 1);
+  assert.match(result.feedback, /early regression/);
+  assert.match(result.feedback, /expected one settlement/);
+  assert.match(result.feedback, /repair\.test\.mjs:12:3/);
+  assert.match(result.feedback, /output omitted/);
+  assert.ok(result.feedback.endsWith('final diagnostic'));
+  assert.ok(result.feedback.length <= 12000);
+  assert.equal(result.digest, testResult(report).digest);
+});
+
+test('test feedback keeps small reports unchanged and bounds oversized failures', async () => {
+  const short = { code: 0, stdout: tap(1, 0), stderr: Buffer.from('diagnostic') };
+  const result = await check({ exec: async () => short }, ['worker/test/repair.test.mjs']);
+  assert.equal(result.feedback, Buffer.concat([short.stdout, short.stderr]).toString());
+  const huge = Buffer.from('not ok 1 - large failure\n  ---\n  error: ' + 'x'.repeat(30000) + '\n  ...\n' + tap(0, 1));
+  const bounded = await check({ exec: async () => ({ code: 1, stdout: huge, stderr: Buffer.alloc(0) }) }, ['worker/test/repair.test.mjs']);
+  assert.equal(bounded.feedback.length, 12000);
+  assert.ok(bounded.feedback.startsWith('not ok 1 - large failure'));
+  assert.match(bounded.feedback, /output omitted/);
+  assert.match(bounded.feedback, /# fail 1/);
+});
+
+test('long malformed test output retains its tail without inventing failures', async () => {
+  const result = await check({ exec: async () => ({ code: 1, stdout: Buffer.from('x'.repeat(20000)), stderr: Buffer.from('import failed') }) }, ['worker/test/repair.test.mjs']);
+  assert.equal(result.valid, false);
+  assert.equal(result.feedback.length, 12000);
+  assert.ok(result.feedback.endsWith('import failed'));
+  assert.match(result.feedback, /output omitted/);
+});
+
 test('failed-test fingerprints distinguish nested labels without retaining content', () => {
   const output = `# Subtest: private suite one\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 1 - private suite one\n# Subtest: private suite two\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 2 - private suite two\n`;
   const receipt = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(output), tap(0, 4)]), stderr: Buffer.from('private error details') });

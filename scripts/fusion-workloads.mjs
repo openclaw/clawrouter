@@ -238,6 +238,24 @@ export function testResult(result) {
     digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
+function testFeedback(result) {
+  const text = Buffer.concat([result.stdout, result.stderr]).toString();
+  if (text.length <= 12000) return text;
+  const diagnostics = [];
+  let failureDepth = -1;
+  for (const line of result.stdout.toString().split('\n')) {
+    const failure = /^( *)not ok [1-9][0-9]* - /.exec(line);
+    if (failure) failureDepth = failure[1].length;
+    else if (line.trim() && line.search(/\S/) <= failureDepth) failureDepth = -1;
+    if (failureDepth >= 0) diagnostics.push(line);
+  }
+  const marker = '\n[test output omitted; showing failure diagnostics and final output]\n';
+  const tail = text.slice(-2000);
+  const failures = diagnostics.join('\n');
+  if (!failures) return marker + text.slice(-(12000 - marker.length));
+  return failures.slice(0, 12000 - marker.length - tail.length) + marker + tail;
+}
+
 export async function check(box, paths, timeout = 120000) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   // Kill the in-container process group before the Docker client deadline.
@@ -245,7 +263,7 @@ export async function check(box, paths, timeout = 120000) {
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
     'node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
-  return { ...testResult(result), feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
+  return { ...testResult(result), feedback: testFeedback(result) };
 }
 
 export async function probe(box, source, timeout = 15000) {
