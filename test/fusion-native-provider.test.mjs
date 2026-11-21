@@ -95,6 +95,18 @@ test('HTTP error diagnostics retain only finite labels, never echoed content', (
   ]) assert.equal(nativeErrorMetadata({ error: { message } }).errorHint, hint);
 });
 
+test('policy prompt rejections use finite safety metadata without retaining echoed text', () => {
+  const error = { type: 'invalid_request_error', code: 'invalid_prompt',
+    message: 'Your prompt was flagged as potentially violating our usage policy. private sentinel' };
+  assert.deepEqual(nativeErrorMetadata({ error }), {
+    errorType: 'invalid_request_error', providerCode: 'invalid_prompt',
+    providerParam: 'unknown', errorHint: 'safety_notice',
+  });
+  for (const changed of [
+    { code: 'invalid_value' }, { type: 'api_error' }, { message: 'Invalid prompt shape. private sentinel' },
+  ]) assert.equal(nativeErrorMetadata({ error: { ...error, ...changed } }).errorHint, 'unknown');
+});
+
 test('selected-model preflight requires only the selected providers', async () => {
   const pair = ['openai/gpt-6-luna', 'openai/gpt-6.1-sol'], calls = [];
   const pins = await nativePins({ OPENAI_API_KEY: 'synthetic-openai' }, async url => {

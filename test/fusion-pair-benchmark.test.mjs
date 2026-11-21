@@ -1231,3 +1231,42 @@ for (const failure of ['truncated', 'invalid-usage', 'unpriced-tools', 'http']) 
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+for (const openAiApi of ['chat-completions', 'responses']) {
+  test(`policy prompt rejection stops ${openAiApi} pairs and retains its full reservation`, async t => {
+    const { root, options } = await fixture();
+    const notices = [];
+    t.mock.method(console, 'error', message => notices.push(message));
+    let calls = 0, grades = 0;
+    try {
+      await assert.rejects(runPairBenchmark({ ...options, openAiApi,
+        fetcher: async (url, request) => {
+          if (url.includes('/v1/models/')) return success(url, request);
+          calls++;
+          return Response.json({ error: { type: 'invalid_request_error', code: 'invalid_prompt',
+            message: 'Your prompt was flagged as potentially violating our usage policy. private sentinel' } }, { status: 400 });
+        },
+        agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+          await invoke(id, roles.cheap, body, signal);
+          await invoke(id, roles.strong, body, signal);
+          return repaired();
+        },
+        grade: async () => { grades++; return grade(); },
+      }), /pair_benchmark_incomplete/);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+      assert.equal(calls, 1);
+      assert.equal(grades, 0);
+      assert.equal(saved.complete, false);
+      assert.equal(saved.failure, 'unknown_cost');
+      assert.equal(saved.calls.length, 1);
+      assert.equal(saved.calls[0].costMicros, null);
+      assert.equal(saved.calls[0].httpStatus, 400);
+      assert.equal(saved.calls[0].providerCode, 'invalid_prompt');
+      assert.equal(saved.calls[0].errorHint, 'safety_notice');
+      assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls[0].reservationMicros);
+      assert.deepEqual(notices, ["Provider safety notice: This content can't be shown."]);
+      assert.doesNotMatch(JSON.stringify(saved), /private sentinel|flagged|usage policy/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
