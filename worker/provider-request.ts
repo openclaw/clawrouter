@@ -1,6 +1,5 @@
 import { configuredEndpointPath } from "./endpoint-path.ts";
-import { providerConfigurationList } from "./provider-connections.ts";
-import { applyTemplateHeaders, resolveTemplate, templateCandidates, PreparationAdmission, preparationValue, preparationHeader, preparationBytes } from "./provider-templates.ts";
+import { providerConfigurationList, applyTemplateHeaders, resolveTemplate, templateCandidates, PreparationAdmission, preparationValue, preparationHeader, preparationBytes } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
