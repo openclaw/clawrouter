@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'vite';
 
-// Compile the real screens; only the unrelated console request boundary is inert.
+// Compile the real screens without console-context substitutes.
 // This is server-rendered output coverage, not browser or interaction proof.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = await mkdtemp(root + 'test/.usage-display-');
@@ -18,11 +18,6 @@ try {
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {} }, querySelector: () => null } });
   await build({
     root, configFile: false, publicDir: false, logLevel: 'error',
-    plugins: [{
-      name: 'no-console-requests', enforce: 'pre',
-      resolveId(id) { if (id === '../console-controller-context') return '\0test-console'; },
-      load(id) { if (id === '\0test-console') return 'export function useConsole() { return { request() { throw new Error("Unexpected console request"); } }; }'; },
-    }],
     build: { ssr: true, outDir: output, minify: false, rollupOptions: {
       input: { personal: root + 'src/screens/my-usage.tsx', admin: root + 'src/screens/users-usage.tsx', complete: root + 'src/screens/complete-usage.tsx', components: root + 'src/components.tsx', analytics: root + 'src/analytics-charts.tsx' },
       output: { entryFileNames: '[name].mjs' },
@@ -101,7 +96,7 @@ test('personal rendered success captions distinguish near-extremes from none and
 test('admin rendered success rate also distinguishes near-extremes from none and all', () => {
   for (const [successCount, expected] of [[9999, '&gt;99%'], [1, '&lt;1%'], [0, '0%'], [10000, '100%']]) {
     const usage = { summary: { requestCount: 10000, successCount, errorCount: 10000 - successCount, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 }, providers: [], events: [], daily: [], ledger: 'ready' };
-    const html = renderToStaticMarkup(createElement(UsageScreen, { keys: [], credentials: [], services: [], overview: null, tenants: [], usageRows: [], usage, usageLoaded: true, usageStale: false, usageError: '', usageUpdatedAt: null }));
+    const html = renderToStaticMarkup(createElement(UsageScreen, { request: async () => { throw new Error("Unexpected content request"); }, keys: [], credentials: [], services: [], overview: null, tenants: [], usageRows: [], usage, usageLoaded: true, usageStale: false, usageError: '', usageUpdatedAt: null }));
     assert.ok(html.includes('<span>success rate</span><strong>' + expected + '</strong>'), 'successCount=' + successCount);
   }
 });
@@ -188,7 +183,7 @@ test('access and catalogue rendering do not import the usage screen', async () =
 });
 
 
-test('shared components load without browser initialization or demo data', async () => {
+test('shared components and ledger screens load without browser or account initialization', async () => {
   assert.equal(typeof window, 'undefined');
   assert.equal(typeof document, 'undefined');
   const modules = new Set();
@@ -198,12 +193,14 @@ test('shared components load without browser initialization or demo data', async
       root, configFile: false, publicDir: false, logLevel: 'error',
       plugins: [{ name: 'component-owner', moduleParsed(info) { modules.add(info.id); } }],
       build: { ssr: true, outDir: output, minify: false, rollupOptions: {
-        input: root + 'src/components.tsx', output: { entryFileNames: 'components.mjs' },
+        input: { components: root + 'src/components.tsx', ledger: root + 'src/screens/users-usage.tsx' }, output: { entryFileNames: '[name].mjs' },
       } },
     });
-    for (const name of ['ui-config.ts', 'demo-data.ts']) {
-      assert.ok(!modules.has(root + 'src/' + name), 'shared components import ' + name);
+    for (const name of ['ui-config.ts', 'demo-data.ts', 'console-controller-context.tsx', 'screens/caps.tsx', 'screens/users.tsx']) {
+      assert.ok(!modules.has(root + 'src/' + name), 'presentation imports ' + name);
     }
+    const { UsageScreen } = await import(pathToFileURL(output + '/ledger.mjs'));
+    assert.equal(typeof UsageScreen, 'function');
     const { navItems, viewIcon, Metric } = await import(pathToFileURL(output + '/components.mjs'));
     assert.deepEqual(navItems.map(({ id, label, section }) => [id, label, section]), [
       ['home', 'Dashboard', 'workspace'], ['my-usage', 'My usage', 'workspace'],
