@@ -9,7 +9,7 @@ import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
 import { REALTIME } from "./realtime-protocol";
 import { softBudgetPolicy } from "./soft-budget.ts";
-import { HttpError } from "./utils";
+import { HttpError } from "./http-error";
 
 export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; weeklyRemaining?: number | null; providerRemaining: number | null }
 export interface OperationAffordability {

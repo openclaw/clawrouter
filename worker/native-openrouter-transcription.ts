@@ -2,7 +2,7 @@ import { jsonBodyBytes } from "./json-body.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { openRouterTranscriptionModels, prepareOpenRouterTranscription, readOpenRouterTranscription } from "./openrouter-transcription.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const requestLimit = 24 * 1024 * 1024;
 const format = "openrouter.audio_transcription";

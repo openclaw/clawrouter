@@ -9,7 +9,7 @@ import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;

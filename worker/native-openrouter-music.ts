@@ -6,7 +6,7 @@ import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { createOpenRouterMusicInspector, openRouterMusicModels, prepareOpenRouterMusic, type OpenRouterMusicContext } from "./openrouter-music.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { createSseFrames } from "./token-usage.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const wireLimit = 32 * 1024 * 1024, windowLimit = 64 * 1024;
 const readLimit = 262144, eventLimit = 8192, frameLimit = 2 * 1024 * 1024;

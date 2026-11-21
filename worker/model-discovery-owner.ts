@@ -11,7 +11,8 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Qualified list metadata retains the already selected owner. It
 // does not grant inference, select another key, or use environment credentials.

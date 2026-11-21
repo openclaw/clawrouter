@@ -4,7 +4,7 @@ import { HttpOperation } from "./http-operation.ts";
 import { readCopilotInferenceInput, copilotInferenceResponse, disposeCopilotInferenceResponse } from "./copilot-inference-response.ts";
 import { copilotAccountingIdentity, copilotAccountingSelection, copilotInferenceUnavailable, type CopilotInferenceInput } from "./copilot-inference-dispatch.ts";
 import { jsonBodyBytes } from "./json-body.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { AccessPolicy, Env } from "./types.ts";
 import type { BudgetReservation } from "./accounting.ts";
 

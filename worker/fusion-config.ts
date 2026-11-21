@@ -3,7 +3,7 @@ import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { DEFAULT_FUSION_CONFIG, FUSION_MODEL_ID, normalizeFusionConfig } from "./fusion";
 import { endpointForPath, modelRoute } from "./provider-catalog";
 import type { Env } from "./types";
-import { HttpError } from "./utils";
+import { HttpError } from "./http-error";
 
 const FUSION_CONFIG_KEY = "config/fusion";
 

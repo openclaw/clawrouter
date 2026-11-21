@@ -3,7 +3,8 @@ import { listCredentials, listPolicies } from "./authority";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { sameOrigin } from "./request-origin";
 import type { AccessSession, Env } from "./types";
-import { errorResponse, HttpError, normalizeEmail, privateJson } from "./utils";
+import { errorResponse, normalizeEmail, privateJson } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function sessionCredentialsApi(request: Request, env: Env, path: string): Promise<Response> {
   const session = await verifiedAccessSession(request, env);

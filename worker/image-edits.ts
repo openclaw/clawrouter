@@ -1,7 +1,7 @@
 import type { ImageTokenPricing } from "./types";
 import { validateImageGeneration } from "./image-generation.ts";
 import { decisionImageBytes } from "./provider-decision-images.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Deliberately narrower than OpenAI's edit API: uploaded bytes only. Never fetch
 // caller URLs or forward cross-account File IDs. The shared byte validator checks

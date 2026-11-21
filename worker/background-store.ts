@@ -4,7 +4,7 @@ import { assertManagedInputLive, bindManagedInput, inputReceipt, inputUnavailabl
 import { type BudgetReservationIntent } from "./accounting.ts";
 import { accountingReceipt, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { assertPublishedInputLive, samePublishedInput, samePublishedObject, validatePublishedInput, validatePublishedObject,
   validatePublishedAttempt, publishedInputUnavailable, publishedInputVersion, type PublishedInputBinding,
   type PublishedInputReceipt, type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";

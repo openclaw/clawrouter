@@ -1,6 +1,6 @@
 import { isAccessDenial, parseAccessJson, type UserSourceCounts } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const userMaterializationHeader = "x-clawrouter-user-materialization";
 export const userMaterializationVersion = "v1";

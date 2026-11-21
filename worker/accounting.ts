@@ -5,7 +5,8 @@ import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, Bud
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
 import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, musicCoverLedgerControl } from "./ledgers.ts";
-import { HttpError, randomId } from "./utils.ts";
+import { randomId } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import type { PricingGap } from "./pricing.ts";
 

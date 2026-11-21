@@ -1,6 +1,6 @@
 import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { rankingStaleAfterMs } from "./grant-routing.ts";

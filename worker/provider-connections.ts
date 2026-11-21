@@ -1,5 +1,5 @@
 import type { ProviderConnection } from "./types";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { PreparationAdmission } from "./provider-templates.ts";
 
 export type ProviderConnectionMutation = Pick<ProviderConnection, "providerId"> & Partial<Pick<ProviderConnection, "enabled" | "label" | "monthlyBudgetMicros">>;

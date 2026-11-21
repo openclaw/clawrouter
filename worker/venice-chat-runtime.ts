@@ -5,7 +5,7 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import { extractUsageTokens } from "./token-usage.ts";
 import { sseEventBoundary, type SseBoundaryCursor } from "./proxy-response.ts";
 import { prepareVeniceChatBinding, validateVeniceReturnedModel, type VeniceChatBinding } from "./venice-chat-binding.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const limit = 2 * 1024 * 1024, maxReads = 8192, frameLimit = 128 * 1024;
 export function veniceChat(selection: ProxySelection): boolean {

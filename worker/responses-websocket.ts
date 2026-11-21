@@ -13,7 +13,8 @@ import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResp
 import { extractUsageTokens } from "./token-usage";
 import { prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
-import { decodePathSegment, errorResponse, HttpError } from "./utils";
+import { decodePathSegment, errorResponse } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function proxyResponsesWebSocket(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
   const initialAuth = await authenticateProxyKey(request.headers, env);

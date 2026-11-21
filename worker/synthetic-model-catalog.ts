@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface SyntheticModelRow {
   id: string;

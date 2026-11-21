@@ -1,5 +1,6 @@
 import type { CompiledProvider, Env } from "./types.ts";
-import { envValue, HttpError } from "./utils.ts";
+import { envValue } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const preparationFailures = new WeakSet<object>();
 export function isPreparationLimit(error: unknown): error is HttpError {

@@ -1,6 +1,7 @@
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { isToolKnowledge, type ToolKnowledge } from "./responses-tool-evidence.ts";
-import { HttpError, json } from "./utils.ts";
+import { json } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const compactionWitnessRetentionMs = 30 * 24 * 60 * 60_000;
 export const compactionWitnessCapacity = 100_000;

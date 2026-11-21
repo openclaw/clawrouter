@@ -48,7 +48,8 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessSession, AssignmentRule, Env, PolicyBinding,
   GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
-import { decodePathSegment, cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { decodePathSegment, cleanId, errorResponse, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
   const authorization = await authorizeAdmin(request, env);

@@ -2,7 +2,7 @@ import { nativeMp3ResponseLimit as outputLimit, readNativeMp3Response } from "./
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { nativeQuerySearch } from "./native-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const responseErrors = { invalid: "invalid_elevenlabs_binary_response", limit: "elevenlabs_binary_limit", incomplete: "elevenlabs_binary_incomplete" };
 const speechPath = "/v1/text-to-speech/${voice_id}";

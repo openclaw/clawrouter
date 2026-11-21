@@ -14,7 +14,8 @@ import { publicControlAuthorization } from "./response-control-authorization.ts"
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { HttpError, randomId, sha256Hex } from "./utils.ts";
+import { randomId, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // The public profile and internal foundation share the same scoped row/outbox.
 export async function allocatePixVerseInput(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity,

@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export type ResponseIdentity = { kind: "response" | "turn"; value: string };
 const limits = { response: 256, turn: 8192 };

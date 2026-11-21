@@ -3,7 +3,7 @@ import type { CopilotCatalogInput } from "./copilot-catalog-flow.ts";
 import type { CopilotInferenceContext, CopilotWireFormat } from "./provider-copilot.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AccessPolicy, AuthorizedIdentity, CompiledProvider } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import type { HttpOperation } from "./http-operation.ts";
 

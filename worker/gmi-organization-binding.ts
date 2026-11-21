@@ -7,7 +7,8 @@ import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { envValue, HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { envValue, safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // accountId is projected from the original credential owner, not caller or
 // routing metadata. Absence deliberately leaves an ordinary Bearer request.

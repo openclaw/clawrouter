@@ -21,7 +21,8 @@ import { managedFileBase, managedFilePublicBody, qualifyManagedFiles } from "./m
 import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
+import { errorResponse, json, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { WanManagedOperation, preflightWanJson, assertWanHeaders, wanRecordBytes } from "./managed-media-json.ts";
 
 // Opt-in protocol path. Ordinary requests keep their existing hot path and do

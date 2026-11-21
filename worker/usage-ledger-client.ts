@@ -1,6 +1,6 @@
 import type { GrantUsageSnapshot } from "../shared/contracts";
 import type { Env } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { mergeUsageSnapshots, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };

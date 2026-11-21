@@ -151,6 +151,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   assert.equal(fixedAfterCosts.rawDigest, final.rawDigest); assert.equal(fixedAfterCosts.budget.spentMicros, final.budget.spentMicros);
   const sourcePaths = [
     "worker/index.ts",
+    "worker/http-error.ts",
     "worker/access.ts",
     "worker/json-measurement.ts",
     "worker/local-auth.ts",

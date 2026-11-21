@@ -9,7 +9,7 @@ import { assertControlCallerLive, authorizeResponseControl, publicControlAuthori
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const denied = () => new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires unchanged original credential authorization");
 function ownerIdentity(grant: UpstreamGrant): string {

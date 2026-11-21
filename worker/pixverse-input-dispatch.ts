@@ -14,7 +14,8 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { readBounded } from "./transcription-body.ts";
 import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface PixVerseInputDispatch {
   binding: ManagedInputBinding;

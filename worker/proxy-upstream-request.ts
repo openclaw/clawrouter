@@ -7,7 +7,8 @@ import { resolveTemplate, PreparationAdmission, preparationHeader } from "./prov
 import { type UpstreamAuth } from "./providers.ts"; import { copyRequestHeaders, upstreamPath } from "./provider-request.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
-import { HttpError, maxJsonBodyBytes } from "./utils.ts";
+import { maxJsonBodyBytes } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function prepareUpstreamRequest(
   request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,

@@ -25,7 +25,8 @@ import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, UpstreamGrant,
 } from "./types.ts";
-import { envValue, HttpError, sha256Hex } from "./utils.ts";
+import { envValue, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates, PreparationAdmission, isPreparationLimit, preparationValue, preparationEncodedBytes } from "./provider-templates.ts";
 
 export interface Readiness {

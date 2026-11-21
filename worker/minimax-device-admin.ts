@@ -1,6 +1,7 @@
 import { sameOrigin } from "./request-origin.ts";
 import type { Env } from "./types.ts";
-import { HttpError, privateJson, sha256Hex } from "./utils.ts";
+import { privateJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export type MiniMaxDeviceInput =
   | { flow: "minimax-device.v1"; provider: "minimax"; operation: "begin"; region: "global" | "cn";

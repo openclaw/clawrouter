@@ -1,6 +1,7 @@
 import type { Env, UpstreamGrant } from "./types.ts";
 import { boundedSecret } from "./grant-refresh-diagnosis.ts";
-import { HttpError, readJson } from "./utils.ts";
+import { readJson } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Reuse the credential binding, with a reserved non-grant object name. Its
 // random HMAC key and full digests stay private to this object, never in KV,

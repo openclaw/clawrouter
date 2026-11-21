@@ -9,7 +9,8 @@ import { filterGrantCandidates } from "./grant-eligibility.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import { policyAllowsModel } from "../shared/policy-models.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const catalogs = {
   "baseten.models": { provider: keyedCatalogProviders["baseten.models"], request: basetenCatalogRequest, read: readBasetenModels },

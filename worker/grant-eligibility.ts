@@ -1,7 +1,7 @@
 import { grantQuotaExclusionReason, grantCoolingDown, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh } from "../shared/grant-quota.ts";
 import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
 import { validGrantSegment } from "./grant-routing.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 

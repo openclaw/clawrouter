@@ -15,7 +15,8 @@ import { assertPublishedInputLive, publishedInputUnavailable, samePublishedInput
   type PublishedInputAttempt, type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import { publishedMusicRequestDigest, publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader, publishedMusicReference } from "./published-music-request.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
-import { errorResponse, HttpError, sha256Hex } from "./utils.ts";
+import { errorResponse, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface Input { binding: PublishedInputBinding; attempt: PublishedInputAttempt; body: string; deadline: number }
 export interface PreparedPublishedMusicForward {

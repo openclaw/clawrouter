@@ -14,7 +14,8 @@ import { publicControlAuthorization } from "./response-control-authorization.ts"
 import { dispatchResponseControl, retainedResponseRoute } from "./responses-control-dispatch.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { AccessSession, AuthorizedIdentity, Env } from "./types.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { WanManagedOperation } from "./managed-media-json.ts";
 
 export interface ResponseControlRoute { createId: string; pathParams: Record<string, string> }

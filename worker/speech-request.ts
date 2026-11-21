@@ -1,5 +1,5 @@
 import type { CompiledModel } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function validateSpeechRequest(body: Record<string, unknown>, model: CompiledModel | null): void {
   if (!model) throw new HttpError(400, "model_required", "a registered speech model is required");
