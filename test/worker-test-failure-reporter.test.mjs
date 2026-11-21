@@ -9,9 +9,10 @@ import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { types } from "node:util";
 import { parse } from "yaml";
-import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
+import { bifrostWorkerEvidence, bifrostWorkerPrefix, bifrostWorkerStages, decodeBifrostWorkerDiagnostic, parseBifrostWorkerDiagnostic, decodeBifrostWorkerGroup, annotation, createObservationRelay, selectFailureRecords, workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
 import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
+import { createRealtimeLedger, realtimeDiagnosticText, parseRealtimeDiagnostic, realtimeObservationContract } from "../scripts/realtime-diagnostics.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
 const marker = "synthetic-private-marker-do-not-report";
@@ -309,7 +310,7 @@ function pureWorkerReporter(runtime = workerAbortRuntime(), tracked = file => ty
     + source.slice(source.indexOf("function failureRecord"), source.indexOf("export default workerFailureReport"));
   // Only the unchanged filesystem resolver is inert here; the producer, native
   // event admission, selection and escaped serializer are the actual source.
-  return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", "parseObservationDiagnostic", "searchObservationContract", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep, parseObservationDiagnostic, searchObservationContract);
+  return new Function("types", "trackedTestFiles", "process", "relative", "resolve", "sep", "parseObservationDiagnostic", "searchObservationContract", "parseRealtimeDiagnostic", "realtimeObservationContract", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked, runtime, relative, resolve, sep, parseObservationDiagnostic, searchObservationContract, parseRealtimeDiagnostic, realtimeObservationContract);
 }
 function workerAbortNativeEvents(frame) {
   const native = { testId: 7, parentId: undefined, name: "owned HTTP/1 reset propagates real metadata ingress cancellation and strict retirement",
@@ -2501,3 +2502,27 @@ for (const defined of [false, true]) test(`inert realtime completed anchors reta
   assert.equal(output[0].operation, "bundle"); assert.equal(output[1].outcomes, "fffffffff");
 });
 // END inert realtime diagnostic tests.
+
+
+test("realtime diagnostics retain their public reporter identities", async () => {
+  const legacy = await import("../scripts/worker-test-failure-reporter.mjs");
+  const owner = await import("../scripts/realtime-diagnostics.mjs");
+  for (const name of Object.keys(owner)) assert.equal(legacy[name], owner[name], name);
+});
+
+test("realtime diagnostics load without reporter execution dependencies", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { registerHooks } from "node:module";
+    registerHooks({ load(url, context, next) {
+      assert.ok(!url.endsWith("/worker-test-failure-reporter.mjs"), url);
+      assert.ok(!url.endsWith("/search-semantics-fixture.mjs"), url);
+      assert.ok(!["node:child_process", "node:fs", "node:path", "node:url"].includes(url), url);
+      return next(url, context);
+    } });
+    const { createRealtimeLedger } = await import("./scripts/realtime-diagnostics.mjs");
+    assert.equal(typeof createRealtimeLedger, "function");
+    process.stdout.write("isolated realtime diagnostics\\n");
+  `], { cwd: process.cwd(), encoding: "utf8" });
+  assert.equal(output, "isolated realtime diagnostics\n");
+});
