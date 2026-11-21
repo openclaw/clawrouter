@@ -51,8 +51,8 @@ export const currentInputInventory = Object.freeze(
 [
   {
     "path": "admin/package.json",
-    "blob": "97b1026fa9acf6559a6f1c19435c1c8f5b4b05e2",
-    "sha256": "8367334abb63435fd05372933243098ca4fa14516b05daf5f5b8013dad8f6adc",
+    "blob": "371722b4d262fd2d41d899d31429f08cd8b91fa3",
+    "sha256": "310f6fed18d981d78b022520acc747d9a96f58b568444a715b3d20d727962cba",
     "bytes": 799
   },
   {
@@ -189,8 +189,8 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "pnpm-lock.yaml",
-    "blob": "63e082689cc2e29736f4f7dbad5d672a134a7528",
-    "sha256": "0741d1a002c7dc19bb67e4ac7f8e1020bb2387d4bfc7fb9bd7d1f8d17641348e",
+    "blob": "4412236c79e134761d337e52936bd3b2d2cca078",
+    "sha256": "d3741f5e366d2fdcc931a47a9a96cf7956d6e27cac195437eb93f69fde38ed98",
     "bytes": 57158
   },
   {
