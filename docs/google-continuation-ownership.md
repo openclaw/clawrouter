@@ -64,8 +64,12 @@ The dedicated `google-continuation` consumer pins OpenClaw
 `b6072e63fdf09422ea70ef4bbdc818536d871047`. It keeps the older Google-text
 consumer and its independent pin unchanged. The new fixture selects
 `google/gemini-3.5-flash` from the real credential-owned Worker catalog, runs
-the registered ClawRouter wrapper and public Google stream, and observes the
-original managed acquisitions, readers and releases. It uses synthetic Google
+the production embedded-runner selector with its registered Google fallback,
+and retains the registered ClawRouter and final-policy wrappers. It requires
+the `boundary-aware:google-generative-ai` strategy and observes the original
+managed acquisitions, readers and releases. The raw public `llm.stream` facade
+alone selects the generic GenAI adapter and is not this continuation route.
+The fixture uses synthetic Google
 responses through an isolated Worker and SQLite, with no paid provider traffic.
 
 An intermediate checkpoint and a final `CONTINUATION` frame precede a held HTTP

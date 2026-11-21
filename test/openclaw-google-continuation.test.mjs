@@ -13,7 +13,6 @@ import { parse } from "yaml";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer, consumerTypecheckPlan } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
-import { googleGuardPin, googleGuardPrelude, overlayGoogleGuardSource, restoreGoogleGuardSource, withGoogleGuardObservation } from "./helpers/openclaw-google-guard-observer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "b6072e63fdf09422ea70ef4bbdc818536d871047";
@@ -29,20 +28,6 @@ const typedObserverSource = observerSource
   .replaceAll("every(unlock =>", "every((unlock: number) =>")
   .replace(/\b(cancel|closed)\[0\]\./g, "$1[0]!.");
 assert.equal(stripTypeScriptTypes(typedObserverSource, { mode: "transform" }), stripTypeScriptTypes(observerSource, { mode: "transform" }), "observer runtime changed during type annotation");
-// Reuse the same acquisition/result/reader/release callbacks for the promise
-// already returned at the observed callsite. Never call the original twice.
-const guardStart = typedObserverSource.indexOf("  function guard("), guardEnd = typedObserverSource.indexOf("  function sdkAbortDisposition(", guardStart);
-assert.ok(guardStart >= 0 && guardEnd > guardStart);
-const passiveGuard = typedObserverSource.slice(guardStart, guardEnd)
-  .replace("function guard(original: (...args: any[]) => any, receiver: any, args: any[], owner: any)", "function observedGuard(original: (...args: any[]) => any, receiver: any, args: any[], owner: any, returned: boolean, value: unknown)")
-  .replace('row.returned = invoke("acquire", original, receiver, args, owner, result => {', 'const observed = invocation(owner, { original, receiver, operands: args, acquisition: row });\n    if (!returned) { operations.push({ kind: "acquire", owner, ...observed, state: "sync_throw", reason: value, settled: event() }); return; }\n    row.returned = watch("acquire", value, owner, result => {')
-  .replace("}, { acquisition: row });", "}, observed);");
-assert.equal(passiveGuard.includes('invoke("acquire"'), false, "passive observation must not invoke the original again");
-assert.equal(passiveGuard.split('watch("acquire", value').length, 2);
-const exportAnchor = "partial, response, guard, providerError";
-assert.equal(typedObserverSource.split(exportAnchor).length, 2);
-const sdkObserverSource = typedObserverSource.slice(0, guardEnd) + passiveGuard + typedObserverSource.slice(guardEnd);
-const sdkObserver = sdkObserverSource.replace(exportAnchor, "partial, response, guard, observedGuard, providerError");
 const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
@@ -66,7 +51,7 @@ const bindingSource = fixtureText.slice(fixtureText.indexOf("// BEGIN GOOGLE BIN
 const bindingCode = stripTypeScriptTypes(bindingSource);
 const { createGoogleBindings } = new Function(bindingCode + "; return { createGoogleBindings };")();
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);
-const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", sdkObserver);
+const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", typedObserverSource);
 
 function wireFor(id, hop) {
   const frame = value => "data: " + JSON.stringify(value) + "\n\n";
@@ -234,6 +219,23 @@ async function startControlBridge(upstream) {
   } };
 }
 
+async function retainGoogleFailureChannels(t, run) {
+  try { return await run(); } catch (error) {
+    await preserveFailures(() => { throw error; }, [() => {
+      for (const failure of error instanceof AggregateError ? error.errors : [error]) {
+        if (!failure || typeof failure !== "object") continue;
+        for (const channel of ["stdout", "stderr"]) {
+          const descriptor = Object.getOwnPropertyDescriptor(failure, channel);
+          if (descriptor && typeof descriptor.value === "string") {
+            const text = descriptor.value;
+            t.diagnostic(`Google original failed process ${channel} ${Buffer.byteLength(text)}B/${sha(text)}\n${text}`);
+          }
+        }
+      }
+    }]);
+  }
+}
+
 test("actual registered Google continuation through Worker and SQLite", { skip: !source, timeout: 540000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-continuation-")); let mf, acceptedConsumer = false;
   await preserveFailures(async () => {
@@ -248,7 +250,7 @@ test("actual registered Google continuation through Worker and SQLite", { skip: 
       const fixture = join(temporary, "google-continuation-contract.test.ts"); await writeFile(fixture, assembled);
       let receipts = 0, cancellations = 0;
       const observed = new Proxy(t, { get(target, name, receiver) { if (name !== "diagnostic") return Reflect.get(target, name, receiver); return text => { const lines = text.split("\n").map(line => line.trim()); receipts += lines.filter(line => line === "GOOGLE_CONTINUATION_TWO_HOPS_RETIRED").length; cancellations += lines.filter(line => line === "GOOGLE_CONTINUATION_CANCEL_RETIRED").length; t.diagnostic(text); }; } });
-      await withGoogleGuardObservation(source, sha(assembled), guardContract => runOpenClawConsumer(observed, { source, sourceHead, fixture: pathToFileURL(fixture), typecheck: true, testPath: "extensions/clawrouter/worker-google-continuation-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_GOOGLE_GUARD_CONTRACT: guardContract, CLAWROUTER_GOOGLE_CONTROL_ORIGIN: bridge.origin, CLAWROUTER_GOOGLE_CONTINUATION_CONTRACT: JSON.stringify(contract), CLAWROUTER_API_KEY: "", GOOGLE_API_KEY: "must-not-fallback", GEMINI_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } }));
+      await retainGoogleFailureChannels(observed, () => runOpenClawConsumer(observed, { source, sourceHead, fixture: pathToFileURL(fixture), typecheck: true, testPath: "extensions/clawrouter/worker-google-continuation-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_GOOGLE_CONTROL_ORIGIN: bridge.origin, CLAWROUTER_GOOGLE_CONTINUATION_CONTRACT: JSON.stringify(contract), CLAWROUTER_API_KEY: "", GOOGLE_API_KEY: "must-not-fallback", GEMINI_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback", NO_COLOR: "1" } }));
       assert.equal(receipts, 1); assert.equal(cancellations, 1); await verify(mf, origin); acceptedConsumer = true;
     }, [() => bridge.close()]);
   }, [async () => {
@@ -277,6 +279,9 @@ test("Google native runner binds the exact pin, provider, controls and post-join
   assert.equal(assembled.includes("/* OWNED_LIFETIME_IMPLEMENTATION */"), false);
   assert.match(assembled, /CLAWROUTER_GOOGLE_CONTROL_ORIGIN/);
   assert.match(fixtureText, /GoogleContinuationOptions/);
+  assert.match(fixtureText, /registerProviderPlugins\(plugin, googlePlugin\)/);
+  assert.match(fixtureText, /withPluginRuntimeGenerationRegistryScope\(registry/);
+  assert.match(fixtureText, /selected\.strategy\)\.toBe\("boundary-aware:google-generative-ai"\)/);
   const runCase = fixtureText.slice(fixtureText.indexOf("async function runCase"), fixtureText.indexOf("const it ="));
   for (const marker of ["GOOGLE_CONTINUATION_TWO_HOPS_RETIRED", "GOOGLE_CONTINUATION_CANCEL_RETIRED"]) {
     assert.ok(runCase.indexOf(marker) > runCase.indexOf("lifetime.join()"));
@@ -309,113 +314,27 @@ test("Google original operation and independent falsey cleanup failures survive"
     assert.deepEqual(seen, [1, 2]);
   }
 });
-test("compiled Google callsite preserves operands, promise and falsey outcomes independently of observation", async () => {
-  const contract = "b".repeat(64), modules = new Set(), observed = [], context = {};
-  runInNewContext('"use strict";\n' + stripTypeScriptTypes(googleGuardPrelude(contract)) + ";globalThis.invoke = __googleGuardInvoke;", context);
-  context[Symbol.for("clawrouter.google.guard." + contract)] = { modules, observe(...args) { observed.push(args); } };
-  const order = [], input = {}, value = {}, promise = Promise.resolve(value);
-  context.operands = {
-    get callee() { order.push("callee"); return function (actual) { order.push("call"); assert.equal(this, undefined); assert.equal(actual.input, input); return promise; }; },
-    get input() { order.push("input"); return input; },
-  };
-  const returned = runInNewContext("invoke(operands.callee, {input: operands.input})", context);
-  assert.equal(returned, promise); assert.equal(await returned, value); assert.deepEqual(order, ["callee", "input", "call"]);
-  assert.equal(modules.size, 1); assert.equal(observed[0][2], undefined); assert.equal(observed[0][3][0].input, input);
-  assert.equal(observed[0][4], true); assert.equal(observed[0][5], promise);
-  const reason = {}, rejected = Promise.reject(reason);
-  assert.equal(context.invoke(() => rejected, input), rejected);
-  await rejected.catch(error => assert.equal(error, reason)); assert.equal(observed[1][5], rejected);
-  let threw = false;
-  try { context.invoke(() => { throw undefined; }, input); } catch (error) { threw = true; assert.equal(error, undefined); }
-  assert.equal(threw, true); assert.equal(observed[2][4], false); assert.equal(observed[2][5], undefined);
-  context[Symbol.for("clawrouter.google.guard." + contract)].observe = () => { throw undefined; };
-  assert.equal(context.invoke(() => promise, input), promise);
-  assert.deepEqual(Array.from([...modules][0].faults), [undefined]);
-  assert.throws(() => googleGuardPrelude("wrong"));
-  assert.throws(() => overlayGoogleGuardSource(Buffer.from("changed source"), contract), /source changed/);
-});
-
-test("Google restoration rejects a pathname replacement before or during the held-inode write", async () => {
-  const stat = { dev: 1, ino: 2, uid: 3, nlink: 1, mode: 0o100644 };
-  const original = Buffer.from("original"), output = Buffer.from("observed");
-  for (const replacement of ["none", "before", "during"]) {
-    let pathStat = replacement === "before" ? { ...stat, ino: 4 } : stat, held = output, writes = 0;
-    const file = { stat: async () => stat }, row = { file, path: "owned.ts", stat, bytes: original, output, changed: true, applied: true };
-    const restoration = restoreGoogleGuardSource(row, async () => ({ bytes: held, stat }), async (target, bytes) => {
-      assert.equal(target, file); writes++; held = bytes;
-      if (replacement === "during") pathStat = { ...stat, ino: 4 };
-    }, async path => { assert.equal(path, row.path); return pathStat; });
-    if (replacement === "none") await restoration;
-    else await assert.rejects(restoration, replacement === "before" ? /source inode changed/ : /restored pathname changed/);
-    assert.equal(writes, replacement === "before" ? 0 : 1);
-    assert.equal(held, replacement === "before" ? output : original);
-  }
-  const row = { file: { stat: async () => stat }, path: "owned.ts", stat, bytes: original, output, changed: true, applied: false };
-  let restored;
-  await restoreGoogleGuardSource(row, async () => ({ bytes: Buffer.from("partial"), stat }), async (_file, bytes) => { restored = bytes; }, async () => stat);
-  assert.equal(restored, original);
-});
-
-test("Google passive acquisition binds the executed callee, input, result and detached release", async () => {
-  const create = new Function('"use strict";\n' + stripTypeScriptTypes(sdkObserver) + ";return createLifetimeObserver;")();
-  const life = create(), owner = {}, input = {}, callee = () => { throw new Error("must not be invoked twice"); };
-  const releasePromise = Promise.resolve(), body = new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1])); c.close(); } });
-  let releases = 0;
-  const result = { response: new Response(body), release: function (...args) { assert.equal(this, undefined); assert.deepEqual(args, []); releases++; return releasePromise; } };
-  const original = Promise.resolve(result), args = [input];
-  assert.equal(life.observedGuard(callee, undefined, args, owner, true, original), original);
-  assert.equal(await original, result);
-  const acquire = life.operations[0];
-  assert.equal(acquire.original, callee); assert.equal(acquire.receiver, undefined); assert.equal(acquire.operands, args);
-  assert.equal(acquire.pending, original); assert.equal(acquire.value, result); assert.equal(acquire.owner, owner);
-  assert.equal(life.guards[0].result, result); assert.equal(life.guards[0].returned, original);
-  const reader = body.getReader(); assert.equal((await reader.read()).done, false); assert.equal((await reader.read()).done, true); reader.releaseLock();
-  const release = result.release; assert.equal(release(), releasePromise);
-  await life.join(); life.restore(); assert.equal(releases, 1); assert.equal(body.locked, false);
-  for (const reason of [undefined, false, null, {}]) for (const returned of [false, true]) {
-    const failed = create(), value = returned ? Promise.reject(reason) : reason;
-    failed.observedGuard(callee, undefined, args, owner, returned, value);
-    await assert.rejects(failed.join(), error => error instanceof AggregateError && error.errors.includes(reason));
-    assert.equal(failed.operations[0].state, returned ? "rejected" : "sync_throw");
-    assert.equal(failed.operations[0].reason, reason); assert.equal(failed.operations[0].original, callee);
-    failed.restore();
-  }
-});
-
-test("Google executed guard rejects foreign modules, callees, invocation and accessor inputs", () => {
-  const source = stripTypeScriptTypes(fixtureText.slice(fixtureText.indexOf("// BEGIN GOOGLE EXECUTED GUARD"), fixtureText.indexOf("// END GOOGLE EXECUTED GUARD")));
-  const module = { faults: [] }, callee = () => {}, input = { url: "https://fixture.example/", init: {}, signal: undefined }, owner = {}, pending = Promise.resolve();
-  const calls = [], signals = [];
-  let expectedOwner = owner;
-  const context = { assert, guardIdentity: undefined, claimOwned(url, init, kind) {
-    assert.equal(url, input.url); assert.equal(init, input.init); assert.equal(kind, "chat");
-    assert.equal(expectedOwner, owner); return owner;
-  }, lifetime: { signal(...args) { signals.push(args); }, observedGuard(...args) { calls.push(args); } } };
-  runInNewContext(source + ";globalThis.observeGuard = observeCompiledGuard;", context);
-  context.observeGuard(module, callee, undefined, [input], true, pending);
-  assert.equal(calls.length, 1); assert.equal(calls[0][0], callee); assert.equal(calls[0][2][0], input); assert.equal(calls[0][3], owner); assert.equal(calls[0][5], pending);
-  for (const args of [[{ faults: [] }, callee, undefined, [input]], [module, () => {}, undefined, [input]], [module, callee, {}, [input]], [module, callee, undefined, []]]) assert.throws(() => context.observeGuard(...args, true, pending));
-  for (const field of ["url", "init", "signal"]) {
-    let gets = 0; const altered = { ...input }; Object.defineProperty(altered, field, { get() { gets++; throw undefined; } });
-    assert.throws(() => context.observeGuard(module, callee, undefined, [altered], true, pending)); assert.equal(gets, 0);
-  }
-  let gets = 0;
-  assert.throws(() => context.observeGuard(module, callee, undefined, [{ ...input, init: { get signal() { gets++; throw undefined; } } }], true, pending)); assert.equal(gets, 0);
-  expectedOwner = {};
-  assert.throws(() => context.observeGuard(module, callee, undefined, [input], true, pending));
-  assert.equal(calls.length, 1); assert.equal(signals.length, 1);
-});
-
 test("Google failure reporting retains original falsey errors after every independent restoration", async () => {
   const source = stripTypeScriptTypes(fixtureText.slice(fixtureText.indexOf("async function runCase"), fixtureText.indexOf("const it =")));
   const calls = [], context = { preserveFailures, bodySucceeded: false,
     lifetime: { join: () => calls.push("join"), restore: () => calls.push("lifetime"), guards: [], summary: () => ({}), joinDiagnostic: () => null },
     bindings: { bindings: [], verify: () => calls.push("bindings") }, vi: { restoreAllMocks: () => calls.push("spies") },
-    guardChannel: { modules: new Set() }, restoreGuardChannel: () => calls.push("channel"),
     console: { log() { throw false; } } };
   runInNewContext(source + ";globalThis.runCase = runCase;", context);
   await assert.rejects(context.runCase(() => { throw undefined; }), error => error.errors?.length === 2 && error.errors[0] === undefined && error.errors[1] === false);
-  assert.deepEqual(calls, ["join", "bindings", "lifetime", "spies", "channel"]);
+  assert.deepEqual(calls, ["join", "bindings", "lifetime", "spies"]);
+});
+
+test("Google failed native channels remain complete without replacing original or falsey faults", async () => {
+  const error = Object.assign(new Error("synthetic native failure"), { stdout: "complete stdout\n", stderr: "complete stderr\n" }), records = [];
+  await assert.rejects(retainGoogleFailureChannels({ diagnostic: text => records.push(text) }, () => { throw error; }), value => value === error);
+  assert.equal(records.length, 2);
+  assert.ok(records[0].endsWith(error.stdout)); assert.ok(records[1].endsWith(error.stderr));
+  assert.match(records[0], new RegExp(sha(error.stdout))); assert.match(records[1], new RegExp(sha(error.stderr)));
+  await assert.rejects(retainGoogleFailureChannels({ diagnostic() { throw undefined; } }, () => { throw error; }), value => value instanceof AggregateError && value.errors[0] === error && value.errors[1] === undefined);
+  let caught = false;
+  try { await retainGoogleFailureChannels({ diagnostic() { throw new Error("unexpected output"); } }, () => { throw undefined; }); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
 });
 
 test("Google final and intermediate wire evidence remains separate", () => {

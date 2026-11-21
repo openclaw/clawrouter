@@ -1,14 +1,19 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as catalogTransport from "../../src/infra/net/fetch-guard.js";
+import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
+import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
+import { selectEmbeddedAgentStream } from "../../src/agents/embedded-agent-runner/stream-resolution.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../src/plugins/runtime/generation-state.js";
 import { stream, type AssistantMessage, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createEmptyPluginRegistry, registerProviderPlugins, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { wrapStreamFnWithProviderPromptState } from "../../src/agents/embedded-agent-runner/provider-prompt-state.js";
 import type { GoogleContinuationOptions } from "../google/transport-stream-types.js";
 import { beforeEach, describe, expect, it as nativeIt, vi } from "vitest";
 import plugin from "./index.js";
+import googlePlugin from "../google/index.js";
 
 /* OWNED_LIFETIME_IMPLEMENTATION */
 
@@ -41,49 +46,9 @@ assert.equal(contract.provider, "google-gemini");
 assert.equal(contract.model, "google/gemini-3.5-flash");
 const invocation = new AsyncLocalStorage<any>();
 const originalCatalog = catalogTransport.fetchWithSsrFGuard;
+const originalGuard = guardedTransport.fetchWithProviderHttpGuard;
 const key = (id: string) => "clawrouter-live-gcont_" + id + "-fixture-secret";
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createGoogleBindings>, bodySucceeded: boolean;
-const guardContract = process.env.CLAWROUTER_GOOGLE_GUARD_CONTRACT!;
-assert.match(guardContract, /^[a-f0-9]{64}$/);
-const guardKey = Symbol.for("clawrouter.google.guard." + guardContract);
-type GuardModule = { faults: unknown[] };
-let guardIdentity: { module: GuardModule; callee: Function } | undefined;
-let guardChannel: { modules: Set<GuardModule>; observe: typeof observeCompiledGuard };
-
-// BEGIN GOOGLE EXECUTED GUARD
-function observeCompiledGuard(module: GuardModule, callee: (...args: any[]) => any, receiver: unknown, args: any[], returned: boolean, value: unknown) {
-  assert.equal(typeof callee, "function"); assert.equal(receiver, undefined); assert.equal(args.length, 1);
-  assert(Array.isArray(module.faults));
-  if (!guardIdentity) guardIdentity = { module, callee };
-  assert.equal(module, guardIdentity.module); assert.equal(callee, guardIdentity.callee);
-  const input = args[0];
-  // These are data properties of the original source-owned guard input. An
-  // accessor cannot become diagnostic permission for another SDK getter call.
-  for (const field of ["url", "init", "signal"]) {
-    const descriptor = Object.getOwnPropertyDescriptor(input, field);
-    assert(!descriptor || Object.hasOwn(descriptor, "value"), "accessor guard input is unqualified");
-  }
-  const initSignal = input.init && Object.getOwnPropertyDescriptor(input.init, "signal");
-  assert(!initSignal || Object.hasOwn(initSignal, "value"), "accessor init signal is unqualified");
-  const owner = claimOwned(input.url, input.init, "chat");
-  lifetime.signal(owner, input.signal ?? initSignal?.value);
-  lifetime.observedGuard(callee, receiver, args, owner, returned, value);
-}
-// END GOOGLE EXECUTED GUARD
-
-function restoreGuardChannel() {
-  const failures: unknown[] = [];
-  try {
-    assert.equal(guardChannel.modules.size, 1, "one actual Google guard module required");
-    for (const module of guardChannel.modules) assert.deepEqual(module.faults, []);
-  } catch (error) { failures.push(error); }
-  try {
-    assert.equal(Object.getOwnPropertyDescriptor(globalThis, guardKey)?.value, guardChannel);
-    assert(Reflect.deleteProperty(globalThis, guardKey), "Google guard channel restoration failed");
-  } catch (error) { failures.push(error); }
-  if (failures.length) throw new AggregateError(failures, "Google guard observation and restoration failed");
-}
-
 // BEGIN GOOGLE CLAIM
 function claimOwned(url: any, init: any, kind: string) {
   try {
@@ -97,13 +62,13 @@ function claimOwned(url: any, init: any, kind: string) {
 async function runCase(body: () => unknown) {
   try {
     await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
-      () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => restoreGuardChannel(),
+      () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(),
     ]);
   } catch (error) {
     try {
       console.log("GOOGLE_CONTINUATION_FAILURE " + JSON.stringify({ v: 1, bodySucceeded,
         bindings: bindings.bindings.map(row => ({ id: row.id, kind: row.kind, claimed: row.claimed })),
-        guards: lifetime.guards.length, modules: guardChannel.modules.size, work: lifetime.summary(), join: lifetime.joinDiagnostic() }));
+        guards: lifetime.guards.length, work: lifetime.summary(), join: lifetime.joinDiagnostic() }));
     } catch (reportError) { throw new AggregateError([error, reportError], "Google failure and diagnostic capture failed"); }
     throw error;
   }
@@ -125,7 +90,11 @@ async function control(action: string, id: string) {
 
 async function selected(id: string) {
   clearLiveCatalogCacheForTests();
-  const provider = await registerSingleProviderPlugin(plugin);
+  const providers = await registerProviderPlugins(plugin, googlePlugin);
+  const provider = requireRegisteredProvider(providers, "clawrouter");
+  const google = requireRegisteredProvider(providers, "google");
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({ pluginId: "clawrouter", provider, source: "test" }, { pluginId: "google", provider: google, source: "test" });
   expect(provider.id).toBe("clawrouter");
   const config = { models: { providers: { clawrouter: { baseUrl: origin + "/v1", auth: "api-key" as const, apiKey: key(id), models: [] } } } };
   const owner = bindings.expect(id + "_catalog", "catalog", origin + "/v1/catalog", "GET", key(id));
@@ -136,15 +105,13 @@ async function selected(id: string) {
   const raw = { ...actual, provider: "clawrouter" } as Model<any>;
   const model = provider.normalizeResolvedModel?.({ provider: "clawrouter", modelId: contract.model, model: raw } as any) ?? raw;
   expect(model).toMatchObject({ id: contract.model, provider: "clawrouter", api: "google-generative-ai", baseUrl: origin + "/v1/native/google-gemini/v1beta" });
-  return { provider, model };
+  return { provider, model, registry };
 }
 
 async function scenario(id: string) {
-  const { provider, model } = await selected(id);
+  const { provider, model, registry } = await selected(id);
   const context: Context = { systemPrompt: "Synthetic continuation " + id,
     messages: [{ role: "user", content: "Synthetic unchanged original input", timestamp: 1 }] };
-  const wrapped = provider.wrapStreamFn?.({ provider: "clawrouter", modelId: model.id, model, sourceApi: model.api, thinkingLevel: "low", streamFn: stream } as any);
-  assert(wrapped, "registered ClawRouter stream wrapper required");
   let temperature = 0.25;
   const policyInputs: unknown[] = [];
   const finalPolicy = async (payload: unknown) => {
@@ -155,7 +122,6 @@ async function scenario(id: string) {
     await Promise.resolve();
     return replacement;
   };
-  const policyStream = wrapStreamFnWithProviderPromptState({ streamFn: wrapped, state: {}, effectiveContextTokenBudget: 128_000, transformPayload: finalPolicy });
   const options = { apiKey: key(id), maxTokens: 128, sessionId: "synthetic-google-session", authProfileId: "synthetic-google-profile", maxRetries: 0 };
   const invoke = (hop: number, replay?: AssistantMessage["providerReplay"], changes: any = {}, reaches = true) => {
     const activeModel = changes.model ?? model, input = changes.context ?? context;
@@ -163,8 +129,20 @@ async function scenario(id: string) {
     const owner = reaches ? bindings.expect(id === "cancel" ? "cancel" : id + "_" + hop, "chat", origin + contract.nativePath, "POST", key(id), caller)
       : { id: id + "_denied", kind: "local-denial", caller };
     owner.callerObservation = {}; lifetime.signal(owner.callerObservation, caller);
-    const supplied: GoogleContinuationOptions = { ...options, ...changes.options, signal: caller, googleContinuation: replay };
-    return invocation.run(owner, () => policyStream(activeModel, input, supplied));
+    const supplied: GoogleContinuationOptions & typeof options & { signal?: AbortSignal } = { ...options, ...changes.options, signal: caller, googleContinuation: replay };
+    return invocation.run(owner, () => withPluginRuntimeGenerationRegistryScope(registry, () => {
+      // Use the real embedded-runner selector, including its registered Google
+      // fallback. The raw public facade alone selects the generic GenAI adapter.
+      const selected = selectEmbeddedAgentStream({ llmRuntime: defaultLlmRuntime, currentStreamFn: stream,
+        model: activeModel, sessionId: supplied.sessionId!, authProfileId: supplied.authProfileId,
+        resolvedApiKey: supplied.apiKey });
+      expect(selected.strategy).toBe("boundary-aware:google-generative-ai");
+      const wrapped = provider.wrapStreamFn?.({ provider: "clawrouter", modelId: activeModel.id,
+        model: activeModel, sourceApi: activeModel.api, thinkingLevel: "low", streamFn: selected.streamFn } as any);
+      assert(wrapped, "registered ClawRouter stream wrapper required");
+      const policyStream = wrapStreamFnWithProviderPromptState({ streamFn: wrapped, state: {}, effectiveContextTokenBudget: 128_000, transformPayload: finalPolicy });
+      return selected.wrapApiKey(policyStream)(activeModel, input, supplied);
+    }));
   };
   return { model, context, invoke, policyInputs, changePolicy() { temperature = 0.75; } };
 }
@@ -196,12 +174,12 @@ describe("registered Google continuation through Worker and SQLite", { concurren
   beforeEach(() => {
     bodySucceeded = false; bindings = createGoogleBindings();
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore() });
-    assert.equal(Object.getOwnPropertyDescriptor(globalThis, guardKey), undefined);
-    guardChannel = Object.freeze({ modules: new Set<GuardModule>(), observe: observeCompiledGuard });
-    Object.defineProperty(globalThis, guardKey, { configurable: true, value: guardChannel });
     vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (this: unknown, ...args) {
       const input = args[0]; if (input.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalog, this, args);
       const owner = claimOwned(input.url, input.init, "catalog"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalCatalog, this, args, owner);
+    });
+    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args) {
+      const input = args[0], owner = claimOwned(input.url, input.init, "chat"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalGuard, this, args, owner);
     });
   });
   it("publishes only after HTTP EOF and makes exactly two explicit owned hops", async () => {
