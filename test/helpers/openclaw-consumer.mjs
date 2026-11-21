@@ -78,8 +78,11 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
 export function consumerTypecheckPlan(sourceHead, testPath) {
   // The copied .test.ts is included by the pinned extension test graph. Run
   // that original graph inside the same exclusive-copy and cleanup lifetime.
-  assert.equal(sourceHead, "b6072e63fdf09422ea70ef4bbdc818536d871047");
-  assert.equal(testPath, "extensions/clawrouter/worker-google-continuation-contract.test.ts");
+  const fixtures = [
+    ["b6072e63fdf09422ea70ef4bbdc818536d871047", "extensions/clawrouter/worker-google-continuation-contract.test.ts"],
+    ["3206356e0fff73751495ca6a5c8cd4f3e97caf04", "extensions/clawrouter/worker-xai-search-contract.test.ts"],
+  ];
+  assert.ok(fixtures.some(([head, path]) => sourceHead === head && testPath === path), "unqualified client owning test graph");
   const project = "test/tsconfig/tsconfig.extensions.test.json";
   return { project, sha256: "b032aa889d4ab5512e57f26871a5839a38ae326b18e765dce2dcec3b4fd80d49",
     args: ["scripts/run-tsgo.mjs", "-p", project, "--noEmit", "--incremental", "false"] };
