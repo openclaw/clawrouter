@@ -5,6 +5,8 @@ const rate = (input, cached, write, output) => ({ input: input / 1e6, cached: ca
 export const nativeModels = {
   'openai/gpt-6-luna': { provider: 'openai', upstream: 'gpt-6-luna', price: rate(0.1, 0.01, 0.125, 0.5), source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' },
   'openai/gpt-6.1-sol': { provider: 'openai', upstream: 'gpt-6.1-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol' },
+  'openai/gpt-6.2-sol': { provider: 'openai', upstream: 'gpt-6.2-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', checkedAt: '2026-11-21' },
+  'openai/gpt-6.2-astra': { provider: 'openai', upstream: 'gpt-6.2-astra', price: rate(8, 0.4, 10, 40), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', checkedAt: '2026-11-21' },
   'anthropic/claude-sonnet-5.5': { provider: 'anthropic', upstream: 'claude-sonnet-5-5', price: rate(2, 0.1, 2.5, 10), source: 'https://platform.claude.com/docs/en/models/sonnet-5-5/overview' },
 };
 
@@ -187,7 +189,7 @@ export async function nativePins(env, fetcher = fetch, selected = Object.keys(na
     // though this benchmark does not request explicit cache creation.
     pins[id] = { id, canonicalSlug: entry.upstream, provider: entry.provider,
       price: { ...entry.price, input: Math.max(entry.price.write, entry.price.input * (entry.provider === 'anthropic' ? 2 : 1)) },
-      usagePrice: entry.price, source: entry.source, checkedAt: '2026-11-05', costSource: 'published-tariff-estimate' };
+      usagePrice: entry.price, source: entry.source, checkedAt: entry.checkedAt ?? '2026-11-05', costSource: 'published-tariff-estimate' };
   }
   return pins;
 }
