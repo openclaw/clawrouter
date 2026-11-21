@@ -1,5 +1,6 @@
 # Changelog
 
+- Require successful participation from both models and a strong-model rescue before a repeated fusion benchmark passes its pilot screen.
 - Stop paired fusion benchmarks on provider safety notices anywhere in the response, including discarded commentary, while retaining settled usage or unresolved reservations.
 - Allow fusion workload acceptance tests to declare pinned helper modules without exposing or changing them during agent execution.
 

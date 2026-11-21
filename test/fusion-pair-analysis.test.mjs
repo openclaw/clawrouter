@@ -134,6 +134,8 @@ test('unsafe provenance is not copied into the summary', () => {
 
 function repeats(outcomes, costs) {
   const first = fixture(outcomes, costs);
+  // Route the first candidate to cheap and the second to strong.
+  first.calls.find(call => call.trialId === 'case-0:scope').model = 'cheap-model';
   first.records.forEach(row => { row.elapsedMs = 100; });
   const second = structuredClone(first);
   second.config.priorCostMicros = first.spentOrReservedMicros;
@@ -267,10 +269,14 @@ test('submission failures stay distinct from budget stops and passing partial pa
 
 test('an arm win from another single-model sample is not counted as a mixed-model win', () => {
   const runs = repeats();
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = 'strong-model';
+  }
   const first = analyzePairRepeats(runs);
   assert.equal(first.comparisons[0].wins, 2);
-  assert.deepEqual(first.candidateModelUse, { cheapOnlyAttempts: 0, strongOnlyAttempts: 4,
-    mixedAttempts: 0, noCallAttempts: 0, mixedWinsOverCheap: 0 });
+  assert.equal(first.candidateModelUse.cheapOnlyAttempts, 0);
+  assert.equal(first.candidateModelUse.strongOnlyAttempts, 4);
+  assert.equal(first.candidateModelUse.mixedWinsOverCheap, 0);
   const call = runs[0].calls.find(call => call.trialId === 'case-1:scope');
   call.costMicros -= 10;
   runs[0].calls.push({ ...call, model: 'cheap-model', costMicros: 10 });
@@ -279,6 +285,51 @@ test('an arm win from another single-model sample is not counted as a mixed-mode
   assert.equal(mixed.candidateModelUse.mixedAttempts, 1);
   assert.equal(mixed.candidateModelUse.mixedWinsOverCheap, 1);
   assert.equal(mixed.candidateModelUse.strongOnlyAttempts, 3);
+});
+
+test('cheap-only and strong-only resampling cannot pass the fusion pilot screen', () => {
+  for (const model of ['cheap-model', 'strong-model']) {
+    const runs = repeats();
+    for (const run of runs) for (const call of run.calls) {
+      if (call.trialId.endsWith(':scope')) call.model = model;
+    }
+    const report = analyzePairRepeats(runs);
+    assert.equal(report.pilotScreen.rescuedBeyondCheap, true);
+    assert.equal(report.pilotScreen.passed, false, model);
+  }
+});
+
+test('routing across tasks qualifies without requiring two models on every task', () => {
+  const report = analyzePairRepeats(repeats());
+  assert.equal(report.candidateModelUse.mixedAttempts, 0);
+  assert.equal(report.pilotScreen.usesBothModelsOnSuccesses, true);
+  assert.equal(report.pilotScreen.rescuedUsingStrong, true);
+  assert.equal(report.pilotScreen.passed, true);
+});
+
+test('using the strong model only on failures cannot qualify cheap-only wins', () => {
+  const runs = repeats([[1, 1, 1], [0, 1, 1], [1, 1, 1], [0, 0, 0]]);
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = call.trialId.startsWith('case-3:') ? 'strong-model' : 'cheap-model';
+  }
+  const screen = analyzePairRepeats(runs).pilotScreen;
+  assert.equal(screen.enoughSolved, true);
+  assert.equal(screen.noStrongRegressions, true);
+  assert.equal(screen.usesBothModelsOnSuccesses, false);
+  assert.equal(screen.rescuedUsingStrong, false);
+  assert.equal(screen.passed, false);
+});
+
+test('a cheap-only rescue cannot borrow strong-model use from another task', () => {
+  const runs = repeats();
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = call.trialId.startsWith('case-0:') ? 'strong-model' : 'cheap-model';
+  }
+  const screen = analyzePairRepeats(runs).pilotScreen;
+  assert.equal(screen.usesBothModelsOnSuccesses, true);
+  assert.equal(screen.rescuedBeyondCheap, true);
+  assert.equal(screen.rescuedUsingStrong, false);
+  assert.equal(screen.passed, false);
 });
 
 
@@ -366,7 +417,8 @@ test('single-block model use distinguishes rescues, single-model samples and no-
   empty.calls = 0; empty.costMicros = 0;
   run.spentOrReservedMicros -= 40;
   assert.deepEqual(analyzePairRun(run).candidateModelUse, { cheapOnlyAttempts: 1, strongOnlyAttempts: 1,
-    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1 });
+    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1,
+    successfulCheapUse: 2, successfulStrongUse: 2, winsOverCheapUsingStrong: 2 });
 });
 
 
