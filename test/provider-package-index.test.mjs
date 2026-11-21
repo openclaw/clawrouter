@@ -1,7 +1,7 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,12 +9,6 @@ import { parse, stringify } from "yaml";
 import { buildProviderPackageIndex } from "../scripts/provider-package-index.mjs";
 
 const source = fileURLToPath(new URL("../examples/provider-plugin/", import.meta.url));
-function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), "provider-package-index-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  cpSync(source, root, { recursive: true });
-  return { root, descriptor: join(root, "clawrouter.plugin.json") };
-}
 
 test("package index contains validated identity and resource references, not file contents", t => {
   const { root, descriptor } = fixture(t);

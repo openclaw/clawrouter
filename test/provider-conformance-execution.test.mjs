@@ -1,11 +1,11 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parse, stringify } from "yaml";
 import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 
@@ -19,19 +19,6 @@ function run(paths) {
   });
   assert.equal(result.error, undefined);
   return result;
-}
-function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), "provider-conformance-execution-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  cpSync(join(root, "examples/provider-plugin"), directory, { recursive: true });
-  const change = (file, yaml, mutate) => {
-    const path = join(directory, file);
-    const value = yaml ? parse(readFileSync(path, "utf8")) : JSON.parse(readFileSync(path, "utf8"));
-    mutate(value); writeFileSync(path, yaml ? stringify(value) : JSON.stringify(value));
-  };
-  return { descriptor: join(directory, "clawrouter.plugin.json"),
-    scenario: mutate => change("fixtures/request.json", false, mutate),
-    manifest: mutate => change("example.provider.yaml", true, mutate) };
 }
 function failed(result, pattern) {
   assert.equal(result.status, 1, result.stderr);
