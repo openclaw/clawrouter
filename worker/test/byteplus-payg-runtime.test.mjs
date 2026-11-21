@@ -10,7 +10,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
-const { snapshot, configuredUpstream } = await import("../providers.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const contracts = [["byteplus", "BYTEPLUS_API_KEY", "https://ark.ap-southeast.bytepluses.com/api/v3"]];

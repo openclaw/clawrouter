@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { catalogResponse, modelsResponse } = await import("../discovery.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 
 async function fixture(t) {

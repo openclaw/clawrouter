@@ -11,7 +11,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { actualModelCost, estimateModelCost } = await import("../pricing.ts");
 const manifest = parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"));
 const provider = compileProviderSnapshot([manifest]).providers[0];

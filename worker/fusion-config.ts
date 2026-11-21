@@ -1,7 +1,7 @@
 import type { FusionConfig } from "../shared/contracts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { DEFAULT_FUSION_CONFIG, FUSION_MODEL_ID, normalizeFusionConfig } from "./fusion";
-import { endpointForPath, modelRoute } from "./providers";
+import { endpointForPath, modelRoute } from "./provider-catalog";
 import type { Env } from "./types";
 import { HttpError } from "./utils";
 

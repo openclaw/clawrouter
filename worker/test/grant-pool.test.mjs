@@ -4,7 +4,7 @@ import test from "node:test";
 import { resolveGrantSelection, selectGrant, selectProviderPolicy, validGrantSegment } from "../grant-selection.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
-import { providerById, upstreamAuth } from "../providers.ts";
+import { upstreamAuth } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
   const env = mockEnv();

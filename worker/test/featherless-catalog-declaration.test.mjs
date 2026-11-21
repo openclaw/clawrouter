@@ -5,7 +5,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const source = parse(readFileSync(new URL("../../providers/featherless.provider.yaml", import.meta.url), "utf8"));

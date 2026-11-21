@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { createProxyAccounting } = await import("../proxy-accounting.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
 const rejected = { error: { type: "request_cancelled", message: "Synthetic upstream disconnection" }, usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };

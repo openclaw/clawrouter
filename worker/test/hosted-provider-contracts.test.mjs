@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
-import { configuredUpstream, providerModel, transformRequestBody, upstreamPath } from "../providers.ts";
+import { configuredUpstream, transformRequestBody, upstreamPath } from "../providers.ts"; import { providerModel } from "../provider-catalog.ts";
 
 // The optional fifth field is the public catalog ID when it differs from upstream.
 const contracts = [

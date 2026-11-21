@@ -6,7 +6,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");
 
 const upstreams = ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"];

@@ -27,7 +27,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey, hasProxyKeyIntent, proxyAdmission } from "./proxy-auth";
-import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import { assertProviderAccess, listHealth, providerReadinessForState, type Readiness } from "./providers"; import { modelRoute, snapshot, unifiedPathForEndpoint } from "./provider-catalog"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";

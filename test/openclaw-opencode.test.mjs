@@ -30,7 +30,7 @@ const { preserveFailures, createLifetimeObserver, createRequestBindings } = new 
 // Reuse the landed original-reader/HttpOperation witness, not its prior results.
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
-assert.equal(sha(outcomeSource), "7e7419bf3ed4751c823467c32b585f7e9498e20c5995a70d331374ce6e6d50ba");
+assert.equal(sha(outcomeSource), "d14c19d9a5eb741b4167152cc56a42fb71fb20aa8993e5efcad7fef91847a831");
 const { bundleResponsesOutcome } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", outcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
 const fixtureText = readFileSync(new URL("./fixtures/openclaw-opencode-contract.test.ts", import.meta.url), "utf8");
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);

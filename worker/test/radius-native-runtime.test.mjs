@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { sqlBudgetNamespace } = await import("./sql-budget-namespace.mjs");
 const usage = { input: 50, output: 12, cacheRead: 10, cacheWrite: 4, totalTokens: 76, cost: { input: 100, output: 100, cacheRead: 100, cacheWrite: 100, total: 400 } };
 const frame = value => `data: ${JSON.stringify(value)}\n\n`;

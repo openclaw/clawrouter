@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test as nodeTest } from "node:test";
 const test = (name, run) => nodeTest(name, { timeout: 10_000 }, run);
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot, upstreamAuth } = await import("../providers.ts");
+const { upstreamAuth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { allocatePixVerseInput, dispatchPixVerseInput, getPixVerseInput } = await import("../pixverse-inputs.ts");
 const { inputRouteDigest, encodeInputDispatch } = await import("../pixverse-input-dispatch.ts");

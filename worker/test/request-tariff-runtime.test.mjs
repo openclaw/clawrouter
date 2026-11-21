@@ -8,7 +8,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { estimateCost, accountingReceipt } = await import("../proxy-accounting.ts");
 const { estimateModelCost, requestPricingGap } = await import("../pricing.ts");
 const { observeUsage } = await import("../proxy-response.ts");

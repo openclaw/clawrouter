@@ -65,7 +65,7 @@ const upstream = `let calls = 0; export default { async fetch(request) {
 test("Anthropic modifiers traverse real Worker admission, usage inspection, queue and durable budgets", { timeout: 90_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-anthropic-modifiers-")); let mf;
   try {
-    mf = await startWorkerdFixture(temporary, `import { providerById } from "./worker/providers.ts";
+    mf = await startWorkerdFixture(temporary, `import { providerById } from "./worker/provider-catalog.ts";
       providerById("anthropic").endpoints.find(endpoint => endpoint.id === "messages").timeout_ms = 1000;
       export { default } from "./worker/index.ts"; export * from "./worker/index.ts";`, upstream);
     const kv = await mf.getKVNamespace("POLICY_KV", "router"), origin = await mf.ready;

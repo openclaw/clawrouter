@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { fixture } = await import("./http-continuation-fixture.mjs");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { assertServiceTier } = await import("../service-tiers.ts");
 const { estimateModelCost } = await import("../pricing.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");

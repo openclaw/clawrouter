@@ -19,7 +19,7 @@ const router = `
   import handler from "./worker/index.ts";
   import { GrantCredentialObject as Owner } from "./worker/grant-credentials.ts";
   import { sha256Hex } from "./worker/utils.ts";
-  import { providerById } from "./worker/providers.ts";
+  import { providerById } from "./worker/provider-catalog.ts";
   providerById("anthropic").auth.authorization = { authorizeUrl: "https://fixture/authorize", tokenUrl: "https://fixture/token", clientId: "fixture-client", grantKind: "subscription", scopes: ["inference"], extraAuthorizeParams: {}, extraTokenParams: {}, accountIdJsonPointer: null, subscriptionPlanJsonPointer: null };
   let clock = ${now}, reconnectStarted = false; Date.now = () => clock;
   export class GrantCredentialObject extends Owner {

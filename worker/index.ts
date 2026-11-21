@@ -25,7 +25,7 @@ import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
 import { poolSubmissionApi } from "./pool-submissions.ts";
 import { privateCodex, privatePath } from "./private-codex";
-import { routeCatalog, snapshot } from "./providers";
+import { routeCatalog, snapshot } from "./provider-catalog";
 import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";

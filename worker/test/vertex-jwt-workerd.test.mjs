@@ -32,7 +32,7 @@ export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCrede
 import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {inspectGrantCredentials} from './worker/grant-credentials.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {configureVertex} from './worker/test/vertex-runtime-fixture.mjs';
 const provider=structuredClone(snapshot.providers.find(p=>p.id==='anthropic')); configureVertex(provider);
 snapshot.providers=snapshot.providers.filter(p=>p.id!=='anthropic-vertex'); snapshot.providers.push(provider);

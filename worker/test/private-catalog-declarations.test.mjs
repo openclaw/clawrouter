@@ -61,7 +61,7 @@ test("private original-operation join retains undefined and independent failures
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials,inspectGrantCredentials} from './worker/grant-credentials.ts';
 import {ingestUsage,usageSnapshot} from './worker/ledgers.ts';
@@ -367,7 +367,7 @@ export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCrede
 import {modelDiscoveryResponse} from './worker/model-discovery.ts';
 import {HttpOperation} from './worker/http-operation.ts';
 import {HttpError} from './worker/utils.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 export default {async fetch(request){
  const mode=await request.text(),provider=snapshot.providers.find(p=>p.id==='baseten'),endpoint=provider.endpoints.find(e=>e.id==='models_list');
  const controller=new AbortController(),primary={},failure=mode==='undefined'?undefined:new HttpError(503,'authority_store_unavailable','fixture authority failure');

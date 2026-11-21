@@ -16,7 +16,7 @@ import worker from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,inspectGrantCredentials,materializeGrantCredentials} from './worker/grant-credentials.ts';
 import {cachedGrantCredentials} from './worker/credential-cache.ts';
-import {providerById} from './worker/providers.ts';
+import { providerById } from './worker/provider-catalog.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {HotCache,setHotCacheClock} from './worker/hot-cache.ts';
 const original=globalThis.fetch.bind(globalThis),realNow=Date.now.bind(Date);

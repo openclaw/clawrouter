@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRouteCatalog } from "../../shared/route-catalog.ts";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 

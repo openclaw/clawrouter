@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 export const googleContinuationToken = "c3ludGhldGljLW9yaWdpbmFsLXN0YXRl";
 export const googleOriginalRequest = { contents: [{ role: "user", parts: [{ text: "Synthetic original request" }] }], generationConfig: { maxOutputTokens: 100 } };
 export const googleContinuationResponse = {

@@ -116,7 +116,7 @@ export class GrantCredentialObject extends Owner{
   return super.fetch(request);
  }
 }
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 const source=structuredClone(snapshot.providers.find(p=>p.id==='openai')),template=source.endpoints.find(e=>e.request_format==='openai.chat_completions');
 // Reuse the wire template, not OpenAI's provider-specific product identity.
 delete source.products;delete source.offer_definitions;

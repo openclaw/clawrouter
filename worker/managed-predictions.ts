@@ -213,7 +213,7 @@ export function managedObservationUnavailable(wan?: WanManagedOperation | MiniMa
 type ControlRead = { prediction: ManagedObservation; status: number };
 export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation, fileBaseUrl?: string,
   wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<ControlRead & { evidence: ControlRead }> {
-  const { providerById } = await import("./providers.ts");
+  const { providerById } = await import("./provider-catalog.ts");
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   if (!provider || !create || create.lifecycle?.protocol !== input.protocol) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
   const { adapter } = managedRoute(provider, create, input.route.pathParams);
@@ -227,7 +227,7 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
         const physical = ownership.track(dispatchResponseControl(env, dispatch, operation.signal, wan, video));
         response = await operation.wait(physical, "upstream", late => { void ownership.discard(late).catch(() => undefined); });
         // The single native ticket owns the actual 1MiB response, not an ACK.
-        const { providerById } = await import("./providers.ts");
+        const { providerById } = await import("./provider-catalog.ts");
         const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
         if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
         const reading = adapter.read(response, { action, expectedId: input.responseId,
@@ -239,7 +239,7 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
     try {
       response = await operation.wait(dispatchResponseControl(env, dispatch, operation.signal), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
-      const { providerById } = await import("./providers.ts");
+      const { providerById } = await import("./provider-catalog.ts");
       const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
       if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
       const prediction = await operation.wait(adapter.read(response, { action, expectedId: input.responseId,

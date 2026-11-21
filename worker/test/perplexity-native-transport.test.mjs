@@ -10,7 +10,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/perplexity/native-contracts.json", import.meta.url), "utf8"));
 const sse = events => events.map(event => `event: ${event.type}\r\ndata: ${JSON.stringify(event)}\r\n\r\n`).join("");
 

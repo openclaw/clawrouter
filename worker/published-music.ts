@@ -8,7 +8,7 @@ import { prepareOpenRouterMusicBorrowed } from "./openrouter-music.ts";
 import { prepareNativeRequest, type ProxySelection } from "./proxy-selection.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { assertProviderAccess, providerById, upstreamAuth } from "./providers.ts";
+import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { providerById } from "./provider-catalog.ts";
 import { authorizePublishedInputOwner, issuedPublishedInputCaller, publishedInputPermission, publishedMusicRoute,
   publishedMusicRouteDigest, assertPublishedInputGrant } from "./published-input-authority.ts";
 import { publishedInputCall, publishedInputResponse, publishedInputUrl, publishInputBytes, resolvePublishedInputUrl,

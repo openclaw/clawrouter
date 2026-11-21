@@ -4,7 +4,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { snapshot, routeCatalog } = await import("../providers.ts");
+const { snapshot, routeCatalog } = await import("../provider-catalog.ts");
 const { BASETEN_SYSTEMONE_MODELS } = await import("../provider-baseten-systemone.ts");
 const { systemOneDecision } = await import("./native-decision-catalog-fixture.ts");
 const { basetenSystemOneRequest } = await import("./baseten-systemone-fixtures.ts");

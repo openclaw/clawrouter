@@ -7,7 +7,7 @@ import { continuationAuthority } from "./continuation-authority.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { authorityCall } = await import("../authority.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { sha256Hex } = await import("../utils.ts");

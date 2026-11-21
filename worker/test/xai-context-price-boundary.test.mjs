@@ -7,7 +7,7 @@ import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 const { default: handler } = await import("../index.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { actualModelCost, estimateModelCost } = await import("../pricing.ts");
 const manifest = parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"));
 const provider = compileProviderSnapshot([manifest]).providers[0];

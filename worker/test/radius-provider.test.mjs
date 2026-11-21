@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-const { configuredUpstream, providerModel, upstreamPath } = await import("../providers.ts");
+const { configuredUpstream, upstreamPath } = await import("../providers.ts"); const { providerModel } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 import { prepareRadiusRequest, createRadiusEventInspector, filterRadiusCatalog } from "../provider-radius.ts";
 
@@ -56,7 +56,7 @@ test("Radius terminal counters include cache buckets but never promote native co
 });
 
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { usageEnv, proxyKey } = await import("./usage-budget-fixture.mjs");
 const { sqlBudgetNamespace } = await import("./sql-budget-namespace.mjs");
 function runtimeFixture(t, { fixed = 7, models } = {}) {

@@ -6,7 +6,7 @@ const { actualModelCost, estimateModelCost, requestPricingGap } = await import("
 const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { prepareGroqMistralAudio, observeGroqMistralAudio } = await import("../groq-mistral-audio.ts");
 const fixtures = ["groq", "mistral"].map(id => ({ id, format: `${id}.transcription`,
   wire: JSON.parse(readFileSync(new URL(`../../providers/_fixtures/${id}/transcription.json`, import.meta.url), "utf8")) }));

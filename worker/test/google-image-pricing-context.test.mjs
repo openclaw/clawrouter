@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { requestPricingGap, estimateModelCost } = await import("../pricing.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const pricing = providerById("google-gemini").models.find(model => model.upstream === "gemini-3.5-flash").pricing;
 const free = { ...pricing, inputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, outputMicrosPerMillion: 0 };
 const foreignImage = providerById("openai").models.find(model => model.id === "openai/gpt-image-2.5-sunburst").pricing;

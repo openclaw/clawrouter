@@ -7,7 +7,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
-const { providerById, modelRoute, transformRequestBody } = await import("../providers.ts");
+const { transformRequestBody } = await import("../providers.ts"); const { providerById, modelRoute } = await import("../provider-catalog.ts");
 const { grantSupports } = await import("../provider-auth.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
