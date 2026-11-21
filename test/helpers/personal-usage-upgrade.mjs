@@ -173,6 +173,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "worker/responses-hosted-usage.ts",
     "worker/responses-tool-evidence.ts",
     "worker/token-usage.ts",
+    "worker/bounded-json-measurement.ts",
     "worker/pricing.ts",
     "worker/soft-budget.ts",
     "worker/budget-scope.ts",
