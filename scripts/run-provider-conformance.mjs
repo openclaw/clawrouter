@@ -1,4 +1,4 @@
-import "../test/helpers/typescript-resolver.mjs";
+import "./typescript-resolver.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { PROVIDER_CONFORMANCE_EXECUTION_SCHEMA } from "../packages/provider-plugin-contract/src/index.ts";

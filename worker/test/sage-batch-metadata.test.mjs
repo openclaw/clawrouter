@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
