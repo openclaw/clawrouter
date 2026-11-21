@@ -1,6 +1,5 @@
 import type { CompiledProvider, Env } from "./types.ts";
 import { envValue, HttpError } from "./utils.ts";
-import { providerConfigurationList } from "./provider-connections.ts";
 
 const preparationFailures = new WeakSet<object>();
 export function isPreparationLimit(error: unknown): error is HttpError {
@@ -350,6 +349,26 @@ export function preparationReplace(value: string, pattern: RegExp | string, reso
   }
   if (units > limit || bytes > limit) owner.fail();
   let index = 0; return value.replace(pattern, () => replacements[index++]);
+}
+
+export function providerConfigurationList(value: string, owner?: PreparationAdmission, name = "configuration", relevant?: readonly string[], sourceAdmitted = false): string[] {
+  if (!owner) return value.split(",").map(item => item.trim()).filter(Boolean);
+  if (!sourceAdmitted) owner.csv(value);
+  const selected: string[] = []; let start = 0;
+  for (let end = 0; end <= value.length; end++) if (end === value.length || value.charCodeAt(end) === 44) {
+    let lo = start, hi = end; start = end + 1;
+    while (lo < hi && /\s/u.test(value[lo])) lo++;
+    while (hi > lo && /\s/u.test(value[hi - 1])) hi--;
+    if (lo === hi) continue;
+    // Unknown optional names never become retained token strings.
+    if (relevant) {
+      const key = relevant.find(key => key.length === hi - lo && value.startsWith(key, lo));
+      if (key === undefined) continue;
+      owner.text(key, 256);
+    }
+    selected.push(owner.csvToken(name, value, lo, hi));
+  }
+  return selected;
 }
 
 export function optionalConfigKeys(provider: CompiledProvider, env: Env, owner?: PreparationAdmission): Set<string> {

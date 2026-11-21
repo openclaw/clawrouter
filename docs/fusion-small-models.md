@@ -889,6 +889,18 @@ no model-quality gain has been measured for paging.
 
 ### Optional native Responses transport
 
+The native benchmark registry also accepts `openai/gpt-6.2-sol` and
+`openai/gpt-6.2-astra` as explicit model choices. Existing defaults stay unchanged.
+Their Standard short-context tariffs were checked on 21 November 2026:
+Sol costs $2 input / $10 output per million tokens; Astra costs $8 / $40.
+Cached input and cache writes use their separate published rates, with
+cache-write prices included in conservative reservations. The existing
+200,000-input-token ceiling rejects long-context pricing that is not qualified.
+See the [Sol model card](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+and [Astra model card](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+Selecting these models enables benchmarking; it does not establish a fusion gain.
+
+
 Set `FUSION_OPENAI_API=responses` for the native pair benchmark to send OpenAI
 calls through `/v1/responses`. The default remains `chat-completions`; Anthropic
 transport is unchanged. The route is recorded as `openAiApi`, and repeated-run
