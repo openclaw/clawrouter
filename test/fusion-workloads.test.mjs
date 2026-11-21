@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
-import { taskSandbox, readSource, writeFiles, command, verify } from '../scripts/fusion-workloads.mjs';
+import { taskSandbox, readSource, writeFiles, command, verify, validatePublicTestFiles } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -24,6 +24,53 @@ test('agent edits cannot change graders, add executable paths or exceed file bou
   assert.deepEqual(validateEdits(task, [{ path: task.editPaths[0], content: 'source' }]), [{ path: task.editPaths[0], content: 'source' }]);
   for (const edits of [[{ path: 'test/verifier.mjs', content: '' }], [{ path: task.editPaths[0], content: 'x'.repeat(262145) }],
     [{ path: task.editPaths[0], content: '' }, { path: task.editPaths[0], content: '' }]]) assert.throws(() => validateEdits(task, edits));
+});
+
+test('public test replacements are bounded visible files and invalid declarations cannot allocate', async () => {
+  const file = { path: task.visibleTests[0], content: "import 'node:test';\n" };
+  assert.deepEqual(validatePublicTestFiles({ ...task, publicTestFiles: [file] }), [file]);
+  for (const files of [null, [], [null], [file, file], [{ ...file, path: task.editPaths[0] }],
+    [{ ...file, path: 'test/undeclared.test.mjs' }], [{ ...file, path: '../escape.test.mjs' }],
+    [{ ...file, content: '' }], [{ ...file, content: 42 }], [{ ...file, content: 'x'.repeat(262145) }]]) {
+    const invalid = { ...task, publicTestFiles: files };
+    assert.throws(() => validateTask(invalid), /invalid_public_test_files/);
+    await assert.rejects(taskSandbox(invalid, `sha256:${'a'.repeat(64)}`, () => {
+      throw Error('must not allocate');
+    }), /invalid_public_test_files/);
+  }
+  assert.throws(() => validateEdits({ ...task, publicTestFiles: [file] }, [file]));
+});
+
+test('public test installation failure closes only the new sandbox', async () => {
+  const calls = [], id = 'c'.repeat(64);
+  await assert.rejects(taskSandbox({ ...task,
+    publicTestFiles: [{ path: task.visibleTests[0], content: "import 'node:test';\n" }] },
+  `sha256:${'a'.repeat(64)}`, async (_program, args, options) => {
+    calls.push(args);
+    if (args[0] === 'create') return { stdout: Buffer.from(id) };
+    if (options?.input) throw Error('test installation failed');
+    return { stdout: Buffer.alloc(0) };
+  }), /test installation failed/);
+  assert.deepEqual(calls.at(-1), ['rm', '-f', id]);
+});
+
+test('public test replacements are visible in trials while the source image remains unchanged', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const file = { path: task.visibleTests[0], content: "import test from 'node:test'; test('declared public contract',()=>{});\n" };
+  const image = process.env.FUSION_NATIVE_IMAGE;
+  const original = await taskSandbox(task, image);
+  let before;
+  try { before = await readSource(original, [file.path]); } finally { await original.close(); }
+  assert.notEqual(before[0].content, file.content);
+  const declared = await taskSandbox({ ...task, publicTestFiles: [file] }, image);
+  try {
+    assert.deepEqual(await readSource(declared, [file.path]), [file]);
+    const result = await check(declared, [file.path]);
+    assert.equal(result.valid, true); assert.equal(result.passed, true); assert.equal(result.tests, 1);
+  } finally { await declared.close(); }
+  const unchanged = await taskSandbox(task, image);
+  try { assert.deepEqual(await readSource(unchanged, [file.path]), before); } finally { await unchanged.close(); }
 });
 
 test('oracle support is bounded to distinct non-test helper modules and stays outside agent edits/context', () => {
@@ -260,6 +307,19 @@ test('provided reproducer qualification requires an original assertion and a rep
   assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true } }), false);
   assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: false }, oracleReproduction: { passed: true } }), false);
   assert.equal(qualificationSucceeded({ ...evidence, reproduction: { assertionFailed: true }, oracleReproduction: { passed: false } }), false);
+});
+
+test('declared updated tests may fail on original source but must pass on the reference', () => {
+  const declared = { ...task, publicTestFiles: [{ path: task.visibleTests[0], content: "import 'node:test';\n" }] };
+  const evidence = { visible: { valid: true, passed: false, failures: 1 },
+    oracleVisible: { valid: true, passed: true }, broken: { valid: true, passed: false }, oracle: { passed: true } };
+  assert.equal(qualificationSucceeded(evidence), false);
+  assert.equal(qualificationSucceeded(evidence, declared), true);
+  for (const visible of [{ valid: false, passed: false, failures: 1 }, { valid: true, passed: false, failures: 0 }]) {
+    assert.equal(qualificationSucceeded({ ...evidence, visible }, declared), false);
+  }
+  assert.equal(qualificationSucceeded({ ...evidence, oracleVisible: { valid: true, passed: false } }, declared), false);
+  assert.equal(qualificationSucceeded({ ...evidence, broken: { valid: true, passed: true } }, declared), false);
 });
 
 test('fresh corpus excludes repairs contradicted by their original visible tests', async () => {

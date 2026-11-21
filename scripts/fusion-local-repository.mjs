@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, command, verify, preservationQualificationMatches } from './fusion-workloads.mjs';
+import { loadTasks, hash, command, verify, preservationQualificationMatches, baselineVisibleQualified } from './fusion-workloads.mjs';
 import { runAgent } from './fusion-agent-benchmark.mjs';
 import { runGroundedAgent } from './fusion-grounded-agent.mjs';
 import { models as roles } from './fusion-benchmark-accounting.mjs';
@@ -34,7 +34,7 @@ export function validateLocalQualification(tasks, qualification) {
   return tasks.map(task => {
     const matches = qualification.receipts?.filter(row => row.taskId === task.id), receipt = matches?.[0];
     if (matches?.length !== 1 || !preservationQualificationMatches(task.preservationProbes, receipt?.preservation) || receipt.taskDigest !== hash(JSON.stringify(task)) || receipt.qualified !== true
-      || receipt.visible?.passed !== true || receipt.oracleVisible?.valid !== true || receipt.oracleVisible?.passed !== true
+      || !baselineVisibleQualified(task, receipt.visible) || receipt.oracleVisible?.valid !== true || receipt.oracleVisible?.passed !== true
       || receipt.oracle?.passed !== true || receipt.oracle.valid !== true
       || !Number.isSafeInteger(receipt.oracle.tests) || receipt.oracle.tests < 1
       || !Number.isSafeInteger(receipt.oracle.skipped) || receipt.oracle.skipped < 0

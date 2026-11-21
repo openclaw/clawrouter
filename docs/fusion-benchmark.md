@@ -70,6 +70,19 @@ in `scripts/compile-providers.mjs`. Every comparison arm must receive the same
 context. Changing a selector changes the task digest and requires qualification
 again. Context is input evidence, not an acceptance test or a known repair.
 
+Tasks that intentionally change an existing test contract may declare
+`publicTestFiles`: up to 12 `{path, content}` replacements for declared
+`visibleTests`, limited to 256 KB each and 1 MB combined. Every isolated trial
+receives these exact test bytes before source reads or checks. Models cannot
+edit them. The immutable source image stays unchanged, and the declaration is
+part of the task digest. Requalify both the original and reference source after
+changing it. Use this to disclose updated regression tests when an old assertion
+contradicts the requested behavior; it does not waive reference, preservation,
+or final acceptance checks. The original may fail the declared updated tests,
+but its test run must complete with a valid failure verdict. The reference must
+pass both the public tests and final acceptance. Undeclared tasks still require
+their original visible tests to pass.
+
 ## Analyze paired repair results
 
 Run `node scripts/fusion-pair-analysis.mjs <pair.json>` on a complete native
