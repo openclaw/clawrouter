@@ -166,6 +166,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
     "providers/openai.provider.yaml",
     "worker/provider-auth.ts",
     "worker/authority.ts",
+    "worker/grant-owner-facts.ts",
     "worker/authority-admission.ts",
     "worker/native-decision-json.ts",
     "worker/anthropic-price-response.ts",

@@ -1,3 +1,4 @@
+import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
 import { fetchFeatherlessModelCatalog } from "./featherless-catalog-scan.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
@@ -9,7 +10,7 @@ import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { authorizeResponseControl, assertControlCallerLive, publicControlAuthorization } from "./response-control-authorization.ts";
-import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
+import type { AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 // A complete keyed scan owns the existing pool until delivery finishes. It has
@@ -37,13 +38,13 @@ export async function prepareFeatherlessCatalogOwner(request: Request, env: Env,
     || endpoint.inputProfile !== undefined || endpoint.requestPricing !== undefined || endpoint.modelPassthrough
     || Object.keys(selection.body).length || Object.keys(endpoint.query).length || upstream.query.size || upstream.transport !== null
     || !["https://api.featherless.ai/v1", "https://api.featherless.ai/v1/"].includes(upstream.baseUrl)
-    || !key || !qualified(grant)) unavailable();
+    || !key || !qualifiedApiKeyOwner(grant, "featherless")) unavailable();
   const headers = new Headers(), query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);
   const authorization = headers.get("authorization");
   if (query.size || !authorization || !/^Bearer [\x21-\x7e]{1,8192}$/.test(authorization)
     || upstream.headers.get("authorization") !== authorization) unavailable();
-  const selectedApiKey = authorization.slice(7), identity = ownerIdentity(grant);
+  const selectedApiKey = authorization.slice(7), identity = grantOwnerIdentity(grant);
   const caller = publicControlAuthorization(auth);
   const owner = { providerId: provider.id, endpointId: endpoint.id, grantKey: key, lineage: grant.credentialLineage!,
     routeSha256: await sha256Hex(JSON.stringify([provider.id, endpoint.id, endpoint.request_format, upstream.baseUrl])),
@@ -55,7 +56,7 @@ export async function prepareFeatherlessCatalogOwner(request: Request, env: Env,
     const policy = await authorizeResponseControl(env, caller, owner, signal);
     const current = await inspectGrantCredentials(env, key, signal);
     signal.throwIfAborted(); assertControlCallerLive(caller);
-    if (!policy || !qualified(current) || ownerIdentity(current) !== identity
+    if (!policy || !qualifiedApiKeyOwner(current, "featherless") || grantOwnerIdentity(current) !== identity
       || !filterGrantCandidates(provider.id, [{ key, grant: current, runtimeState: null }], new Set(),
         grantRoutingPolicy(policy.grantRouting), key, undefined, Date.now()).available.length) unavailable();
     currentPolicy = policy;
@@ -63,13 +64,4 @@ export async function prepareFeatherlessCatalogOwner(request: Request, env: Env,
   return { inferenceBaseUrl: upstream.baseUrl, selectedApiKey, revalidateAccount, allows, permittedModelIds };
 }
 
-function qualified(grant: UpstreamGrant | null): grant is UpstreamGrant {
-  return !!grant && grant.provider === "featherless" && grant.kind === "api_key" && grant.credentialStore === "durable_object"
-    && grant.enabled === true && !grant.revokedAt && grant.credentialStatus === "active"
-    && Number.isSafeInteger(grant.credentialGeneration) && typeof grant.credentialLineage === "string" && !!grant.credentialLineage
-    && (!grant.expiresAt || Number.isFinite(Date.parse(grant.expiresAt)) && Date.parse(grant.expiresAt) > Date.now());
-}
-function ownerIdentity(grant: UpstreamGrant): string {
-  return JSON.stringify([grant.provider, grant.kind, grant.credentialGeneration, grant.credentialLineage, grant.accountId ?? null]);
-}
 function unavailable(): never { throw new HttpError(503, "model_discovery_owner_unavailable", "the original catalog caller, credential or destination is unavailable"); }
