@@ -58,7 +58,7 @@ test('native preflight checks all identities without inference or mixed credenti
   assert.equal(calls.length, 5);
   assert.ok(calls.every(c => c.url.includes('/v1/models/')));
   assert.equal(calls[0].headers['x-api-key'], undefined);
-  assert.equal(calls.find(call => call.url.includes('api.anthropic.com')).headers.authorization, undefined);
+  assert.equal(calls.find(call => new URL(call.url).hostname === 'api.anthropic.com').headers.authorization, undefined);
   assert.equal(pins['openai/gpt-6-luna'].costSource, 'published-tariff-estimate');
   assert.equal(pins['anthropic/claude-sonnet-5.5'].price.input, 4 / 1e6);
   await assert.rejects(nativePins(env, async () => new Response(null, { status: 401 })), /preflight_http_401/);
