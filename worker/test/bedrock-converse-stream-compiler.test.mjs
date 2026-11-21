@@ -14,6 +14,13 @@ const { sha256Hex } = await import("../utils.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const source = parse(readFileSync(new URL("../../providers/aws-bedrock.provider.yaml", import.meta.url), "utf8"));
+// Preserve the original Invoke-only fixture when bundled Converse declarations
+// arrive; these existing protocol tests must not append duplicate native routes.
+for (const [id, endpoint] of Object.entries(source.endpoints)) {
+  if (!["aws_bedrock.converse", "aws_bedrock.converse_stream"].includes(endpoint.requestFormat)) continue;
+  delete source.endpoints[id]; source.capabilities = source.capabilities.filter(capability => capability.endpoint !== id);
+}
+for (const model of source.models.entries) model.capabilities = model.capabilities.filter(capability => capability !== "llm.chat");
 const requestFormat = "aws_bedrock.converse_stream", responseFormat = "aws_bedrock.converse_eventstream";
 const body = { modelId: "unselected-body-alias", stream: true, messages: [{ role: "user", content: [{ text: "synthetic" }] }], inferenceConfig: { maxTokens: 12 } };
 const compile = manifest => compileProviderSnapshot([manifest]);
