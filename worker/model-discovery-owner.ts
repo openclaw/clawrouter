@@ -1,3 +1,4 @@
+import { grantOwnerIdentity } from "./grant-owner-facts.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
@@ -49,7 +50,7 @@ export async function prepareModelDiscoveryOwner(request: Request, env: Env, aut
     for (const name of [...headers.keys()]) headers.delete(name);
     native.headers.forEach((value, name) => headers.set(name, value));
   }
-  const original = identity(grant), originalModels = auth.policy.models == null ? null : [...auth.policy.models];
+  const original = grantOwnerIdentity(grant), originalModels = auth.policy.models == null ? null : [...auth.policy.models];
   const caller = publicControlAuthorization(auth), owner = {
     providerId: provider.id, endpointId: endpoint.id, grantKey, lineage: grant.credentialLineage!,
     routeSha256: await sha256Hex(JSON.stringify([endpoint.request_format, url.href])), policyGeneration: auth.policy.generation,
@@ -58,7 +59,7 @@ export async function prepareModelDiscoveryOwner(request: Request, env: Env, aut
     const policy = await authorizeResponseControl(env, caller, owner, signal);
     const current = await inspectGrantCredentials(env, grantKey, signal);
     signal.throwIfAborted(); assertControlCallerLive(caller);
-    if (!policy || !qualified(current, provider.id) || identity(current) !== original || url.href !== destination()
+    if (!policy || !qualified(current, provider.id) || grantOwnerIdentity(current) !== original || url.href !== destination()
       || !filterGrantCandidates(provider.id, [{ key: grantKey, grant: current, runtimeState: null }], new Set(),
         grantRoutingPolicy(policy.grantRouting), grantKey, undefined, Date.now()).available.length) unavailable();
     // A later policy may narrow the admitted inventory, never widen this call.
@@ -72,7 +73,5 @@ function qualified(grant: UpstreamGrant | null, provider: string): grant is Upst
     && Number.isSafeInteger(grant.credentialGeneration) && !!grant.credentialLineage
     && (!grant.expiresAt || Number.isFinite(Date.parse(grant.expiresAt)) && Date.parse(grant.expiresAt) > Date.now());
 }
-function identity(grant: UpstreamGrant): string {
-  return JSON.stringify([grant.provider, grant.kind, grant.credentialGeneration, grant.credentialLineage, grant.accountId ?? null]);
-}
+
 function unavailable(): never { throw new HttpError(503, "model_discovery_owner_unavailable", "the original catalog caller, credential or destination is unavailable"); }
