@@ -1,3 +1,4 @@
+import { usageMetricKeys } from '../../shared/usage-report.ts';
 import assert from 'node:assert/strict';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -27,7 +28,7 @@ function nodes(tree){return [tree,...(Array.isArray(tree?.props?.children)?tree.
 function labelControl(tree,label){const node=nodes(tree).find(n=>n.type==='label'&&[].concat(n.props.children).filter(x=>typeof x==='string').join('')===label);assert.ok(node,'visible control: '+label);return nodes(node).find(n=>n.type==='input'||n.type==='select');}
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
 const now=Date.parse('2026-11-10T12:00:00Z');
-const metrics=()=>Object.fromEntries(api.metricKeys.map(k=>[k,0]));
+const metrics=()=>Object.fromEntries(usageMetricKeys.map(k=>[k,0]));
 function report(extra={},audience='personal'){return {query:{from:now-3600000,to:now,timezone:'Asia/Kathmandu',grain:'day',groupBy:'model',rankBy:'calls',rankOffset:0,filters:{user:'alice@example.com'}},cut:'a'.repeat(43),metrics:metrics(),costs:[],recordedChargeMicros:0,chargeReportedCalls:0,groups:[],buckets:[],remainder:{metrics:metrics(),costs:[],recordedChargeMicros:0,chargeReportedCalls:0},rank:{exact:true,distinctGroups:0,offset:0,hasMore:false},coverage:{authority:audience==='admin'?'admin_retained':'current_access',scope:audience==='admin'?'admin_current_plus_tracked_retired':'personal_current_access',allDiscoveredSourcesAnswered:true,effectiveFrom:now-3600000,clippedFrom:null,capturedBetween:{from:now,to:now},captureAudit:{startedAt:now-1000,verifiedSince:now-1000,captureGapObserved:false},historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded'},...extra};}
 const outcome=value=>({kind:'complete',value});
 function mount({full=true,audience='personal',controls=false}={}){

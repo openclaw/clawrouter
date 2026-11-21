@@ -1,4 +1,5 @@
-import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, UsageMetrics, UsageCostLane, UsageCostClass } from '../../shared/usage-report';
+import { emptyUsageMetrics, usageMetricKeys as metricKeys, usageTokenFields } from '../../shared/usage-report';
+import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, UsageCostLane, UsageCostClass } from '../../shared/usage-report';
 import type { ConsoleRequest } from './dashboard-fetch';
 import { parseUsageRangeInput, type UsageRangeInput } from './usage-range';
 export type UsageAudience = 'admin' | 'personal';
@@ -13,7 +14,6 @@ export const usageCaveats = {
   accounting: 'Value retained in the usage ledger; not proof of upstream price or completed budget settlement. Settlement-confirmation evidence is unavailable.',
   missingness: 'Missing token or monetary fields are not inferred zeros. Presence counts describe retained fields, not provider confirmation. Reporting costs remain separate by lane and price class; unknown is not free.',
 };
-export const metricKeys = ['calls','generationCalls','utilityCalls','successfulCalls','errorCalls','deniedCalls','inputTokens','outputTokens','cachedInputTokens','cacheWriteInputTokens','reasoningOutputTokens','inputReportedCalls','outputReportedCalls','cacheReadReportedCalls','cacheWriteReportedCalls','reasoningReportedCalls'] as const;
 export const eventFields = ['id','occurredAt','user','provider','model','keyId','capability','callKind','status','statusCode','durationMs','inputTokens','outputTokens','cachedInputTokens','cacheWriteInputTokens','reasoningOutputTokens','lane','costClass','reportingCostMicros','estimateReason','recordedChargeMicros','costBasis','pricingRef','requestedTier','servedTier','compoundRequestId','compoundStage'] as const;
 const lanes = ['api','subscription','unattributed'], classes = ['calculated','fixed','estimated','upper_bound','partial','unknown','no_charge'];
 const bytes = (s: string) => new TextEncoder().encode(s).length;
@@ -44,7 +44,7 @@ export function completeValue<T>(outcome: CompleteUsageOutcome<T>): T {
 export async function releaseUsage(request: ConsoleRequest, origin: string, audience: UsageAudience, cut: string) {
   try { await request(origin,usageEndpoint(audience)+'/report?'+new URLSearchParams({cut}),{method:'DELETE',keepalive:true}); } catch { /* Fixed server TTL bounds lost cleanup. */ }
 }
-function empty(): UsageAdditives { return {metrics:Object.fromEntries(metricKeys.map(k=>[k,0])) as unknown as UsageMetrics,recordedChargeMicros:0,chargeReportedCalls:0,costs:[]}; }
+function empty(): UsageAdditives { return {metrics:emptyUsageMetrics(),recordedChargeMicros:0,chargeReportedCalls:0,costs:[]}; }
 function cost(total: UsageAdditives,lane: string,costClass: string,calls: number,amount: number) {
   if(!lanes.includes(lane)||!classes.includes(costClass))fail();
   let c=total.costs.find(c=>c.lane===lane&&c.costClass===costClass);
@@ -56,7 +56,7 @@ function addEvent(total: UsageAdditives,e: CompleteUsageEvent) {
   const m=total.metrics;
   m.calls=plus(m.calls,1);m.generationCalls=plus(m.generationCalls,Number(e.callKind==='generation'));m.utilityCalls=plus(m.utilityCalls,Number(e.callKind==='utility'));
   m.successfulCalls=plus(m.successfulCalls,Number(e.status==='success'));m.deniedCalls=plus(m.deniedCalls,Number(e.status==='denied'));m.errorCalls=plus(m.errorCalls,Number(e.status!=='success'&&e.status!=='denied'));
-  for(const [field,present] of [['inputTokens','inputReportedCalls'],['outputTokens','outputReportedCalls'],['cachedInputTokens','cacheReadReportedCalls'],['cacheWriteInputTokens','cacheWriteReportedCalls'],['reasoningOutputTokens','reasoningReportedCalls']] as const)if(e[field]!==null){m[field]=plus(m[field],safe(e[field]));m[present]=plus(m[present],1);}
+  for(const [field,present] of usageTokenFields)if(e[field]!==null){m[field]=plus(m[field],safe(e[field]));m[present]=plus(m[present],1);}
   if(e.recordedChargeMicros!==null){total.recordedChargeMicros=plus(total.recordedChargeMicros,safe(e.recordedChargeMicros));total.chargeReportedCalls=plus(total.chargeReportedCalls,1);}
   if(e.costClass==='unknown'?e.reportingCostMicros!==null:e.reportingCostMicros===null)fail();
   cost(total,e.lane,e.costClass,1,e.reportingCostMicros===null?0:safe(e.reportingCostMicros));
