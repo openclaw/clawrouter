@@ -1,4 +1,4 @@
-import { liveBackground, type BackgroundRecord } from "./background-store.ts";
+import { liveBackground, type BackgroundRecord } from "./background-record.ts";
 import { backgroundCall } from "./http-background.ts";
 import type { Env } from "./types.ts";
 import { HttpError, privateJson, readJson } from "./utils.ts";
