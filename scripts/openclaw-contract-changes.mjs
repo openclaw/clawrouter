@@ -11,7 +11,7 @@ export function affectsOpenClawContract(path) {
     || path.startsWith("providers/")
     || /^test\/openclaw-[^/]*\.test\.mjs$/.test(path)
     || /^test\/fixtures\/openclaw-[^/]*-contract\.test\.ts$/.test(path)
-    || ["test/helpers/openclaw-consumer.mjs", "test/helpers/workerd.mjs",
+    || ["test/helpers/openclaw-consumer.mjs", "test/helpers/workerd.mjs", "test/helpers/catalog-diagnostic-harness.mjs",
       ".github/workflows/openclaw-contract.yml", "scripts/openclaw-contract-changes.mjs",
       "test/openclaw-contract-changes.test.mjs", "pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(path)
     || /(^|\/)package\.json$/.test(path)
