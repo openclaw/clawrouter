@@ -106,7 +106,7 @@ export async function runProviderConformance(pluginPaths) {
   const plan = loadProviderConformancePlan(pluginPaths);
   const cases = plan.cases.map(entry => ({ ...entry, authentication: preflight(entry) }));
   const [{ default: worker }, { snapshot }, { sha256Hex }, { clearHotCaches }] = await Promise.all([
-    import("../worker/index.ts"), import("../worker/providers.ts"), import("../worker/utils.ts"), import("../worker/hot-cache.ts"),
+    import("../worker/index.ts"), import("../worker/provider-catalog.ts"), import("../worker/utils.ts"), import("../worker/hot-cache.ts"),
   ]);
   const originalFetch = globalThis.fetch;
   const original = { providers: snapshot.providers, model_index: snapshot.model_index };
