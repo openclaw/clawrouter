@@ -83,7 +83,7 @@ const typedObserver = sdkObserverSource.replaceAll("function (...args: any[])", 
 assert.equal(stripTypeScriptTypes(typedObserver, { mode: "transform" }), stripTypeScriptTypes(sdkObserverSource, { mode: "transform" }));
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);
 const assembledFixture = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", typedObserver);
-const proxyResponseSHA = "310c94195a2783ed5791a5471944486df33c5eaf781e0dea619a4288ce9d4174";
+const proxyResponseSHA = "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3";
 function inspectionOverlay(text) {
   assert.equal(createHash("sha256").update(text).digest("hex"), proxyResponseSHA);
   const anchor = '    resolve({ ...inspection, delivery,'; assert.equal(text.split(anchor).length, 2);

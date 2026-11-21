@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve qualified Voyage embedding usage when response JSON inspection is enabled, including rejection and MIME guards.
+
 - Protect final fusion acceptance tests and helper modules from candidate writes, and reject changed test bytes after grading.
 
 - Preserve early failing-test diagnostics in bounded fusion benchmark feedback when later passing tests produce long output. Mark omitted output and retain final diagnostics.
