@@ -1,3 +1,4 @@
+import { usageDateLabel, usageDateStart } from "../shared/usage-calendar.ts";
 import type { UsageReportRange } from "../shared/usage-report.ts";
 import { HttpError } from "./utils.ts";
 
@@ -12,21 +13,11 @@ export function usageDateTools(timezone: string) {
   let formatter: Intl.DateTimeFormat;
   try { formatter = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }); }
   catch { return invalid("timezone must be a supported IANA timezone"); }
-  const label = (at: number) => {
-    const parts = formatter.formatToParts(at);
-    const part = (name: string) => parts.find(p => p.type === name)!.value;
-    return part("year") + "-" + part("month") + "-" + part("day");
-  };
+  const label = (at: number) => usageDateLabel(formatter, at);
   const midnight = (date: string) => {
     const utc = Date.parse(date + "T00:00:00Z");
     if (!Number.isFinite(utc) || new Date(utc).toISOString().slice(0, 10) !== date) invalid("invalid calendar date");
-    let low = utc - 36 * 3_600_000, high = utc + 36 * 3_600_000;
-    // 29 steps suffice for the 72-hour millisecond search interval.
-    for (let i = 0; low < high && i < 29; i++) {
-      const mid = low + Math.floor((high - low) / 2);
-      if (label(mid) < date) low = mid + 1; else high = mid;
-    }
-    return low;
+    return usageDateStart(formatter, date, utc);
   };
   return { label, midnight };
 }

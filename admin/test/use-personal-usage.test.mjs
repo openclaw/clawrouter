@@ -5,7 +5,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'vite';
 import { stripTypeScriptTypes } from 'node:module';
 import test from 'node:test';
-import {parseUsageRangeInput} from '../src/usage-range.ts';
 import {emptyFilters} from '../src/personal-usage.ts';
 // Execute the actual hook with a deterministic React scheduling harness; no source assertions.
 const source=stripTypeScriptTypes(await readFile(new URL('../src/hooks/use-personal-usage.ts',import.meta.url),'utf8')).split(String.fromCharCode(10)).filter(line=>!line.startsWith('import ')).join(String.fromCharCode(10)).replaceAll('export function ','function ');
@@ -24,6 +23,7 @@ try{
 }finally{await rm(output,{recursive:true,force:true});}
 const {cursorUsageFixture}=await import('./helpers/personal-usage-cursor.mjs');
 const api=await import('../src/complete-usage.ts');
+const {parseUsageRangeInput}=await import('../src/usage-range.ts');
 function nodes(tree){return [tree,...(Array.isArray(tree?.props?.children)?tree.props.children:[tree?.props?.children]).flat(Infinity).filter(Boolean).flatMap(child=>typeof child==='object'?nodes(child):[])];}
 function labelControl(tree,label){const node=nodes(tree).find(n=>n.type==='label'&&[].concat(n.props.children).filter(x=>typeof x==='string').join('')===label);assert.ok(node,'visible control: '+label);return nodes(node).find(n=>n.type==='input'||n.type==='select');}
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve();};
