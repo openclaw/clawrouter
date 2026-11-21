@@ -32,7 +32,7 @@ const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
-assert.equal(sha(outcomeSource), "6e5b59d2d8d937f4dda3af1f1d347a695d4c320212491bb0d1e164ffb18da647");
+assert.equal(sha(outcomeSource), "31ed0ecbc105e07d93ddc71c7a235a13337817663cf5726ebb6abd06bb76e221");
 // Google does not enter ownOrdinaryResponse. Its original fetched reader is
 // owned directly by observeUsage, as in the donor's embeddings branch.
 const directReaderFormat = 'responseFormat === "openai.embeddings"';

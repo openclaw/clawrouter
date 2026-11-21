@@ -1105,3 +1105,31 @@ test('paging rejects auxiliary model strategies before allocating a sandbox', as
     await assert.rejects(runAgent({}, 'unread-image', strategy, 'unsupported', {}, () => {}, undefined, { sourcePageLines: 200 }), /unsupported_source_paging/);
   }
 });
+test('empty insertion is limited to an empty declared new file', () => {
+  const path = 'worker/new-module.ts', task = { editPaths: [path], newPaths: [path] };
+  const edit = { path, search: '', replace: 'export const value = 1;' };
+  assert.deepEqual(replaceEdits(task, [{ path, content: '' }], [edit]), [{ path, content: edit.replace }]);
+  assert.throws(() => replaceEdits({ editPaths: [path] }, [{ path, content: '' }], [edit]), /invalid_edit/);
+  assert.throws(() => replaceEdits(task, [{ path, content: 'existing' }], [edit]), /invalid_edit/);
+  assert.throws(() => replaceEdits(task, [{ path, content: '' }], [edit, edit]), /invalid_edit/);
+});
+
+test('agent creates and submits a declared new module in a real sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts', content = 'export const value = 1;\n';
+  const task = { id: 'new-module', instruction: 'Create the declared module.',
+    editPaths: [path], newPaths: [path], visibleTests: ['worker/test/accounting.test.mjs'] };
+  let calls = 0;
+  const result = await runAgent(task, process.env.FUSION_NATIVE_IMAGE, 'strong', 'new-module',
+    { maxTurns: 2, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      assert.match(body.messages[0].content, /Declared new files start empty/);
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: calls++ ? 'finish' : 'edit', paths: [], query: '', memory: '',
+        edits: calls === 1 ? [{ path, search: '', replace: content }] : [],
+      }) } }] };
+    });
+  assert.equal(result.publicPassed, true);
+  assert.deepEqual(result.files, [{ path, content }]);
+  assert.deepEqual(result.actions.map(action => action.action), ['edit', 'finish']);
+});

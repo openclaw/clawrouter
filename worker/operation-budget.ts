@@ -1,7 +1,7 @@
 import { pixVerseInputFixedCost } from "./pixverse-input-policy.ts";
 import type { RequestTariffEndpoint } from "./request-tariff.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { isModelDiscovery } from "./model-discovery.ts";
+import { isModelDiscovery } from "./model-discovery-formats.ts";
 import { validateBudgetReservation, type EstimatedCost } from "./accounting";
 import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
