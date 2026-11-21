@@ -617,7 +617,7 @@ export function completeConsumableCredentialGeneration(preparation: IdentityGene
 
 type GenerationAuthenticationOwner = {
   slot: GenerationSlot; parent: IdentityGenerationBorrow; lease: GenerationConsumptionLease;
-  identity?: import("./types").AuthorizedIdentity; failure?: import("./utils.ts").HttpError;
+  identity?: import("./types").AuthorizedIdentity; failure?: import("./http-error.ts").HttpError;
   children: number; closed: boolean; initialSelection: boolean;
 };
 // The registry is lazy and its owner is charged before the WeakMap factory.

@@ -6,7 +6,8 @@ import { continuationScope } from "./http-continuation.ts";
 import type { ResponseBodyInspection } from "./proxy-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const tokenLimit = 16 * 1024, candidateLimit = 8;

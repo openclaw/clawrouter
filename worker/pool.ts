@@ -7,7 +7,8 @@ import { authenticateProxyKey, hasProxyKeyIntent } from "./proxy-auth";
 import { snapshot } from "./provider-catalog";
 import { modelEligibility, modelExclusionReason, planLabel, policyGrants, quotaFree } from "../shared/subscription-pool.ts";
 import type { Env, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
+import { errorResponse, privateJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function poolResponse(request: Request, env: Env): Promise<Response> {
   const hasKey = hasProxyKeyIntent(request.headers);

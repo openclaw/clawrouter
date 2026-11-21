@@ -7,7 +7,7 @@ import type { InlineMusicEvidence } from "./openrouter-music-owner.ts";
 import { freezeInlineMusicInput } from "./openrouter-music-input.ts";
 import { qualifyImageContainer } from "./pixverse-image-multipart.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const MiB = 1024 * 1024;
 const inputs = new WeakMap<ProxySelection, InlineMusicInput>();

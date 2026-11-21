@@ -13,7 +13,8 @@ import { assertPublishedInputLive, publishedInputUnavailable, type PublishedInpu
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const inputs = new WeakMap<ProxySelection, PublishedMusicInput>();
 export class PublishedMusicUnsent extends HttpError {

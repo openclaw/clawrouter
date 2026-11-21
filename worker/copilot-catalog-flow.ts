@@ -19,7 +19,8 @@ import { inputRetirement } from "./input-retirement.ts";
 import { jsonBodyTransport } from "./json-body.ts";
 import { BodyLease } from "./body-budget.ts";
 import { hotCacheConfig } from "./hot-cache.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { AccessPolicy, Env } from "./types.ts";
 

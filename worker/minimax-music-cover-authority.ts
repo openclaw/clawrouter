@@ -15,7 +15,8 @@ import { authenticateProxyKey, proxyAdmission, proxyKeyVerification } from "./pr
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import { musicCoverSoftBudget, softBudgetPolicy } from "./soft-budget.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, ProviderConnection, UpstreamGrant, UsageEvent } from "./types.ts";
-import { HttpError, randomId } from "./utils.ts";
+import { randomId } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const capability = "music.generate", model = "minimax/music-cover";
 const selection = Object.freeze({ providerId: "minimax", endpointId: "music-cover", mode: "http" as const,

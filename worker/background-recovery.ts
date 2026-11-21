@@ -1,7 +1,8 @@
 import { liveBackground, type BackgroundRecord } from "./background-record.ts";
 import { backgroundCall } from "./http-background.ts";
 import type { Env } from "./types.ts";
-import { HttpError, privateJson, readJson } from "./utils.ts";
+import { privateJson, readJson } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Called only behind the existing administrator/same-origin boundary. One
 // locator names one scoped owner; there is no global enumeration or job index.

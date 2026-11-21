@@ -44,7 +44,8 @@ import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate, PreparationAdmission, isPreparationLimit } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
 import { transformRequestBody } from "./provider-request"; import { endpointForPath, modelRoute, providerForModel, providerModel, unifiedPathForEndpoint } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
-import { errorResponse, HttpError } from "./utils";
+import { errorResponse } from "./utils";
+import { HttpError } from "./http-error";
 
 export interface ProxySelection {
   preparation?: PreparationAdmission;

@@ -3,7 +3,7 @@ import { inputRetirement } from "./input-retirement.ts";
 import { providerById } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { TranscriptionUpload } from "./transcription-body.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const formats = new Set(["groq.transcription", "mistral.transcription"]);
 const admitted = new WeakSet<ProxySelection>();

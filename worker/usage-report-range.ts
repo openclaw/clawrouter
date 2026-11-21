@@ -1,6 +1,6 @@
 import { usageDateLabel, usageDateStart } from "../shared/usage-calendar.ts";
 import type { UsageReportRange } from "../shared/usage-report.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const reportDayMs = 86_400_000;
 export const reportRetentionMs = 30 * reportDayMs;

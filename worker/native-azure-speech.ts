@@ -2,7 +2,7 @@ import { nativeMp3ResponseLimit as outputLimit, readNativeMp3Response } from "./
 import { azureSpeechRegionalOrigin, azureSpeechSsmlLimit, prepareAzureSpeechSsml } from "./azure-speech-ssml.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const speechPath = "/cognitiveservices/v1";
 const responseErrors = { invalid: "invalid_azure_speech_binary_response", limit: "azure_speech_binary_limit", incomplete: "azure_speech_binary_incomplete" };

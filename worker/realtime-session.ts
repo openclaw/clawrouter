@@ -1,4 +1,5 @@
-import { HttpError, sha256Hex } from './utils';
+import { sha256Hex } from './utils';
+import { HttpError } from './http-error';
 import type { FundedInput } from './realtime-accounting';
 import { REALTIME, audio, cap, effectiveSession, fail, fields, identity, object, sessionPolicy, toolChoice, vadPolicy, wireSession, type Json } from './realtime-protocol';
 

@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const copilotControlHeaders = {
   phase: "x-clawrouter-copilot-control-phase", id: "x-clawrouter-copilot-control-id",

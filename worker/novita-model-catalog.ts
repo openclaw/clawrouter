@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const NOVITA_MODELS_FORMAT = "novita.models";
 export interface NovitaModelRow {

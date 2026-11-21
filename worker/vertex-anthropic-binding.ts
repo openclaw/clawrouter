@@ -1,7 +1,7 @@
 import { prepareVertexAnthropicRequest, vertexAnthropicUrl, importVertexServiceAccountKey, createVertexAssertion } from "./provider-vertex.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface VertexResource {
   version: "clawrouter.vertex-anthropic.v1";

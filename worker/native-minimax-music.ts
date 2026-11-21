@@ -5,7 +5,7 @@ import { consumeMiniMaxMusicCoverResponse, type MusicCoverResponseCapability } f
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { inputRetirement } from "./input-retirement.ts";
 
 const audioLimit = 4 * 1024 * 1024, responseLimit = audioLimit * 2 + 65536;

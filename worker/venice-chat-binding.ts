@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export type VeniceChatBinding = Readonly<{ selectedUpstreamModel: string }>;
 

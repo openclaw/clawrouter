@@ -1,5 +1,5 @@
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const PRICE_KEYS = ["input_price", "output_price", "cached_price", "caching_price"] as const;
 const MAX_BYTES = 2 * 1024 * 1024;

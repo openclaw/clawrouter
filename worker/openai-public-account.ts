@@ -1,7 +1,7 @@
 import { authorityCall } from "./authority.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Compaction windows and standalone search references cannot cross accounts.
 // Count resolved pool members, not currently available candidates:

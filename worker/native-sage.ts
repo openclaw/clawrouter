@@ -4,7 +4,7 @@ import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./
 import { decisionRecord } from "./provider-decision-wire.ts";
 import { decodeSageResponse, prepareSageRequest } from "./provider-sage.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // The common owner selects the model/grant before calling this pure wrapper.
 export function prepareNativeSage(selection: ProxySelection): NativeResponse | undefined {

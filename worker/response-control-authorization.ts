@@ -14,7 +14,8 @@ import type { ContinuationOwner } from "./continuation-store.ts";
 import { currentLocalSession } from "./local-auth.ts";
 import { proxyCredentialFailure, proxyKeyVerification, type ProxyKeyVerification } from "./proxy-auth.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface PublicControlBinding {
   credentialId: string | null;

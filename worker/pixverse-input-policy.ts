@@ -1,5 +1,5 @@
 import type { AccessPolicy } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Two explicitly named operations, never a policy-wide generation fee or a
 // claimed vendor tariff. Discovery considers their combined reservation.

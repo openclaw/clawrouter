@@ -2,7 +2,7 @@ import { createVertexAssertion, importVertexServiceAccountKey, vertexTokenReques
 import { vertexOwnerBinding } from "./vertex-anthropic-binding.ts";
 import { HttpOperation } from "./http-operation.ts";
 import type { CredentialRecord, MaterializeRequest, OwnerResponse } from "./grant-credential-record.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface Owner {
   order<T>(run: () => Promise<T>): Promise<T>;

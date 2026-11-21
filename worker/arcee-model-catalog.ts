@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const ARCEE_MODELS_FORMAT = "arcee.models";
 const PRICE_KEYS = ["prompt", "completion", "image", "request", "input_cache_reads", "input_cache_writes"] as const;

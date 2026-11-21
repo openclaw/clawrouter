@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const denials = new WeakSet<object>();
 export function accessDenial(kind: "limit" | "transport" | "cleanup" | "deadline"): HttpError {

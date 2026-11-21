@@ -1,7 +1,8 @@
 import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import type { PreparationAdmission } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledProvider } from "./types.ts";
-import { decodePathSegment, HttpError } from "./utils.ts";
+import { decodePathSegment } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {
   const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "[^/]+");

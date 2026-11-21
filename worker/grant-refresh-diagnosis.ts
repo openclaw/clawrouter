@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const MAX_SECRET_BYTES = 64 * 1024;
 export const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;

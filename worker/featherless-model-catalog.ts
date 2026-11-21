@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const FEATHERLESS_MODELS_FORMAT = "featherless.models";
 const PAGE_SIZE = 100;

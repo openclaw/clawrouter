@@ -7,7 +7,8 @@ import { createResponseIdentityInspector, responseIdentity, type ResponseIdentit
 import { createResponsesToolEvidence, retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import { responseOutcome } from "./token-usage.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { WebSocketContinuationPin, WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
 
 export function continuationRestart(): HttpError {

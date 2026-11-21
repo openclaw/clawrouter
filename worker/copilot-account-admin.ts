@@ -2,7 +2,7 @@ import { copilotDeviceAdmin, readCopilotDeviceBytes, readCopilotDeviceJson, copi
 import { copilotControlHeaders, assertCopilotControlHeaders, qualifiedCopilotControlHeaders, copilotControlReply } from "./copilot-inference-control.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { BodyLease } from "./body-budget.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { Env } from "./types.ts";
 
 export const copilotAccountFlow = "copilot-account.v1";

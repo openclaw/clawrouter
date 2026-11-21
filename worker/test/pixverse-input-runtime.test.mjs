@@ -11,7 +11,7 @@ const { backgroundCall } = await import("../http-background.ts");
 const { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const { accountingAdmissionFailure, isAccountingAdmissionFailure } = await import("../json-body.ts");
-const { HttpError } = await import("../utils.ts");
+const { HttpError } = await import("../http-error.ts");
 const plan = { model: "v6", prompt: "A lighthouse", duration: 5, quality: "720p" };
 // Decoder-valid 1x1 PNG, used unchanged; no remote input reference.
 const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64"));

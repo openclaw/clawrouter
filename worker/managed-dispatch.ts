@@ -1,7 +1,7 @@
 import { managedCreateAdapter, managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import type { ManagedControl, ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import type { CompiledProvider } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function managedProbeId(adapter: ManagedLifecycleAdapter): string {
   return adapter.validateId(adapter.identityProbe ?? (adapter.protocol === "replicate.predictions" ? "owner-pin" : "11111111-1111-4111-8111-111111111111"));

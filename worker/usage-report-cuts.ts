@@ -1,4 +1,4 @@
-import {HttpError} from './utils.ts';
+import { HttpError } from './http-error.ts';
 import {reportCutTtlMs} from './usage-report-range.ts';
 import type { UsageVisibilityCut } from './usage-report-protocol.ts';
 

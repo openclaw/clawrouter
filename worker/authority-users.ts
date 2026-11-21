@@ -1,5 +1,6 @@
 import type { AccessControlUser, AccessUserRecord } from "./types";
-import { HttpError, normalizeEmail } from "./utils.ts";
+import { normalizeEmail } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function normalizeUser(value: AccessControlUser): AccessControlUser {
   const email = normalizeEmail(value.email);
