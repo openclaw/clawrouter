@@ -67,12 +67,18 @@ and submits one multipart request to the Router. This differs from the native
 PixVerse provider's separate upload and JSON-create sequence. The existing text
 consumer retains its independent pin and coverage.
 
-Hosted SDK qualification is pending. The fixture observes the original guarded
+The registered SDK contract exercises both models, explicit pricing/retention
+denials, original job polling and ambiguous-create no-replay. Exact-head hosted
+results are recorded on [PR777](https://github.com/openclaw/clawrouter/pull/777).
+The fixture observes the original guarded
 responses, body and reader cancellation, closed/read promises and releases;
 transport output alone is not retirement proof. The client returns an exact
 terminal URL and MIME type; the generic runner does not download that URL. The
 fixture rejects unexpected foreign-origin fetches rather than claiming a
-download that the registered provider never performs. Synthetic policy-fixed prices
+download that the registered provider never performs. The original owner may
+collect concurrently with SDK polling: all GETs must retain the same job ID,
+credential and destination and reconcile to caller requests or observed owned
+collector calls. Collection never authorizes another create or another charge. Synthetic policy-fixed prices
 are fixture inputs, not vendor tariffs. No paid vendor execution, deployment,
 automatic catalog entitlement or caller-signal/physical pre-header cancellation
 qualification is claimed.

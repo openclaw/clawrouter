@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripTypeScriptTypes } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import { inspect, stripVTControlCharacters } from "node:util";
 import test from "node:test";
@@ -41,11 +41,42 @@ async function invokeNative(t, origin, invoke = runOpenClawConsumer, bind = with
   for (const model of ["v6", "c1"]) assert.equal(lines.filter(line => line === "PIXVERSE_IMAGE_RETIRED " + model).length, 1, "exact original SDK completion receipt");
 }
 async function json(response, status = 200) { const text = await response.text(); assert.equal(response.status, status, text); return JSON.parse(text); }
+const collectionSourceSHA = "fc2dcf75ee41a4ad89a1885fb42442a311551ca00654bcdf2ff01b71df58510b";
+function collectionPrelude() {
+  return `const pixverseCollectionRows = [], pixverseCollectionFaults = [];
+function pixverseCollectInvoke(fn, ...args) {
+  let original;
+  try { original = Reflect.apply(fn, undefined, args); }
+  catch (error) { try { pixverseCollectionRows.push({ fn, args, state: "rejected", error }); } catch (fault) { pixverseCollectionFaults.push(fault); } throw error; }
+  try {
+    const row = { fn, args, original, state: "pending" }; pixverseCollectionRows.push(row);
+    row.tail = original.then(value => { row.state = "fulfilled"; row.value = value; }, error => { row.state = "rejected"; row.error = error; });
+  } catch (fault) { pixverseCollectionFaults.push(fault); }
+  return original;
+}
+export async function pixverseCollectionProof() {
+  for (let n = 0; n < pixverseCollectionRows.length;) { const batch = pixverseCollectionRows.slice(n); n = pixverseCollectionRows.length; await Promise.all(batch.map(row => row.tail)); }
+  const failures = [...pixverseCollectionFaults, ...pixverseCollectionRows.filter(row => row.state !== "fulfilled").map(row => row.error)];
+  if (failures.length) throw new AggregateError(failures, "original PixVerse collector failure");
+  return pixverseCollectionRows.map(row => ({ state: row.state, originalCallee: row.fn === readManagedControl,
+    owner: row.args[1].owner, responseId: row.args[1].responseId, protocol: row.args[1].protocol, authorization: row.args[1].authorization.kind }));
+}
+`;
+}
+function observePixVerseCollection(bytes) {
+  assert.equal(createHash("sha256").update(bytes).digest("hex"), collectionSourceSHA, "original collection owner source changed");
+  const anchor = "    const { evidence } = await readManagedControl(env, { owner: job.owner, route: job.route, responseId: job.responseId,";
+  const text = bytes.toString(); assert.equal(text.split(anchor).length, 2); assert.equal(text.includes("pixverseCollectInvoke"), false);
+  return Buffer.from(collectionPrelude() + text.replace(anchor, anchor.replace("readManagedControl(env,", "pixverseCollectInvoke(readManagedControl, env,")));
+}
 async function withFixture(t, run) {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-pixverse-image-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const { startBundledWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const { build } = createRequire(import.meta.resolve("wrangler/package.json"))("esbuild");
+  const bundle = await build({ stdin: { contents: routerFixture(), resolveDir: process.cwd(), sourcefile: "pixverse-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent", plugins: [{ name: "owned-pixverse-collection", setup(build) { build.onLoad({ filter: /worker\/managed-predictions\.ts$/ }, async args => ({ contents: observePixVerseCollection(readFileSync(args.path)).toString(), loader: "ts" })); } }] });
+  const startWorkerdFixture = (temporary, _router, upstream, options) => startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstream, options);
   const failures = []; let mf;
-  const options = { persistencePath: join(temporary, "state") };
+  const options = { persistencePath: join(temporary, "state"), preventEviction: true };
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), options);
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -124,7 +155,7 @@ async function assertAmbiguousReservation(origin) {
   assert.equal(job.inputReceipt.upload.reservedMicros, 13); assert.equal(job.inputReceipt.upload.amount, 13); assert.equal(job.inputReceipt.upload.basis, "policy_fixed");
   assert.equal(job.event, null, "original durable owner retains unknown result for recovery");
 }
-function assertCalls(calls, selected) {
+function assertCalls(calls, selected, requests = [], collections = []) {
   for (const id of selected) {
     const rows = calls.filter(row => row.id === id);
     assert.equal(rows.filter(row => row.path === "/openapi/v2/image/upload").length, 1, id + " one paid upload");
@@ -133,12 +164,27 @@ function assertCalls(calls, selected) {
     for (const row of rows) {
       assert.equal(row.origin, "https://app-api.pixverse.ai"); assert.equal(row.headers["api-key"], "fixture-upstream-piximage-" + id);
       assert.equal(row.headers.authorization, undefined); assert.equal(row.redirect, "manual");
-      if (row.method === "GET") assert.equal(row.path, "/openapi/v2/video/result/" + job(id));
+      if (["/openapi/v2/image/upload", "/openapi/v2/video/img/generate"].includes(row.path)) assert.equal(row.method, "POST", id + " paid operations require POST");
+      else { assert.equal(row.method, "GET", id + " only original GET controls remain"); assert.equal(row.path, "/openapi/v2/video/result/" + job(id)); }
     }
+    assert.equal(rows.length, 2 + rows.filter(row => row.method === "GET").length, id + " every dispatch is one upload/create or original GET");
     if (id === "ambiguous") assert.equal(rows.length, 2, "unknown create never polls an invented ID");
-    else assert.equal(rows.filter(row => row.method === "GET").length, 2, id + " original ID pending then terminal poll");
+    else {
+      const caller = requests.filter(row => row.method === "GET" && row.path === "/v1/native/pixverse/openapi/v2/video/result/" + job(id) && row.authorization === "Bearer " + key(id));
+      const collector = collections.filter(row => row.responseId === job(id));
+      assert.ok(caller.length >= 1 && caller.length <= 2, id + " bounded actual SDK/control polls");
+      assert.ok(collector.length <= 1, id + " one bounded original collector attempt");
+      assert.ok(rows.filter(row => row.method === "GET").length >= 2 && rows.filter(row => row.method === "GET").length <= 3, id + " finite caller/collector overlap");
+      for (const row of collector) {
+        assert.equal(row.state, "fulfilled"); assert.equal(row.originalCallee, true);
+        assert.equal(row.owner.grantKey, "oauth/piximage_" + id + "/pixverse"); assert.equal(row.owner.endpointId, "image_video");
+        assert.equal(row.owner.policyGeneration, "fixture"); assert.match(row.owner.routeSha256, /^[a-f0-9]{64}$/); assert.equal(typeof row.owner.lineage, "string");
+        assert.equal(row.protocol, "pixverse.video"); assert.equal(row.authorization, "collection");
+      }
+      assert.equal(rows.filter(row => row.method === "GET").length, caller.length + collector.length, id + " every original GET belongs to caller or durable collector");
+    }
   }
-  assert.equal(calls.length, selected.reduce((sum, id) => sum + (id === "ambiguous" ? 2 : 4), 0));
+  assert.ok(calls.every(row => selected.includes(row.id)), "no unselected provider dispatch");
 }
 
 test("actual Worker catalog gates composed profile and separate prices on real credential owners", { timeout: 30000 }, async t => {
@@ -168,7 +214,7 @@ test("actual Worker composes selected upload/create and original-key GET without
     for (const [id, method] of [["foreign", "GET"], ["local", "DELETE"]]) { const r = await call(id, route, undefined, method); assert.ok(r.status >= 400); await r.arrayBuffer(); }
     assert.equal((await json(await call("local", route))).Resp.status, 5);
     assert.equal((await json(await call("local", route))).Resp.status, 1);
-    assertCalls(await json(await upstream.fetch("https://fixture.example/state")), ["local"]);
+    assertCalls(await json(await upstream.fetch("https://fixture.example/state")), ["local"], await json(await fetch(origin + "/fixture/requests")), await json(await fetch(origin + "/fixture/collections")));
     assertReceipt(await usage(origin, "local", 2, 713), "local");
   });
 });
@@ -184,7 +230,7 @@ test("ambiguous paid create retains both original financial legs without replay 
 test("actual registered PixVerse image SDK through Worker and SQLite", { skip: !source, timeout: 300000 }, async t => {
   await withFixture(t, async ({ origin, upstream }) => {
     await invokeNative(t, origin);
-    assertCalls(await json(await upstream.fetch("https://fixture.example/state")), paid.filter(id => id !== "local"));
+    assertCalls(await json(await upstream.fetch("https://fixture.example/state")), paid.filter(id => id !== "local"), await json(await fetch(origin + "/fixture/requests")), await json(await fetch(origin + "/fixture/collections")));
     for (const id of ["v6", "c1", "failed"]) assertReceipt(await usage(origin, id, 2, 713), id);
     await assertAmbiguousReservation(origin);
     for (const id of denied) assert.equal((await usage(origin, id)).usage.events.length, 0, id);
@@ -203,12 +249,14 @@ function routerFixture() {
     import { inputRouteDigest } from "./worker/pixverse-input-dispatch.ts";
     import { continuationScope } from "./worker/http-continuation.ts";
     import { backgroundCall } from "./worker/http-background.ts";
+    import { pixverseCollectionProof } from "./worker/managed-predictions.ts";
     const requests = [], operations = [];
     function own(promise) { const row = { state: "pending", promise }; operations.push(row); row.tail = promise.then(() => { row.state = "fulfilled"; }, error => { row.state = "rejected"; row.error = error; }); return promise; }
     async function retire() { for (let n = 0; n < operations.length;) { const batch = operations.slice(n); n = operations.length; await Promise.all(batch.map(row => row.tail)); } return { operations: operations.length, pending: operations.filter(row => row.state === "pending").length, rejected: operations.filter(row => row.state === "rejected").length }; }
     export default { ...handler, async fetch(request, env, context) {
       const route = new URL(request.url).pathname;
-      if (route === "/fixture/retire") return Response.json(await retire());
+      if (route === "/fixture/retire") { await pixverseCollectionProof(); return Response.json(await retire()); }
+      if (route === "/fixture/collections") return Response.json(await pixverseCollectionProof());
       if (route === "/fixture/requests") return Response.json(requests);
       if (route === "/fixture/job/ambiguous") {
         const authorization = "Bearer clawrouter-live-piximage_ambiguous-fixture-secret";
@@ -430,4 +478,42 @@ test("PixVerse original body.cancel stays joined when fulfilled, held or rejecte
     assert.deepEqual(faults, []);
     const foreign = {}; assert.throws(() => body.cancel.call(foreign, reason)); assert.equal(faults.length, 1); assert.equal(rows.at(-1).state, "rejected");
   }
+});
+
+test("actual durable collector may poll the original image job independently of caller GETs", { timeout: 20000 }, async t => {
+  await withFixture(t, async ({ origin, upstream, call }) => {
+    await json(await call("local", path, multipart("local")));
+    let collections = [];
+    for (let i = 0; i < 200 && !collections.length; i++) {
+      collections = await json(await fetch(origin + "/fixture/collections"));
+      if (!collections.length) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.equal(collections.length, 1, "the real scheduled owner collector must execute");
+    const route = "/v1/native/pixverse/openapi/v2/video/result/" + job("local");
+    assert.equal((await json(await call("local", route))).Resp.status, 1);
+    const calls = await json(await upstream.fetch("https://fixture.example/state"));
+    const requests = await json(await fetch(origin + "/fixture/requests"));
+    assertCalls(calls, ["local"], requests, collections);
+    assertReceipt(await usage(origin, "local", 2, 713), "local");
+    for (const invalid of [[], [{ ...collections[0], originalCallee: false }], [{ ...collections[0], owner: { ...collections[0].owner, grantKey: "oauth/foreign/pixverse" } }], [{ ...collections[0], state: "rejected" }]]) assert.throws(() => assertCalls(calls, ["local"], requests, invalid));
+    assert.throws(() => assertCalls([...calls, calls.find(row => row.method === "GET")], ["local"], requests, collections), /every original GET/);
+    const get = calls.find(row => row.method === "GET");
+    for (const row of [{ ...get, method: "DELETE" }, { ...get, path: "/openapi/v2/unknown" }, { ...get, method: "POST", path: "/openapi/v2/unknown" }]) assert.throws(() => assertCalls([...calls, row], ["local"], requests, collections));
+    for (const paidPath of ["/openapi/v2/image/upload", "/openapi/v2/video/img/generate"]) assert.throws(() => assertCalls(calls.map(row => row.path === paidPath ? { ...row, method: "GET" } : row), ["local"], requests, collections), /paid operations require POST/);
+  });
+});
+
+test("collection observation preserves original operands, promise, falsey failure and independent joins", async () => {
+  const context = {}, input = {}, result = {}, promise = Promise.resolve(result);
+  const text = collectionPrelude().replace("export async function", "async function");
+  runInNewContext('"use strict";\n' + text + ';globalThis.invoke = pixverseCollectInvoke; globalThis.proof = pixverseCollectionProof; globalThis.rows = pixverseCollectionRows;', context);
+  const fn = function (...args) { assert.equal(this, undefined); assert.deepEqual(args, [input]); return promise; };
+  assert.equal(context.invoke(fn, input), promise); await promise; await Promise.all(context.rows.map(row => row.tail));
+  assert.equal(context.rows[0].original, promise); assert.equal(context.rows[0].value, result); assert.equal(context.rows[0].args[0], input);
+  let thrown = false; try { context.invoke(() => { throw undefined; }, input); } catch (error) { thrown = true; assert.equal(error, undefined); } assert.equal(thrown, true);
+  let finish; const held = new Promise(resolve => { finish = resolve; }); assert.equal(context.invoke(() => held, input), held);
+  const rejected = Promise.reject(undefined); assert.equal(context.invoke(() => rejected, input), rejected);
+  const proof = context.proof(); let settled = false; proof.catch(() => { settled = true; }); await Promise.resolve(); assert.equal(settled, false); finish();
+  await assert.rejects(proof, error => { assert.equal(error.errors.length, 2); assert.ok(error.errors.every(value => value === undefined)); return true; });
+  assert.throws(() => observePixVerseCollection(Buffer.from("foreign owner")), /source changed/);
 });
