@@ -13,7 +13,8 @@ const key = "Bearer clawrouter-live-fixture-fixture-key";
 const router = `
 import worker from "./worker/index.ts";
 export * from "./worker/index.ts";
-import { BudgetLedgerObject as Budget, usageStub, ingestUsage } from "./worker/ledgers.ts";
+import { BudgetLedgerObject as Budget, ingestUsage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
 import { sha256Hex } from "./worker/utils.ts";
 export class BudgetLedgerObject extends Budget {
   constructor(state) { super(state); this.sql=state.storage.sql; }

@@ -12,7 +12,8 @@ import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 const router = `
   import worker from "./worker/index.ts";
   import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
-  import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage, usageStub } from "./worker/ledgers.ts";
+  import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
   import { authenticateProxyKey } from "./worker/proxy-auth.ts";
   import { continuationScope } from "./worker/http-continuation.ts";
   import { putGrantCredentials } from "./worker/grant-credentials.ts";

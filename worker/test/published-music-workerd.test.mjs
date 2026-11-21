@@ -66,7 +66,7 @@ import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {configureMusic,musicModels} from './worker/test/openrouter-music-runtime-fixture.mjs';
 configureMusic(snapshot.providers.find(value=>value.id==='openrouter'));
 snapshot.providers.find(value=>value.id==='openrouter').endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;
