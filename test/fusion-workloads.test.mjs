@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
+import { taskSandbox, readSource, writeFiles, command } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -20,6 +21,41 @@ test('agent edits cannot change graders, add executable paths or exceed file bou
   assert.deepEqual(validateEdits(task, [{ path: task.editPaths[0], content: 'source' }]), [{ path: task.editPaths[0], content: 'source' }]);
   for (const edits of [[{ path: 'test/verifier.mjs', content: '' }], [{ path: task.editPaths[0], content: 'x'.repeat(262145) }],
     [{ path: task.editPaths[0], content: '' }, { path: task.editPaths[0], content: '' }]]) assert.throws(() => validateEdits(task, edits));
+});
+
+test('new source paths must be unique declared edits and cannot name tests or escape the tree', async () => {
+  const path = 'worker/fusion-new-module.ts';
+  assert.equal(validateTask({ ...task, editPaths: [path], newPaths: [path] }).newPaths[0], path);
+  for (const paths of [[path, path], ['worker/../escape.ts'], ['worker/test/hidden.ts'], ['worker/new.json'], ['worker/undeclared.ts'], 'worker/new.ts']) {
+    const invalid = { ...task, editPaths: [path], newPaths: paths };
+    assert.throws(() => validateTask(invalid), /invalid_new_paths/);
+    await assert.rejects(taskSandbox(invalid, `sha256:${'a'.repeat(64)}`, () => { throw Error('must not allocate'); }), /invalid_new_paths/);
+  }
+});
+
+test('declared new source files are empty, editable, and never replace existing source', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts';
+  const addition = { ...task, editPaths: [path], newPaths: [path] };
+  const box = await taskSandbox(addition, process.env.FUSION_NATIVE_IMAGE);
+  try {
+    assert.deepEqual(await readSource(box, [path]), [{ path, content: '' }]);
+    await writeFiles(box, validateEdits(addition, [{ path, content: 'export const answer = 42;\n' }]));
+    assert.equal((await readSource(box, [path]))[0].content, 'export const answer = 42;\n');
+  } finally { await box.close(); }
+  await assert.rejects(taskSandbox({ ...task, newPaths: [task.editPaths[0]] }, process.env.FUSION_NATIVE_IMAGE), /command_failed/);
+  const linked = 'worker/new-parent/new.ts';
+  let prepared = false;
+  const run = async (program, args, options) => {
+    const result = await command(program, args, options);
+    if (!prepared && args[0] === 'exec') {
+      prepared = true;
+      await command('docker', ['exec', args[2], 'ln', '-s', '/tmp', '/work/worker/new-parent']);
+    }
+    return result;
+  };
+  await assert.rejects(taskSandbox({ ...task, editPaths: [linked], newPaths: [linked] }, process.env.FUSION_NATIVE_IMAGE, run), /command_failed/);
 });
 
 test('sandbox requires immutable image and excludes host mounts, credentials and network', () => {

@@ -15,6 +15,13 @@ The first corpus covers catalog protocol validation, native model identity,
 streaming response ownership, and Copilot catalog/request identity. Only the
 declared source files are writable. Source dependencies remain readable.
 
+Tasks that add modules may list up to 12 `newPaths`, each also present in
+`editPaths`. The pinned parent must not contain them. Each disposable trial
+creates empty files under existing, non-symlink source directories; the source
+image remains unchanged. An agent may use an empty search string only for the
+first write to an empty declared new file. Qualification, candidate replay and
+final verification use the same initialization.
+
 ## Qualification
 
 Use a Node 24.22.1 slim image pinned by its pulled manifest digest:
