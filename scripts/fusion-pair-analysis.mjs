@@ -37,15 +37,21 @@ function failureSignals(rows, receipts) {
 
 function modelUse(runs, candidate) {
   const result = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
-    noCallAttempts: 0, mixedWinsOverCheap: 0 };
+    noCallAttempts: 0, mixedWinsOverCheap: 0, successfulCheapUse: 0,
+    successfulStrongUse: 0, winsOverCheapUsingStrong: 0 };
   for (const run of runs) {
     for (const row of run.records.filter(row => row.strategy === candidate)) {
       const used = new Set(run.calls.filter(call => call.trialId === `${row.taskId}:${candidate}`).map(call => call.model));
+      const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
+      if (row.score === 1) {
+        result.successfulCheapUse += Number(used.has(run.config.cheap));
+        result.successfulStrongUse += Number(used.has(run.config.strong));
+        result.winsOverCheapUsingStrong += Number(used.has(run.config.strong) && cheapRow.score === 0);
+      }
       if (!used.size) result.noCallAttempts++;
       else if (used.size === 1) result[used.has(run.config.cheap) ? 'cheapOnlyAttempts' : 'strongOnlyAttempts']++;
       else {
         result.mixedAttempts++;
-        const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
         if (row.score > cheapRow.score) result.mixedWinsOverCheap++;
       }
     }
@@ -228,7 +234,9 @@ export function analyzePairRepeats(runs, options) {
     noStrongRegressions: comparisons[1].losses === 0,
     enoughCostSaving: saving !== null && BigInt(selected.costMicros) * 5n <= BigInt(strong.costMicros) * 4n,
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
-    rescuedBeyondCheap: comparisons[0].wins > 0 };
+    rescuedBeyondCheap: comparisons[0].wins > 0,
+    usesBothModelsOnSuccesses: candidateModelUse.successfulCheapUse > 0 && candidateModelUse.successfulStrongUse > 0,
+    rescuedUsingStrong: candidateModelUse.winsOverCheapUsingStrong > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
     openAiApi: runs[0].openAiApi ?? 'chat-completions', actionSchemaProfile: runs[0].actionSchemaProfile ?? 'legacy', sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
@@ -237,7 +245,8 @@ export function analyzePairRepeats(runs, options) {
     cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
       && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     pilotScreen: { ...screen, passed: screen.enoughSolved && screen.noStrongRegressions
-      && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap },
+      && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap
+      && screen.usesBothModelsOnSuccesses && screen.rescuedUsingStrong },
     spentOrReservedMicros: runs.at(-1).spentOrReservedMicros,
     limitations: ['Repeated attempts are not independent tasks or evidence of statistical significance.',
       'The fixed pilot screen is exploratory; passing it is not production approval.',

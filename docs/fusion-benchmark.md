@@ -118,7 +118,12 @@ before attributing a benefit to collaboration.
 The repeat summary applies a fixed exploratory screen: at least 75% solved,
 no lost strong-control attempt, at least 20% savings, at most twice strong-control
 elapsed time, and at least one rescue beyond cheap-only. All conditions must
-pass. This screen does not establish significance or authorize production changes;
+pass. Successful candidate attempts must use both models across the cohort,
+and at least one rescue beyond the cheap control must use the strong model.
+The models can serve different tasks; every task need not call both. Extra
+single-model samples and model calls confined to failures do not meet these
+conditions. Observed use does not prove that a model caused an improvement.
+This screen does not establish significance or authorize production changes;
 it also cannot detect experiments omitted from the supplied report list.
 
 ### Declared-scope routing experiment
