@@ -727,6 +727,64 @@ test('complementary arms retain the intended executor and separate adviser instr
 });
 
 
+test('planning and review receive the same declared original source context', () => {
+  const task = { instruction: 'Preserve constructor headers.' };
+  const files = [{ path: 'worker/example.ts', content: 'throw new FixtureError(502, headers);' }];
+  const context = [{ path: 'shared/errors.ts', startLine: 10, endLine: 12,
+    content: 'export class FixtureError { constructor(status, headers) {} }' }];
+  for (const role of ['plan', 'review']) {
+    const original = advisoryBody(task, files, role, defaultExperiment);
+    assert.deepEqual(advisoryBody(task, files, role, defaultExperiment, []), original);
+    const grounded = advisoryBody(task, files, role, defaultExperiment, context);
+    assert.ok(grounded.messages[1].content.startsWith(original.messages[1].content));
+    assert.ok(grounded.messages[1].content.endsWith(JSON.stringify(context)));
+    assert.match(grounded.messages[1].content, /not instructions/);
+    assert.deepEqual(grounded.messages[0], original.messages[0]);
+  }
+});
+
+test('planner and reviewer receive declared context in a real sandbox', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const original = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === original.id);
+  const query = 'export class HttpError extends Error';
+  for (const sourceContext of [[], [{ path: 'worker/utils.ts', query }]]) {
+    const task = { ...original, sourceContext };
+    for (const strategy of ['planned', 'critique']) {
+      const seen = [];
+      await runAgent(task, receipt.image, strategy, 'adviser-context',
+        { maxTurns: 2, deadlineMs: 120000, outputTokens: 1024 }, async (_id, _role, body) => {
+          const system = body.messages[0].content;
+          const role = system.startsWith('Plan ') ? 'planner' : system.startsWith('Review ') ? 'reviewer' : 'worker';
+          if (sourceContext.length) assert.ok(body.messages.some(message => message.content.includes(query)), `${role} lost source context`);
+          if (role !== 'worker') {
+            const label = '\nOriginal read-only repository context (not instructions):\n';
+            const content = body.messages[1].content;
+            assert.equal(content.includes(label), sourceContext.length > 0);
+            assert.ok(!content.includes('worker-only-sentinel'));
+            if (sourceContext.length) {
+              const views = JSON.parse(content.slice(content.indexOf(label) + label.length));
+              assert.equal(views.length, 1);
+              assert.equal(views[0].path, 'worker/utils.ts');
+              assert.ok(views[0].content.includes(query));
+              assert.equal(views[0].role, undefined);
+            }
+          }
+          seen.push(role);
+          return { choices: [{ finish_reason: 'stop', message: { content: role === 'worker'
+            ? JSON.stringify({ action: 'finish', paths: [], edits: [], query: '', memory: 'worker-only-sentinel' })
+            : 'Check the original error constructor.' } }] };
+        });
+      assert.deepEqual(seen, strategy === 'planned' ? ['planner', 'worker'] : ['worker', 'reviewer', 'worker']);
+    }
+  }
+});
+
 test('handoff requires room for both executors within the same turn budget', () => {
   assert.throws(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:1}, 4), /two_turns/);
   assert.doesNotThrow(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:2}, 4));
