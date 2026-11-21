@@ -19,6 +19,14 @@ const sha = value => createHash("sha256").update(value).digest("hex");
 const donor = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.ts", import.meta.url), "utf8");
 assert.equal(sha(donor), "ab514fc2ea8ff572684381413230590e118f7b49826dc1a282736d2e885f6075");
 const observerSource = donor.slice(donor.indexOf("type OriginalOperation ="), donor.indexOf("// END ORIGINAL LIFETIME OBSERVERS"));
+// The source-pinned observer originally ran through native transpilation. Add
+// only erased annotations for the stricter transplanted extension test graph.
+const typedObserverSource = observerSource
+  .replaceAll("function (...args: any[])", "function (this: unknown, ...args: any[])")
+  .replaceAll("function (...operands: any[])", "function (this: unknown, ...operands: any[])")
+  .replaceAll("every(unlock =>", "every((unlock: number) =>")
+  .replace(/\b(cancel|closed)\[0\]\./g, "$1[0]!.");
+assert.equal(stripTypeScriptTypes(typedObserverSource, { mode: "transform" }), stripTypeScriptTypes(observerSource, { mode: "transform" }), "observer runtime changed during type annotation");
 const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
@@ -42,7 +50,7 @@ const bindingSource = fixtureText.slice(fixtureText.indexOf("// BEGIN GOOGLE BIN
 const bindingCode = stripTypeScriptTypes(bindingSource);
 const { createGoogleBindings } = new Function(bindingCode + "; return { createGoogleBindings };")();
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);
-const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", observerSource);
+const assembled = fixtureText.replace("/* OWNED_LIFETIME_IMPLEMENTATION */", typedObserverSource);
 
 function wireFor(id, hop) {
   const frame = value => "data: " + JSON.stringify(value) + "\n\n";

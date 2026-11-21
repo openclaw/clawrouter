@@ -129,6 +129,7 @@ async function firstReceipt(id: string, s: Awaited<ReturnType<typeof scenario>>)
   for await (const event of active) {
     if (sawFinal || event.type !== "text_delta" || !event.delta.includes("final")) continue;
     sawFinal = true;
+    assert(event.partial, "original Google partial event required");
     expect(event.partial.providerReplay).toBeUndefined();
     const state = await control("state", id);
     expect(state).toMatchObject({ calls: 1, eof: false, released: false, expired: false });
@@ -148,11 +149,11 @@ describe("registered Google continuation through Worker and SQLite", { concurren
   beforeEach(() => {
     bodySucceeded = false; bindings = createGoogleBindings();
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore() });
-    vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (...args) {
+    vi.spyOn(catalogTransport, "fetchWithSsrFGuard").mockImplementation(function (this: unknown, ...args) {
       const input = args[0]; if (input.url !== origin + "/v1/catalog") return Reflect.apply(originalCatalog, this, args);
       const owner = claimOwned(input.url, input.init, "catalog"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalCatalog, this, args, owner);
     });
-    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (...args) {
+    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (this: unknown, ...args) {
       const input = args[0], owner = claimOwned(input.url, input.init, "chat"); lifetime.signal(owner, input.signal ?? input.init?.signal); return lifetime.guard(originalGuard, this, args, owner);
     });
   });
@@ -190,6 +191,7 @@ describe("registered Google continuation through Worker and SQLite", { concurren
     let settled = false; void result.then(() => { settled = true; }, () => { settled = true; });
     let released = false;
     for await (const event of active) if (!released && event.type === "text_delta" && event.delta.includes("final")) {
+      assert(event.partial, "original Google partial event required");
       expect(event.partial.providerReplay).toBeUndefined(); expect(settled).toBe(false);
       expect((await control("state", id)).eof).toBe(false);
       await control("release", id); released = true;
