@@ -101,7 +101,7 @@ import { permitsGrantFailover, transportDispatchStarted } from "./upstream-trans
 import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
-import { assertProviderAccess, configuredUpstream, signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth } from "./providers"; import { modelRoute, providerById } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
+import { assertProviderAccess, configuredUpstream, signSigV4, upstreamAuth, type UpstreamAuth } from "./providers"; import { upstreamPath } from "./provider-request"; import { modelRoute, providerById } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
 import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";

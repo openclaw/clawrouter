@@ -1,7 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { transformRequestBody } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
+import { transformRequestBody } from "../provider-request.ts"; import { providerById } from "../provider-catalog.ts";
 
 test("request renames preserve frozen prompt/tool data and do not mutate the caller", () => {
   const messages = Object.freeze([Object.freeze({ role: "user", content: "x".repeat(262144) })]);

@@ -9,7 +9,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
-const { configuredUpstream, upstreamPath } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts"); const { modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { upstreamPath } = await import("../provider-request.ts"); const { snapshot } = await import("../provider-catalog.ts"); const { modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 

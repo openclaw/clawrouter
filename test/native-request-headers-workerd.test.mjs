@@ -13,7 +13,7 @@ const moderationReply = { id: "modr_fixture", model: "omni-moderation-latest", r
 const router = [
   'import handler from "./worker/index.ts";',
   'export * from "./worker/index.ts";',
-  'import { copyRequestHeaders } from "./worker/providers.ts"; import { providerById } from "./worker/provider-catalog.ts";',
+  'import { copyRequestHeaders } from "./worker/provider-request.ts"; import { providerById } from "./worker/provider-catalog.ts";',
   'import { putGrantCredentials } from "./worker/grant-credentials.ts";',
   'import { ingestUsage } from "./worker/ledgers.ts";',
   'export default { queue: handler.queue, async fetch(request, env, ctx) {',

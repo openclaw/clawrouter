@@ -6,7 +6,7 @@ import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
-const { upstreamPath, configuredUpstream } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { upstreamPath } = await import("../provider-request.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { configuredEndpointPath } = await import("../endpoint-path.ts");
 const { assertOperationConfiguration } = await import("../provider-auth.ts");
 const { authorityCall } = await import("../authority.ts");
