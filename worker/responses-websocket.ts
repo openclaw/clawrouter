@@ -5,7 +5,8 @@ import { prepareContentRetention, type PreparedContentRetention, retentionRequir
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { admitAccountingFacts, createProxyAccounting, estimateCost } from "./proxy-accounting";
-import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
+import { concreteOpenAiSelection, isSelectionFailure, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
+import { nativeMatch } from "./native-route";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess } from "./providers"; import { providerById } from "./provider-catalog";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";

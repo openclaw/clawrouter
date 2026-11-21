@@ -6,7 +6,8 @@ import test from "node:test";
 const { prepareNativeMiniMaxMusic } = await import("../native-minimax-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
-const { nativeMatch, prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
+const { prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
+const { nativeMatch } = await import("../native-route.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/music.json", import.meta.url), "utf8"));
 // Locally generated test tone, not provider synthesis. ffprobe: MP3, 44100 Hz,
 // stereo, 256000 bps; full ffmpeg decode: 13824 PCM16 bytes. No Worker transcoder.
