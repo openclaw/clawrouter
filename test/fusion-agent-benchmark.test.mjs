@@ -753,7 +753,7 @@ test('planner and reviewer receive declared context in a real sandbox', {
   const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
     .receipts.find(receipt => receipt.taskId === original.id);
   const query = 'export class HttpError extends Error';
-  for (const sourceContext of [[], [{ path: 'worker/http-error.ts', query }]]) {
+  for (const sourceContext of [[], [{ path: 'worker/utils.ts', query }]]) {
     const task = { ...original, sourceContext };
     for (const strategy of ['planned', 'critique']) {
       const seen = [];
@@ -770,7 +770,7 @@ test('planner and reviewer receive declared context in a real sandbox', {
             if (sourceContext.length) {
               const views = JSON.parse(content.slice(content.indexOf(label) + label.length));
               assert.equal(views.length, 1);
-              assert.equal(views[0].path, 'worker/http-error.ts');
+              assert.equal(views[0].path, 'worker/utils.ts');
               assert.ok(views[0].content.includes(query));
               assert.equal(views[0].role, undefined);
             }
