@@ -59,6 +59,7 @@ export function validateTask(task) {
       || !task[field].every(safePath)) throw new Error('invalid_task_paths');
   }
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
+  validateNewPaths(task);
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
   validateSourceContext(task);
   validatePreservationProbes(task.preservationProbes);
@@ -125,6 +126,27 @@ export async function sandbox(image, run = command) {
     await exec(['node', '-e', `const fs=require('node:fs'); for(let i=0;i<200;i++){if(fs.existsSync('/work/.ready'))process.exit(0);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50)}process.exit(1)`]);
     return { id, exec, close: () => run('docker', ['rm', '-f', id]) };
   } catch (error) { await run('docker', ['rm', '-f', id]); throw error; }
+}
+
+export function validateNewPaths(task) {
+  const paths = task.newPaths ?? [];
+  if (!Array.isArray(paths) || paths.length > 12 || new Set(paths).size !== paths.length
+    || paths.some(path => !safePath(path) || /(^|\/)test(s)?\//.test(path)
+      || !/\.(ts|mjs)$/.test(path) || !task.editPaths?.includes(path))) throw new Error('invalid_new_paths');
+  return paths;
+}
+
+// Keep the immutable source image exact. Only declared additions get empty
+// placeholders inside each disposable trial, before any model sees the tree.
+export async function taskSandbox(task, image, run = command) {
+  const paths = validateNewPaths(task), box = await sandbox(image, run);
+  try {
+    if (paths.length) await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
+if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
+fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
+    return box;
+  } catch (error) { await box.close(); throw error; }
 }
 
 export function validateEdits(task, edits) {
@@ -245,7 +267,7 @@ async function revisionFiles(repo, revision, paths) {
 
 export async function verify(task, image, edits, repo) {
   validateEdits(task, edits);
-  const box = await sandbox(image);
+  const box = await taskSandbox(task, image);
   try {
     await writeFiles(box, edits);
     // Files new in the oracle do not yet exist. Create their parent/empty file
@@ -261,7 +283,7 @@ export async function verify(task, image, edits, repo) {
 
 // The repair must pass the original visible tests before acceptance tests replace
 // any same-named files. Otherwise a benchmark can punish the correct repair.
-export async function checkOracleVisible(task, image, edits, { makeSandbox = sandbox, write = writeFiles, test = check } = {}) {
+export async function checkOracleVisible(task, image, edits, { makeSandbox = image => taskSandbox(task, image), write = writeFiles, test = check } = {}) {
   const box = await makeSandbox(image);
   try {
     await write(box, validateEdits(task, edits));
@@ -280,7 +302,7 @@ export function qualificationSucceeded({ visible, oracleVisible, broken, oracle,
 export async function checkPreservationProbes(task, image, edits = []) {
   const results = [];
   for (const source of validatePreservationProbes(task.preservationProbes)) {
-    const box = await sandbox(image);
+    const box = await taskSandbox(task, image);
     try {
       if (edits.length) await writeFiles(box, validateEdits(task, edits));
       const before = await readSource(box, task.editPaths);
@@ -295,7 +317,7 @@ export async function checkPreservationProbes(task, image, edits = []) {
 
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
-  const box = await sandbox(built.image);
+  const box = await taskSandbox(task, built.image);
   let visible, reproduction, oracleReproduction;
   try {
     await readTaskContext(box, task);
@@ -310,7 +332,7 @@ export async function qualify(task, options) {
   const broken = await verify(task, built.image, [], options.repo);
   const oracle = await verify(task, built.image, edits, options.repo);
   if (task.reproducer !== undefined) {
-    const repaired = await sandbox(built.image);
+    const repaired = await taskSandbox(task, built.image);
     try {
       await writeFiles(repaired, edits);
       const { feedback, ...result } = await probe(repaired, task.reproducer); oracleReproduction = result;

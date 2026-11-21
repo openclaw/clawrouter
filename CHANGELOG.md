@@ -1,6 +1,7 @@
 # Changelog
 
 - Stop paired fusion benchmarks on provider safety notices anywhere in the response, including discarded commentary, while retaining settled usage or unresolved reservations.
+- Let repository fusion benchmarks declare new source modules, with isolated initialization and guarded first writes.
 
 - Bind custom fusion acceptance receipts to their matching validator and grader; reject custom receipts in default Git-oracle runners.
 - Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
