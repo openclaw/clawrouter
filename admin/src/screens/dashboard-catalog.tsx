@@ -17,6 +17,7 @@ import {
 import {
   currencyInput,
   grantNamesForService,
+  kindLabel,
   optionalCurrencyMicros,
   playgroundBlockedForService,
   policyCoversProvider,
@@ -34,7 +35,6 @@ import {
   ReadinessStatus,
   Status,
   kindIcon,
-  kindLabel,
 } from "../components";
 import { presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";

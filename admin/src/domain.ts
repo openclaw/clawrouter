@@ -16,6 +16,21 @@ import type {
   ServiceOutcome,
 } from "./ui-types";
 
+export function kindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    all: "all",
+    gateway_platform: "gateway",
+    llm: "model",
+    "llm-gateway": "gateway",
+    media: "media",
+    model_provider: "model",
+    oauth_platform: "oauth",
+    search: "search",
+    tool_provider: "tool",
+  };
+  return labels[kind] ?? kind.replace(/_/g, " ");
+}
+
 export interface CredentialSummary {
   credentialId: string;
   policyId: string;

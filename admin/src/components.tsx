@@ -81,21 +81,6 @@ export function viewIcon(view: View): IconComponent {
   return navItems.find((item) => item.id === view)?.icon ?? Boxes;
 }
 
-export function kindLabel(kind: string) {
-  const labels: Record<string, string> = {
-    all: "all",
-    gateway_platform: "gateway",
-    llm: "model",
-    "llm-gateway": "gateway",
-    media: "media",
-    model_provider: "model",
-    oauth_platform: "oauth",
-    search: "search",
-    tool_provider: "tool",
-  };
-  return labels[kind] ?? kind.replace(/_/g, " ");
-}
-
 export function kindIcon(kind: string): IconComponent {
   if (kind === "model" || kind === "model_provider" || kind.includes("llm")) return FlaskConical;
   if (kind === "tool" || kind === "tool_provider" || kind === "oauth_platform") return ServerCog;
