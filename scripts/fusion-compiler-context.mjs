@@ -42,7 +42,9 @@ export function createCompilerRepairContext({ files, diagnostics, referenceFiles
       throw new Error('unsupported_compiler_diagnostic');
     }
     const path = pathName(match[1]), source = sources.get(path), row = Number(match[2]), column = Number(match[3]);
-    if (!source || !Number.isSafeInteger(row) || !Number.isSafeInteger(column) || row > source.content.split('\n').length) {
+    const lines = source?.content.split('\n');
+    if (!source || !Number.isSafeInteger(row) || !Number.isSafeInteger(column) || row > lines.length
+      || column > lines[row - 1].replace(/\r$/, '').length + 1) {
       throw new Error('compiler_diagnostic_outside_source');
     }
     paths.add(path);
@@ -66,5 +68,7 @@ export function applyCompilerRepairs({ context, files, replacements }) {
   if (!expected.size || !updates.size) throw new Error('empty_compiler_repair');
   for (const [path, file] of expected) if (original.get(path)?.content !== file.content) throw new Error('stale_compiler_repair');
   for (const path of updates.keys()) if (!expected.has(path)) throw new Error('compiler_repair_outside_scope');
-  return [...original.values()].map(file => ({ ...(updates.get(file.path) ?? file) }));
+  const merged = [...original.values()].map(file => ({ ...(updates.get(file.path) ?? file) }));
+  sourceFiles(merged, 64, 1024 * 1024);
+  return merged;
 }
