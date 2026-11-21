@@ -91,3 +91,25 @@ import { Boxes, CheckCircle2, CircleSlash2, FlaskConical, Moon, ServerCog, Sun }
 import { readinessLabel, readinessTone } from "./domain";
 import { navItems } from "./ui-config";
 import type { BrandIcon, IconComponent, OutcomeTone, ProviderReadiness, ServiceOutcome, Theme, View } from "./ui-types";
+
+export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[]; detail?: React.ReactNode }> }) {
+  return (
+    <div className="entityTable" style={{ "--cols": columns.length, "--columns": columnTemplate } as React.CSSProperties}>
+      <div className="tableHead">{columns.map((column) => <span key={column}>{column}</span>)}</div>
+      <div className="tableBody">{rows.map((row) => {
+        const content = row.cells.map((cell, index) => <span key={index} data-label={columns[index]}>{cell}</span>);
+        const className = `tableRow${row.active ? " selected" : ""}${row.onClick ? " interactive" : ""}`;
+        return <React.Fragment key={row.id}>
+          {row.onClick
+            ? <button type="button" className={className} onClick={row.onClick}>{content}</button>
+            : <div className={className}>{content}</div>}
+          {row.detail ? <div className="tableRowDetail">{row.detail}</div> : null}
+        </React.Fragment>;
+      })}</div>
+    </div>
+  );
+}
+
+export function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
+  return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{meta}</small></div>;
+}

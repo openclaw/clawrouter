@@ -28,6 +28,7 @@ import {
 import {
   BrandMark,
   EntityName,
+  EntityTable,
   InlineNote,
   InspectorHeader,
   MiniListItem,
@@ -37,7 +38,7 @@ import {
   kindIcon,
 } from "../components";
 import { presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
-import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import { ProviderUsageChart, TrafficAreaChart, UsageFreshness } from "../analytics-charts";
 import {
   effectiveProviderCount,
   formatCount,
@@ -47,7 +48,6 @@ import {
   usagePolicyId,
 } from "../ui-helpers";
 import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
-import { EntityTable, UsageFreshness } from "./users-usage";
 import type {
   AccessPolicy,
   UpstreamGrant,

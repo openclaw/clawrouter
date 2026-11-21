@@ -5,12 +5,11 @@ import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
 import React, { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, kindLabel, type CatalogModel } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, Status } from "../components";
+import { EntityTable, Metric, EntityName, InlineError, InlineNote, InspectorHeader, Status } from "../components";
 import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { rolePresets } from "../ui-config";
 import { credentialOutcome, groupedProviders } from "../ui-helpers";
 import { formatMicros, presentCost } from "../cost-presentation";
-import { EntityTable, Metric } from "./users-usage";
 import type {
   AccessPolicy,
   AccessTab,

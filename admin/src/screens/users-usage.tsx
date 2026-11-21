@@ -1,10 +1,10 @@
 import { CompleteUsageScreen } from "./complete-usage";
 import { CapsView } from "./caps";
-import React, { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, kindLabel, policyUsageFallback, tenantSummaryFallback } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, MiniListItem, Status } from "../components";
-import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import { EntityTable, Metric, EntityName, InlineError, InlineNote, InspectorHeader, MiniListItem, Status } from "../components";
+import { UsageFreshness, ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { useConsole } from "../console-controller-context";
 import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
 import { presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget } from "../cost-presentation";
@@ -255,13 +255,6 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   );
 }
 
-export function UsageFreshness({ loaded, stale, error, updatedAt }: { loaded: boolean; stale: boolean; error: string; updatedAt: number | null }) {
-  if (loaded && !stale) return null;
-  return <div className="usageFreshness" role="status"><InlineNote>{loaded && updatedAt !== null
-    ? <>Showing last known usage from <time dateTime={new Date(updatedAt).toISOString()}>{formatTimestamp(updatedAt, true)}</time>. Balances may have changed.</>
-    : error ? "Usage unavailable. Spend and remaining balances are unknown." : "Loading usage…"}</InlineNote></div>;
-}
-
 function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; onInspect: (event: UsageAuditEvent) => Promise<void> }) {
   const cost = presentAccountedSpend({ requestCount: group.events.length, actualCostMicros: group.actualCostMicros, unpricedRequestCount: group.unpricedRequestCount }, group.complete);
   return (
@@ -281,10 +274,6 @@ function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; on
 
 function compoundStage(event: UsageAuditEvent) {
   return event.compound_request_stage === "fusion_synthesizer" ? "Synthesizer" : `Adviser ${event.compound_request_index ?? ""}`.trim();
-}
-
-export function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{meta}</small></div>;
 }
 
 export function BudgetUsage({ row }: { row: AdminUsageRow }) {
@@ -331,22 +320,4 @@ function BudgetBreakdown({ row }: { row: AdminUsageRow }) {
 
 export function UsageHealth({ row }: { row: AdminUsageRow }) {
   return <Status {...presentPolicyBudget(row).health} />;
-}
-
-export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[]; detail?: React.ReactNode }> }) {
-  return (
-    <div className="entityTable" style={{ "--cols": columns.length, "--columns": columnTemplate } as React.CSSProperties}>
-      <div className="tableHead">{columns.map((column) => <span key={column}>{column}</span>)}</div>
-      <div className="tableBody">{rows.map((row) => {
-        const content = row.cells.map((cell, index) => <span key={index} data-label={columns[index]}>{cell}</span>);
-        const className = `tableRow${row.active ? " selected" : ""}${row.onClick ? " interactive" : ""}`;
-        return <React.Fragment key={row.id}>
-          {row.onClick
-            ? <button type="button" className={className} onClick={row.onClick}>{content}</button>
-            : <div className={className}>{content}</div>}
-          {row.detail ? <div className="tableRowDetail">{row.detail}</div> : null}
-        </React.Fragment>;
-      })}</div>
-    </div>
-  );
 }
