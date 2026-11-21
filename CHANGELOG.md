@@ -122,6 +122,7 @@
 
 - Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.
 - Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
+- Apply the same joined-read cancellation contract to the exact Bifrost partial cases, requiring actual caller abort, a successfully retired bounded producer, original resource ownership and fixed-charge accounting. Retain both original read/observer rejections and all independent failures; this does not identify their native error cause.
 
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
 
