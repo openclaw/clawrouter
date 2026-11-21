@@ -10,7 +10,7 @@ const { consumeAdmissionBridge, admissionBridgeFailureMetadata } = await import(
 const { bodyBudgetCharged } = await import('../body-budget.ts');
 const { identitySourceBudget, identityPlan, admitIdentityBytes, parseIdentity, planPrivateIdentityString, admitGeneratedRuntime, foldIdentitySqlHistory, isIdentityFailure } = await import('../identity-admission.ts');
 const { closeAdmissionEnvelope, checkPreflightIdentity, admissionContinuationPath, admissionContinuationHeader, admissionContinuationVersion } = await import('../credential-preflight-protocol.ts');
-const { normalizedChoiceCandidates, consumeOwnedChoiceCandidates, chooseGrantKey, chooseOwnedGrantKey, GRANT_SELECTION_STRATEGIES } = await import('../grant-selection-strategies.ts');
+const { normalizedChoiceCandidates, consumeOwnedChoiceCandidates } = await import('../grant-selection-strategies.ts');
 const { normalizePolicyRecord, normalizePrivatePolicyRecord } = await import('../authority-policy.ts');
 const { grantRoutingPolicy, privateGrantRoutingPolicy, privateGrantKey, validGrantKey } = await import('../grant-routing.ts');
 const { normalizeUser, normalizePrivateUser } = await import('../authority-users.ts');
@@ -234,27 +234,6 @@ test('private consuming choices preserve normalized collisions, stable order, de
   assert.deepEqual(raw.map(value => value.key), [' B ', 'a', 'b', 'A', ' a ']);
   const invalid = [{ key: 'valid' }, { key: 'bad' }, { key: 'valid' }], reason = new Error('synthetic key rejection');
   assert.throws(() => consumeOwnedChoiceCandidates(invalid, key => { if (key === 'bad') throw reason; return key; }), error => error === reason);
-});
-
-test('private stable folds match all six ordinary strategies, fallback, sticky, threshold and random draws', t => {
-  let draw = 0, calls = 0;
-  t.mock.method(globalThis.crypto, 'getRandomValues', array => { calls++; array[0] = draw; return array; });
-  const inputs = [
-    [{ key: 'z', weight: 3, remainingRatio: 0.1 }, { key: 'a', weight: 1, remainingRatio: 0.8 }, { key: 'm', weight: 2, remainingRatio: null }],
-    [{ key: 'z', remainingRatio: null }, { key: 'a', remainingRatio: null }, { key: 'm', remainingRatio: null }],
-    [{ key: 'z', remainingRatio: 0.1 }, { key: 'a', remainingRatio: 0.2 }, { key: 'm', remainingRatio: 0.2 }],
-    [{ key: 'a', remainingRatio: 0.100000001 }, { key: 'b', remainingRatio: 0.2 }, { key: 'c', remainingRatio: 1 }],
-  ];
-  const counts = { a: { count: 2, lastMs: 7 }, m: { count: 2, lastMs: 6 } };
-  for (const candidates of inputs) for (const strategy of [...GRANT_SELECTION_STRATEGIES, 'unknown'])
-    for (const cursorKey of [null, 'a', 'm', 'z', 'missing']) for (const stickyHash of [null, 'f'.repeat(64), 'invalid'])
-      for (draw of [0, 0x80000000, 0xffffffff]) {
-        const request = { strategy, stickyHash, switchAtUsedPercent: 90, hysteresisPercent: 10, candidates };
-        const normalized = normalizedChoiceCandidates(candidates), expected = chooseGrantKey(request, normalized, { cursorKey, counts: new Map(Object.entries(counts)) });
-        const owned = candidates.map(candidate => ({ ...candidate })); consumeOwnedChoiceCandidates(owned, String);
-        assert.deepEqual(chooseOwnedGrantKey(request, owned, cursorKey, key => counts[key]), expected);
-      }
-  assert.ok(calls > 0);
 });
 
 test('private policy normalization preserves first 1024 UNIQUE models, raw providers and every default field', () => {

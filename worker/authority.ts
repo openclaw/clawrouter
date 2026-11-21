@@ -26,7 +26,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { privateGrantKey } from "./grant-routing.ts";
-import { chooseOwnedGrantKey, consumeOwnedChoiceCandidates, chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
+import { consumeOwnedChoiceCandidates, chooseGrantKey, normalizedChoiceCandidates } from "./grant-selection-strategies.ts";
 import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 import { admitUserJson, admitUserRecordBytes, parseUserRecord, readUserKvRecord, readUserMaterializationRequest, userJsonText, userMaterializationFailure, userMaterializationHeader, userMaterializationVersion, userRecordBudget, type UserRecordBudget } from "./authority-user-materialization.ts";
@@ -1652,7 +1652,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     const candidates = normalizedChoiceCandidates(input.candidates, grantKey);
     const cursorKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
     const counts = input.strategy === "least_used" ? this.selectionCounts(poolKey) : new Map<string, { count: number; lastMs: number }>();
-    const choice = chooseGrantKey(input, candidates, { cursorKey, counts });
+    const choice = chooseGrantKey(input, candidates, cursorKey, key => counts.get(key));
     if (choice.cursorKey) this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, choice.cursorKey);
     const nowMs = Date.now();
     const row = rows<{ selected_count: number }>(this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms RETURNING selected_count", poolKey, choice.selectedKey, nowMs))[0];
@@ -1670,8 +1670,9 @@ export class PolicyBindingIndexObject implements DurableObject {
     const previous = bound?.identity ? this.selectionState(poolKey, bound) : undefined;
     const candidates = bound?.bridge ? consumeOwnedChoiceCandidates(input.candidates, grantKey) : normalizedChoiceCandidates(input.candidates, grantKey);
     const cursorKey = previous ? previous.cursorKey : rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key ?? null;
-    const choice = bound?.bridge ? chooseOwnedGrantKey(input, candidates, cursorKey, key => previous?.counts[key])
-      : chooseGrantKey(input, candidates, { cursorKey, counts: input.strategy === "least_used" ? previous ? new Map(Object.entries(previous.counts)) : this.selectionCounts(poolKey) : new Map() });
+    const counts = bound?.bridge ? undefined : input.strategy === "least_used" ? previous ? new Map(Object.entries(previous.counts)) : this.selectionCounts(poolKey) : new Map();
+    const count = bound?.bridge ? (key: string) => previous?.counts[key] : (key: string) => counts!.get(key);
+    const choice = chooseGrantKey(input, candidates, cursorKey, count);
     const nowMs = Date.now(), lastSelectedAt = new Date(nowMs).toISOString();
     const current = previous?.counts[choice.selectedKey]?.count ?? (rows<{ selected_count: number }>(this.sql.exec("SELECT selected_count FROM upstream_grant_selection WHERE pool_key = ? AND grant_key = ?", poolKey, choice.selectedKey))[0]?.selected_count ?? 0);
     const result = { selectedKey: choice.selectedKey, selectedCount: current + 1, lastSelectedAt };
