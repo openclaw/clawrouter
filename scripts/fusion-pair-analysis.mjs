@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const identifier = value => typeof value === 'string' && /^[a-z][a-z0-9-]{1,63}$/.test(value);
 const money = value => Number.isSafeInteger(value) && value >= 0;
+const submitted = row => ['submitted', 'draft_submitted'].includes(row.outcome);
 const digest = (value, length) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
 const sum = values => {
   const value = values.reduce((total, next) => total + next, 0);
@@ -23,10 +24,10 @@ function failureSignals(rows, receipts) {
   const failed = rows.filter(row => row.score === 0);
   return {
     visiblePassFailures: failed.filter(row => row.publicPassed === true).length,
-    falseAccepts: failed.filter(row => row.outcome === 'submitted' && row.publicPassed === true).length,
+    falseAccepts: failed.filter(row => submitted(row) && row.publicPassed === true).length,
     acceptancePassesWithoutSubmission: failed.filter(row => {
       const receipt = receipts.find(receipt => receipt.taskId === row.taskId);
-      return typeof row.outcome === 'string' && row.outcome !== 'submitted'
+      return typeof row.outcome === 'string' && !submitted(row)
         && row.verdict?.passed === true && row.verdict.tests === receipt.oracleTests
         && row.verdict.skipped === receipt.oracleSkipped;
     }).length,
@@ -114,7 +115,7 @@ export function analyzePairRun(run, options) {
     if ((row.status === 'complete' || row.verdict !== undefined) && row.verdict?.valid !== true) {
       throw new Error('incomplete_pair_grade');
     }
-    if (row.score === 1 && ((run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
+    if (row.score === 1 && (!submitted(row) || (run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
       || row.verdict.tests !== entry.receipt.oracleTests || row.verdict.skipped !== entry.receipt.oracleSkipped)) {
       throw new Error('unverified_pair_score');
     }
