@@ -18,7 +18,7 @@ const relevant = [
   "test/fixtures/openclaw-search-contract.test.ts", "test/helpers/openclaw-consumer.mjs",
   "test/helpers/workerd.mjs", "test/helpers/catalog-diagnostic-harness.mjs", ".github/workflows/openclaw-contract.yml",
   "scripts/openclaw-contract-changes.mjs", "test/openclaw-contract-changes.test.mjs",
-  "package.json", "admin/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
+  "package.json", "admin/package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "test/helpers/worker-outcome-fixture.mjs",
   ".npmrc", ".pnpmfile.cjs", "patches/dependency.patch", "admin/patches/dependency.patch",
 ];
 const unrelated = [
@@ -78,6 +78,7 @@ for (const [name, changes, expected] of [
   ["portable contract source only", [["packages/provider-plugin-contract/src/snapshot.ts", "changed contract\n"]], true],
   ["portable contract build configuration", [["packages/provider-plugin-contract/tsconfig.json", "{}\n"]], true],
   ["portable schema packaging", [["packages/provider-plugin-contract/copy-manifest-schema.mjs", "// packaging\n"]], true],
+  ["shared Worker outcome fixture", [["test/helpers/worker-outcome-fixture.mjs", "fixture\n"]], true],
   ["portable contract renamed into documentation", [["packages/provider-plugin-contract/src/snapshot.ts", null], ["packages/provider-plugin-contract/README.md", "original contract\n"]], true],
 ]) {
   test(`merge diff selects ${name}`, (t) => {

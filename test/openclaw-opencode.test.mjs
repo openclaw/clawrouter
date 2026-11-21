@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,6 +11,7 @@ import { parse } from "yaml";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
+import { createWorkerOutcomeFixture } from "./helpers/worker-outcome-fixture.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "322cfc608526dca6bf60cfef05210b231461c1db";
@@ -30,8 +31,9 @@ const { preserveFailures, createLifetimeObserver, createRequestBindings } = new 
 // Reuse the landed original-reader/HttpOperation witness, not its prior results.
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
-assert.equal(sha(outcomeSource), "3dc85598aa0430b0596a28319790ba347b228acfef6cf9eb41ae0e785a3ff258");
-const { bundleResponsesOutcome } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", outcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
+assert.equal(sha(outcomeSource), "6cd750e46de341ce019c16657c3afb8024c99454458f1c0849a28c38fe98c8b3");
+assert.equal(sha(readFileSync(new URL("./helpers/worker-outcome-fixture.mjs", import.meta.url))), "7b6cd56db95d00e362a86fb1aa6f0eca79635146c8129c4ead740b09474c456e");
+const { bundleResponsesOutcome } = new Function("createWorkerOutcomeFixture", outcomeSource + "; return { bundleResponsesOutcome };")(createWorkerOutcomeFixture);
 const fixtureText = readFileSync(new URL("./fixtures/openclaw-opencode-contract.test.ts", import.meta.url), "utf8");
 assert.equal(fixtureText.split("/* OWNED_LIFETIME_IMPLEMENTATION */").length, 2);
 // Each request still gets a distinct private owner. Repeated transport credentials

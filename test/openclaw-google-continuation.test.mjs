@@ -32,13 +32,17 @@ const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const responseHarness = readFileSync(new URL("./openclaw-provider-responses.test.mjs", import.meta.url), "utf8");
 const outcomeSource = responseHarness.slice(responseHarness.indexOf("const workerOutcomePins ="), responseHarness.indexOf("function assertProof("));
-assert.equal(sha(outcomeSource), "3dc85598aa0430b0596a28319790ba347b228acfef6cf9eb41ae0e785a3ff258");
+assert.equal(sha(outcomeSource), "6cd750e46de341ce019c16657c3afb8024c99454458f1c0849a28c38fe98c8b3");
+const outcomeHelperSource = readFileSync(new URL("./helpers/worker-outcome-fixture.mjs", import.meta.url), "utf8");
+assert.equal(sha(outcomeHelperSource), "7b6cd56db95d00e362a86fb1aa6f0eca79635146c8129c4ead740b09474c456e");
 // Google does not enter ownOrdinaryResponse. Its original fetched reader is
 // owned directly by observeUsage, as in the donor's embeddings branch.
 const directReaderFormat = 'responseFormat === "openai.embeddings"';
-assert.equal(outcomeSource.split(directReaderFormat).length, 5);
-const googleOutcomeSource = outcomeSource.replaceAll(directReaderFormat, 'responseFormat === "google.stream_generate_content"');
-const { bundleResponsesOutcome, workerOutcomeOverlay } = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", googleOutcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return { bundleResponsesOutcome, workerOutcomeOverlay };")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
+assert.equal(outcomeHelperSource.split(directReaderFormat).length, 5);
+const googleOutcomeSource = outcomeHelperSource.slice(outcomeHelperSource.indexOf("export function ")).replace("export function ", "function ").replaceAll(directReaderFormat, 'responseFormat === "google.stream_generate_content"');
+const createGoogleOutcomeFixture = new Function("assert", "createHash", "createRequire", "readFileSync", "importMetaResolve", googleOutcomeSource.replaceAll("import.meta.resolve", "importMetaResolve") + "; return createWorkerOutcomeFixture;")(assert, createHash, createRequire, readFileSync, specifier => import.meta.resolve(specifier));
+const googleOutcomePins = JSON.parse(outcomeSource.slice("const workerOutcomePins = ".length, outcomeSource.indexOf(";\n")));
+const { bundleWorkerOutcome: bundleResponsesOutcome, workerOutcomeOverlay } = createGoogleOutcomeFixture(googleOutcomePins);
 const fixtureText = readFileSync(new URL("./fixtures/openclaw-google-continuation-contract.test.ts", import.meta.url), "utf8");
 const provider = snapshot.providers.find(row => row.id === "google-gemini");
 const model = provider.models.find(row => row.upstream === "gemini-3.5-flash");
