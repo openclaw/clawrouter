@@ -1,5 +1,7 @@
 # Changelog
 
+- Add a pinned registered Google continuation contract through the Worker and SQLite: EOF-bound receipts, two explicit request-bound hops, independent budgets and settlement, changed-authority denials and original-operation retirement. Keep the separate physical pre-header cancellation limitation explicit.
+
 - Run the realtime cadence proof before the concurrent CI script suite, retaining every test, deadline, bounded diagnostic and failure status.
 
 - Allow interactive fusion pair benchmarks to opt into the existing bounded action schema for every comparison arm, and record the selected profile in the result.

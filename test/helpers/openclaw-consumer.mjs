@@ -10,9 +10,11 @@ import { makeQwenValuePlan, qwenValueArgv, qwenValueSources, readQwenValueInput 
 import { withPrivateExecutionOverlay } from "./openclaw-private-execution-observer.mjs";
 import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, runnerPlan, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
 
-export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport, privateExec }) {
+export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport, privateExec, typecheck = false }) {
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
+  assert.equal(typeof typecheck, "boolean");
+  const typePlan = typecheck ? consumerTypecheckPlan(sourceHead, testPath) : undefined;
   if (privateExec !== undefined) {
     assert.equal(runnerReport, undefined, "independent runner contracts cannot mix");
     validatePrivateExecRequest({ sourceHead, testPath, privateExec });
@@ -25,6 +27,19 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
   }
   const clientTest = join(resolve(source), testPath);
   await withCopiedConsumerFixture(() => copyFile(fixture, clientTest, constants.COPYFILE_EXCL), async () => {
+    if (typePlan) {
+      assert.equal(sha256(await readFile(join(source, typePlan.project))), typePlan.sha256, "owning client test graph changed");
+      const started = performance.now();
+      let result;
+      try { result = await promisify(execFile)(process.execPath, typePlan.args, {
+        cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
+      }); } catch (error) {
+        t.diagnostic(`OpenClaw ${sourceHead}; owning test type graph failed\n${error.stdout ?? ""}\n${error.stderr ?? ""}`);
+        throw error;
+      }
+      t.diagnostic(`OpenClaw ${sourceHead}; owning test type graph PASS; ${Math.round(performance.now() - started)}ms; stdout ${Buffer.byteLength(result.stdout)}B/${sha256(result.stdout)}; stderr ${Buffer.byteLength(result.stderr)}B/${sha256(result.stderr)}\n${result.stdout}\n${result.stderr}`);
+    }
     if (runnerReport !== undefined) {
       const started = performance.now();
       const result = await withNativeRunnerReport({ source, sourceHead, fixture, testPath, env, runnerReport }, async (extraArgs, valueDirectory) => {
@@ -58,6 +73,16 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
     });
     t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
   }, () => rm(clientTest));
+}
+
+export function consumerTypecheckPlan(sourceHead, testPath) {
+  // The copied .test.ts is included by the pinned extension test graph. Run
+  // that original graph inside the same exclusive-copy and cleanup lifetime.
+  assert.equal(sourceHead, "b6072e63fdf09422ea70ef4bbdc818536d871047");
+  assert.equal(testPath, "extensions/clawrouter/worker-google-continuation-contract.test.ts");
+  const project = "test/tsconfig/tsconfig.extensions.test.json";
+  return { project, sha256: "b032aa889d4ab5512e57f26871a5839a38ae326b18e765dce2dcec3b4fd80d49",
+    args: ["scripts/run-tsgo.mjs", "-p", project, "--noEmit", "--incremental", "false"] };
 }
 
 // Private/E2 only. Parent exec settlement is not Vitest collection or case proof.

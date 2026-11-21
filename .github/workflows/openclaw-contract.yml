@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: google-continuation
+            ref: b6072e63fdf09422ea70ef4bbdc818536d871047
+            test: test/openclaw-google-continuation.test.mjs
           - consumer: pixverse-image
             ref: b0d33f09ba5d8d0e6db804f01cbf79dcf269a351
             test: test/openclaw-pixverse-image.test.mjs
