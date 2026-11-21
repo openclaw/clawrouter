@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -2113,7 +2113,7 @@ test("a broken actual output pipe cannot turn the failing native child into succ
   } finally { clearTimeout(timer); }
 });
 
-test("workflow preserves typecheck order, the full default-concurrency glob and downstream gates", () => {
+test("workflow preserves typecheck order, script phases and downstream gates", () => {
   const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")), job = workflow.jobs["worker-package"];
   const index = job.steps.findIndex(step => step.name === "Worker typecheck");
   assert.ok(index >= 0); assert.equal(job["timeout-minutes"], 20);
@@ -2125,16 +2125,61 @@ test("workflow preserves typecheck order, the full default-concurrency glob and 
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["worker:check"], "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs");
   const scripts = workflow.jobs["script-tests"], step = scripts.steps.find(step => step.name === "Script tests with bounded failure identities");
   assert.equal(scripts["timeout-minutes"], 10);
-  assert.equal(step.run, "node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout test/*.test.mjs");
+  assert.equal(typeof step.run, "string");
+  const compatibility = scripts.steps[scripts.steps.indexOf(step) - 1];
+  assert.equal(compatibility.name, "Validate deployment compatibility in the feature PR");
+  assert.equal(compatibility.run, "node scripts/check-deployment-compatibility.mjs");
   const validation = scripts.steps.at(-1);
   assert.equal(scripts.steps.indexOf(validation), scripts.steps.indexOf(step) + 1);
   assert.equal(validation.name, "Validate native preflight workflow expression contexts");
-  for (const gate of [step, validation]) {
+  for (const gate of [compatibility, step, validation]) {
     assert.equal(gate.if, undefined);
     assert.equal(gate["continue-on-error"], undefined);
   }
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:scripts"], "node --test test/*.test.mjs");
   for (const file of ["scripts/worker-test-failure-reporter.mjs", "test/worker-test-failure-reporter.test.mjs", ".github/workflows/ci.yml"]) assert.equal(affectsOpenClawContract(file), false);
+});
+
+test("script CI runs every file once, isolates cadence and retains either phase failure", async () => {
+  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+  const command = workflow.jobs["script-tests"].steps.find(step => step.name === "Script tests with bounded failure identities").run;
+  const cadence = "test/realtime-cadence-workerd.test.mjs";
+  const files = (await readdir("test")).filter(name => name.endsWith(".test.mjs")).map(name => "test/" + name);
+  files.push("test/extra spaced.test.mjs");
+  const f = await fixture("", true, cadence), bin = join(f.cwd, "bin");
+  await mkdir(bin);
+  await Promise.all(files.map(file => writeFile(join(f.cwd, file), "")));
+  await writeFile(join(f.cwd, "test/not-a-test.mjs"), "");
+  await mkdir(join(f.cwd, "test/nested"));
+  await writeFile(join(f.cwd, "test/nested/excluded.test.mjs"), "");
+  await writeFile(join(bin, "node"), `#!${process.execPath}
+const args = process.argv.slice(2);
+const phase = args.includes(${JSON.stringify(cadence)}) ? "cadence" : "remaining";
+const status = Number(process.env[phase === "cadence" ? "CADENCE_STATUS" : "REMAINING_STATUS"]);
+console.log(JSON.stringify({ event: "start", phase, args }));
+console.log("::" + (status ? "error" : "notice") + " title=Worker test identity::" + JSON.stringify({ v: 1, kind: "summary", failureEvents: Number(status !== 0), reported: Number(status !== 0), omittedEvents: 0, unknownFiles: 0, countsSaturated: false }));
+console.log(JSON.stringify({ event: "end", phase }));
+process.exit(status);
+`, { mode: 0o755 });
+  for (const [cadenceStatus, remainingStatus] of [[0, 0], [7, 0], [0, 9], [7, 9]]) {
+    const result = spawnSync("/bin/bash", ["-e", "-o", "pipefail", "-c", command], {
+      cwd: f.cwd, env: { ...childEnv, PATH: bin + ":" + childEnv.PATH, CADENCE_STATUS: String(cadenceStatus), REMAINING_STATUS: String(remainingStatus) },
+      encoding: "utf8", timeout: 15_000, maxBuffer: 256 * 1024,
+    });
+    assert.equal(result.error, undefined); assert.equal(result.signal, null); assert.equal(result.stderr, "");
+    assert.equal(result.status === 0, cadenceStatus === 0 && remainingStatus === 0);
+    const lines = result.stdout.trimEnd().split("\n");
+    const events = lines.filter(line => line.startsWith("{")).map(line => JSON.parse(line));
+    assert.deepEqual(events.map(({ event, phase }) => [event, phase]), [["start", "cadence"], ["end", "cadence"], ["start", "remaining"], ["end", "remaining"]]);
+    const flags = ["--test", "--test-reporter=./scripts/worker-test-failure-reporter.mjs", "--test-reporter-destination=stdout"];
+    assert.deepEqual(events[0].args, [flags[0], "--test-concurrency=1", ...flags.slice(1), cadence]);
+    assert.deepEqual(events[2].args.slice(0, flags.length), flags);
+    const selected = [cadence, ...events[2].args.slice(flags.length)];
+    assert.equal(new Set(selected).size, files.length);
+    assert.deepEqual(selected.sort(), [...files].sort());
+    const summaries = lines.filter(line => line.startsWith("::")).map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+    assert.deepEqual(summaries.map(row => row.failureEvents), [Number(cadenceStatus !== 0), Number(remainingStatus !== 0)]);
+  }
 });
 
 // BEGIN inert observation diagnostic tests (extract without native child fixtures).
