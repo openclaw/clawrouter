@@ -44,6 +44,7 @@ export function validateSourceContext(task) {
       || item.path.split('/').some(part => !part || part === '.' || part === '..' || /^tests?$/.test(part))
       || /\.test\./.test(item.path) || task.editPaths.includes(item.path)
       || task.hiddenTests.includes(item.path)
+      || task.oracleSupportPaths?.includes(item.path)
       || typeof item.query !== 'string' || !item.query.trim() || item.query.length > 200
       || seen.has(JSON.stringify([item.path, item.query]))) throw new Error('invalid_source_context');
     seen.add(JSON.stringify([item.path, item.query]));
@@ -61,6 +62,12 @@ export function validateTask(task) {
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
   validateNewPaths(task);
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
+  if (task.oracleSupportPaths !== undefined && (!Array.isArray(task.oracleSupportPaths)
+    || task.oracleSupportPaths.length > 12 || new Set(task.oracleSupportPaths).size !== task.oracleSupportPaths.length
+    || task.oracleSupportPaths.some(path => !safePath(path) || !/^(worker\/test|test)\/.+\.mjs$/.test(path)
+      || /\.test\.mjs$/.test(path) || [...task.editPaths, ...task.visibleTests, ...task.hiddenTests].includes(path)))) {
+    throw new Error('invalid_oracle_support_paths');
+  }
   validateSourceContext(task);
   validatePreservationProbes(task.preservationProbes);
   if (task.reproducer !== undefined) validateReproducer(task.reproducer);
@@ -272,8 +279,9 @@ export async function verify(task, image, edits, repo) {
     await writeFiles(box, edits);
     // Files new in the oracle do not yet exist. Create their parent/empty file
     // only inside this fresh verifier before the same guarded write operation.
-    const hidden = await revisionFiles(repo, task.oracle, task.hiddenTests);
-    await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(task.hiddenTests)]);
+    const acceptancePaths = [...task.hiddenTests, ...(task.oracleSupportPaths ?? [])];
+    const hidden = await revisionFiles(repo, task.oracle, acceptancePaths);
+    await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(acceptancePaths)]);
     await writeFiles(box, hidden);
     const result = await check(box, [...new Set([...task.visibleTests, ...task.hiddenTests])]);
     const { feedback, ...receipt } = result;
