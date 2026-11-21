@@ -675,6 +675,25 @@ test('working notes survive bounded context eviction without unbounded repeated 
 });
 
 
+test('remaining action turns survive context eviction without mutating the conversation', () => {
+  const messages = [{ role: 'system', content: 'Repair the task.' }, { role: 'user', content: 'Original task.' },
+    ...Array.from({ length: 20 }, (_, index) => ({ role: 'user', content: `feedback ${index}` }))];
+  const before = structuredClone(messages);
+  const first = agentContext(messages, 'keep the invariant', 12);
+  const last = agentContext(messages, 'keep the invariant', 1);
+  assert.match(first[3].content, /Action turns remaining: 12, including this turn/);
+  assert.match(last[3].content, /Action turns remaining: 1, including this turn/);
+  assert.doesNotMatch(last[3].content, /remaining: 12/);
+  assert.deepEqual(first.slice(0, 2), messages.slice(0, 2));
+  assert.deepEqual(last.slice(0, 2), messages.slice(0, 2));
+  assert.deepEqual(last.at(-1), messages.at(-1));
+  assert.deepEqual(messages, before);
+  assert.equal(agentContext(messages)[0].content, 'Repair the task.');
+  for (const invalid of [0, -1, 1.5, NaN, Infinity]) {
+    assert.throws(() => agentContext(messages, '', invalid), /invalid_remaining_turns/);
+  }
+});
+
 test('independent Claude baseline uses the same loop without changing cascade selection', () => {
   assert.equal(executorModel('claude', 0), 'anthropic/claude-sonnet-5.5');
   assert.equal(executorModel('strong', 0), 'openai/gpt-6.1-sol');
@@ -987,6 +1006,9 @@ test('paged handoff retains source navigation and fetches current lines after tr
   const result = await runAgent(task, receipt.image, 'handoff', 'paged-transfer',
     { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
       const turn = calls++;
+      assert.equal(body.messages.filter(message => message.content.startsWith('Action turns remaining:')).length, 1);
+      assert.match(body.messages.find(message => message.content.startsWith('Action turns remaining:')).content,
+        new RegExp(`Action turns remaining: ${3 - turn}, including this turn`));
       if (turn === 0) {
         assert.match(body.messages[0].content, /at most 2 lines/);
         const first = JSON.parse(body.messages[1].content.split('Initial editable source (use tools for current source after edits):\n')[1])[0];
