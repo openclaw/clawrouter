@@ -25,7 +25,8 @@ const managedLifecycleContracts = {
     },
   },
   "pixverse.video": {
-    provider: "pixverse", create: ["/openapi/v2/video/text/generate"], request: "pixverse.text_video", response: "pixverse.video",
+    provider: "pixverse", create: ["/openapi/v2/video/text/generate", "/openapi/v2/video/img/generate"], response: "pixverse.video",
+    requestByPath: { "/openapi/v2/video/text/generate": "pixverse.text_video", "/openapi/v2/video/img/generate": "pixverse.image_video" },
     controls: { retrieve: ["GET", "/openapi/v2/video/result/${video_id}", "pixverse.video_get", "pixverse.video"] },
   },
   "google.omni_video": {
@@ -83,6 +84,7 @@ export function validateManagedLifecycles(manifest) {
     const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
     const protocol = endpoint.lifecycle.protocol;
     const fourSegmentFal = protocol === "fal.queue" && endpoint.path === "/${owner}/${app}/${variant}/${subvariant}";
+    const pixVerseImage = protocol === "pixverse.video" && endpoint.path === "/openapi/v2/video/img/generate";
     const vydraModels = protocol === "vydra.jobs" && endpoint.requestFormat === "vydra.model_video_create";
     const contract = vydraModels ? vydraModelsContract : Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
     const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false;
@@ -95,7 +97,7 @@ export function validateManagedLifecycles(manifest) {
     if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || Object.keys(endpoint.query ?? {}).length || !parametersMatch(endpoint)
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
       || endpoint.requestFormat !== (contract.requestByPath?.[endpoint.path] ?? contract.request) || endpoint.responseFormat !== contract.response
-      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === (pixVerseImage ? "video.generate" : "media.predict"))) fail();
     if (vydraModels) {
       const scheme = manifest.auth.schemes[0];
       if (Object.keys(endpoint.lifecycle).some(key => !["protocol", "retrieve"].includes(key))
@@ -182,7 +184,8 @@ export function validateManagedLifecycles(manifest) {
         || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
     }
     if (protocol === "pixverse.video") {
-      // Image routes remain closed until uploads have durable original-job scope.
+      // Only the registered composed intake may establish image ownership.
+      if (pixVerseImage && endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1") fail();
       if (Object.values(manifest.baseUrls).some(base => !["https://app-api.pixverse.ai", "https://app-api.pixverseai.cn"].includes(base))
         || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
       const schemes = manifest.auth.schemes;
@@ -201,7 +204,12 @@ export function validateManagedLifecycles(manifest) {
     for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
       const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-      const sharedControl = (["fal.queue", "xai.video"].includes(protocol) || protocol === "vydra.jobs" && action === "retrieve")
+      // One text/image pair may share the GET shape; the runtime resolves the
+      // original create owner. A duplicate create or third route cannot borrow it.
+      const pixVersePair = protocol === "pixverse.video" && action === "retrieve"
+        && [...creates].filter(createId => manifest.endpoints[createId].lifecycle.retrieve === controlId)
+          .map(createId => manifest.endpoints[createId].requestFormat).sort().join(",") === "pixverse.image_video,pixverse.text_video";
+      const sharedControl = (["fal.queue", "xai.video"].includes(protocol) || protocol === "vydra.jobs" && action === "retrieve" || pixVersePair)
         && controlBindings.get(controlId) === `${protocol}:${action}`;
       if (!control || controlId === id || controls.has(controlId) && !sharedControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
         || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)

@@ -83,10 +83,10 @@ test("compiled PixVerse raw IDs, foreign callers and rotated original credential
   assert.equal((await json(await f.read(), 503)).error.code, "response_owner_unavailable"); assert.equal(f.sent.length, 1);
 });
 
-test("compiled PixVerse does not activate upload, image creation or caller-supplied image authority", { timeout: 10_000 }, async t => {
+test("compiled PixVerse keeps raw upload and caller-supplied image authority closed", { timeout: 10_000 }, async t => {
   const f = await setup(t);
   await json(await f.call(prefix + wire.upload.path, {}), 404);
-  await json(await f.call(prefix + wire.image.path, wire.image.body), 404);
+  assert.equal((await json(await f.call(prefix + wire.image.path, wire.image.body), 400)).error.code, "invalid_pixverse_input");
   await json(await f.create(true, { ...wire.text.body, img_id: 123 }), 400);
   assert.equal(f.sent.length, 0);
 });

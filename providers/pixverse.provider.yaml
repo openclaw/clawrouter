@@ -27,7 +27,21 @@ capabilities:
   - id: media.predict
     endpoint: text_video
     methods: [POST]
+  - id: video.generate
+    endpoint: image_video
+    methods: [POST]
 endpoints:
+  image_video:
+    method: POST
+    path: /openapi/v2/video/img/generate
+    pathParams: []
+    requestFormat: pixverse.image_video
+    responseFormat: pixverse.video
+    inputProfile: clawrouter.pixverse-image-input.v1
+    lifecycle:
+      protocol: pixverse.video
+      retrieve: video
+    timeoutMs: 120000
   text_video:
     path: /openapi/v2/video/text/generate
     requestFormat: pixverse.text_video
@@ -48,11 +62,11 @@ models:
     - id: pixverse/v6
       displayName: "PixVerse v6"
       upstream: v6
-      capabilities: [media.predict]
+      capabilities: [media.predict, video.generate]
     - id: pixverse/c1
       displayName: "PixVerse C1"
       upstream: c1
-      capabilities: [media.predict]
+      capabilities: [media.predict, video.generate]
 billing:
   meter: clawrouter.requests
   dimensions: [provider, model, endpoint, key, service, subject]
