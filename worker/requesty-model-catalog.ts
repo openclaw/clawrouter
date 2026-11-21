@@ -1,7 +1,6 @@
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { HttpError } from "./utils.ts";
 
-export const REQUESTY_MODELS_FORMAT = "requesty.models_managed";
 const PRICE_KEYS = ["input_price", "output_price", "cached_price", "caching_price"] as const;
 const MAX_BYTES = 2 * 1024 * 1024;
 const MAX_CHUNKS = 8192;

@@ -1,4 +1,5 @@
 import { grantOwnerIdentity, qualifiedApiKeyOwner } from "./grant-owner-facts.ts";
+import { isKeyedModelDiscovery, keyedCatalogProviders } from "./model-discovery-formats.ts";
 import { basetenCatalogRequest, readBasetenModels } from "./baseten-model-catalog.ts";
 import { arceeCatalogRequest, readArceeModels } from "./arcee-model-catalog.ts";
 import { novitaCatalogRequest, readNovitaModels } from "./novita-model-catalog.ts";
@@ -10,14 +11,10 @@ import type { AccessPolicy, AuthorizedIdentity, Env } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
 
 const catalogs = {
-  "baseten.models": { provider: "baseten", request: basetenCatalogRequest, read: readBasetenModels },
-  "arcee.models": { provider: "arcee", request: arceeCatalogRequest, read: readArceeModels },
-  "novita.models": { provider: "novita", request: novitaCatalogRequest, read: readNovitaModels },
-} as const;
-
-export function isKeyedModelDiscovery(format: string): format is keyof typeof catalogs {
-  return Object.hasOwn(catalogs, format);
-}
+  "baseten.models": { provider: keyedCatalogProviders["baseten.models"], request: basetenCatalogRequest, read: readBasetenModels },
+  "arcee.models": { provider: keyedCatalogProviders["arcee.models"], request: arceeCatalogRequest, read: readArceeModels },
+  "novita.models": { provider: keyedCatalogProviders["novita.models"], request: novitaCatalogRequest, read: readNovitaModels },
+} as const satisfies Record<keyof typeof keyedCatalogProviders, unknown>;
 
 export function readKeyedModelDiscovery(format: keyof typeof catalogs, response: Response, signal: AbortSignal, allows: (id: string) => boolean) {
   return catalogs[format].read(response, signal, allows);

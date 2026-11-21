@@ -1,20 +1,16 @@
-import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
-import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { isKeyedModelDiscovery, REQUESTY_MODELS_FORMAT } from "./model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { filterRadiusCatalog } from "./provider-radius.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
-import { REQUESTY_MODELS_FORMAT, filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
+import { filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
-// These formats are metadata, not inference or a permission to delete models.
-export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return endpoint.request_format === REQUESTY_MODELS_FORMAT || endpoint.request_format === "featherless.catalog" || publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["radius.config", "openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
-}
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
 }
