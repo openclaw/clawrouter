@@ -75,7 +75,7 @@ async function exportAcceptedRepair(out, task, files, sourceSha, qualificationDi
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', actionSchemaProfile = 'legacy', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, preflight = nativePins }) {
+  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', actionSchemaProfile = 'legacy', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, controlStrategy = null, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, preflight = nativePins }) {
   validateOpenAiApi(openAiApi);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
@@ -88,6 +88,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls)
+    || (controlStrategy !== null && (!controlsOnly || !['cheap', 'strong'].includes(controlStrategy)))
     || (!includeControls && policy !== 'edit-handoff' && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (typeof exportRepairs !== 'boolean' || (exportRepairs && (includeControls || policy !== 'edit-handoff'))) {
     throw new Error('invalid_repair_export');
@@ -106,7 +107,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (!controlsOnly && policy === 'probe-selection' && config.maxCalls < 4) throw new Error('probe_selection_requires_four_calls');
   if (!controlsOnly && policy === 'draft-sampling' && config.maxCalls < 3) throw new Error('sampling_requires_three_calls');
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
-  const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
+  const trialStrategies = controlsOnly ? (controlStrategy === null ? ['cheap', 'strong'] : [controlStrategy])
+    : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
   if (!Number.isSafeInteger(armOffset) || armOffset < 0 || armOffset >= trialStrategies.length) throw new Error('invalid_arm_offset');
   const tasks = await loadTasks(taskManifest);
   if (tasks.some(task => task.preservationProbes !== undefined) && !probeRegressionGate) throw new Error('preservation_requires_regression_gate');
@@ -119,10 +121,11 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
-  const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly,
+  const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly, controlStrategy,
     openAiApi, cheapReasoning, cheapMaxCalls, executor, actionSchemaProfile, preloadSource, sourcePageLines, exportRepairs, handoffEvidence, probeRegressionGate, handoffProbeGate, handoffMaxTurns, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, armOffset, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
+      ...(controlStrategy !== null ? ['Only one fixed-model control ran; this report alone cannot establish comparative quality, cost or latency.'] : []),
       ...(!includeControls ? ['No fixed-model controls ran; this report cannot establish comparative quality, cost or latency.'] : []),
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
       'Published tariffs applied to reported usage; unknown charges retain their full reservation.'] };

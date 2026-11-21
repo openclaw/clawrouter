@@ -1,6 +1,7 @@
 # Changelog
 
 - Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
+- Allow fusion benchmark runners to select one fixed-model control without rerunning or reserving budget for the other control. Keep the default two-control run and record single-control limitations.
 
 - Run the realtime cadence proof before the concurrent CI script suite, retaining every test, deadline, bounded diagnostic and failure status.
 

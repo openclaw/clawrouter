@@ -387,7 +387,39 @@ test('an uncertain native call retains prior actions without resuming or accepti
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const controlStrategy of ['cheap', 'strong']) test(`single ${controlStrategy} control reserves and runs only its selected arm`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, controlsOnly: true, controlStrategy,
+      config: { ...config, campaignBudgetMicros: config.priorCostMicros + config.trialBudgetMicros },
+      grade, fetcher: success,
+      contractAgent: async () => { assert.fail('candidate must not run'); },
+      agent: async (_task, _image, strategy, id, _settings, invoke) => {
+        seen.push(strategy);
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+    });
+    assert.deepEqual(seen, ['strong']);
+    assert.deepEqual(state.strategies, [controlStrategy]);
+    assert.equal(state.calls.length, 1);
+    assert.equal(state.calls[0].model, config[controlStrategy]);
+    assert.equal(state.controlStrategy, controlStrategy);
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).controlStrategy, controlStrategy);
+    assert.match(state.limitations.join(' '), /Only one fixed-model control/);
+    assert.throws(() => analyzePairRun(state), /incomplete_pair_run/);
+    await assert.rejects(runPairBenchmark({ ...options, controlsOnly: true, controlStrategy, armOffset: 1 }), /invalid_arm_offset/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
+  for (const controlStrategy of ['both', '', true, 1, {}, []]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly: true, controlStrategy }), /invalid_control_selection/);
+  }
+  for (const controlsOnly of [false, undefined]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly, controlStrategy: 'strong' }), /invalid_control_selection/);
+  }
   for (const controlsOnly of ['true', null, 1]) {
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);
   }
