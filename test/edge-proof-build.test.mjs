@@ -54,6 +54,21 @@ test("AST instrumentation distinguishes calls from text and erases byte exactly"
 test("frozen capsule refuses an alternative source before materialization", () => {
   assert.throws(() => frozenSource(process.cwd(), "0".repeat(40)), /identity mismatch/);
 });
+test("frozen observer composition projects the current usage owner exactly once", async () => {
+  const builder = await readFile(new URL("../scripts/edge-proof-build.mjs", import.meta.url), "utf8");
+  const start = builder.indexOf('  const begin = "// BEGIN EDGE OBSERVER'), end = builder.indexOf('  await mkdir(join(root, "worker/fixtures"));', start);
+  assert.ok(start >= 0 && end > start);
+  const project = new Function("observerSource", "root", "join", "writeFile", `return (async () => {${builder.slice(start, end)}return { observer, entry };})();`);
+  const source = await readFile(new URL("../worker/fixtures/edge-native-cancellation.ts", import.meta.url), "utf8");
+  const current = 'import { usageSnapshot } from "../usage-ledger-client.ts";\n';
+  const writes = [], run = value => project(value, "/capsule", join, async (...args) => { writes.push(args); });
+  const projected = await run(source);
+  assert.equal(projected.observer, source.split("// BEGIN EDGE OBSERVER\n")[1].split("// END EDGE OBSERVER")[0]);
+  assert.equal(projected.entry, 'import { edgeIngress, edgeTask, edgeJoin } from "../edge-proof-observer.ts";\n' + source.split("// END EDGE OBSERVER")[1].replace(current, 'import { usageSnapshot } from "../ledgers.ts";\n'));
+  assert.deepEqual(writes, [["/capsule/worker/edge-proof-observer.ts", projected.observer, { flag: "wx", mode: 0o600 }]]);
+  await assert.rejects(run(source.replace(current, "")), /frozen usage import mismatch/);
+  await assert.rejects(run(source.replace(current, current + current)), /frozen usage import mismatch/);
+});
 let instance = 0;
 async function observer() {
   const source = await readFile(new URL("../worker/fixtures/edge-native-cancellation.ts", import.meta.url), "utf8");

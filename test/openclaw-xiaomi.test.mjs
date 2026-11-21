@@ -150,7 +150,8 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
-import { usageSnapshot, budgetStatus } from "./worker/ledgers.ts";
+import { budgetStatus } from "./worker/ledgers.ts";
+import { usageSnapshot } from "./worker/usage-ledger-client.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 ${proofCode}
 ${planRouter.toString()}

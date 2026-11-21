@@ -9,7 +9,7 @@ import { flushSelections } from '../admission-cache.ts';
 import { observeProviderGrantQuota } from '../provider-quota.ts';
 import { mergeGrantRuntimeState } from '../grant-runtime.ts';
 import { providerById } from '../provider-catalog.ts';
-import { grantQuotaExhausted } from '../grant-quota.ts';
+import { grantQuotaExhausted } from '../../shared/grant-quota.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
 import { bindSingleDispatchTransport } from '../upstream-transport.ts';
 const { default: worker } = await import('../index.ts');

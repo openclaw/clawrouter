@@ -1,6 +1,7 @@
 # Changelog
 
 - Bind custom fusion acceptance receipts to their matching validator and grader; reject custom receipts in default Git-oracle runners.
+- Include declared read-only repository context in fusion benchmark planning and review, matching the worker context without changing empty-context prompts.
 
 - Allow fusion benchmark runners to select one fixed-model control without rerunning or reserving budget for the other control. Keep the default two-control run and record single-control limitations.
 

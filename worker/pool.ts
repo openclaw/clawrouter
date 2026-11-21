@@ -1,7 +1,7 @@
 import { accessSessionIdentity, sessionPolicies, sessionPolicyIdentity, verifiedAccessSession } from "./access";
 import { upstreamGrantResponses } from "./admin";
 import { grantRoutingPolicy } from "./grant-selection";
-import { grantUsageSnapshot } from "./ledgers";
+import { grantUsageSnapshot } from "./usage-ledger-client";
 import { policyAllowsModel } from "./policy-models";
 import { authenticateProxyKey, hasProxyKeyIntent } from "./proxy-auth";
 import { snapshot } from "./provider-catalog";

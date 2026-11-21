@@ -12,8 +12,7 @@ import { authorizePublishedInputCaller, assertPublishedInputCredential, assertPu
 import { parsePublishedInputUrl, publishedInputCall } from "./published-input-archive.ts";
 import { assertPublishedInputLive, publishedInputUnavailable, samePublishedInput, validatePublishedAttempt,
   type PublishedInputAttempt, type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
-import { publishedMusicRequestDigest } from "./published-music.ts";
-import { publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader, publishedMusicReference } from "./published-music-runtime.ts";
+import { publishedMusicRequestDigest, publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader, publishedMusicReference } from "./published-music-request.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
 import { errorResponse, HttpError, sha256Hex } from "./utils.ts";
 
