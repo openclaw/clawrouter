@@ -14,7 +14,7 @@ import { privateGrantRoutingPolicy, planPrivateGrantRouting, rankingStaleAfterMs
 import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth.ts";
 import { isPreparationLimit, PreparationAdmission } from "./provider-templates.ts";
 import type { AdmissionScratchVector } from "./credential-preflight-arena.ts";
-import { grantQuotaRatio } from "./grant-quota.ts";
+import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { HttpError, normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
 import { musicCoverControlVersion, musicCoverUnavailable } from "./minimax-music-cover-control.ts";
