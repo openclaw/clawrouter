@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: opencode
+            ref: 322cfc608526dca6bf60cfef05210b231461c1db
+            test: test/openclaw-opencode.test.mjs
           - consumer: baseten-decisions
             ref: 761748e1824e2ee43e886fcce4376c3b20055015
             test: test/openclaw-baseten-decisions.test.mjs
