@@ -1,3 +1,4 @@
+import { publishedMusicRequestDigest } from "./published-music-request.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { continuationScope } from "./http-continuation.ts";
@@ -17,15 +18,6 @@ import { assertPublishedInputLive, publishedInputLifetimeMs, publishedInputUnava
   type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import type { Env } from "./types.ts";
 import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
-
-export async function publishedMusicRequestDigest(body: Record<string, unknown>, image: Pick<PublishedInputBinding, "digest" | "mime" | "size" | "slot">): Promise<string> {
-  // The codec has already qualified every native field. The image slot is
-  // replaced semantically, so the eventual verifier URL is not self-referential
-  // and never enters the stored request digest input as a bearer credential.
-  const message = (body.messages as { role: string; content: { text?: string }[] }[])[0];
-  return sha256Hex(JSON.stringify(["clawrouter.published-music-request.v1", body.model, body.stream, body.modalities,
-    (body.audio as { format: string }).format, message.role, message.content[0].text, image.slot, image.digest, image.mime, image.size]));
-}
 
 export function publishedMusicAccess(env: Env, binding: PublishedInputBinding, operation: HttpOperation, admittedPolicy?: string): PublishedInputAccess {
   return { binding, operation,
