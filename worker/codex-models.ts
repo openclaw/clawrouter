@@ -69,7 +69,7 @@ function lifetime(headers: Headers): number {
   return Math.max(0, Math.min(60, match ? Number(match[1]) : 60) - age) * 1000;
 }
 
-async function upstreamCatalog(request: Request, headers: Headers, version: string): Promise<{ json: string; ttl: number }> {
+async function upstreamCatalog(request: Request, headers: Headers, version: string): Promise<{ json: string; parsed: CodexModelsResponse; ttl: number }> {
   const operation = new HttpOperation(request.signal, 15_000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let response: Response | undefined;
@@ -105,8 +105,8 @@ async function upstreamCatalog(request: Request, headers: Headers, version: stri
     try { json = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
     catch { throw new CatalogFailure("invalid_utf8"); }
     // An invalid response is never a new fallback generation.
-    parseCodexModels(json);
-    return { json, ttl: lifetime(response.headers) };
+    const parsed = parseCodexModels(json);
+    return { json, parsed, ttl: lifetime(response.headers) };
   } catch (error) {
     if (error instanceof CatalogFailure) throw new CatalogFailure(error.reason, error.transient, response?.status);
     throw error;
@@ -131,8 +131,7 @@ export async function codexModelsResponse(request: Request, env: Env): Promise<R
   const catalog = await catalogForProxyIdentity(auth, env);
   if (!catalog.providers.find(item => item.id === "openai")?.offers.some(offer => offer.eligible && offer.modelId && offer.routeKind === "native"
     && offer.endpoint === "responses" && offer.transport === "http")) throw new HttpError(403, "codex_models_not_allowed", "no native OpenAI Responses model is currently eligible");
-  const project = (json: string) => {
-    const parsed = parseCodexModels(json);
+  const project = (parsed: CodexModelsResponse) => {
     try {
       const result = buildCodexCatalog(catalog, parsed, "openai");
       if (params.has("standalone_search")) result.catalog.models = result.catalog.models.filter(model => result.standaloneSearchModels.includes(model.slug));
@@ -152,16 +151,18 @@ export async function codexModelsResponse(request: Request, env: Env): Promise<R
   const config = { maxAgeMs: Math.min(60_000, bound.maxAgeMs), freshMs: Math.min(10_000, bound.freshMs) };
   const cached = catalogs.peek(key, config);
   let json = cached?.fresh ? cached.value.json : undefined;
+  let projected: CodexModelsResponse | undefined;
   if (!json) {
     const publication = catalogs.beginPublication(key);
     const started = hotCacheNow();
     try {
       const loaded = await upstreamCatalog(request, upstream.headers, version);
-      project(loaded.json);
+      const result = project(loaded.parsed);
       json = loaded.json;
       const expires = started + loaded.ttl;
       if (loaded.ttl && new TextEncoder().encode(json).byteLength <= MAX_CACHED_BYTES) catalogs.publish(key, publication, { json, expires }, config, expires, started);
       else catalogs.delete(key);
+      projected = result;
     } catch (error) {
       if (request.signal.aborted) throw new HttpError(499, "client_canceled", "catalog request canceled");
       if (error instanceof CatalogFailure && error.transient && cached && cached.value.expires > hotCacheNow()
@@ -170,6 +171,6 @@ export async function codexModelsResponse(request: Request, env: Env): Promise<R
     } finally { catalogs.endPublication(key, publication); }
   }
   try {
-    return privateJson(project(json));
+    return privateJson(projected ?? project(parseCodexModels(json)));
   } catch (error) { throw unavailable(error); }
 }
