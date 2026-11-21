@@ -260,6 +260,42 @@ feedback content. The default deadline is 15 minutes and the maximum is 30.
 This opt-in workflow does not establish quality, cost, or latency gains for a
 model configuration; measure those against a matched control on your tasks.
 
+### Scoped compiler repair context
+
+For TypeScript drafts that pass runtime checks but fail compilation,
+`scripts/fusion-compiler-context.mjs` builds a small data payload from located
+compiler errors and the current source. Supply any required type declarations
+as explicit read-only `referenceFiles`.
+
+```js
+import {
+  createCompilerRepairContext,
+  applyCompilerRepairs,
+} from './scripts/fusion-compiler-context.mjs';
+
+const context = createCompilerRepairContext({
+  files: draft.files,
+  diagnostics: compiler.diagnostics,
+  referenceFiles: typeDeclarations,
+});
+// The caller's model adapter returns [{ path, content }] replacements.
+const files = applyCompilerRepairs({ context, files: draft.files, replacements });
+```
+
+The immutable payload contains only diagnosed editable files, diagnostics and
+explicit references. It excludes unrelated source files. Paths must be relative
+`.ts` paths; relative Windows separators are normalized. Unlocated errors,
+unknown paths, invalid line positions and oversized inputs are rejected. The
+limits are 64 source files, 256 KiB per file, 1 MiB total source, 32 reference
+files with 48 KiB total, 12 KiB of diagnostics, and eight diagnosed files.
+
+The merge rejects edits outside the diagnosed files and rejects a repair if
+those files changed after the context was created. It preserves all unrelated
+source. The caller must reserve model costs, apply its cancellation policy, and
+run the complete original runtime suite and compiler on the merged artifact.
+The helper does not validate generated code or establish model quality, cost,
+or latency gains.
+
 ## Fixed-choice voting experiments
 
 `scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls
