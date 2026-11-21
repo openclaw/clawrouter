@@ -1,5 +1,7 @@
 # Changelog
 
+- Report paired cost and latency uncertainty in Fusion evaluations, preserving failed-run costs, equal case weighting, and undefined ratios.
+
 - Preserve qualified Voyage embedding usage when response JSON inspection is enabled, including rejection and MIME guards.
 
 - Protect final fusion acceptance tests and helper modules from candidate writes, and reject changed test bytes after grading.
