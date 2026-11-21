@@ -73,6 +73,7 @@ export class SpendLedger {
   }
 }
 
+const editFailures = new WeakMap();
 export function replaceEdits(task, files, edits) {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
   const current = new Map(files.map(file => [file.path, file.content]));
@@ -81,9 +82,11 @@ export function replaceEdits(task, files, edits) {
       || typeof edit.replace !== 'string' || !current.has(edit.path)) throw new Error('invalid_edit');
     const original = current.get(edit.path), index = original.indexOf(edit.search);
     if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) {
-      throw new Error('search_must_match_once', { cause: {
+      const error = new Error('search_must_match_once', { cause: {
         index: editIndex, path: edit.path, match: index < 0 ? 'missing' : 'ambiguous',
       } });
+      editFailures.set(error, { ordinal: editIndex + 1, path: edit.path, reason: index < 0 ? 'no match' : 'multiple matches' });
+      throw error;
     }
     current.set(edit.path, original.slice(0, index) + edit.replace + original.slice(index + edit.search.length));
   }
@@ -205,12 +208,13 @@ function bodyFor(messages, config, actionSchemaProfile) {
     json_schema: { name: 'repository_action', strict: true, schema: repositoryActionSchema(actionSchemaProfile) } } };
 }
 
-export function actionFeedback(code, action, task) {
+export function actionFeedback(code, action, task, error) {
   if (['read', 'search'].includes(action) && ['invalid_read_paths', 'invalid_source_view', 'command_failed'].includes(code)) {
     return `Tool error: ${code}. Use at most 12 selectors across three existing files, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges; several ranges may reference the same file. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
   }
   if (['invalid_edits', 'invalid_edit', 'search_must_match_once'].includes(code)) {
-    return `Tool error: ${code}. Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
+    const detail = code === 'search_must_match_once' && editFailures.get(error);
+    return `Tool error: ${code}.${detail ? ` Edit ${detail.ordinal} in ${detail.path}: ${detail.reason}. The edit batch was not applied.` : ''} Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
   }
   return `Tool error: ${code}. Check allowed paths, line ranges and exact unique search text.`;
 }
@@ -494,7 +498,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
-        invalidActions++; messages.push({ role: 'user', content: actionFeedback(event.status, action.action, task) }); }
+        invalidActions++; messages.push({ role: 'user', content: actionFeedback(event.status, action.action, task, error) }); }
       finally { toolMs += performance.now() - toolStarted; }
       // This is a development cascade using observable tests, not an oracle gate.
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }

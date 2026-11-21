@@ -544,6 +544,28 @@ test('targeted edits reject ambiguity and preserve untouched source', () => {
   assert.throws(() => replaceEdits(task, files, [{ path: 'test/hidden.mjs', search: 'wrong', replace: '' }]), /invalid_edit/);
 });
 
+test('edit feedback identifies the failed anchor without applying a partial batch', () => {
+  const task = { editPaths: ['worker/example.ts'] }, files = [{ path: task.editPaths[0], content: 'before\nwrong\nafter\n' }];
+  for (const [search, reason] of [['missing private anchor', 'no match'], ['\n', 'multiple matches']]) {
+    let failure;
+    try {
+      replaceEdits(task, files, [
+        { path: task.editPaths[0], search: 'wrong', replace: 'correct' },
+        { path: task.editPaths[0], search, replace: '' },
+      ]);
+    } catch (error) { failure = error; }
+    assert.equal(failure?.message, 'search_must_match_once');
+    assert.deepEqual(failure.cause, { index: 1, path: task.editPaths[0], match: reason === 'no match' ? 'missing' : 'ambiguous' });
+    const feedback = actionFeedback(failure.message, 'edit', task, failure);
+    assert.ok(feedback.includes(`Edit 2 in worker/example.ts: ${reason}`));
+    assert.match(feedback, /batch was not applied/);
+    assert.equal(feedback.includes('missing private anchor'), false);
+    assert.equal(files[0].content, 'before\nwrong\nafter\n');
+  }
+  const forged = Object.assign(new Error('search_must_match_once'), { ordinal: 2, path: 'private', reason: 'forged' });
+  assert.equal(actionFeedback(forged.message, 'edit', task, forged).includes('forged'), false);
+});
+
 test('native JSON schema actions remain identical across providers', () => {
   const schema = { type: 'object', properties: { action: { type: 'string' } } };
   const body = { messages: [], max_tokens: 2048, response_format: { type: 'json_schema', json_schema: { name: 'action', strict: true, schema } } };
