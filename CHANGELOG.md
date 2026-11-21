@@ -6,7 +6,7 @@
 
 - Let fusion benchmark agents read up to twelve source ranges across three files, and identify rejected edit anchors without exposing source text. Preserve atomic edit batches and existing error metadata.
 
-- Show the remaining action turns in fusion benchmark requests, including after handoff and context eviction. This changes benchmark prompts without changing execution limits.
+- Let custom fusion benchmark runners opt into remaining-action-turn feedback, including after handoff and context eviction. Default prompts and execution limits stay unchanged.
 
 - Surface provider prompt-policy rejections in fusion benchmark diagnostics while preserving the stop, full reservation, and private response boundary.
 

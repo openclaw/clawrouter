@@ -38,6 +38,7 @@ for (const profile of ['legacy', 'compact']) test(`action schema reaches reposit
     { maxTurns: 1, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
       calls++;
       assert.deepEqual(body.response_format.json_schema.schema, repositoryActionSchema(profile));
+      assert.ok(!body.messages.some(message => message.content.startsWith('Action turns remaining:')));
       assert.ok(body.messages[0].content.includes(`at most ${profile === 'compact' ? '512' : '6,000'} characters`));
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
         action: 'read', paths: task.editPaths, edits: [], query: '', memory: '',
@@ -675,6 +676,13 @@ test('working notes survive bounded context eviction without unbounded repeated 
 });
 
 
+test('invalid action-budget flags fail before allocating a sandbox', async () => {
+  for (const showActionBudget of [null, 'true', 1, {}]) {
+    await assert.rejects(runAgent(null, null, 'strong', 'invalid-budget', {},
+      async () => assert.fail('must not dispatch'), undefined, { showActionBudget }), /invalid_action_budget/);
+  }
+});
+
 test('remaining action turns survive context eviction without mutating the conversation', () => {
   const messages = [{ role: 'system', content: 'Repair the task.' }, { role: 'user', content: 'Original task.' },
     ...Array.from({ length: 20 }, (_, index) => ({ role: 'user', content: `feedback ${index}` }))];
@@ -1026,7 +1034,7 @@ test('paged handoff retains source navigation and fetches current lines after tr
         : turn === 1 ? { action: 'read', paths: [`${task.editPaths[0]}:${markerLine}-${markerLine}`], query: '', edits: [] }
         : { action: 'finish', paths: [], query: '', edits: [] };
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...action, memory: '' }) } }] };
-    }, undefined, { handoffAfterEdit: true, preloadSource: true, sourcePageLines: 2 });
+    }, undefined, { handoffAfterEdit: true, preloadSource: true, sourcePageLines: 2, showActionBudget: true });
   assert.equal(calls, 3);
   assert.equal(result.handoffUsed, true);
   assert.equal(result.publicPassed, true);

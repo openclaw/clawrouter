@@ -224,6 +224,8 @@ export function actionFeedback(code, action, task, error) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  if (options.showActionBudget !== undefined && typeof options.showActionBudget !== 'boolean') throw new Error('invalid_action_budget');
+  const showActionBudget = options.showActionBudget === true;
   const actionSchemaProfile = options.actionSchemaProfile ?? 'legacy';
   repositoryActionSchema(actionSchemaProfile);
   const sourcePageLines = options.sourcePageLines ?? null;
@@ -374,7 +376,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
-      const context = agentContext(messages, memory, config.maxTurns - turns);
+      const context = agentContext(messages, memory, showActionBudget ? config.maxTurns - turns : undefined);
       let response;
       try {
         let request = bodyFor(context, config, actionSchemaProfile);
