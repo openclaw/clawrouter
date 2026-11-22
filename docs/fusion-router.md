@@ -230,7 +230,8 @@ export function repairTask({ invoke, verify, signal }) {
 The caller supplies two adapters:
 
 - `invoke({ stage, model, draft, feedback, signal })` reserves a conservative
-  budget before dispatch and returns `{ artifact, costMicros }`. Use `null`
+  budget before dispatch and returns `{ artifact, costMicros }`, with optional
+  `feedback` describing an unusable draft. Use `null`
   for an unusable artifact. Report the full attempt cost, including failed
   attempts. Model identifiers are passed through to this adapter.
 - `verify({ artifact, stage, model, signal })` returns boolean `runtimePassed`
@@ -262,6 +263,14 @@ failed specialist output. The specialist is skipped for compiler failures,
 unusable drafts, and the strong control. Omitting it preserves the default
 sequence. The maximum remains six calls; failed specialist attempts count
 toward total cost and elapsed time.
+
+Optionally set `models.admissionRepair` for a draft that has no usable artifact.
+The `draft-admission` stage receives `draft: null` and the original admission
+feedback. The adapter can use that feedback or make a fresh attempt against the
+original task. Both verification checks must pass. A failed attempt leaves the
+original feedback intact for strong-model fallback. This option is skipped for
+usable drafts and the strong control. It adds at most one attempt and preserves
+the six-call bound; its cost and elapsed time are included in the result.
 
 The result includes `passed`, the final `artifact` and `verification`, all
 attempt costs, and elapsed time including callbacks. Optional `onStep` receives

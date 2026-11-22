@@ -104,3 +104,56 @@ test('runtime specialist errors stop the workflow and invalid model IDs fail bef
     assert.equal(invalid.requests.length, 0);
   }
 });
+
+test('optional admission repair receives a rejected draft and must pass both gates', async () => {
+  const f = fixture({}), invoke = f.invoke;
+  f.invoke = async request => request.stage === 'draft'
+    ? (f.requests.push(request), { artifact: null, feedback: 'invalid syntax', costMicros: 7 }) : invoke(request);
+  const result = await runVerifiedWorkflow({ ...f, models: { ...models, admissionRepair: 'provider-d/admission' } });
+  assert.equal(result.passed, true); assert.equal(result.costMicros, 14);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-admission']);
+  assert.equal(f.requests[1].draft, null);
+  assert.deepEqual(f.requests[1].feedback, { runtimePassed: false, compilerPassed: false, feedback: 'invalid syntax' });
+});
+
+test('failed admission repair preserves rejected draft feedback and the six-call limit', async () => {
+  const f = fixture({ 'draft-admission': runtimeError, 'semantic-repair': typeError,
+    'semantic-compiler': runtimeError, 'strong-restart': runtimeError, 'strong-repair': runtimeError }), invoke = f.invoke;
+  f.invoke = async request => {
+    if (request.stage === 'draft') { f.requests.push(request); return { artifact: null, feedback: 'invalid syntax', costMicros: 7 }; }
+    if (request.stage === 'draft-admission') request.feedback.feedback = 'corrupted';
+    return invoke(request);
+  };
+  const result = await runVerifiedWorkflow({ ...f, models: { ...models, admissionRepair: 'provider-d/admission', runtimeRepair: 'provider-e/runtime' } });
+  assert.equal(result.passed, false); assert.equal(result.costMicros, 42);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-admission', 'semantic-repair', 'semantic-compiler', 'strong-restart', 'strong-repair']);
+  assert.equal(f.requests[2].draft, null); assert.equal(f.requests[2].feedback.feedback, 'invalid syntax');
+});
+
+test('admission repair stays opt-in and does not run on executable drafts or strong controls', async () => {
+  for (const strategy of ['fusion', 'strong']) {
+    const f = fixture({ draft: runtimeError });
+    await runVerifiedWorkflow({ ...f, strategy, models: { ...models, admissionRepair: 'provider-d/admission' } });
+    assert.ok(f.requests.every(x => x.stage !== 'draft-admission'));
+  }
+  const f = fixture({}), invoke = f.invoke;
+  f.invoke = async request => request.stage === 'draft' ? (f.requests.push(request), { artifact: null, costMicros: 7 }) : invoke(request);
+  await runVerifiedWorkflow(f);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'semantic-repair']);
+});
+
+test('admission repair provider failure stops and invalid model ids are rejected', async () => {
+  const f = fixture({}), invoke = f.invoke;
+  f.invoke = async request => {
+    if (request.stage === 'draft') { f.requests.push(request); return { artifact: null, costMicros: 7 }; }
+    if (request.stage === 'draft-admission') throw Error('admission_unavailable');
+    return invoke(request);
+  };
+  await assert.rejects(runVerifiedWorkflow({ ...f, models: { ...models, admissionRepair: 'provider-d/admission' } }), /admission_unavailable/);
+  assert.equal(f.requests.length, 1);
+  for (const admissionRepair of [null, '', ' ', 42, 'x'.repeat(257)]) {
+    const invalid = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...invalid, models: { ...models, admissionRepair } }), /invalid_verified_workflow/);
+    assert.equal(invalid.requests.length, 0);
+  }
+});
