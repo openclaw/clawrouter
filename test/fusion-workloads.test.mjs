@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
-import { taskSandbox, readSource, writeFiles, command, verify, validatePublicTestFiles } from '../scripts/fusion-workloads.mjs';
+import { taskSandbox, readSource, writeFiles, command, verify, validatePublicTestFiles, acceptanceTestFiles } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -52,6 +52,41 @@ test('public test installation failure closes only the new sandbox', async () =>
     return { stdout: Buffer.alloc(0) };
   }), /test installation failed/);
   assert.deepEqual(calls.at(-1), ['rm', '-f', id]);
+});
+
+test('acceptance retains append-only public guards but never substitutes different oracle tests', () => {
+  const path = task.visibleTests[0], original = { path, content: 'original oracle tests\n' };
+  const fixture = { ...task, hiddenTests: [path] };
+  const appended = { path, content: original.content + 'appended public guard\n' };
+  assert.deepEqual(acceptanceTestFiles({ ...fixture, publicTestFiles: [appended] }, [original]), [appended]);
+  assert.deepEqual(acceptanceTestFiles({ ...fixture, publicTestFiles: [{ path, content: 'different public tests\n' }] }, [original]), [original]);
+  assert.deepEqual(acceptanceTestFiles(fixture, [original]), [original]);
+  const support = { path: 'worker/test/fixture.mjs', content: 'oracle helper' };
+  assert.deepEqual(acceptanceTestFiles({ ...fixture, publicTestFiles: [appended] }, [original, support]), [appended, support]);
+});
+
+test('append-only public guards survive actual candidate acceptance', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const repo = await mkdtemp(join(tmpdir(), 'fusion-public-acceptance-'));
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.name=Fixture',
+    '-c', 'user.email=fixture@example.invalid', ...args], { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const source = 'worker/fusion-public-append-source.mjs', path = 'worker/test/fusion-public-append.test.mjs';
+  const original = "import test from 'node:test'; import assert from 'node:assert/strict'; import { value } from '../fusion-public-append-source.mjs';\ntest('original contract',()=>assert.equal(typeof value,'number'));\n";
+  try {
+    git('init', '--quiet'); await writeFile(join(repo, 'README.md'), 'isolated acceptance fixture\n');
+    git('add', '.'); git('commit', '--quiet', '-m', 'base'); const base = git('rev-parse', 'HEAD');
+    await mkdir(join(repo, 'worker/test'), { recursive: true });
+    await writeFile(join(repo, source), 'export const value = 42;\n'); await writeFile(join(repo, path), original);
+    git('add', '.'); git('commit', '--quiet', '-m', 'oracle');
+    const fixture = { id: 'public-append-acceptance', split: 'development', base, oracle: git('rev-parse', 'HEAD'),
+      instruction: 'Export value 42.', editPaths: [source], newPaths: [source], visibleTests: [path], hiddenTests: [path],
+      publicTestFiles: [{ path, content: original + "test('appended preservation guard',()=>assert.equal(value,42));\n" }] };
+    const bad = await verify(fixture, process.env.FUSION_NATIVE_IMAGE, [{ path: source, content: 'export const value = 41;\n' }], repo);
+    assert.equal(bad.valid, true); assert.equal(bad.passed, false); assert.equal(bad.tests, 2); assert.equal(bad.failures, 1);
+    const good = await verify(fixture, process.env.FUSION_NATIVE_IMAGE, [{ path: source, content: 'export const value = 42;\n' }], repo);
+    assert.equal(good.valid, true); assert.equal(good.passed, true); assert.equal(good.tests, 2);
+  } finally { await rm(repo, { recursive: true, force: true }); }
 });
 
 test('public test replacements are visible in trials while the source image remains unchanged', {
