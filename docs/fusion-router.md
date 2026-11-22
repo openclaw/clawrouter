@@ -270,6 +270,37 @@ feedback content. The default deadline is 15 minutes and the maximum is 30.
 This opt-in workflow does not establish quality, cost, or latency gains for a
 model configuration; measure those against a matched control on your tasks.
 
+### Constrain region edit targets
+
+For adapters that request region replacements as structured output,
+`scripts/fusion-region-schema.mjs` exports `createRegionEditSchema(files)`.
+Supply the current inventory's file paths and region IDs:
+
+```js
+import { createRegionEditSchema } from './scripts/fusion-region-schema.mjs';
+
+const schema = createRegionEditSchema([
+  { path: 'src/handler.ts', ids: ['r0', 'r1'] },
+  { path: 'src/client.ts', ids: ['r0', 'r2'] },
+]);
+```
+
+Use the returned schema in your adapter's strict structured-output request.
+It describes `{ edits: [{ path, id, code }] }`, with one to 24 replacements.
+Each replacement's ID is bound to its file; shared local IDs are allowed.
+The adapter must support nested `anyOf` for multiple files. A single-file
+schema uses direct enums without `anyOf`.
+
+The helper rejects empty or duplicate targets and limits the inventory to
+64 files, 1,000 total enum values, and 100,000 target characters. File paths
+count as enum values. ID enums above 250 values allow at most 15,000 ID
+characters per file. Oversized inputs fail rather than dropping constraints.
+Keep the inventory tied to the current source and validate returned edits
+against it, including duplicate replacements, before applying them. The
+schema does not verify replacement code, prevent stale-source edits, or
+replace runtime and compiler checks. This helper makes no model calls and
+does not change Worker routing.
+
 ### Scoped compiler repair context
 
 For TypeScript drafts that pass runtime checks but fail compilation,
