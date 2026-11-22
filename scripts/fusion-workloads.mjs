@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|test)\/[A-Za-z0-9_./-]+$/.test(value)
@@ -263,18 +264,57 @@ function testFeedback(result) {
   return failures.slice(0, 12000 - marker.length - tail.length) + marker + tail;
 }
 
-export async function check(box, paths, timeout = 120000) {
+function namedTestPattern(testNamePrefix) {
+  if (testNamePrefix === undefined) return undefined;
+  if (typeof testNamePrefix !== 'string' || !testNamePrefix.trim() || testNamePrefix.length > 256
+    || /[\r\n]/.test(testNamePrefix)) throw new Error('invalid_test_name_prefix');
+  return testNamePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Match Node's TAP reporter encoding without interpreting generated output.
+function tapTestName(name) {
+  const escapes = { '\b': '\\\\b', '\f': '\\\\f', '\t': '\\\\t', '\n': '\\\\n', '\r': '\\\\r', '\v': '\\\\v',
+    '\\': '\\\\', '#': '\\#' };
+  return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
+}
+
+export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  const pattern = namedTestPattern(testNamePrefix);
+  const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
-  return { ...testResult(result), feedback: testFeedback(result) };
+    'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+  const metrics = testResult(result);
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result) };
+  // Node can report the test file itself as passing when no name matched.
+  const encodedPrefix = tapTestName(testNamePrefix);
+  const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
+  let selectedLabel;
+  const matchedTestPrefix = result.stdout.toString().split('\n').some(rawLine => {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith('# Subtest: ')) {
+      const label = line.slice('# Subtest: '.length);
+      selectedLabel = label.startsWith(encodedPrefix) && !fileLabels.some(path => label === path
+        || label.endsWith(`/${path}`) || path.endsWith(`/${label}`)) ? label : undefined;
+      return false;
+    }
+    const completed = /^(?:not )?ok \d+ - (.*)$/.exec(line);
+    if (!completed) return false;
+    // Exact equality excludes SKIP/TODO directives after the encoded name.
+    const passed = line.startsWith('ok ') && selectedLabel !== undefined && completed[1] === selectedLabel;
+    selectedLabel = undefined;
+    return passed;
+  });
+  return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
+    feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
 }
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */
-export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000) {
+export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000, options = {}) {
+  namedTestPattern(options.testNamePrefix);
   if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
     || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {
     throw new Error('invalid_acceptance_check');
@@ -300,7 +340,7 @@ if(process.getuid()!==65534||![denied(()=>fs.writeFileSync(path,'changed')),deni
   if (admission.stdout.toString().trim() !== 'protected') throw new Error('acceptance_protection_failed');
   if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
   try {
-    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout);
+    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout, options);
   } finally {
     if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
   }
@@ -316,11 +356,12 @@ export async function probe(box, source, timeout = 15000, { filterLoaderAssertio
   const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
     { input: source, allowFailure: true, timeout: limit + 2000 });
   const output = Buffer.concat([result.stdout, result.stderr]).toString();
+  const diagnostics = filterLoaderAssertions ? stripVTControlCharacters(output) : output;
   // Conservative opt-in for generated probes wrapping subprocess failures.
   // Diagnostics are not attestation; retain the legacy interpretation by default.
   const loaderError = /^(?:Error|TypeError) \[(?:ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION|ERR_UNSUPPORTED_DIR_IMPORT)\]:[^\n]*(?:\nDid you mean to import [^\n]*)?\n\s+at [^\n]*\(node:internal\/modules\//m;
   const parserError = /^SyntaxError:[^\n]*\n\s+at compileSourceTextModule \(node:internal\/modules\//m;
-  const filtered = filterLoaderAssertions && (loaderError.test(output) || parserError.test(output));
+  const filtered = filterLoaderAssertions && (loaderError.test(diagnostics) || parserError.test(diagnostics));
   return { passed: result.code === 0,
     // node:test can rethrow an uncaught assertion from its exception handler,
     // producing Node's exit code 7 instead of the usual uncaught exit code 1.

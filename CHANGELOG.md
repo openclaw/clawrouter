@@ -1,5 +1,9 @@
 # Changelog
 
+- Allow fusion workload checks to select a literal test-name prefix and reject runs with no matching test.
+
+- Recognize terminal-colored loader diagnostics when fusion probe callers opt into filtering, while preserving raw feedback.
+
 - Let fusion probe callers opt into filtering wrapped Node loader and parser failures from behavioral assertion failures, preserving existing interpretation by default.
 
 - Allow caller-side single trajectories to schedule validated follow-up tools without a model call, preserving tool limits, cancellation and final checks.
