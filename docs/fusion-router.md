@@ -203,6 +203,29 @@ execute client tools or repository regression checks. Executable repair policies
 in the benchmark require a caller-side agent and are not deployed by selecting
 `clawrouter/fusion`.
 
+## Body-budget development workload
+
+`benchmarks/fusion/body-budget-workloads.json` provides one pinned method-addition
+workload for caller-side coding evaluations. Only `worker/body-budget.ts` is
+editable. The original ten tests cover atomic transfers, competing leases,
+invalid charges, successor ownership, repeated release, and legacy behavior.
+
+The test file is supplied to the initial candidate and reused for acceptance.
+This is development data with no hidden-test claim. The base must fail the
+supplied tests and the reference must pass them; a passing reference alone does
+not qualify the workload. Model results depend on the chosen caller and policy.
+
+To qualify it without model calls, set `FUSION_NODE_IMAGE` to a pinned
+`node@sha256:...` image and run:
+
+```sh
+node scripts/qualify-fusion-workloads.mjs "$FUSION_NODE_IMAGE" \
+  /tmp/body-budget-qualification.json benchmarks/fusion/body-budget-workloads.json
+```
+
+Qualification builds the task's frozen dependencies. Reuse an existing qualified
+runtime during local research when downloads or new builds are constrained.
+
 ## Caller-side verified repair
 
 `scripts/fusion-verified-workflow.mjs` exports `runVerifiedWorkflow`. Use it in
