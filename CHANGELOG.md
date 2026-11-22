@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in caller-side tool trajectory controller with bounded model/tool calls, reviewed writes, cancellation and optional final checks.
+
 - Retain append-only public regression guards during final fusion workload acceptance without replacing oracle test bytes.
 
 - Install declared new public fusion workload test files in disposable sandboxes while preserving file and parent path guards.
