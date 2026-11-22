@@ -249,6 +249,9 @@ fixes that pass the original examples but change other request behavior.
 
 All supplied tests are visible before generation and reused for acceptance;
 the manifest's `hiddenTests` field does not imply independent hidden tests.
+Acceptance retains appended public guards when the supplied file starts with
+the exact oracle test bytes. Other public replacements do not override oracle
+tests.
 Only the listed source files are editable. Qualification must confirm that the
 base fails and the reference passes the complete supplied suite.
 

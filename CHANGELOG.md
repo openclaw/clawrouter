@@ -1,5 +1,7 @@
 # Changelog
 
+- Retain append-only public regression guards during final fusion workload acceptance without replacing oracle test bytes.
+
 - Install declared new public fusion workload test files in disposable sandboxes while preserving file and parent path guards.
 
 - Allow caller-side fusion workflows to retry an unusable draft with an optional specialist before strong-model fallback, preserving verification, costs and the six-call bound.

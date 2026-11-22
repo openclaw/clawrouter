@@ -347,6 +347,16 @@ async function revisionFiles(repo, revision, paths) {
   return Promise.all(paths.map(async path => ({ path, content: (await git(repo, ['show', `${revision}:${path}`])).toString() })));
 }
 
+export function acceptanceTestFiles(task, oracleFiles) {
+  const declared = new Map(validatePublicTestFiles(task).map(file => [file.path, file]));
+  return oracleFiles.map(file => {
+    const publicFile = declared.get(file.path);
+    // Keep append-only public guards without replacing any oracle bytes.
+    // Other public replacements must not override the hidden test contract.
+    return task.hiddenTests.includes(file.path) && publicFile?.content.startsWith(file.content) ? publicFile : file;
+  });
+}
+
 export async function verify(task, image, edits, repo) {
   validateEdits(task, edits);
   const box = await taskSandbox(task, image);
@@ -355,7 +365,7 @@ export async function verify(task, image, edits, repo) {
     // Files new in the oracle do not yet exist. Create their parent/empty file
     // only inside this fresh verifier before the same guarded write operation.
     const acceptancePaths = [...task.hiddenTests, ...(task.oracleSupportPaths ?? [])];
-    const hidden = await revisionFiles(repo, task.oracle, acceptancePaths);
+    const hidden = acceptanceTestFiles(task, await revisionFiles(repo, task.oracle, acceptancePaths));
     await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(acceptancePaths)]);
     await writeFiles(box, hidden);
     const result = await checkAcceptance(box, [...new Set([...task.visibleTests, ...task.hiddenTests])], task.oracleSupportPaths ?? []);
