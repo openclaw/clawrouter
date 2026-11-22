@@ -2,6 +2,77 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runTrajectory, runSingleTrajectory } from '../scripts/fusion-trajectory.mjs';
 
+test('scheduled checks use real observations and tool counts without another model call', async () => {
+  let edited = false, checked = false, calls = 0;
+  const result = await runSingleTrajectory({ task: 'Edit then check.', maxModelCalls: 2, maxToolCalls: 3,
+    finalCheckTool: 'check',
+    tools: [
+      { name: 'edit', effect: 'write', validate: args => Object.keys(args).length === 0,
+        execute: async () => { edited = true; return { revision: 1 }; } },
+      { name: 'check', effect: 'read', validate: args => Object.keys(args).length === 0,
+        execute: async () => { assert.ok(edited); checked = true; return { passed: true }; } },
+    ],
+    nextAction: request => {
+      assert.deepEqual(request.segment, []);
+      if (edited && !checked) {
+        assert.equal(request.history.at(-1).observation.revision, 1);
+        request.history.length = 0;
+        return { type: 'tool', name: 'check', arguments: {} };
+      }
+      return null;
+    },
+    draft: async ({ history }) => {
+      calls++;
+      if (calls === 1) return { type: 'tool', name: 'edit', arguments: {} };
+      assert.equal(history.length, 2);
+      assert.deepEqual(history.at(-1).observation, { passed: true });
+      return { type: 'final', content: 'checked' };
+    },
+  });
+  assert.equal(result.content, 'checked');
+  assert.equal(result.stats.modelCalls, 2);
+  assert.equal(result.stats.toolCalls, 3);
+  assert.equal(result.history.length, 3);
+});
+
+test('scheduled actions cannot escape validation or the tool budget', async () => {
+  let executed = 0, models = 0;
+  const options = { task: 'Check.', maxToolCalls: 1,
+    tools: [{ name: 'check', effect: 'read', validate: args => Object.keys(args).length === 0,
+      execute: async () => { executed++; return { passed: true }; } }],
+    draft: async () => { models++; return { type: 'final', content: 'done' }; },
+  };
+  await assert.rejects(runSingleTrajectory({ ...options,
+    nextAction: () => ({ type: 'tool', name: 'check', arguments: { unexpected: true } }),
+  }), /invalid_trajectory_action/);
+  assert.equal(executed, 0);
+  await assert.rejects(runSingleTrajectory({ ...options,
+    nextAction: () => ({ type: 'tool', name: 'check', arguments: {} }),
+  }), /trajectory_tool_limit/);
+  assert.equal(executed, 1); assert.equal(models, 0);
+});
+
+test('caller scheduling cannot return final answers or bypass reviewed execution', async () => {
+  const tool = { name: 'read', effect: 'read', validate: () => true, execute: async () => ({ value: 1 }) };
+  let models = 0;
+  const options = { task: 'Inspect.', tools: [tool], nextAction: () => ({ type: 'final', content: 'unchecked' }),
+    draft: async () => { models++; return { type: 'final', content: 'done' }; } };
+  await assert.rejects(runSingleTrajectory(options), /invalid_trajectory_scheduled_action/);
+  await assert.rejects(runTrajectory({ ...options, verify: async () => ({}), repair: options.draft }), /invalid_trajectory_scheduler/);
+  assert.equal(models, 0);
+});
+
+test('caller scheduling honors cancellation before invoking a tool', async () => {
+  const controller = new AbortController(); controller.abort();
+  let scheduled = 0, executed = 0;
+  await assert.rejects(runSingleTrajectory({ task: 'Inspect.', signal: controller.signal,
+    tools: [{ name: 'read', effect: 'read', validate: () => true, execute: async () => { executed++; return {}; } }],
+    nextAction: () => { scheduled++; return { type: 'tool', name: 'read', arguments: {} }; },
+    draft: async () => ({ type: 'final', content: 'done' }),
+  }), { name: 'AbortError' });
+  assert.equal(scheduled, 0); assert.equal(executed, 0);
+});
+
 const read = name => ({ type: 'tool', name: 'read', arguments: { name } });
 const write = value => ({ type: 'tool', name: 'write', arguments: { value } });
 

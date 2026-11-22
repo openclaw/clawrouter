@@ -21,13 +21,16 @@ export const runSingleTrajectory = options => runController(options, false);
 
 async function runController({ task, tools, draft, verify, repair,
   chunkSize = 4, maxModelCalls = 32, maxToolCalls = 32, maxContextBytes = 131072,
-  deadlineMs = 120000, signal, finalCheckTool } = {}, reviewDrafts) {
+  deadlineMs = 120000, signal, finalCheckTool, nextAction } = {}, reviewDrafts) {
   for (const [value, max] of [[chunkSize, 16], [maxModelCalls, 128], [maxToolCalls, 128],
     [maxContextBytes, 1048576], [deadlineMs, 600000]]) {
     if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error('invalid_trajectory_limit');
   }
   if (typeof task !== 'string' || !task.trim() || !Array.isArray(tools)
     || !(reviewDrafts ? [draft, verify, repair] : [draft]).every(fn => typeof fn === 'function')) throw new Error('invalid_trajectory_config');
+  if (nextAction !== undefined && (reviewDrafts !== false || typeof nextAction !== 'function')) {
+    throw new Error('invalid_trajectory_scheduler');
+  }
   const registry = new Map();
   for (const tool of tools) {
     if (!plain(tool) || typeof tool.name !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(tool.name)
@@ -96,6 +99,14 @@ async function runController({ task, tools, draft, verify, repair,
   };
   while (true) {
     if (!reviewDrafts) {
+      active.throwIfAborted();
+      const scheduled = nextAction?.(context({ segment: [] }));
+      if (scheduled !== undefined && scheduled !== null) {
+        const action = checkedAction(scheduled);
+        if (action.type !== 'tool') throw new Error('invalid_trajectory_scheduled_action');
+        commit([await execute(action)]);
+        continue;
+      }
       const action = checkedAction(await call(draft, context({ segment: [] })));
       if (action.type === 'final') { const result = await checkedFinish(action); if (result) return result; else continue; }
       commit([await execute(action)]);
