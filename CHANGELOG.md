@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in source workspace projection for trajectory model requests, preserving canonical tool history and failed-edit evidence.
+
 - Add an opt-in check-driven model selector that starts small and bounds stronger-model repair after failed executable checks.
 
 - Let bounded fusion trajectory callers checkpoint committed work without accepting rejected steps or replaying interrupted operations.
