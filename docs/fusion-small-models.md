@@ -80,6 +80,15 @@ optional final check. Set `finalCheckTool` to a registered tool that accepts `{}
 and returns an observation with boolean `passed`. A failed final check enters
 history and continues the trajectory; only a passing check permits completion.
 
+For deterministic follow-up tools, `runSingleTrajectory` accepts a synchronous
+`nextAction({ task, history, segment })` callback. Return a registered tool action
+to execute it before the next model call, or `null`/`undefined` to ask the model.
+For example, a caller can run tests after an edit without asking a model to
+select that already-known step. The callback receives copied history, and every
+scheduled action uses the normal validation, tool limit, deadline and history.
+It cannot return a final answer or be used with reviewed `runTrajectory`.
+An always-scheduling callback exhausts `maxToolCalls`; it does not run forever.
+
 The controller propagates callback errors and does not retry a failed or timed-out
 operation. Callbacks must honor their abort signal. A callback that ignores
 cancellation may continue after the controller rejects, so the caller must
