@@ -238,11 +238,16 @@ regressions for caller-side coding evaluations:
 | --- | ---: | --- |
 | Native music MIME fields | 9 | `worker/fal-music.ts` |
 | Manifest route discovery | 20 | `worker/discovery.ts` |
-| Missing managed native ID | 12 | `worker/managed-predictions.ts`, `worker/proxy.ts` |
+| Missing managed native ID | 12 + 3 preservation tests | `worker/managed-predictions.ts`, `worker/proxy.ts` |
 | Cancellation acknowledgement | 21 | `worker/background-store.ts`, `worker/managed-lifecycle-types.ts`, `worker/managed-predictions.ts`, `worker/response-controls.ts` |
 
-Each task supplies the exact original test files from its pinned reference
-revision. These tests are visible before generation and reused for acceptance;
+Each task supplies the original test files from its pinned reference revision.
+The managed-ID file retains those bytes and appends one preservation test with
+two subtests. Its 34 requests check status codes, error codes, upstream calls,
+and budget calls across declared and undeclared lifecycles. These guards catch
+fixes that pass the original examples but change other request behavior.
+
+All supplied tests are visible before generation and reused for acceptance;
 the manifest's `hiddenTests` field does not imply independent hidden tests.
 Only the listed source files are editable. Qualification must confirm that the
 base fails and the reference passes the complete supplied suite.
