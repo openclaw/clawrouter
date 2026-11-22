@@ -27,7 +27,8 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   if (!['fusion', 'strong'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
     || !models || ['draft', 'repair', 'compiler'].some(k => !validModel(models[k]))
-    || (models.runtimeRepair !== undefined && !validModel(models.runtimeRepair))) {
+    || (models.runtimeRepair !== undefined && !validModel(models.runtimeRepair))
+    || (models.admissionRepair !== undefined && !validModel(models.admissionRepair))) {
     throw new Error('invalid_verified_workflow');
   }
   const deadline = AbortSignal.timeout(deadlineMs);
@@ -65,6 +66,10 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   }
   const draft = await attempt('draft', models.draft);
   if (isPassed(draft)) return finish(draft);
+  if (draft.artifact === null && models.admissionRepair !== undefined) {
+    const repaired = await attempt('draft-admission', models.admissionRepair, draft);
+    if (isPassed(repaired)) return finish(repaired);
+  }
   if (compilerOnly(draft)) {
     const repaired = await attempt('draft-compiler', models.compiler, draft);
     if (isPassed(repaired)) return finish(repaired);

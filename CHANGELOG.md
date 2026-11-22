@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow caller-side fusion workflows to retry an unusable draft with an optional specialist before strong-model fallback, preserving verification, costs and the six-call bound.
+
 - Allow caller-side fusion workflows to try an optional runtime repair specialist before stronger-model fallback, preserving the original draft and six-call bound.
 
 - Allow compiler repair callers to apply bounded exact-text edits, preserving unedited bytes and rejecting ambiguous, overlapping or stale changes.
