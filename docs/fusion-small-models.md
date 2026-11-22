@@ -123,6 +123,23 @@ Keep independent final grading and fixed-model controls in any comparison.
   selects either `draftModel` or `reviewModel` for each action. It sees a copied
   task and committed history; an unconfigured selection stops the run.
 
+For executable-check feedback, `scripts/fusion-check-routing.mjs` exports
+`createCheckDrivenSelector({ draftModel, repairModel, checkTool, repairSteps })`.
+Pass its result as `selectModel` and configure the adapter's `reviewModel` to
+match `repairModel`. It starts with the draft model. A boolean `passed: false`
+from the named check tool selects the repair model for four subsequent steps
+by default. Consecutive failed checks extend that window by two steps, up to
+eight; a passing check immediately returns to the draft model. Other tools,
+missing results and non-boolean values do not affect selection.
+
+The selector makes no model calls and owns no mutable state. It derives its
+choice from committed history, so the controller's existing limits still apply.
+Use a caller-owned executable check, such as supplied tests and a compiler.
+This is routing feedback, not completion evidence: configure `finalCheckTool`
+separately and keep independent acceptance checks. A weak check can miss defects;
+the helper does not establish a general quality or cost advantage. Existing
+callers and default routing remain unchanged.
+
 Supply `task`, `runId`, `tools`, `invoke` and the controller limits. Reviewed and
 adaptive runs require both model identifiers. Single-model runs use `model`.
 Each tool also supplies `parameters`, a strict JSON Schema object in which every
