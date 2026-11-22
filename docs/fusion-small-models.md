@@ -44,6 +44,51 @@ grading attempt remain failures; a supplied incomplete grade invalidates the run
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
 
+## Bounded caller-side tool trajectories
+
+`scripts/fusion-trajectory.mjs` exports `runTrajectory` and
+`runSingleTrajectory` for callers that need multiple tool steps. This is an
+opt-in utility; it does not register a Worker route or select models by itself.
+The caller provides model callbacks and a trusted tool registry. It also owns
+provider credentials, spending reservations and reconciliation, and tool isolation.
+
+Each tool has a unique `name`, an `effect` of `read` or `write`, a synchronous
+`validate(arguments)` callback and an asynchronous `execute(arguments, signal)`
+callback. Only tools with no external mutation may be declared `read`.
+Actions and observations must contain plain JSON values; `undefined` is invalid.
+Tool output is untrusted data, not permission to change the task or tool policy.
+
+The model callbacks receive a copied `{ task, history, segment }` and an abort
+signal. Return `{ type: "tool", name, arguments }` for a tool step or
+`{ type: "final", content }` for completion. In `runTrajectory`, `verify` returns
+`{ accepted, reason, replacement }`: `accepted` is the length of the valid prefix
+of the proposed segment, and `replacement` is one corrective action or `null`.
+Full acceptance requires a null replacement. Rejection requires a nonempty reason.
+If no usable replacement is supplied, `repair` receives only committed history
+and the reason. Rejected observations do not reach subsequent model callbacks.
+
+Read actions execute before review so the verifier can inspect their observations.
+Writes and final answers wait for review. A read-only segment is reviewed after
+`chunkSize` steps. `runSingleTrajectory` uses the same action validation, limits
+and registry but invokes only `draft`, with no semantic reviewer. This provides
+a matched execution control, not a guarantee of equivalent answer quality.
+
+Both functions return `{ content, history, stats }`. Set `maxModelCalls`,
+`maxToolCalls`, `maxContextBytes` and `deadlineMs` before execution. Every model
+callback and tool execution consumes its corresponding limit, including an
+optional final check. Set `finalCheckTool` to a registered tool that accepts `{}`
+and returns an observation with boolean `passed`. A failed final check enters
+history and continues the trajectory; only a passing check permits completion.
+
+The controller propagates callback errors and does not retry a failed or timed-out
+operation. Callbacks must honor their abort signal. A callback that ignores
+cancellation may continue after the controller rejects, so the caller must
+reconcile its outcome before another write or paid request. Returned history can
+contain sensitive tool data; callers must choose storage and redaction explicitly.
+
+This execution contract does not establish a fusion quality, cost or latency gain.
+Keep independent final grading and fixed-model controls in any comparison.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
