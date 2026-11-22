@@ -615,6 +615,7 @@ test('probeXX: unrelated', () => assert.fail('regex metacharacters must be liter
 test('probe.+: selected', () => assert.ok(true));
 test.skip('skipped: selected', () => assert.fail('must not count'));
 test.todo('todo: selected');
+test('failure: selected', () => assert.fail('selected assertion failed'));
 test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
 `);
     await writeFile(join(fixture, 'empty.test.mjs'), '');
@@ -643,6 +644,11 @@ test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
       assert.equal(skipped.passed, false, skipped.feedback);
       assert.equal(skipped.matchedTestPrefix, false);
     }
+    const failure = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: 'failure: ' });
+    assert.equal(failure.passed, false);
+    assert.equal(failure.matchedTestPrefix, true);
+    assert.match(failure.feedback, /selected assertion failed/);
+    assert.doesNotMatch(failure.feedback, /No test matched/);
     const defaultResult = await check(box, ['fixture.test.mjs'], 15000);
     assert.equal(defaultResult.passed, false);
     assert.equal('matchedTestPrefix' in defaultResult, false);
