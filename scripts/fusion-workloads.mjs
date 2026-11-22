@@ -270,6 +270,13 @@ function namedTestPattern(testNamePrefix) {
   return testNamePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Match Node's TAP reporter encoding without interpreting generated output.
+function tapTestName(name) {
+  return name.replaceAll('\b', '\\b').replaceAll('\f', '\\f').replaceAll('\t', '\\t')
+    .replaceAll('\n', '\\n').replaceAll('\r', '\\r').replaceAll('\v', '\\v')
+    .replaceAll('\\', '\\\\').replaceAll('#', '\\#');
+}
+
 export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   // Kill the in-container process group before the Docker client deadline.
@@ -282,7 +289,14 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix } = {
   const metrics = testResult(result);
   if (pattern === undefined) return { ...metrics, feedback: testFeedback(result) };
   // Node can report the test file itself as passing when no name matched.
-  const matchedTestPrefix = new RegExp(`^# Subtest: ${pattern}`, 'm').test(result.stdout.toString());
+  const encodedPrefix = tapTestName(testNamePrefix);
+  const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
+  const matchedTestPrefix = result.stdout.toString().split('\n').some(line => {
+    if (!line.startsWith('# Subtest: ')) return false;
+    const label = line.slice('# Subtest: '.length).replace(/\r$/, '');
+    return label.startsWith(encodedPrefix) && !fileLabels.some(path => label === path
+      || label.endsWith(`/${path}`) || path.endsWith(`/${label}`));
+  });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
     feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
 }

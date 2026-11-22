@@ -562,12 +562,14 @@ test('preservation qualification rejects source-mutating checks and isolates the
 
 test('named checks select a literal prefix and reject empty file-wrapper success', async () => {
   const prefix = 'probe.+: ';
+  const encodedPrefix = 'probe #\\:\t ';
   const fixture = await mkdtemp(join(tmpdir(), 'fusion-named-check-'));
   try {
     await writeFile(join(fixture, 'fixture.test.mjs'), `import test from 'node:test'; import assert from 'node:assert/strict';
 test('original contract', () => assert.fail('unselected original'));
 test('probeXX: unrelated', () => assert.fail('regex metacharacters must be literal'));
 test('probe.+: selected', () => assert.ok(true));
+test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
 `);
     const box = { exec: async (args, options) => {
       assert.equal(args[0], 'timeout');
@@ -580,6 +582,11 @@ test('probe.+: selected', () => assert.ok(true));
     const pass = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: prefix });
     assert.equal(pass.passed, true, pass.feedback);
     assert.equal(pass.matchedTestPrefix, true);
+    const encoded = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: encodedPrefix });
+    assert.equal(encoded.passed, true, encoded.feedback);
+    const filename = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: 'fixture.test.mjs' });
+    assert.equal(filename.passed, false);
+    assert.equal(filename.matchedTestPrefix, false);
     const empty = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: 'missing: ' });
     assert.equal(empty.passed, false);
     assert.equal(empty.matchedTestPrefix, false);
