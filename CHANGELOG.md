@@ -100,6 +100,8 @@
 
 ## Unreleased
 
+- Collect bounded read-only source and fixture context from literal references in fusion task tests.
+
 - Add a caller-side fusion edit schema that binds replacement region IDs to their files before inference.
 
 - Activate Radius API-key Pi routes and bounded, owner-bound config filtering with a closed native metadata projection. Add registered configured-stream, replay, cache-counter, denial and original cancellation/accounting checks; keep automatic catalog/OAuth routing and unknown tariffs explicitly separate.
