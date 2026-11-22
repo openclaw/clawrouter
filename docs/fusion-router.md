@@ -301,6 +301,46 @@ schema does not verify replacement code, prevent stale-source edits, or
 replace runtime and compiler checks. This helper makes no model calls and
 does not change Worker routing.
 
+### Include files referenced by tests
+
+A visible test can still depend on data the model cannot see. For example,
+it can load a JSON fixture and build a selection from a provider manifest.
+`scripts/fusion-test-context.mjs` exports `collectTestContext` to find direct,
+literal references and collect their source as read-only context:
+
+```js
+import { collectTestContext } from './scripts/fusion-test-context.mjs';
+
+const context = collectTestContext({
+  tests: [{ path: 'test/handler.test.mjs', content: testSource }],
+  editPaths: ['src/handler.ts'],
+  parse: parseModule,
+  readSource: path => readAtRevision(baseRevision, path),
+});
+// Add context.files to the model's read-only source context.
+// Inspect context.omitted before deciding whether the request has enough context.
+```
+
+Supply a Babel- or ESTree-style parser and a bounded source reader for the
+original repository revision. The reader returns a string or `null` for an
+unavailable file; errors propagate. The collector has no filesystem access
+and does not execute test or dependency code. It excludes the supplied tests
+and editable paths before calling the reader.
+
+Supported references are relative static imports, literal dynamic imports,
+re-exports, and `readFile` or `readFileSync` calls imported from `node:fs` or
+`node:fs/promises` (including aliases and namespace imports). File reads must
+use `new URL('relative-path', import.meta.url)`. Package imports, computed
+paths, binary files and paths outside the repository are not collected.
+It does not follow dependencies recursively or resolve extensionless imports.
+
+The defaults allow 16 collected files and 128 KiB of source. Oversized,
+excluded, unavailable, unsupported and file-limit omissions are reported;
+source is never truncated. At most 32 tests, 256 distinct references and
+250,000 AST objects are accepted. The result always has `complete: false`:
+literal references cannot establish a complete dependency graph. Retain
+normal edit validation, input budgets and full test/compiler verification.
+
 ### Scoped compiler repair context
 
 For TypeScript drafts that pass runtime checks but fail compilation,
