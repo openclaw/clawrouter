@@ -263,18 +263,33 @@ function testFeedback(result) {
   return failures.slice(0, 12000 - marker.length - tail.length) + marker + tail;
 }
 
-export async function check(box, paths, timeout = 120000) {
+function namedTestPattern(testNamePrefix) {
+  if (testNamePrefix === undefined) return undefined;
+  if (typeof testNamePrefix !== 'string' || !testNamePrefix.trim() || testNamePrefix.length > 256
+    || /[\r\n]/.test(testNamePrefix)) throw new Error('invalid_test_name_prefix');
+  return testNamePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  const pattern = namedTestPattern(testNamePrefix);
+  const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
-  return { ...testResult(result), feedback: testFeedback(result) };
+    'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+  const metrics = testResult(result);
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result) };
+  // Node can report the test file itself as passing when no name matched.
+  const matchedTestPrefix = new RegExp(`^# Subtest: ${pattern}`, 'm').test(result.stdout.toString());
+  return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
+    feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
 }
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */
-export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000) {
+export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000, options = {}) {
+  namedTestPattern(options.testNamePrefix);
   if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
     || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {
     throw new Error('invalid_acceptance_check');
@@ -300,7 +315,7 @@ if(process.getuid()!==65534||![denied(()=>fs.writeFileSync(path,'changed')),deni
   if (admission.stdout.toString().trim() !== 'protected') throw new Error('acceptance_protection_failed');
   if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
   try {
-    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout);
+    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout, options);
   } finally {
     if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
   }

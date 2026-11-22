@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow fusion workload checks to select a literal test-name prefix and reject runs with no matching test.
+
 - Allow caller-side single trajectories to schedule validated follow-up tools without a model call, preserving tool limits, cancellation and final checks.
 
 - Add a caller-supplied model adapter for bounded trajectories, with strict action schemas, fixed-model controls and feedback-driven selection from a configured pair.

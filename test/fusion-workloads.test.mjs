@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
-import { taskSandbox, readSource, writeFiles, command, verify, validatePublicTestFiles, acceptanceTestFiles } from '../scripts/fusion-workloads.mjs';
+import { taskSandbox, readSource, writeFiles, command, verify, validatePublicTestFiles, acceptanceTestFiles, checkAcceptance } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -557,4 +557,43 @@ test('preservation qualification rejects source-mutating checks and isolates the
   const results = await checkPreservationProbes(task, receipt.image);
   assert.deepEqual(results.map(row => [row.passed, row.unchanged]), [[true, false], [true, true]]);
   assert.equal(JSON.stringify(results).includes('guard-mutation'), false);
+});
+
+
+test('named checks select a literal prefix and reject empty file-wrapper success', async () => {
+  const prefix = 'probe.+: ';
+  const fixture = await mkdtemp(join(tmpdir(), 'fusion-named-check-'));
+  try {
+    await writeFile(join(fixture, 'fixture.test.mjs'), `import test from 'node:test'; import assert from 'node:assert/strict';
+test('original contract', () => assert.fail('unselected original'));
+test('probeXX: unrelated', () => assert.fail('regex metacharacters must be literal'));
+test('probe.+: selected', () => assert.ok(true));
+`);
+    const box = { exec: async (args, options) => {
+      assert.equal(args[0], 'timeout');
+      assert.equal(options.allowFailure, true);
+      const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+      const child = spawnSync(process.execPath, args.slice(4), { cwd: fixture, timeout: 10000, env });
+      assert.equal(child.error, undefined);
+      return { code: child.status, stdout: child.stdout, stderr: child.stderr };
+    } };
+    const pass = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: prefix });
+    assert.equal(pass.passed, true, pass.feedback);
+    assert.equal(pass.matchedTestPrefix, true);
+    const empty = await check(box, ['fixture.test.mjs'], 15000, { testNamePrefix: 'missing: ' });
+    assert.equal(empty.passed, false);
+    assert.equal(empty.matchedTestPrefix, false);
+    assert.match(empty.feedback, /No test matched/);
+    const defaultResult = await check(box, ['fixture.test.mjs'], 15000);
+    assert.equal(defaultResult.passed, false);
+    assert.equal('matchedTestPrefix' in defaultResult, false);
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+});
+
+test('invalid name prefixes fail before a test process or acceptance mutation', async () => {
+  const box = { exec: () => { throw Error('must not execute'); }, execUnprivileged: () => { throw Error('must not execute'); } };
+  for (const testNamePrefix of ['', ' ', '\nname', 'name\r', 123, 'x'.repeat(257)]) {
+    await assert.rejects(check(box, ['fixture.test.mjs'], 1000, { testNamePrefix }), /invalid_test_name_prefix/);
+    await assert.rejects(checkAcceptance(box, ['fixture.test.mjs'], [], 1000, { testNamePrefix }), /invalid_test_name_prefix/);
+  }
 });
