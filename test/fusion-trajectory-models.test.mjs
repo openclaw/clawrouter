@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runModelTrajectory, runSingleModelTrajectory, runAdaptiveModelTrajectory } from '../scripts/fusion-trajectory-models.mjs';
+import { runModelTrajectory, runSingleModelTrajectory, runAdaptiveModelTrajectory, runFinalReviewedModelTrajectory } from '../scripts/fusion-trajectory-models.mjs';
 
 const answer = content => ({ action: { type: 'final', content } });
 const response = value => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] });
@@ -168,4 +168,29 @@ test('model adapters forward checkpoint hooks without adding inference calls', a
   assert.equal(checkpoints[0].stats.modelCalls, 1);
   assert.deepEqual(checkpoints[0].history, result.history);
   assert.equal(result.content, 'done');
+});
+
+
+test('completion review uses a strong correction despite the draft selector and meters every call', async () => {
+  const models = []; let value = 0;
+  const result = await runFinalReviewedModelTrajectory({ task: 'Set two.', runId: 'final-review',
+    draftModel: 'draft-model', reviewModel: 'review-model', selectModel: () => 'draft-model',
+    maxModelCalls: 6, maxToolCalls: 3, finalCheckTool: 'check',
+    tools: [{ name: 'write', effect: 'write', parameters: { type: 'object', properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false },
+      validate: args => Number.isInteger(args.value), execute: async args => { value = args.value; return { value }; } },
+    { name: 'check', effect: 'read', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      validate: args => Object.keys(args).length === 0, execute: async () => ({ passed: value === 2 }) }],
+    invoke: async (_id, model, body) => {
+      models.push(model);
+      const step = models.length;
+      if (step === 1 || step === 4) return response({ action: { type: 'tool', name: 'write', arguments: { value: step === 1 ? 1 : 2 } } });
+      if (step === 2 || step === 5) return response(answer('done'));
+      assert.match(body.messages[0].content, /Passing public checks is not proof/);
+      return response(step === 3 ? { accepted: 0, reason: 'Wrong value.', replacement: null }
+        : { accepted: 1, reason: '', replacement: null });
+    } });
+  assert.equal(value, 2);
+  assert.deepEqual(models, ['draft-model', 'draft-model', 'review-model', 'review-model', 'draft-model', 'review-model']);
+  assert.equal(result.stats.modelCalls, 6); assert.equal(result.stats.toolCalls, 3);
+  assert.equal(result.stats.reviews, 2); assert.equal(result.stats.repairs, 1);
 });

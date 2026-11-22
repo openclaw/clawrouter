@@ -16,19 +16,25 @@ function copy(value, limit) {
 }
 
 export const runTrajectory = options => runController(options, true);
+// Tool effects execute immediately; callers must keep them in disposable state
+// until the final answer has passed review.
+export const runFinalReviewedTrajectory = options => runController(options, 'final');
 // Matched fixed-model baseline: identical tools and limits, no model reviewer.
 export const runSingleTrajectory = options => runController(options, false);
 
 async function runController({ task, tools, draft, verify, repair,
   chunkSize = 4, maxModelCalls = 32, maxToolCalls = 32, maxContextBytes = 131072,
-  deadlineMs = 120000, signal, finalCheckTool, nextAction, onCheckpoint } = {}, reviewDrafts) {
+  deadlineMs = 120000, signal, finalCheckTool, reviewSnapshot, nextAction, onCheckpoint } = {}, reviewDrafts) {
   for (const [value, max] of [[chunkSize, 16], [maxModelCalls, 128], [maxToolCalls, 128],
     [maxContextBytes, 1048576], [deadlineMs, 600000]]) {
     if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error('invalid_trajectory_limit');
   }
   if (typeof task !== 'string' || !task.trim() || !Array.isArray(tools)
     || !(reviewDrafts ? [draft, verify, repair] : [draft]).every(fn => typeof fn === 'function')) throw new Error('invalid_trajectory_config');
-  if (nextAction !== undefined && (reviewDrafts !== false || typeof nextAction !== 'function')) {
+  if (reviewSnapshot !== undefined && (reviewDrafts !== 'final' || typeof reviewSnapshot !== 'function')) {
+    throw new Error('invalid_trajectory_snapshot');
+  }
+  if (nextAction !== undefined && (![false, 'final'].includes(reviewDrafts) || typeof nextAction !== 'function')) {
     throw new Error('invalid_trajectory_scheduler');
   }
   if (onCheckpoint !== undefined && typeof onCheckpoint !== 'function') throw new Error('invalid_trajectory_checkpoint');
@@ -103,6 +109,7 @@ async function runController({ task, tools, draft, verify, repair,
     }
     return finish(action);
   };
+  let pendingFinal;
   while (true) {
     if (!reviewDrafts) {
       active.throwIfAborted();
@@ -120,15 +127,36 @@ async function runController({ task, tools, draft, verify, repair,
     }
     const segment = [];
     let held = false;
-    while (segment.length < chunkSize) {
+    if (reviewDrafts === 'final') {
+      active.throwIfAborted();
+      const scheduled = nextAction?.(context({ segment: [] }));
+      if (scheduled !== undefined && scheduled !== null) {
+        const action = checkedAction(scheduled);
+        if (action.type !== 'tool') throw new Error('invalid_trajectory_scheduled_action');
+        await commit([await execute(action)]);
+        continue;
+      }
+      const action = pendingFinal ?? checkedAction(await call(draft, context({ segment: [] })));
+      pendingFinal = undefined;
+      if (action.type !== 'final') { await commit([await execute(action)]); continue; }
+      held = true;
+      segment.push({ action, observation: null });
+    }
+    while (reviewDrafts !== 'final' && segment.length < chunkSize) {
       const action = checkedAction(await call(draft, context({ segment })));
       held = action.type === 'final' || registry.get(action.name).effect === 'write';
       segment.push(held ? { action, observation: null } : await execute(action));
       if (held) break;
     }
     stats.reviews++;
-    // Unlike the paper's unchecked K-read commit, every chunk is reviewed.
-    const verdict = await call(verify, context({ segment }));
+    // Full review holds each chunk; completion review holds only the final answer.
+    let reviewRequest = context({ segment });
+    if (reviewSnapshot) {
+      const snapshot = reviewSnapshot(context({}));
+      if (!plain(snapshot)) throw new Error('invalid_trajectory_snapshot');
+      reviewRequest = owned({ task, segment, snapshot });
+    }
+    const verdict = await call(verify, reviewRequest);
     if (!plain(verdict) || Object.keys(verdict).some(key => !['accepted', 'reason', 'replacement'].includes(key))
       || !Number.isSafeInteger(verdict.accepted) || verdict.accepted < 0 || verdict.accepted > segment.length
       || typeof verdict.reason !== 'string' || verdict.reason.length > 4096
@@ -155,7 +183,10 @@ async function runController({ task, tools, draft, verify, repair,
         stats.repairs++;
         action = checkedAction(await call(repair, context({ reason: verdict.reason })));
       }
-      if (action.type === 'final') { const result = await checkedFinish(action); if (result) return result; else continue; }
+      if (action.type === 'final') {
+        if (reviewDrafts === 'final') { pendingFinal = action; continue; }
+        const result = await checkedFinish(action); if (result) return result; else continue;
+      }
       await commit([await execute(action)]);
     }
   }
