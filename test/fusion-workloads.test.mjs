@@ -613,8 +613,11 @@ test('named checks select a literal prefix and reject empty file-wrapper success
 test('original contract', () => assert.fail('unselected original'));
 test('probeXX: unrelated', () => assert.fail('regex metacharacters must be literal'));
 test('probe.+: selected', () => assert.ok(true));
+test.skip('skipped: selected', () => assert.fail('must not count'));
+test.todo('todo: selected');
 test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
 `);
+    await writeFile(join(fixture, 'empty.test.mjs'), '');
     const box = { exec: async (args, options) => {
       assert.equal(args[0], 'timeout');
       assert.equal(options.allowFailure, true);
@@ -635,6 +638,11 @@ test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
     assert.equal(empty.passed, false);
     assert.equal(empty.matchedTestPrefix, false);
     assert.match(empty.feedback, /No test matched/);
+    for (const testNamePrefix of ['skipped: ', 'todo: ']) {
+      const skipped = await check(box, ['fixture.test.mjs', 'empty.test.mjs'], 15000, { testNamePrefix });
+      assert.equal(skipped.passed, false, skipped.feedback);
+      assert.equal(skipped.matchedTestPrefix, false);
+    }
     const defaultResult = await check(box, ['fixture.test.mjs'], 15000);
     assert.equal(defaultResult.passed, false);
     assert.equal('matchedTestPrefix' in defaultResult, false);

@@ -292,11 +292,21 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix } = {
   // Node can report the test file itself as passing when no name matched.
   const encodedPrefix = tapTestName(testNamePrefix);
   const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
-  const matchedTestPrefix = result.stdout.toString().split('\n').some(line => {
-    if (!line.startsWith('# Subtest: ')) return false;
-    const label = line.slice('# Subtest: '.length).replace(/\r$/, '');
-    return label.startsWith(encodedPrefix) && !fileLabels.some(path => label === path
-      || label.endsWith(`/${path}`) || path.endsWith(`/${label}`));
+  let selectedLabel;
+  const matchedTestPrefix = result.stdout.toString().split('\n').some(rawLine => {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith('# Subtest: ')) {
+      const label = line.slice('# Subtest: '.length);
+      selectedLabel = label.startsWith(encodedPrefix) && !fileLabels.some(path => label === path
+        || label.endsWith(`/${path}`) || path.endsWith(`/${label}`)) ? label : undefined;
+      return false;
+    }
+    const completed = /^(?:not )?ok \d+ - (.*)$/.exec(line);
+    if (!completed) return false;
+    // Exact equality excludes SKIP/TODO directives after the encoded name.
+    const passed = line.startsWith('ok ') && selectedLabel !== undefined && completed[1] === selectedLabel;
+    selectedLabel = undefined;
+    return passed;
   });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
     feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
