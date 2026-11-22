@@ -73,6 +73,44 @@ test('public test replacements are visible in trials while the source image rema
   try { assert.deepEqual(await readSource(unchanged, [file.path]), before); } finally { await unchanged.close(); }
 });
 
+test('new public test files are installed only in the disposable sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const file = { path: 'worker/test/fusion-new-public.test.mjs', content: "import test from 'node:test'; test('new public contract',()=>{});\n" };
+  const image = process.env.FUSION_NATIVE_IMAGE;
+  const fixture = { ...task, visibleTests: [file.path], publicTestFiles: [file] };
+  const declared = await taskSandbox(fixture, image);
+  try {
+    assert.deepEqual(await readSource(declared, [file.path]), [file]);
+    const result = await check(declared, [file.path]);
+    assert.equal(result.valid, true); assert.equal(result.passed, true); assert.equal(result.tests, 1);
+  } finally { await declared.close(); }
+  const unchanged = await taskSandbox(task, image);
+  try {
+    await unchanged.exec(['node', '-e', "if(require('node:fs').existsSync(process.argv[1]))process.exit(1)", `/work/${file.path}`]);
+  } finally { await unchanged.close(); }
+});
+
+test('public test installation rejects linked files, linked parents and missing parents', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  for (const kind of ['file', 'parent', 'missing']) {
+    const path = kind === 'file' ? 'worker/test/fusion-linked-public.test.mjs' : 'worker/fusion-public-parent/new.test.mjs';
+    let prepared = false;
+    const run = async (program, args, options) => {
+      const result = await command(program, args, options);
+      if (!prepared && args[0] === 'exec') {
+        prepared = true;
+        if (kind !== 'missing') await command('docker', ['exec', args[2], 'ln', '-s', '/tmp',
+          kind === 'file' ? `/work/${path}` : '/work/worker/fusion-public-parent']);
+      }
+      return result;
+    };
+    await assert.rejects(taskSandbox({ ...task, visibleTests: [path],
+      publicTestFiles: [{ path, content: "import 'node:test';\n" }] }, process.env.FUSION_NATIVE_IMAGE, run), /command_failed/);
+  }
+});
+
 test('oracle support is bounded to distinct non-test helper modules and stays outside agent edits/context', () => {
   const helper = 'worker/test/usage-snapshot-fixture.mjs';
   assert.equal(validateTask({ ...task, oracleSupportPaths: [helper] }).oracleSupportPaths[0], helper);

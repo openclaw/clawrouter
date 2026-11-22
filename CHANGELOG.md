@@ -1,5 +1,7 @@
 # Changelog
 
+- Install declared new public fusion workload test files in disposable sandboxes while preserving file and parent path guards.
+
 - Allow caller-side fusion workflows to retry an unusable draft with an optional specialist before strong-model fallback, preserving verification, costs and the six-call bound.
 
 - Allow caller-side fusion workflows to try an optional runtime repair specialist before stronger-model fallback, preserving the original draft and six-call bound.

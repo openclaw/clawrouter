@@ -169,7 +169,13 @@ export async function taskSandbox(task, image, run = command) {
 for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
 if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
 fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
-    if (publicTests.length) await writeFiles(box, publicTests);
+    if (publicTests.length) {
+      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
+if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
+try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}`, JSON.stringify(publicTests.map(file => file.path))]);
+      await writeFiles(box, publicTests);
+    }
     return box;
   } catch (error) { await box.close(); throw error; }
 }
