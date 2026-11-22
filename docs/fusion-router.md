@@ -253,6 +253,16 @@ fails, the strong model starts again from the original task and can make one
 final repair. The maximum is six model calls. Set `strategy: 'strong'` for a
 two-call control using only the repair model.
 
+Optionally set `models.runtimeRepair` to a specialist model identifier. When
+the original draft fails runtime checks but passes compilation, the workflow
+calls that model once with the saved draft and verification feedback, using
+the `draft-runtime` stage. Both checks must pass to accept its repair. If they
+do not, the strong model receives the original draft and feedback, not the
+failed specialist output. The specialist is skipped for compiler failures,
+unusable drafts, and the strong control. Omitting it preserves the default
+sequence. The maximum remains six calls; failed specialist attempts count
+toward total cost and elapsed time.
+
 The result includes `passed`, the final `artifact` and `verification`, all
 attempt costs, and elapsed time including callbacks. Optional `onStep` receives
 only stage, model, cost, check verdicts, and timing; it receives no artifact or

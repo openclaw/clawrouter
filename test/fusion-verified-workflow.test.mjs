@@ -66,3 +66,41 @@ test('invalid or overflowing costs cannot become successful accounting receipts'
   assert.equal(calls, 2);
   await assert.rejects(runVerifiedWorkflow({ ...fixture({}), invoke: async () => ({ artifact: undefined, costMicros: 0 }) }), /invalid_generation_receipt/);
 });
+test('optional runtime specialist accepts only a fully verified repair', async () => {
+  const f = fixture({ draft: runtimeError });
+  const r = await runVerifiedWorkflow({ ...f, models: { ...models, runtimeRepair: 'provider-d/runtime' } });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 14);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-runtime']);
+  assert.equal(f.requests[1].model, 'provider-d/runtime');
+  assert.deepEqual(f.requests[1].draft, { name: 'draft' });
+  assert.deepEqual(f.requests[1].feedback, runtimeError);
+});
+test('failed runtime specialist preserves original draft and the six-call ceiling', async () => {
+  const f = fixture({ draft: runtimeError, 'draft-runtime': typeError, 'semantic-repair': typeError,
+    'semantic-compiler': runtimeError, 'strong-restart': runtimeError, 'strong-repair': runtimeError });
+  const invoke = f.invoke;
+  f.invoke = async r => { if (r.stage === 'draft-runtime') { r.draft.name = 'corrupted'; r.feedback.feedback = 'changed'; } return invoke(r); };
+  const r = await runVerifiedWorkflow({ ...f, models: { ...models, runtimeRepair: 'provider-d/runtime' } });
+  assert.equal(r.passed, false); assert.equal(r.costMicros, 42);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-runtime', 'semantic-repair', 'semantic-compiler', 'strong-restart', 'strong-repair']);
+  assert.deepEqual(f.requests[2].draft, { name: 'draft' }); assert.deepEqual(f.requests[2].feedback, runtimeError);
+  assert.equal(f.requests[4].draft, null);
+});
+test('runtime specialist is skipped for other failure classes and strong controls', async () => {
+  for (const [draft, strategy] of [[good, 'fusion'], [typeError, 'fusion'], [{ runtimePassed: false, compilerPassed: false }, 'fusion'], [runtimeError, 'strong']]) {
+    const f = fixture({ draft });
+    await runVerifiedWorkflow({ ...f, strategy, models: { ...models, runtimeRepair: 'provider-d/runtime' } });
+    assert.ok(f.requests.every(x => x.stage !== 'draft-runtime'));
+  }
+});
+test('runtime specialist errors stop the workflow and invalid model IDs fail before calls', async () => {
+  const f = fixture({ draft: runtimeError }), invoke = f.invoke;
+  f.invoke = async r => { if (r.stage === 'draft-runtime') throw Error('specialist_unavailable'); return invoke(r); };
+  await assert.rejects(runVerifiedWorkflow({ ...f, models: { ...models, runtimeRepair: 'provider-d/runtime' } }), /specialist_unavailable/);
+  assert.equal(f.requests.length, 1);
+  for (const runtimeRepair of [null, '', ' ', 42, 'x'.repeat(257)]) {
+    const invalid = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...invalid, models: { ...models, runtimeRepair } }), /invalid_verified_workflow/);
+    assert.equal(invalid.requests.length, 0);
+  }
+});

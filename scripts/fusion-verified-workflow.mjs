@@ -2,6 +2,7 @@
 // isolated verification and artifact storage; this module makes no network calls.
 const isPassed = result => result.verification.runtimePassed && result.verification.compilerPassed;
 const compilerOnly = result => result.verification.runtimePassed && !result.verification.compilerPassed;
+const validModel = id => typeof id === 'string' && Boolean(id.trim()) && id.length <= 256;
 
 async function bounded(signal, operation) {
   signal.throwIfAborted();
@@ -25,7 +26,8 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   deadlineMs = 900000, signal: callerSignal }) {
   if (!['fusion', 'strong'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
-    || !models || ['draft', 'repair', 'compiler'].some(k => typeof models[k] !== 'string' || !models[k].trim() || models[k].length > 256)) {
+    || !models || ['draft', 'repair', 'compiler'].some(k => !validModel(models[k]))
+    || (models.runtimeRepair !== undefined && !validModel(models.runtimeRepair))) {
     throw new Error('invalid_verified_workflow');
   }
   const deadline = AbortSignal.timeout(deadlineMs);
@@ -67,7 +69,11 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
     const repaired = await attempt('draft-compiler', models.compiler, draft);
     if (isPassed(repaired)) return finish(repaired);
   }
-  // Failed compiler repairs cannot replace the original draft as repair input.
+  if (!draft.verification.runtimePassed && draft.verification.compilerPassed && models.runtimeRepair !== undefined) {
+    const repaired = await attempt('draft-runtime', models.runtimeRepair, draft);
+    if (isPassed(repaired)) return finish(repaired);
+  }
+  // Failed specialist repairs cannot replace the original draft as repair input.
   const semantic = await attempt('semantic-repair', models.repair, draft);
   if (isPassed(semantic)) return finish(semantic);
   if (compilerOnly(semantic)) {
