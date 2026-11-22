@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|test)\/[A-Za-z0-9_./-]+$/.test(value)
@@ -335,20 +336,28 @@ if(process.getuid()!==65534||![denied(()=>fs.writeFileSync(path,'changed')),deni
   }
 }
 
-export async function probe(box, source, timeout = 15000) {
+export async function probe(box, source, timeout = 15000, { filterLoaderAssertions = false } = {}) {
   if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_probe');
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_probe');
+  if (typeof filterLoaderAssertions !== 'boolean') throw new Error('invalid_probe');
   const limit = Math.min(15000, timeout);
   // The in-container watchdog owns the process group; killing docker exec alone
   // would leave a hanging probe alive. Give the client time to collect its exit.
   const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
     { input: source, allowFailure: true, timeout: limit + 2000 });
+  const output = Buffer.concat([result.stdout, result.stderr]).toString();
+  const diagnostics = filterLoaderAssertions ? stripVTControlCharacters(output) : output;
+  // Conservative opt-in for generated probes wrapping subprocess failures.
+  // Diagnostics are not attestation; retain the legacy interpretation by default.
+  const loaderError = /^(?:Error|TypeError) \[(?:ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION|ERR_UNSUPPORTED_DIR_IMPORT)\]:[^\n]*(?:\nDid you mean to import [^\n]*)?\n\s+at [^\n]*\(node:internal\/modules\//m;
+  const parserError = /^SyntaxError:[^\n]*\n\s+at compileSourceTextModule \(node:internal\/modules\//m;
+  const filtered = filterLoaderAssertions && (loaderError.test(diagnostics) || parserError.test(diagnostics));
   return { passed: result.code === 0,
     // node:test can rethrow an uncaught assertion from its exception handler,
     // producing Node's exit code 7 instead of the usual uncaught exit code 1.
     // node:test reporters print caught assertion diagnostics on stdout.
-    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(Buffer.concat([result.stdout, result.stderr]).toString()),
-    feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
+    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(output) && !filtered,
+    feedback: output.slice(-12000) };
 }
 
 export async function buildTask(task, { repo, nodeImage, run = command }) {

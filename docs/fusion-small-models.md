@@ -596,6 +596,12 @@ JavaScript check body. A passing probe, import failure or
 syntax error does not qualify. Each probe executes in a fresh disposable
 sandbox; its writes cannot change the repair workspace.
 
+Low-level callers can use `probe(box, source, timeout, { filterLoaderAssertions: true })`
+to classify wrapped Node loader and parser diagnostics as invalid probes rather
+than behavioral assertions. The option defaults to `false`. This conservative
+output heuristic preserves assertion expectations that merely mention an error
+code; it does not authenticate generated tests or establish complete coverage.
+
 Once a reproduction fails with an assertion on the original source, freeze it
 and allow repairs. Rerun it on each candidate in another disposable sandbox.
 Submit automatically only when the reproduction and visible tests pass. Hidden
