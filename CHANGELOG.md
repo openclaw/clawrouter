@@ -130,6 +130,8 @@
 
 ## Unreleased
 
+- Clarify the existing Copilot catalog normalization of reported reasoning-effort tags, including unknown tags and missing, null, or empty observations.
+
 - Add an opt-in supporting-source selector for fusion benchmarks, with hashed omissions and conservative handling of unresolved imports; benchmark and Worker defaults are unchanged.
 
 - Collect bounded read-only source and fixture context from literal references in fusion task tests.

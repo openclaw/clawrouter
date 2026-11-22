@@ -32,8 +32,12 @@ the complete read and fresh owner check.
 Context-window, prompt and output token limits remain three separate optional
 positive-safe-integer observations. Missing or invalid numeric facts stay absent;
 there is no 8192 output guess, synthetic context size, clamping or inferred limit.
-Explicit support booleans, including false, and empty or null reasoning-effort
-observations survive. Missing support facts stay unknown. Starter selection's
+Explicit support booleans, including false, survive. For
+`capabilities.supports.reasoning_effort`, the decoder trims each string, converts
+it to lowercase, removes empty strings, and removes duplicates in first-seen
+order. Unknown nonempty tags survive. An empty array stays empty, explicit
+`null` stays `null`, and a missing field stays absent. Missing support facts stay
+unknown. Starter selection's
 tool/streaming requirements remain separate from picker visibility and inference
 authority. No modalities are guessed from model names.
 
