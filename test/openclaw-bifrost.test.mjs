@@ -15,6 +15,7 @@ import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { createBifrostSocketReset } from "./helpers/bifrost-reset-socket.mjs";
 
 export const bifrostPin = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 export const bifrostModels = ["tenant/opaque-a", "tenant/opaque-b"];
@@ -2494,21 +2495,27 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    assert.deepEqual(h.order,["abort","cancel","release"]);
   }
  });
- for(const mode of ["progress","partial"])test("Bifrost "+mode+" caller abort plus explicit consumer retirement joins Worker accounting",{timeout:30000},async()=>{
+ for(const mode of ["progress","partial"])test("Bifrost "+mode+" caller abort plus explicit consumer retirement joins Worker accounting"+(mode==="partial"?" after TCP reset":""),{timeout:30000},async()=>{
   const row={id:mode==="partial"?"bifrost_stream_partial":"bifrost_local_progress",mode,api:"stream"},f=await startBifrostFixture();
+  let disconnect;
   await finishBifrostOwned(async()=>{
    await f.setup(row);
    const discovery=await fetch(f.origin+"/v1/native/bifrost/v1/models",{headers:{authorization:"Bearer "+bifrostDiscoveryKey(row.id)}});assert.equal(discovery.status,200);await discovery.arrayBuffer();
+   if(mode==="partial")disconnect=createBifrostSocketReset(f.origin+"/v1/native/bifrost/v1/chat/completions");
    const controller=new AbortController(),response=await fetch(f.origin+"/v1/native/bifrost/v1/chat/completions",{method:"POST",headers:{authorization:"Bearer "+bifrostKey(row.id),"content-type":"application/json"},
     body:JSON.stringify({model:"tenant/opaque-a",stream:true,messages:[{role:"user",content:"synthetic local progress"}]}),signal:controller.signal});
    assert.equal(response.status,200);const reader=response.body.getReader();assert.ok((await reader.read()).value.byteLength>0);
    const pending=reader.read(),reason=new Error("synthetic local cancellation");
+   // An idle response need not observe a graceful TCP close until its next write.
+   // Exercise explicit reset here; progress mode retains ordinary fetch abort.
+   // https://github.com/cloudflare/workerd/issues/6832
+   disconnect?.reset();
    const retired=await retireBifrostDirectReader(reader,pending,controller,reason);
    assert.equal(retired.reader,reader);assert.equal(retired.reading,pending);assert.equal(response.body.locked,false);
    if(mode==="progress"){const progress=await fetch(f.origin+"/__bifrost/progress/"+row.id,{method:"POST"});assert.equal(progress.status,200);await progress.arrayBuffer();}
    const proof=await f.join(row.id);assertBifrostRetired(proof);assertBifrostFailedChatAccounting({id:row.id,mode:"partial"},proof);
    assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);assert.equal(proof.source.expired,0);assert.equal(proof.source.producer.joined,true);
-  },[()=>f.close()]);
+  },[()=>disconnect?.close(),()=>f.close()]);
  });
  function progressEvidence(){
   const w=nativeEvidence(),t=w.transports[0];w.owner.id="bifrost_progress";t.socketRequest={};t.socket={};t.socketClosedAt=20;w.caller.controlInvoke=21;
