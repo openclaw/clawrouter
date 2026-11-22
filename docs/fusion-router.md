@@ -376,6 +376,36 @@ source is never truncated. At most 32 tests, 256 distinct references and
 literal references cannot establish a complete dependency graph. Retain
 normal edit validation, input budgets and full test/compiler verification.
 
+### Select optional supporting source
+
+Callers can opt into `selectSourceContext` from the same module after collecting
+supporting source. It retains direct imports and re-exports of editable files,
+declaration files and named fragments, non-code resources, and test helpers. It reports other
+whole-file omissions with content hashes. Editable source and acceptance tests
+remain separate inputs and are never removed by this function.
+
+```js
+import { selectSourceContext } from './scripts/fusion-test-context.mjs';
+
+const selected = selectSourceContext({
+  sources: editableFiles,
+  context: supportingFiles,
+  parse: parseModule,
+});
+// Inspect selected.omitted, then explicitly use selected.files in the request.
+```
+
+This is an experimental prompt policy, not a complete dependency resolver.
+Unresolved dynamic imports and package or alias imports preserve all supplied
+context. Extension and directory-index variants are retained conservatively.
+The function does not read files, invoke models, or change benchmark defaults.
+Keep full test and compiler gates; a smaller request does not prove equal quality.
+
+Inputs are bounded to 32 editable files, 256 context entries, 256 KiB per file,
+4 MiB of combined content, and 250,000 AST objects. `bytes` and `originalBytes`
+count UTF-8 supporting content, excluding request formatting. The result always
+has `complete: false`; inspect omissions before using it.
+
 ### Scoped compiler repair context
 
 For TypeScript drafts that pass runtime checks but fail compilation,
