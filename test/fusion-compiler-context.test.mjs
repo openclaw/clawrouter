@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCompilerRepairContext, applyCompilerRepairs } from '../scripts/fusion-compiler-context.mjs';
+import { createCompilerRepairContext, applyCompilerRepairs, applyCompilerTextEdits } from '../scripts/fusion-compiler-context.mjs';
 
 const files = () => [{ path: 'src/a.ts', content: 'const a: string = 1;\n' }, { path: 'src/b.ts', content: 'const b = 2;\n' }];
 const diagnostics = "src/a.ts(1,7): error TS2322: Type 'number' is not assignable to type 'string'.\n";
@@ -68,4 +68,51 @@ test('merged source must stay within the total bound even when each replacement 
   const context = createCompilerRepairContext({ files: input, diagnostics: 'src/a.ts(1,1): error TS1005: Missing token.' });
   assert.throws(() => applyCompilerRepairs({ context, files: input, replacements: [{ path: 'src/a.ts', content: 'x' }] }), /invalid_compiler_source_files/);
   assert.equal(input[4].content, '');
+});
+
+test('exact edits preserve unrelated bytes and use original offsets for all replacements', () => {
+  const input = [{ path: 'src/a.ts', content: 'const a: string = 1;\r\n// 😀 keep\r\nconst b = a;\r\n' }, files()[1]];
+  const context = createCompilerRepairContext({ files: input, diagnostics });
+  const edits = [{ path: 'src\\a.ts', oldText: 'const b = a;', newText: 'const b: string = a;' },
+    { path: 'src/a.ts', oldText: 'string = 1', newText: "string = 'one'" }];
+  const before = structuredClone(input);
+  const result = applyCompilerTextEdits({ context, files: input, edits });
+  assert.equal(result[0].content, "const a: string = 'one';\r\n// 😀 keep\r\nconst b: string = a;\r\n");
+  assert.deepEqual(result[1], input[1]); assert.deepEqual(input, before);
+});
+
+test('exact edits reject ambiguous matches including overlapping occurrences', () => {
+  const input = [{ path: 'src/a.ts', content: 'aaa' }];
+  const context = createCompilerRepairContext({ files: input, diagnostics: 'src/a.ts(1,1): error TS1005: Missing token.' });
+  assert.throws(() => applyCompilerTextEdits({ context, files: input,
+    edits: [{ path: 'src/a.ts', oldText: 'aa', newText: 'b' }] }), /compiler_text_edit_not_unique/);
+});
+
+test('exact edit batches reject missing, overlapping, stale and out-of-scope changes atomically', () => {
+  const input = files(), context = createCompilerRepairContext({ files: input, diagnostics });
+  const edit = { path: 'src/a.ts', oldText: 'string = 1', newText: "string = '1'" };
+  for (const edits of [[edit, { ...edit, oldText: 'missing' }], [edit, edit],
+    [edit, { ...edit, oldText: 'a: string', newText: 'b: string' }],
+    [edit, { path: 'src/b.ts', oldText: '2', newText: '3' }],
+    [{ ...edit, path: '../a.ts' }], [{ ...edit, path: 'src/new.ts' }]]) {
+    assert.throws(() => applyCompilerTextEdits({ context, files: input, edits }));
+    assert.deepEqual(input, files());
+  }
+  input[0].content += '// changed';
+  assert.throws(() => applyCompilerTextEdits({ context, files: input, edits: [edit] }), /stale_compiler_repair/);
+});
+
+test('exact edit bounds reject no-ops, malformed output and oversized batches', () => {
+  const input = files(), context = createCompilerRepairContext({ files: input, diagnostics });
+  const edit = { path: 'src/a.ts', oldText: 'string = 1', newText: "string = '1'" };
+  for (const edits of [null, [], Array(33).fill(edit), [null],
+    [{ ...edit, oldText: '' }], [{ ...edit, newText: undefined }], [{ ...edit, newText: edit.oldText }],
+    [{ ...edit, oldText: 'x'.repeat(16385) }], [{ ...edit, newText: 'x'.repeat(16385) }]]) {
+    assert.throws(() => applyCompilerTextEdits({ context, files: input, edits }));
+  }
+  const chunks = Array.from({ length: 5 }, (_, i) => String(i).repeat(10000));
+  const large = [{ path: 'src/a.ts', content: chunks.join('\n') }];
+  const largeContext = createCompilerRepairContext({ files: large, diagnostics });
+  assert.throws(() => applyCompilerTextEdits({ context: largeContext, files: large,
+    edits: chunks.map(oldText => ({ path: 'src/a.ts', oldText, newText: 'x'.repeat(10000) })) }), /compiler_text_edit_limit/);
 });
