@@ -1,5 +1,7 @@
 # Changelog
 
+- Add a caller-supplied model adapter for bounded trajectories, with strict action schemas, fixed-model controls and feedback-driven selection from a configured pair.
+
 - Add an opt-in caller-side tool trajectory controller with bounded model/tool calls, reviewed writes, cancellation and optional final checks.
 
 - Retain append-only public regression guards during final fusion workload acceptance without replacing oracle test bytes.
