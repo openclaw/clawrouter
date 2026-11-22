@@ -304,9 +304,9 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix } = {
     const completed = /^(?:not )?ok \d+ - (.*)$/.exec(line);
     if (!completed) return false;
     // Exact equality excludes SKIP/TODO directives after the encoded name.
-    const passed = line.startsWith('ok ') && selectedLabel !== undefined && completed[1] === selectedLabel;
+    const matched = selectedLabel !== undefined && completed[1] === selectedLabel;
     selectedLabel = undefined;
-    return passed;
+    return matched;
   });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
     feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };

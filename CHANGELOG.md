@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve failure diagnostics when a matching named fusion test runs and fails.
+
 - Allow fusion workload checks to select a literal test-name prefix and reject runs with no matching test.
 
 - Recognize terminal-colored loader diagnostics when fusion probe callers opt into filtering, while preserving raw feedback.
