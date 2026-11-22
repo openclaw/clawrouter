@@ -89,6 +89,20 @@ scheduled action uses the normal validation, tool limit, deadline and history.
 It cannot return a final answer or be used with reviewed `runTrajectory`.
 An always-scheduling callback exhausts `maxToolCalls`; it does not run forever.
 
+Both controllers also accept `onCheckpoint(snapshot, signal)`. The optional
+callback receives a copied `{ task, history, stats }` after a nonempty committed
+step or segment, including scheduled tools and final checks. It never receives
+rejected observations or a held write before review and execution. The controller
+awaits the callback within the existing deadline; persistence failures stop the
+run without retrying the tool or callback. The model adapters forward this option.
+
+Use checkpoints to retain confirmed work if a later call reaches a limit. A
+checkpoint does not certify completion or authorize replay. A later interrupted
+tool can still have an unknown external outcome; reconcile that operation before
+resuming. The caller owns checkpoint storage and redaction. Existing callers that
+omit the callback retain their execution and result format; this optional utility
+introduces no persistent-state migration or Worker deployment change.
+
 The controller propagates callback errors and does not retry a failed or timed-out
 operation. Callbacks must honor their abort signal. A callback that ignores
 cancellation may continue after the controller rejects, so the caller must

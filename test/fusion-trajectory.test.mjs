@@ -264,3 +264,75 @@ test('single-model control uses the same tools and action guard without reviewer
   await assert.rejects(runSingleTrajectory({ ...options, draft: async () => write('bad') }), /invalid_trajectory_action/);
   assert.equal(events.length, 2);
 });
+
+
+test('checkpoints preserve committed work before a limit and isolate caller mutations', async () => {
+  const saved = []; let calls = 0;
+  await assert.rejects(runSingleTrajectory({ task: 'Edit and check.', maxModelCalls: 2,
+    tools: [{ name: 'write', effect: 'write', validate: () => true, execute: async args => ({ applied: args.value }) }],
+    draft: async ({ history }) => {
+      assert.equal(history.length, calls);
+      if (history.length) assert.equal(history[0].observation.applied, 1);
+      return write(++calls);
+    },
+    onCheckpoint: async (snapshot, signal) => {
+      assert.equal(signal.aborted, false);
+      await Promise.resolve();
+      saved.push(structuredClone(snapshot));
+      snapshot.history.length = 0; snapshot.stats.modelCalls = 99;
+    },
+  }), /trajectory_model_limit/);
+  assert.equal(saved.length, 2);
+  assert.deepEqual(saved.map(s => s.history.length), [1, 2]);
+  assert.deepEqual(saved.map(s => s.stats.modelCalls), [1, 2]);
+  assert.equal(saved[0].history[0].observation.applied, 1);
+});
+
+test('checkpoints exclude rejected reads and held writes until review and execution', async () => {
+  const saved = []; let drafted = 0, writes = 0;
+  await assert.rejects(runTrajectory({ task: 'Review changes.', maxModelCalls: 3,
+    tools: [
+      { name: 'read', effect: 'read', validate: () => true, execute: async () => ({ secret: 'rejected observation' }) },
+      { name: 'write', effect: 'write', validate: () => true, execute: async () => { writes++; return { applied: true }; } },
+    ],
+    draft: async () => drafted++ === 0 ? read('source') : write('unreviewed'),
+    verify: async () => {
+      assert.equal(saved.length, 0); assert.equal(writes, 0);
+      return { accepted: 0, reason: 'Reject the proposed segment.', replacement: write('corrected') };
+    }, repair: async () => { throw Error('unexpected repair'); },
+    onCheckpoint: snapshot => saved.push(structuredClone(snapshot)),
+  }), /trajectory_model_limit/);
+  assert.equal(writes, 1); assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].history, [{ action: write('corrected'), observation: { applied: true } }]);
+});
+
+test('checkpoint persistence errors stop execution without replaying committed writes', async () => {
+  const failed = Error('checkpoint storage unavailable'); let writes = 0, models = 0;
+  await assert.rejects(runSingleTrajectory({ task: 'Write once.',
+    tools: [{ name: 'write', effect: 'write', validate: () => true, execute: async () => { writes++; return {}; } }],
+    draft: async () => { models++; return write('once'); },
+    onCheckpoint: async () => { throw failed; },
+  }), error => error === failed);
+  assert.equal(writes, 1); assert.equal(models, 1);
+});
+
+test('cancellation while saving a checkpoint stops before another model or tool call', async () => {
+  const controller = new AbortController(); let calls = 0, writes = 0;
+  await assert.rejects(runSingleTrajectory({ task: 'Write once.', signal: controller.signal,
+    tools: [{ name: 'write', effect: 'write', validate: () => true, execute: async () => { writes++; return {}; } }],
+    draft: async () => { calls++; return write('once'); },
+    onCheckpoint: (_snapshot, signal) => {
+      assert.equal(signal.aborted, false); controller.abort(); return new Promise(() => {});
+    },
+  }), { name: 'AbortError' });
+  assert.equal(calls, 1); assert.equal(writes, 1);
+});
+
+test('invalid checkpoint hooks are rejected before execution', async () => {
+  let calls = 0;
+  await assert.rejects(runSingleTrajectory({ task: 'Inspect.', onCheckpoint: true,
+    tools: [{ name: 'read', effect: 'read', validate: () => true, execute: async () => ({}) }],
+    draft: async () => { calls++; return read('source'); },
+  }), /invalid_trajectory_checkpoint/);
+  assert.equal(calls, 0);
+});

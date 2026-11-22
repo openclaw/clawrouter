@@ -21,7 +21,7 @@ export const runSingleTrajectory = options => runController(options, false);
 
 async function runController({ task, tools, draft, verify, repair,
   chunkSize = 4, maxModelCalls = 32, maxToolCalls = 32, maxContextBytes = 131072,
-  deadlineMs = 120000, signal, finalCheckTool, nextAction } = {}, reviewDrafts) {
+  deadlineMs = 120000, signal, finalCheckTool, nextAction, onCheckpoint } = {}, reviewDrafts) {
   for (const [value, max] of [[chunkSize, 16], [maxModelCalls, 128], [maxToolCalls, 128],
     [maxContextBytes, 1048576], [deadlineMs, 600000]]) {
     if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error('invalid_trajectory_limit');
@@ -31,6 +31,7 @@ async function runController({ task, tools, draft, verify, repair,
   if (nextAction !== undefined && (reviewDrafts !== false || typeof nextAction !== 'function')) {
     throw new Error('invalid_trajectory_scheduler');
   }
+  if (onCheckpoint !== undefined && typeof onCheckpoint !== 'function') throw new Error('invalid_trajectory_checkpoint');
   const registry = new Map();
   for (const tool of tools) {
     if (!plain(tool) || typeof tool.name !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(tool.name)
@@ -83,16 +84,21 @@ async function runController({ task, tools, draft, verify, repair,
     active.throwIfAborted();
     return { action, observation: owned(observation) };
   };
-  const commit = steps => {
+  const commit = async steps => {
     owned({ task, history: [...history, ...steps] });
     history.push(...steps);
+    if (onCheckpoint && steps.length) {
+      const snapshot = owned({ task, history, stats });
+      await bounded(() => onCheckpoint(snapshot, active));
+      active.throwIfAborted();
+    }
   };
   const finish = action => ({ content: action.content, history: owned(history), stats: { ...stats } });
   const checkedFinish = async action => {
     if (finalCheckTool !== undefined) {
       const step = await execute(checkedAction({ type: 'tool', name: finalCheckTool, arguments: {} }));
       if (typeof step.observation?.passed !== 'boolean') throw new Error('invalid_trajectory_final_check_result');
-      commit([step]);
+      await commit([step]);
       if (!step.observation.passed) return null;
     }
     return finish(action);
@@ -104,12 +110,12 @@ async function runController({ task, tools, draft, verify, repair,
       if (scheduled !== undefined && scheduled !== null) {
         const action = checkedAction(scheduled);
         if (action.type !== 'tool') throw new Error('invalid_trajectory_scheduled_action');
-        commit([await execute(action)]);
+        await commit([await execute(action)]);
         continue;
       }
       const action = checkedAction(await call(draft, context({ segment: [] })));
       if (action.type === 'final') { const result = await checkedFinish(action); if (result) return result; else continue; }
-      commit([await execute(action)]);
+      await commit([await execute(action)]);
       continue;
     }
     const segment = [];
@@ -129,15 +135,15 @@ async function runController({ task, tools, draft, verify, repair,
       || !Object.hasOwn(verdict, 'replacement')) throw new Error('invalid_trajectory_verdict');
     if (verdict.accepted === segment.length) {
       if (verdict.replacement !== null) throw new Error('ambiguous_trajectory_verdict');
-      commit(held ? segment.slice(0, -1) : segment);
+      await commit(held ? segment.slice(0, -1) : segment);
       if (!held) continue;
       const action = segment.at(-1).action;
       if (action.type === 'final') { const result = await checkedFinish(action); if (result) return result; else continue; }
-      commit([await execute(action)]);
+      await commit([await execute(action)]);
     } else {
       if (!verdict.reason.trim()) throw new Error('invalid_trajectory_verdict');
       stats.rejectedSteps += segment.length - verdict.accepted;
-      commit(segment.slice(0, verdict.accepted));
+      await commit(segment.slice(0, verdict.accepted));
       let action;
       if (verdict.replacement !== null) {
         try { action = checkedAction(verdict.replacement); }
@@ -150,7 +156,7 @@ async function runController({ task, tools, draft, verify, repair,
         action = checkedAction(await call(repair, context({ reason: verdict.reason })));
       }
       if (action.type === 'final') { const result = await checkedFinish(action); if (result) return result; else continue; }
-      commit([await execute(action)]);
+      await commit([await execute(action)]);
     }
   }
 }
