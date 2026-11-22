@@ -30,11 +30,14 @@ test('collects static/dynamic imports and aliased file reads, excluding editable
 test('supports namespace reads and ignores unrelated URL constructors, dynamic paths and escaped roots', () => {
   const result = collect([imported('node:fs/promises', [{ type: 'ImportNamespaceSpecifier', local: { name: 'fs' } }]),
     read({ type: 'MemberExpression', object: { name: 'fs' }, property: { name: 'readFile' } }, '../data/config.yaml'),
+    read({ type: 'MemberExpression', object: { name: 'fs' }, property: { name: 'readFile' } }, 'fixtures/bare.json'),
+    read({ type: 'MemberExpression', object: { name: 'fs' }, property: { name: 'readFile' } }, '/outside.json'),
+    read({ type: 'MemberExpression', object: { name: 'fs' }, property: { name: 'readFile' } }, 'https://example.com/data.json'),
     url('../unread.json'), read({ type: 'Identifier', name: 'unknown' }, '../unread.json'),
     imported('../../outside.ts'), imported('../.git/config'), imported('../node_modules/pkg/index.js'),
     imported('../src/a.ts?raw'), { type: 'ImportExpression', source: { type: 'Identifier', name: 'dynamic' } },
   ]);
-  assert.deepEqual(result.files.map(file => file.path), ['data/config.yaml']);
+  assert.deepEqual(result.files.map(file => file.path), ['data/config.yaml', 'test/fixtures/bare.json']);
 });
 test('deduplicates references and bounds bytes and reads without truncating source', () => {
   let reads = 0;

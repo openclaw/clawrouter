@@ -36,7 +36,8 @@ export function collectTestContext({ tests, editPaths = [], parse, readSource, m
       }
     }
     const add = (specifier, kind) => {
-      if (typeof specifier !== 'string' || !/^(?:\.\/|\.\.\/)/.test(specifier)) return;
+      if (typeof specifier !== 'string' || !specifier || specifier.startsWith('/') || specifier.includes('\\')) return;
+      if (kind === 'import' && !/^(?:\.\/|\.\.\/)/.test(specifier)) return;
       const path = posix.normalize(posix.join(posix.dirname(test.path), specifier));
       if (!pathIsRelative(path)) return;
       if (!references.has(path)) references.set(path, { path, from: new Set(), kinds: new Set() });
