@@ -396,6 +396,49 @@ test('an assertion caught by node:test qualifies when its reporter writes to std
 });
 
 
+test('probe loader filtering is opt-in and preserves assertion expectations', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const diagnostics = [
+    'Error [ERR_MODULE_NOT_FOUND]: missing fixture\n    at finalizeResolution (node:internal/modules/esm/resolve:272:11)',
+    'TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown extension\n    at Object.getFileProtocolModuleFormat [as file:] (node:internal/modules/esm/get_format:243:9)',
+    'Error [ERR_UNSUPPORTED_DIR_IMPORT]: directory import\nDid you mean to import "./fixture/index.js"?\n    at finalizeResolution (node:internal/modules/esm/resolve:260:11)',
+    'SyntaxError: Unexpected identifier\n    at compileSourceTextModule (node:internal/modules/esm/utils:319:16)',
+  ];
+  for (const diagnostic of diagnostics) {
+    const output = 'AssertionError [ERR_ASSERTION]: subprocess failed\n' + diagnostic;
+    const box = { exec: async () => ({ code: 1, stdout: Buffer.from(output), stderr: Buffer.alloc(0) }) };
+    assert.equal((await probe(box, 'test')).assertionFailed, true);
+    const filtered = await probe(box, 'test', 15000, { filterLoaderAssertions: true });
+    assert.equal(filtered.passed, false);
+    assert.equal(filtered.assertionFailed, false);
+    assert.equal(filtered.feedback, output);
+  }
+  const output = "AssertionError [ERR_ASSERTION]: expected code 'ERR_MODULE_NOT_FOUND', actual 'ERR_NETWORK'";
+  const box = { exec: async () => ({ code: 1, stdout: Buffer.alloc(0), stderr: Buffer.from(output) }) };
+  assert.equal((await probe(box, 'test', 15000, { filterLoaderAssertions: true })).assertionFailed, true);
+  await assert.rejects(probe(box, 'test', 15000, { filterLoaderAssertions: 1 }), /invalid_probe/);
+});
+
+test('probe filtering recognizes a real loader failure wrapped in an assertion', async () => {
+  const { probe } = await import('../scripts/fusion-workloads.mjs');
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { spawnSync } from 'node:child_process';
+    const nested = spawnSync(process.execPath, ['--input-type=module', '-e',
+      "await import('file:///missing-fusion-fixture.mjs')"], { encoding: 'utf8' });
+    assert.equal(nested.status, 0, nested.stderr);
+  `], { timeout: 5000, env });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  const box = { exec: async () => ({ code: child.status, stdout: child.stdout, stderr: child.stderr }) };
+  assert.equal((await probe(box, 'test')).assertionFailed, true);
+  const result = await probe(box, 'test', 15000, { filterLoaderAssertions: true });
+  assert.equal(result.passed, false);
+  assert.equal(result.assertionFailed, false);
+  assert.match(result.feedback, /ERR_MODULE_NOT_FOUND/);
+});
+
 test('transfer validation uses distinct pinned tasks without changing the original corpus', async () => {
   const original = await loadTasks();
   const validation = await loadTasks(new URL('../benchmarks/fusion/validation-workloads.json', import.meta.url));
