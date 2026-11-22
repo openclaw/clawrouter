@@ -46,8 +46,8 @@ including checks after an edit or a review submission.
 
 ## Bounded caller-side tool trajectories
 
-`scripts/fusion-trajectory.mjs` exports `runTrajectory` and
-`runSingleTrajectory` for callers that need multiple tool steps. This is an
+`scripts/fusion-trajectory.mjs` exports `runTrajectory`,
+`runSingleTrajectory` and `runFinalReviewedTrajectory` for callers that need multiple tool steps. This is an
 opt-in utility; it does not register a Worker route or select models by itself.
 The caller provides model callbacks and a trusted tool registry. It also owns
 provider credentials, spending reservations and reconciliation, and tool isolation.
@@ -73,14 +73,15 @@ Writes and final answers wait for review. A read-only segment is reviewed after
 and registry but invokes only `draft`, with no semantic reviewer. This provides
 a matched execution control, not a guarantee of equivalent answer quality.
 
-Both functions return `{ content, history, stats }`. Set `maxModelCalls`,
+All three functions return `{ content, history, stats }`. Set `maxModelCalls`,
 `maxToolCalls`, `maxContextBytes` and `deadlineMs` before execution. Every model
 callback and tool execution consumes its corresponding limit, including an
 optional final check. Set `finalCheckTool` to a registered tool that accepts `{}`
 and returns an observation with boolean `passed`. A failed final check enters
 history and continues the trajectory; only a passing check permits completion.
 
-For deterministic follow-up tools, `runSingleTrajectory` accepts a synchronous
+For deterministic follow-up tools, `runSingleTrajectory` and
+`runFinalReviewedTrajectory` accept a synchronous
 `nextAction({ task, history, segment })` callback. Return a registered tool action
 to execute it before the next model call, or `null`/`undefined` to ask the model.
 For example, a caller can run tests after an edit without asking a model to
@@ -89,7 +90,7 @@ scheduled action uses the normal validation, tool limit, deadline and history.
 It cannot return a final answer or be used with reviewed `runTrajectory`.
 An always-scheduling callback exhausts `maxToolCalls`; it does not run forever.
 
-Both controllers also accept `onCheckpoint(snapshot, signal)`. The optional
+All three controllers also accept `onCheckpoint(snapshot, signal)`. The optional
 callback receives a copied `{ task, history, stats }` after a nonempty committed
 step or segment, including scheduled tools and final checks. It never receives
 rejected observations or a held write before review and execution. The controller
@@ -111,6 +112,26 @@ contain sensitive tool data; callers must choose storage and redaction explicitl
 
 This execution contract does not establish a fusion quality, cost or latency gain.
 Keep independent final grading and fixed-model controls in any comparison.
+
+### Completion review
+
+`runFinalReviewedTrajectory` executes each validated tool action immediately and
+reviews only a proposed final answer. Use it only with caller-owned disposable
+state: rejected completion does not roll back earlier writes. Keep external
+publication or deployment outside the trajectory, after independent acceptance.
+
+The verifier receives the committed history and one held final step. Acceptance
+requires `accepted: 1` and `replacement: null`. A rejected final answer may produce
+a corrective tool action or a separate repair call. Replacement and repaired
+final answers pass through review again; they cannot bypass it. Model calls,
+tools, checkpoints, cancellation and `finalCheckTool` retain their existing limits.
+
+An optional synchronous `reviewSnapshot({ task, history })` callback supplies a
+plain JSON snapshot for the verifier. Its request becomes `{ task, segment,
+snapshot }`; draft and repair callbacks still receive history. The controller
+copies and bounds the snapshot and preserves its own task and held segment.
+The caller must include enough evidence to review the current result. A snapshot
+or passing public check does not establish full correctness.
 
 ## Connecting models to a trajectory
 
@@ -161,10 +182,13 @@ retain independent acceptance checks.
 ### Choosing the model
 
 `scripts/fusion-trajectory-models.mjs` connects the controller to a caller-supplied
-`invoke(runId, model, body, signal)` function. It exports three entry points:
+`invoke(runId, model, body, signal)` function. It exports four entry points:
 
 - `runModelTrajectory`: a draft model, reviewer and corrective actions.
 - `runSingleModelTrajectory`: one fixed model, without semantic review.
+- `runFinalReviewedModelTrajectory`: execute tool actions and review completion;
+  an optional `selectModel` chooses the draft model from the configured pair.
+  Verification and corrective calls use `reviewModel`.
 - `runAdaptiveModelTrajectory`: a synchronous `selectModel(request)` callback
   selects either `draftModel` or `reviewModel` for each action. It sees a copied
   task and committed history; an unconfigured selection stops the run.

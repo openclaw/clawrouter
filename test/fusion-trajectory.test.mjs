@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runTrajectory, runSingleTrajectory } from '../scripts/fusion-trajectory.mjs';
+import { runTrajectory, runSingleTrajectory, runFinalReviewedTrajectory } from '../scripts/fusion-trajectory.mjs';
 
 test('scheduled checks use real observations and tool counts without another model call', async () => {
   let edited = false, checked = false, calls = 0;
@@ -335,4 +335,117 @@ test('invalid checkpoint hooks are rejected before execution', async () => {
     draft: async () => { calls++; return read('source'); },
   }), /invalid_trajectory_checkpoint/);
   assert.equal(calls, 0);
+});
+
+
+test('completion review executes confined tools immediately but holds final acceptance', async () => {
+  let drafts = 0;
+  const { options, events } = fixture({ draft: async () => [read('one'), write(3), final('done')][drafts++],
+    verify: async ({ history, segment }) => {
+      assert.deepEqual(history.map(step => step.action), [read('one'), write(3)]);
+      assert.deepEqual(segment, [{ action: final('done'), observation: null }]);
+      events.push(['review']); return accept(segment);
+    } });
+  const result = await runFinalReviewedTrajectory(options);
+  assert.deepEqual(events, [['read', 'one'], ['write', 3], ['review']]);
+  assert.equal(result.stats.modelCalls, 4); assert.equal(result.stats.reviews, 1);
+});
+
+test('rejected completion stays within the existing model and tool budgets', async () => {
+  const { options, events } = fixture({ maxModelCalls: 2,
+    verify: async () => ({ accepted: 0, reason: 'Check another record.', replacement: read('more') }) });
+  await assert.rejects(runFinalReviewedTrajectory(options), /trajectory_model_limit/);
+  assert.deepEqual(events, [['read', 'more']]);
+});
+
+
+test('focused completion snapshots are owned and cannot replace the task or final segment', async () => {
+  let drafts = 0;
+  const snapshot = { task: 'untrusted', files: [{ content: 'current' }] };
+  const { options } = fixture({ draft: async () => drafts++ ? final('done') : read('one'),
+    reviewSnapshot: request => {
+      assert.equal(request.history.length, 1);
+      request.history.length = 0;
+      return snapshot;
+    },
+    verify: async request => {
+      assert.equal(request.task, options.task);
+      assert.deepEqual(request.segment, [{ action: final('done'), observation: null }]);
+      assert.equal(Object.hasOwn(request, 'history'), false);
+      assert.deepEqual(request.snapshot, snapshot);
+      request.snapshot.files[0].content = 'mutated';
+      return accept(request.segment);
+    } });
+  const result = await runFinalReviewedTrajectory(options);
+  assert.equal(result.history.length, 1);
+  assert.equal(snapshot.files[0].content, 'current');
+});
+
+test('completion snapshot configuration and content fail before verifier transport', async () => {
+  for (const runner of [runTrajectory, runSingleTrajectory]) {
+    await assert.rejects(runner(fixture({ reviewSnapshot: () => ({}) }).options), /invalid_trajectory_snapshot/);
+  }
+  for (const [snapshot, error] of [[null, /invalid_trajectory_snapshot/],
+    [Promise.resolve({}), /invalid_trajectory_snapshot/], [{ value: undefined }, /invalid_trajectory_json/],
+    [{ content: 'x'.repeat(1000) }, /trajectory_context_limit/]]) {
+    let reviews = 0;
+    await assert.rejects(runFinalReviewedTrajectory(fixture({ maxContextBytes: 512,
+      reviewSnapshot: () => snapshot, verify: async () => { reviews++; throw new Error('unexpected_transport'); },
+    }).options), error);
+    assert.equal(reviews, 0);
+  }
+});
+
+
+test('completion review rechecks replacement and repaired finals before accepting', async () => {
+  for (const replacement of [final('revised'), null]) {
+    let reviews = 0;
+    const { options } = fixture({
+      draft: async () => final('draft'),
+      repair: async () => final('revised'),
+      verify: async ({ segment }) => ++reviews === 1
+        ? { accepted: 0, reason: 'Revise the conclusion.', replacement }
+        : (assert.equal(segment[0].action.content, 'revised'), accept(segment)),
+    });
+    const result = await runFinalReviewedTrajectory(options);
+    assert.equal(result.content, 'revised');
+    assert.equal(reviews, 2);
+    assert.equal(result.stats.modelCalls, replacement ? 3 : 4);
+  }
+});
+
+test('completion scheduling awaits committed checkpoints and preserves the final check', async () => {
+  const events = []; let scheduled = false;
+  const result = await runFinalReviewedTrajectory({ task: 'Update then check.', finalCheckTool: 'check',
+    tools: [
+      { name: 'write', effect: 'write', validate: () => true, execute: async () => { events.push('write'); return { applied: true }; } },
+      { name: 'check', effect: 'read', validate: () => true, execute: async () => { events.push('check'); return { passed: true }; } },
+    ],
+    nextAction: () => scheduled ? null : (scheduled = true, { type: 'tool', name: 'write', arguments: {} }),
+    onCheckpoint: async snapshot => {
+      await Promise.resolve(); events.push(`checkpoint:${snapshot.history.length}`);
+      snapshot.history.length = 0;
+    },
+    draft: async ({ history }) => { assert.equal(history.length, 1); return final('done'); },
+    verify: async ({ history, segment }) => {
+      assert.equal(history.length, 1); assert.deepEqual(events, ['write', 'checkpoint:1']);
+      events.push('review'); return accept(segment);
+    },
+    repair: async () => { throw new Error('unexpected_repair'); },
+  });
+  assert.deepEqual(events, ['write', 'checkpoint:1', 'review', 'check', 'checkpoint:2']);
+  assert.equal(result.history.length, 2);
+  assert.equal(result.stats.modelCalls, 2); assert.equal(result.stats.toolCalls, 2);
+});
+
+test('cancellation during completion review prevents acceptance without replaying tools', async () => {
+  const controller = new AbortController(); let writes = 0, drafts = 0;
+  await assert.rejects(runFinalReviewedTrajectory({ task: 'Update.', signal: controller.signal,
+    tools: [{ name: 'write', effect: 'write', validate: () => true,
+      execute: async () => { writes++; return { applied: true }; } }],
+    draft: async () => drafts++ ? final('done') : { type: 'tool', name: 'write', arguments: {} },
+    verify: async ({ segment }) => { controller.abort(new Error('cancelled')); return accept(segment); },
+    repair: async () => { throw new Error('unexpected_repair'); },
+  }), /cancelled/);
+  assert.equal(writes, 1);
 });
