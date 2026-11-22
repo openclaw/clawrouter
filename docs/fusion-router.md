@@ -214,6 +214,9 @@ The test file is supplied to the initial candidate and reused for acceptance.
 This is development data with no hidden-test claim. The base must fail the
 supplied tests and the reference must pass them; a passing reference alone does
 not qualify the workload. Model results depend on the chosen caller and policy.
+Declared public test files can be new or replace existing files. Their parent
+directory must already exist in the base; linked files and parents are rejected.
+Installation changes only the disposable sandbox, not the source image.
 
 To qualify it without model calls, set `FUSION_NODE_IMAGE` to a pinned
 `node@sha256:...` image and run:
