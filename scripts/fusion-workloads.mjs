@@ -273,9 +273,9 @@ function namedTestPattern(testNamePrefix) {
 
 // Match Node's TAP reporter encoding without interpreting generated output.
 function tapTestName(name) {
-  return name.replaceAll('\b', '\\b').replaceAll('\f', '\\f').replaceAll('\t', '\\t')
-    .replaceAll('\n', '\\n').replaceAll('\r', '\\r').replaceAll('\v', '\\v')
-    .replaceAll('\\', '\\\\').replaceAll('#', '\\#');
+  const escapes = { '\b': '\\\\b', '\f': '\\\\f', '\t': '\\\\t', '\n': '\\\\n', '\r': '\\\\r', '\v': '\\\\v',
+    '\\': '\\\\', '#': '\\#' };
+  return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
 }
 
 export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
