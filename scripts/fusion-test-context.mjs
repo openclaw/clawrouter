@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { posix } from 'node:path';
 
 const pathIsRelative = path => typeof path === 'string' && path.length <= 1024
@@ -9,6 +10,72 @@ const literal = node => node?.type === 'StringLiteral' ? node.value
   : node?.type === 'Literal' && typeof node.value === 'string' ? node.value : null;
 const importMetaUrl = node => node?.type === 'MemberExpression' && !node.computed && node.property?.name === 'url'
   && node.object?.type === 'MetaProperty' && node.object.meta?.name === 'import' && node.object.property?.name === 'meta';
+
+// Treat extension and directory-index variants conservatively as one module.
+const moduleKey = path => path.replace(/\.(?:[cm]?[jt]sx?)$/, '').replace(/\/index$/, '');
+
+/** Filter optional supporting source; never changes editable source or tests. */
+export function selectSourceContext({ sources, context, parse }) {
+  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= 32, 'source_context_sources');
+  assert.ok(Array.isArray(context) && context.length <= 256, 'source_context_entries');
+  assert.equal(typeof parse, 'function', 'source_context_parser');
+  const paths = new Set(); let inputBytes = 0;
+  for (const source of sources) {
+    assert.ok(source && pathIsRelative(source.path) && !paths.has(source.path)
+      && typeof source.content === 'string' && Buffer.byteLength(source.content) <= 262144, 'source_context_source');
+    paths.add(source.path); inputBytes += Buffer.byteLength(source.content);
+  }
+  for (const entry of context) {
+    assert.ok(entry && pathIsRelative(entry.path) && typeof entry.content === 'string'
+      && Buffer.byteLength(entry.content) <= 262144
+      && (!Object.hasOwn(entry, 'name') || typeof entry.name === 'string' && entry.name.length > 0 && entry.name.length <= 256), 'source_context_entry');
+    inputBytes += Buffer.byteLength(entry.content);
+  }
+  assert.ok(inputBytes <= 4 * 1024 * 1024, 'source_context_byte_limit');
+  const direct = new Set(); let preserveReason = null, nodes = 0;
+  for (const source of sources) {
+    const ast = parse(source.content, source.path), program = ast?.program ?? ast;
+    assert.ok(Array.isArray(program?.body), 'source_context_ast');
+    const seen = new WeakSet(), stack = [program];
+    while (stack.length) {
+      const node = stack.pop();
+      if (!node || typeof node !== 'object' || seen.has(node)) continue;
+      seen.add(node); assert.ok(++nodes <= 250000, 'source_context_node_limit');
+      const dynamic = node.type === 'ImportExpression' || node.type === 'CallExpression' && node.callee?.type === 'Import';
+      const imported = dynamic ? node.source ?? node.arguments?.[0]
+        : ['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(node.type) ? node.source : null;
+      const specifier = literal(imported);
+      if (dynamic && specifier === null) preserveReason ??= 'dynamic_import';
+      if (node.type === 'ImportDeclaration' && specifier === null) preserveReason ??= 'unresolved_import';
+      if (specifier !== null) {
+        if (/^(?:\.\/|\.\.\/)/.test(specifier)) {
+          const path = posix.normalize(posix.join(posix.dirname(source.path), specifier));
+          assert.ok(pathIsRelative(path), 'source_context_import_path');
+          direct.add(moduleKey(path));
+        } else if (!specifier.startsWith('node:')) preserveReason ??= 'unresolved_import';
+      }
+      for (const value of Object.values(node)) {
+        if (Array.isArray(value)) {
+          for (const child of value) if (child && typeof child === 'object') {
+            stack.push(child); assert.ok(stack.length <= 250000, 'source_context_node_limit');
+          }
+        } else if (value && typeof value === 'object') {
+          stack.push(value); assert.ok(stack.length <= 250000, 'source_context_node_limit');
+        }
+      }
+    }
+  }
+  const files = [], omitted = []; let bytes = 0, originalBytes = 0;
+  for (const entry of context) {
+    const size = Buffer.byteLength(entry.content); originalBytes += size;
+    if (preserveReason || Object.hasOwn(entry, 'name') || /\.d\.[cm]?ts$/.test(entry.path) || direct.has(moduleKey(entry.path))
+      || !/\.[cm]?[jt]sx?$/.test(entry.path) || /(^|\/)tests?\//.test(entry.path)) {
+      files.push(entry); bytes += size;
+    } else omitted.push({ path: entry.path, bytes: size, reason: 'not_direct_source_dependency',
+      sha256: createHash('sha256').update(entry.content).digest('hex') });
+  }
+  return { files, omitted, bytes, originalBytes, preserveReason, complete: false };
+}
 
 // The caller owns parsing and pinned reads. Test and dependency code is not executed.
 export function collectTestContext({ tests, editPaths = [], parse, readSource, maxFiles = 16, maxBytes = 131072 }) {

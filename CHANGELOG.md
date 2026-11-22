@@ -104,6 +104,8 @@
 
 ## Unreleased
 
+- Add an opt-in supporting-source selector for fusion benchmarks, with hashed omissions and conservative handling of unresolved imports; benchmark and Worker defaults are unchanged.
+
 - Collect bounded read-only source and fixture context from literal references in fusion task tests.
 
 - Add a caller-side fusion edit schema that binds replacement region IDs to their files before inference.
