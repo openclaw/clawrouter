@@ -50,6 +50,39 @@ test('truncated and malformed responses stop without retries', async () => {
   }
 });
 
+test('review schemas bound acceptance to each current segment, not committed history', async () => {
+  let actions = 0; const reviewed = [];
+  const options = fixture(async (_trial, _model, body) => {
+    if (body.response_format.json_schema.name === 'trajectory_action') {
+      return response(++actions <= 2
+        ? { action: { type: 'tool', name: 'read', arguments: { key: String(actions) } } }
+        : answer('done'));
+    }
+    const request = JSON.parse(body.messages[1].content);
+    const accepted = body.response_format.json_schema.schema.properties.accepted;
+    assert.deepEqual(accepted, { type: 'integer', minimum: 0, maximum: request.segment.length });
+    reviewed.push([request.history.length, accepted.maximum]);
+    return response({ accepted: request.segment.length, reason: '', replacement: null });
+  });
+  const result = await runModelTrajectory({ ...options, chunkSize: 2 });
+  assert.equal(result.content, 'done');
+  assert.deepEqual(reviewed, [[0, 2], [2, 1]]);
+  assert.equal(result.stats.modelCalls, 5);
+});
+
+test('runtime rejects an out-of-range verdict even if the transport ignores its schema', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    let calls = 0;
+    await assert.rejects(run(fixture(async (_trial, _model, body) => {
+      calls++;
+      if (body.response_format.json_schema.name === 'trajectory_action') return response(answer('done'));
+      assert.equal(body.response_format.json_schema.schema.properties.accepted.maximum, 1);
+      return response({ accepted: 4, reason: '', replacement: null });
+    })), /invalid_trajectory_verdict/);
+    assert.equal(calls, 2);
+  }
+});
+
 test('metering failures propagate and preflight rejects malformed tools without calling models', async () => {
   await assert.rejects(runModelTrajectory(fixture(async () => { throw new Error('campaign_budget'); })), /campaign_budget/);
   const options = fixture(async () => { throw new Error('must_not_call'); });
