@@ -229,6 +229,31 @@ node scripts/qualify-fusion-workloads.mjs "$FUSION_NODE_IMAGE" \
 Qualification builds the task's frozen dependencies. Reuse an existing qualified
 runtime during local research when downloads or new builds are constrained.
 
+## Verified regression development workload
+
+`benchmarks/fusion/verified-regression-workloads.json` pins four historical
+regressions for caller-side coding evaluations:
+
+| Task | Original tests | Editable source |
+| --- | ---: | --- |
+| Native music MIME fields | 9 | `worker/fal-music.ts` |
+| Manifest route discovery | 20 | `worker/discovery.ts` |
+| Missing managed native ID | 12 | `worker/managed-predictions.ts`, `worker/proxy.ts` |
+| Cancellation acknowledgement | 21 | `worker/background-store.ts`, `worker/managed-lifecycle-types.ts`, `worker/managed-predictions.ts`, `worker/response-controls.ts` |
+
+Each task supplies the exact original test files from its pinned reference
+revision. These tests are visible before generation and reused for acceptance;
+the manifest's `hiddenTests` field does not imply independent hidden tests.
+Only the listed source files are editable. Qualification must confirm that the
+base fails and the reference passes the complete supplied suite.
+
+Use the same model-free qualification command as above, with
+`benchmarks/fusion/verified-regression-workloads.json` as the manifest. This
+separate development cohort does not replace existing workloads or qualify a
+model, routing policy, or production deployment. A model comparison must freeze
+its models, prompts, effort, call limits and acceptance rules, and include all
+attempts in cost and latency totals.
+
 ## Caller-side verified repair
 
 `scripts/fusion-verified-workflow.mjs` exports `runVerifiedWorkflow`. Use it in
