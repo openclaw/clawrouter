@@ -114,6 +114,52 @@ Keep independent final grading and fixed-model controls in any comparison.
 
 ## Connecting models to a trajectory
 
+### Supplying current source
+
+`scripts/fusion-trajectory-workspace.mjs` exports
+`workspaceModelView(request, workspace)` for callers that own an editable source
+workspace. Apply it inside the adapter's `invoke` callback before metering and
+sending the request:
+
+```js
+const request = JSON.parse(body.messages[1].content);
+const view = workspaceModelView(request, {
+  revision,
+  files: currentFiles,
+  context: publicContext,
+  publicCheck: checkedRevision === revision ? lastCheck : null,
+});
+const projected = {
+  ...body,
+  messages: [body.messages[0], {
+    ...body.messages[1], content: JSON.stringify(view),
+  }],
+};
+return invokeMetered(runId, model, projected, signal);
+```
+
+Supply a nonnegative integer revision, current `files`, read-only `context`, and
+either a current `{ passed, feedback }` check or `null`. Each file has a unique
+`path` and string `content`. The caller must update the revision and invalidate
+the check after every edit. Meter and enforce request-size limits on the final
+payload sent to the provider.
+
+The helper copies its inputs. It replaces successful `edit_source` and
+`edit_sources` arguments with affected paths only when every path is present in
+the current workspace. Failed edits and edits to unavailable paths remain intact.
+Identical `run_tests` feedback can reference `workspace.publicCheck.feedback`;
+other observations remain unchanged. Returned controller history and checkpoints
+retain their original arguments and feedback.
+
+To keep starting behavior visible during repair, callers can include immutable
+starting-source copies under distinct paths in `context`. Keep those paths out
+of the tools' editable allowlist. This helper performs no filesystem operations
+and does not enforce tool permissions or certify that source and checks are
+current. Supplying context does not establish correctness or a cost reduction;
+retain independent acceptance checks.
+
+### Choosing the model
+
 `scripts/fusion-trajectory-models.mjs` connects the controller to a caller-supplied
 `invoke(runId, model, body, signal)` function. It exports three entry points:
 
