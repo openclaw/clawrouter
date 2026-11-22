@@ -89,6 +89,47 @@ contain sensitive tool data; callers must choose storage and redaction explicitl
 This execution contract does not establish a fusion quality, cost or latency gain.
 Keep independent final grading and fixed-model controls in any comparison.
 
+## Connecting models to a trajectory
+
+`scripts/fusion-trajectory-models.mjs` connects the controller to a caller-supplied
+`invoke(runId, model, body, signal)` function. It exports three entry points:
+
+- `runModelTrajectory`: a draft model, reviewer and corrective actions.
+- `runSingleModelTrajectory`: one fixed model, without semantic review.
+- `runAdaptiveModelTrajectory`: a synchronous `selectModel(request)` callback
+  selects either `draftModel` or `reviewModel` for each action. It sees a copied
+  task and committed history; an unconfigured selection stops the run.
+
+Supply `task`, `runId`, `tools`, `invoke` and the controller limits. Reviewed and
+adaptive runs require both model identifiers. Single-model runs use `model`.
+Each tool also supplies `parameters`, a strict JSON Schema object in which every
+property is required and `additionalProperties` is false. Use explicit nullable
+fields when needed. The adapter rejects optional properties, unsupported schema
+composition, and excessive schema depth or node count before calling a model.
+Tool argument validation still runs after the model responds.
+
+The request body uses OpenAI-compatible `messages`, `max_tokens` and a strict
+`response_format` JSON Schema. The callback must return a normalized completion
+with `choices[0].message.content` containing JSON and a completed stop reason.
+The adapter rejects refusals, truncation, unknown stops and malformed JSON; it
+never retries or switches models after a transport error. For Responses or
+other native provider APIs, the caller must translate requests and normalize
+responses. Model identifiers remain opaque to the adapter.
+
+`draftOutputTokens` bounds every action response, including corrective actions;
+`reviewOutputTokens` bounds reviewer verdicts. Both default to bounded values
+and accept 64–8192 tokens. The controller's call, tool, context and deadline
+limits apply to all three entry points. The caller still owns input admission,
+monetary reservations, usage settlement, credentials, tool isolation and
+reconciliation after cancellation. `runId` is only a correlation value passed to
+that callback; no prompt, completion or usage logging is added.
+
+For adaptive runs, public tool observations can drive the selection callback.
+This is a mechanism, not a built-in quality classifier: declare the policy before
+evaluation, use a final check when available, and compare against both fixed
+models on independently graded tasks. Model choices and tool checks alone do
+not establish correctness or a Fusion performance gain.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
