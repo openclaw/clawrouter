@@ -8,7 +8,7 @@ function strictParameters(schema) {
   let nodes = 0;
   const visit = (value, depth = 0) => {
     if (++nodes > 1024 || depth > 12 || !value || typeof value !== 'object' || Array.isArray(value)
-      || ['$ref', '$dynamicRef', 'allOf', 'oneOf', 'not', 'if', 'then', 'else', 'patternProperties']
+      || ['$ref', '$dynamicRef', 'allOf', 'oneOf', 'not', 'if', 'then', 'else', 'patternProperties', 'dependentRequired', 'dependentSchemas']
         .some(key => Object.hasOwn(value, key))) throw new Error('invalid_trajectory_parameters');
     const types = Array.isArray(value.type) ? value.type : [value.type];
     if (types.includes('object') || value.properties) {

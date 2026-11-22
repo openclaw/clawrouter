@@ -143,3 +143,15 @@ test('adaptive tool feedback switches the pinned model and checks the corrected 
   assert.equal(output.history.at(-1).observation.passed, true);
   assert.equal(output.stats.modelCalls, 3); assert.equal(output.stats.toolCalls, 3);
 });
+
+
+test('schema dependencies fail preflight at the root and in nested parameters', async () => {
+  for (const keyword of ['dependentRequired', 'dependentSchemas']) for (const nested of [false, true]) {
+    let calls = 0;
+    const options = fixture(async () => { calls++; throw new Error('must_not_call'); });
+    const dependency = { type: 'object', properties: {}, required: [], additionalProperties: false, [keyword]: {} };
+    options.tools[0].parameters = nested ? { type: 'object', properties: { child: dependency }, required: ['child'], additionalProperties: false } : dependency;
+    await assert.rejects(runModelTrajectory(options), /invalid_trajectory_parameters/);
+    assert.equal(calls, 0);
+  }
+});
