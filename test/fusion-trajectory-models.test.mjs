@@ -155,3 +155,17 @@ test('schema dependencies fail preflight at the root and in nested parameters', 
     assert.equal(calls, 0);
   }
 });
+
+test('model adapters forward checkpoint hooks without adding inference calls', async () => {
+  let calls = 0; const checkpoints = [];
+  const options = fixture(async () => ++calls === 1
+    ? response({ action: { type: 'tool', name: 'read', arguments: { key: 'value' } } })
+    : response(answer('done')));
+  const result = await runSingleModelTrajectory({ ...options, model: 'fixed-model',
+    onCheckpoint: snapshot => checkpoints.push(structuredClone(snapshot)) });
+  assert.equal(calls, 2);
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].stats.modelCalls, 1);
+  assert.deepEqual(checkpoints[0].history, result.history);
+  assert.equal(result.content, 'done');
+});

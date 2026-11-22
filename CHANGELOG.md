@@ -1,5 +1,7 @@
 # Changelog
 
+- Let bounded fusion trajectory callers checkpoint committed work without accepting rejected steps or replaying interrupted operations.
+
 - Preserve failure diagnostics when a matching named fusion test runs and fails.
 
 - Allow fusion workload checks to select a literal test-name prefix and reject runs with no matching test.
