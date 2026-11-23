@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { after } from "node:test";
 import { types as nodeTypes } from "node:util";
+import { runInNewContext } from "node:vm";
 import { execFile } from "node:child_process";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
@@ -15,6 +16,7 @@ import { musicWave } from "../worker/test/openrouter-music-runtime-fixture.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 import { createMusicSourceLifetime } from "./helpers/music-source-lifetime.mjs";
+import { createMusicPassiveState, readMusicPassiveResponse, captureMusicPassiveState } from "./helpers/music-passive-state.mjs";
 
 // Published canonical manifest-model correction, NOT a qualified client release.
 // The previous hosted attempt failed without a typed cause; new diagnostics are unproven.
@@ -299,11 +301,10 @@ async function reportRetirementObservation(origin, expectedRoute, fetchOriginal 
     assert.ok(Buffer.byteLength(text) <= 8192);
     const snapshot = JSON.parse(text);
     assert.deepEqual(Object.keys(snapshot).sort(), ["cleanup", "observerFailed", "records"]);
-    assert.equal(snapshot.observerFailed, false);
     assert.ok(Array.isArray(snapshot.records) && snapshot.records.length > 0 && snapshot.records.length <= 11);
     for (const value of [...snapshot.records, ...(snapshot.cleanup ? [snapshot.cleanup] : [])]) {
       const record = protocol.validate(value);
-      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary"].includes(record.phase));
+      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary", "native_state"].includes(record.phase));
       // Preserve first-pass fields. Later counts are cumulative, not additional
       // unique operations; expose their pass/total even when detail quota fills.
       diagnostics.put(record.phase === "worker_summary" && snapshot.cleanup ? protocol.record({ ...record,
@@ -311,6 +312,8 @@ async function reportRetirementObservation(origin, expectedRoute, fetchOriginal 
         cleanupCounterTotal: Object.entries(snapshot.cleanup).filter(([key]) => key.startsWith("f_")).reduce((sum, [, value]) => sum + value, 0),
       }) : record);
     }
+    // Retain original counts even when an independent snapshot observer failed.
+    assert.equal(snapshot.observerFailed, false);
   } catch (error) { failures.push(error); }
 }
 
@@ -411,10 +414,32 @@ function routerScript(route = "native") {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
+import { bodyBudgetCharged } from "./worker/body-budget.ts";
 const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
 const originalFetch = globalThis.fetch;
 let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0;
 const diagnosticErrors = [], taskTails = [];
+${createMusicPassiveState.toString()}
+${readMusicPassiveResponse.toString()}
+${captureMusicPassiveState.toString()}
+const passive = createMusicPassiveState(), passiveSnapshots = new Map(), passiveRecords = [], passiveErrors = [];
+const passiveEpoch = Date.now(), passiveNow = () => Date.now() - passiveEpoch;
+async function capturePassive(point, id = "none", status = null) {
+  const record = await captureMusicPassiveState(passiveSnapshots, passiveErrors, point,
+    () => passive.local(point, id, status, ingresses, inputs, bodyBudgetCharged(), passiveNow()),
+    () => readMusicPassiveResponse(originalFetch, "https://fixture.example/passive-state", passive),
+    (local, source, received, faults) => passive.compact(local, source, received, ${JSON.stringify(route)}, faults), passiveNow);
+  if (record) passiveRecords.push(record);
+}
+function passiveRetirementResponse() {
+  // Preserve the primary counter envelope and cumulative cleanup separately.
+  // Extra detail omissions are counted, never disguised as absent failures.
+  const records = retirementSnapshot.records.length ? [retirementSnapshot.records[0], ...passiveRecords, ...retirementSnapshot.records.slice(1)] : [...passiveRecords];
+  const omitted = Math.max(0, records.length - 11);
+  if (records[0]?.phase === "worker_summary") records[0] = { ...records[0], suppressed: (records[0].suppressed ?? 0) + omitted, stateFaults: passiveErrors.length };
+  const snapshot = { ...retirementSnapshot, records: records.slice(0, 11), observerFailed: retirementSnapshot.observerFailed || diagnosticErrors.length > 0 || passiveErrors.length > 0 };
+  return new Response(passive.bounded(snapshot), { headers: { "content-type": "application/json" } });
+}
 ${createMusicFailureCounts.toString()}
 ${retirementObservation.toString()}
 ${musicWorkerDetails.toString()}
@@ -468,9 +493,10 @@ async function retire() {
     try { retirementSnapshot = retainMusicRetirement(retirementSnapshot, retirementObservation(inputs, failureCounts.snapshot(), errors, ${JSON.stringify(route)},
       { pass, faults: diagnosticErrors.length, ingresses, terminations: terminationWitness.rows, tails: taskTails })); }
     catch { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; }
+    await capturePassive("retirement");
     throw new AggregateError(errors, "original Worker operations failed");
   }
-  if (diagnosticErrors.length) { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; throw new AggregateError(diagnosticErrors, "music diagnostic instrumentation failed"); }
+  if (diagnosticErrors.length || passiveErrors.length) { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; await capturePassive("retirement"); throw new AggregateError([...diagnosticErrors, ...passiveErrors], "music diagnostic instrumentation failed"); }
   return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
 }
 export default { ...handler, async fetch(request, env, context) {
@@ -481,11 +507,19 @@ export default { ...handler, async fetch(request, env, context) {
   }
   if (path === "/fixture/revoke") { const id = new URL(request.url).searchParams.get("id"); if (!rows.some(row => row.id === id)) return new Response(null, { status: 400 }); await revokeGrantCredentials(env, "oauth/orm_" + id + "/openrouter"); return new Response(null, { status: 204 }); }
   if (path === "/fixture/retire") return Response.json(await retire());
-  if (path === "/fixture/retirement-observation") return Response.json(retirementSnapshot);
+  if (path === "/fixture/retirement-observation") return passiveRetirementResponse();
   if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
   if (path === "/fixture/source-dispose") return originalFetch("https://fixture.example/dispose");
   if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
-  if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
+  if (path === "/fixture/started") {
+    const id = new URL(request.url).searchParams.get("id");
+    let response;
+    try { response = await originalFetch("https://fixture.example/started?id=" + id); }
+    catch (error) { if (passive.ids.includes(id)) await capturePassive("readiness", id); throw error; }
+    const status = musicObserve(() => passive.responseStatus(response), passiveErrors);
+    if (status !== 204 && passive.ids.includes(id)) await capturePassive("readiness", id, status);
+    return response;
+  }
   if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
   let ingress;
   try {
@@ -500,9 +534,11 @@ export default { ...handler, async fetch(request, env, context) {
     }
     if (request.method === "POST") { record.body = await request.clone().json(); if (ingress) ingress.body = record.body; }
   }
-  return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending);
+  const response = await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending);
     const tail = { ingress }; taskTails.push(tail); observeMusicPromise(pending, tail, tick, diagnosticErrors);
-    context.waitUntil(pending); } }); }
+    context.waitUntil(pending); } });
+  if (ingress) musicObserve(() => { ingress.responseStatus = passive.responseStatus(response); }, passiveErrors);
+  return response; }
   catch (error) { failures.push(error); failureCounts.add("handler"); throw error; }
 } };`;
 }
@@ -640,13 +676,20 @@ async function waitForReadiness(id, waiting, readiness, signal, runtime = {
 function upstreamScript(audio) {
   return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [], sourceOwners = [];
 ${createMusicSourceLifetime.toString()}
+${createMusicPassiveState.toString()}
 ${createReadinessWitness.toString()}
 ${waitForReadiness.toString()}
 const readiness = createReadinessWitness(rows.map(row => row.id));
+const passive = createMusicPassiveState(), passiveEpoch = Date.now();
 const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
 export default { async fetch(request, env, context) {
   const url = new URL(request.url);
   if (url.hostname === "fixture.example") {
+    if (url.pathname === "/passive-state") {
+      if (request.method !== "GET" || url.search) return new Response(null, { status: 400 });
+      const snapshot = passive.source(calls, id => readiness.snapshot(id), Date.now() - passiveEpoch);
+      return new Response(passive.bounded(snapshot), { headers: { "content-type": "application/json" } });
+    }
     if (url.pathname === "/dispose") {
       const outcomes = await Promise.allSettled(sourceOwners.map(owner => owner.dispose()));
       const failures = outcomes.filter(row => row.status === "rejected").map(row => row.reason);
@@ -959,7 +1002,7 @@ test("retirement observation retains strict original read cancel and closed fail
 test("retirement observation is captured before the original serialized Worker rejection", async () => {
   const script = routerScript("native"), begin = script.indexOf("async function retire() {"), end = script.indexOf("\nexport default", begin);
   const create = new Function("inputs", "tasks", "ingresses", "failures", "failureCounts", "retirementObservation", "acquisitionSnapshot", "provisionalHeaderDisposition", "retainMusicRetirement",
-    'let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0; const diagnosticErrors = [], taskTails = [], terminationWitness = { rows: new WeakMap() }; const requests = [];\n'  + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
+    'let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0; const diagnosticErrors = [], taskTails = [], terminationWitness = { rows: new WeakMap() }; const requests = []; const passiveErrors = []; const capturePassive = async () => {};\n'  + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
   for (const reason of [new Error("controlled acquisition"), undefined]) {
     for (const snapshotFails of [false, true]) {
       const pending = deferredOriginal(), proof = { effective: { signal: null, headers: new Headers() }, observerErrors: [], observed: Promise.resolve(), state: "rejected", reason };
@@ -1856,4 +1899,112 @@ test("music tail binding rejects a foreign ingress with the same label and repor
   const summary = records.find(row => row.phase === "worker_summary");
   assert.deepEqual([summary.pass, summary.f_read, summary.cleanupPass, summary.cleanupRejected, summary.cleanupCounterTotal], [1, 1, 2, 1, 2]);
   assert.ok(Buffer.byteLength(JSON.stringify(later)) <= 8192);
+});
+
+test("passive source endpoint snapshots the actual held handler without joining or ending it", async () => {
+  const source = new Function(upstreamScript({ wav: "", mp3: "" }).replace("export default", "const handler =") + "; return { handler, calls };")();
+  const controller = new AbortController(), tails = [];
+  const pending = source.handler.fetch(new Request(target, { method: "POST", headers: { authorization: "Bearer fixture-upstream-abort_headers" },
+    body: JSON.stringify(body(cases.find(row => row.id === "abort_headers"))), signal: controller.signal }), {}, { waitUntil(p) { tails.push(p); void p.catch(() => {}); } });
+  let settled = false; void pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    // Wait only for request.json's existing reaction to enter the producer.
+    for (let i = 0; i < 20 && !source.calls.length; i++) await Promise.resolve();
+    assert.equal(source.calls.length, 1); const before = JSON.stringify(source.calls);
+    const response = await source.handler.fetch(new Request("https://fixture.example/passive-state"));
+    assert.equal(response.status, 200);
+    const passive = createMusicPassiveState(nodeTypes.isProxy), snapshot = passive.validateSource(await response.json());
+    assert.equal(snapshot.rows[0].lifetime.pending, 3); assert.equal(snapshot.rows[0].lifetime.terminal, null);
+    assert.equal(snapshot.rows[0].readiness.matchingPosts, 1); assert.equal(snapshot.rows[1].lifetime, null);
+    assert.equal(settled, false); assert.equal(JSON.stringify(source.calls), before);
+    for (const request of [new Request("https://fixture.example/passive-state?foreign=1"), new Request("https://fixture.example/passive-state", { method: "POST" })]) {
+      assert.equal((await source.handler.fetch(request)).status, 400);
+    }
+    assert.equal(settled, false);
+  } finally { controller.abort(new Error("test-owned cleanup")); }
+  assert.equal((await pending).status, 499);
+  const outcomes = await Promise.allSettled(tails); assert.ok(outcomes.every(row => row.status === "fulfilled"));
+  assert.equal(source.calls[0].sourceLifetime.pending, 0); assert.equal(source.calls[0].sourceLifetime.timerActive, false);
+});
+
+test("passive state records preserve failure census and original detail suppression within 9+1", () => {
+  const passive = createMusicPassiveState(nodeTypes.isProxy), origin = passive.source([], id => createReadinessWitness([id]).snapshot(id), 25);
+  const lines = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  const counts = createMusicFailureCounts(); for (const kind of counts.kinds) counts.add(kind);
+  emitter.put(retirementObservation([], counts.snapshot(), [undefined], "native").records[0]);
+  for (const route of ["native", "manifest"]) for (const point of ["readiness", "retirement"]) {
+    const local = passive.local(point, point === "readiness" ? "abort_body" : "none", point === "readiness" ? 500 : null, [], [], 123, 12);
+    const record = passive.compact(local, origin, 29, route);
+    assert.ok(musicProtocol.validate(record)); emitter.put(record);
+    const missing = { ...record }; delete missing.hI; assert.equal(musicProtocol.validate(missing), undefined);
+    assert.equal(musicProtocol.validate({ ...record, hL: 1024 }), undefined);
+    assert.equal(musicProtocol.validate({ ...record, receivedMs: 11 }), undefined);
+    assert.equal(musicProtocol.validate({ ...record, bR: null }), undefined);
+  }
+  for (let i = 0; i < 20; i++) emitter.put(musicProtocol.record({ ...musicDiagnosticContext("native", "abort_body", "worker_original"), operation: "read", inputIndex: i }));
+  emitter.flush();
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(records.filter(r => r.phase === "native_state").length, 2);
+  const summary = records.find(r => r.phase === "worker_summary");
+  for (const kind of counts.kinds) assert.equal(summary["f_" + kind], 1);
+  assert.equal(summary.rejected, 1); assert.ok(records.at(-1).suppressed > 0);
+  assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  for (const record of records) assert.ok(Buffer.byteLength(JSON.stringify(record)) <= 640);
+});
+
+test("independent passive fault does not hide original retirement counters", async () => {
+  const snapshot = { ...retainMusicRetirement({ records: [], observerFailed: false }, retirementObservation([], { f_acquisition: 1 }, [undefined], "native")), observerFailed: true };
+  const records = [], faults = [];
+  await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(snapshot), musicProtocol, { put: r => records.push(r) }, faults);
+  assert.equal(records[0].f_acquisition, 1); assert.equal(records[0].rejected, 1); assert.equal(faults.length, 1);
+});
+
+test("generated router retains exact readiness response and first failure across passive control I/O", async () => {
+  const passive = createMusicPassiveState(nodeTypes.isProxy);
+  const source = passive.source([], id => createReadinessWitness([id]).snapshot(id), 7);
+  for (const sourceFails of [false, true]) for (const readyThrows of [false, true]) {
+    const readyResponse = new Response("original readiness failure", { status: 500 }), original = Object.freeze({ primary: true });
+    let originalReads = 0, controlReads = 0;
+    Object.defineProperty(readyResponse, "body", { get() { originalReads++; throw new Error("must not read readiness body"); } });
+    Object.defineProperty(readyResponse, "clone", { value() { assert.fail("must not clone readiness response"); } });
+    const nativeResponse = new Response("held original body", { status: 503 });
+    Object.defineProperty(nativeResponse, "body", { get() { assert.fail("original handler body read"); } });
+    Object.defineProperty(nativeResponse, "clone", { value() { assert.fail("original handler response clone"); } });
+    class Operation { stop() {} }
+    const script = routerScript("native").replace(/^import[^\n]*\n/gm, "").replace("export default", "const router =");
+    const fixture = runInNewContext(script + "; ({ router, passiveRecords, passiveSnapshots, passiveErrors });", {
+      Response, Request, Headers, URL, AbortController, AbortSignal, TextEncoder, TextDecoder, setTimeout, clearTimeout,
+      HttpOperation: Operation, bodyBudgetCharged: () => 222,
+      handler: { async fetch(request) { if (new URL(request.url).pathname === "/failing-original") throw original; return nativeResponse; } },
+      fetch: async url => {
+        if (url === "https://fixture.example/started?id=abort_body") { if (readyThrows) throw undefined; return readyResponse; }
+        assert.equal(url, "https://fixture.example/passive-state"); controlReads++;
+        if (sourceFails) throw undefined;
+        return Response.json(source);
+      },
+    });
+    const nativeResult = await fixture.router.fetch(new Request("https://router.invalid/v1/native/openrouter/v1/chat/completions", {
+      method: "POST", headers: headers("abort_headers"), body: JSON.stringify(body(cases.find(row => row.id === "abort_headers"))),
+    }), {}, {});
+    assert.equal(nativeResult, nativeResponse);
+    const readyPending = fixture.router.fetch(new Request("https://router.invalid/fixture/started?id=abort_body"));
+    if (readyThrows) await assert.rejects(readyPending, error => error === undefined);
+    else assert.equal(await readyPending, readyResponse); assert.equal(originalReads, 0); assert.equal(controlReads, 1);
+    const first = fixture.passiveRecords[0];
+    assert.ok(musicProtocol.validate(JSON.parse(JSON.stringify(first)))); assert.equal(first.point, "readiness"); assert.equal(first.charged, 222); assert.equal(first.httpStatus, readyThrows ? null : 500); assert.equal(first.hS, 503);
+    assert.equal(first.stateFaults, sourceFails ? 1 : 0); assert.equal(first.sourceMs, sourceFails ? null : 7);
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/failing-original"), {}, { waitUntil() { assert.fail("unexpected tail"); } }), error => error === original);
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/fixture/retire", { method: "POST" })), error => error.errors.length === 1 && error.errors[0] === original);
+    const response = await fixture.router.fetch(new Request("https://router.invalid/fixture/retirement-observation"));
+    const text = await response.text(), snapshot = JSON.parse(text);
+    assert.ok(Buffer.byteLength(text) <= 8192); assert.equal(snapshot.observerFailed, sourceFails);
+    assert.equal(snapshot.records[0].f_handler, 1); assert.equal(snapshot.records[0].rejected, 1);
+    assert.equal(snapshot.records[0].stateFaults, sourceFails ? 2 : 0);
+    assert.equal(fixture.passiveRecords.length, 2); assert.equal(fixture.passiveRecords[0], first); assert.equal(controlReads, 2);
+    for (const record of snapshot.records) assert.ok(musicProtocol.validate(record));
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/fixture/retire", { method: "POST" })), error => error.errors[0] === original);
+    assert.equal(controlReads, 2); assert.equal(fixture.passiveRecords[0], first);
+    if (sourceFails) { assert.equal(fixture.passiveErrors.length, 2); assert.ok(fixture.passiveErrors.every(error => error.errors[0] === undefined)); }
+  }
 });

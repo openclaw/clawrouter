@@ -36,10 +36,10 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   type Data = Record<string, string | number | boolean | null>;
   const prefix = "CLAWROUTER_MUSIC_DIAGNOSTIC_V1 ";
   const ids = new Set(["none", "m0_wav", "m0_mp3", "m1_wav", "m1_mp3", "reference", "options", "preabort", "missing", "foreign", "revoked", "unpriced", "stalegrant", "empty", "eof", "json", "utf8", "base64", "ambiguous", "partial", "error", "redirect", "wire", "audio", "transcript", "abort_headers", "abort_body", "deadline_body"]);
-  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
+  const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary", "native_state", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
   const names = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "unknown"]);
   const codes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_REQUIRE_ESM", "ABORT_ERR", "ECONNRESET", "ETIMEDOUT"]);
-  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", "operation", "closedOutcome", "cancelOutcome", "inputIndex", "readerIndex", "operationIndex", "responsePresent", "readerPresent", "reasonDefined", "signalAbortedAtJoin", "sameSignalReasonAtJoin", "sameClosedReason", "sameCancelReason", "bodyLockedAtJoin", "observedOutcome", "d_retirements", "d_promises", "d_fulfilled", "d_rejected", "d_pending", "d_violations", "pass", "cleanupPass", "cleanupRejected", "cleanupCounterTotal", "diagnosticFaults", "headerAccepted", "defined", "noResponse", "observerClean", "unique", "ingressLive", "effectiveLive", "abortedBeforeReject", "listenerRemoved", "invokeAt", "rejectAt", "ingressAt", "effectiveAt", "operationBound", "stopCalls", "stopCause", "stopAt", "stopReturnedAt", "statusBefore", "statusAfter", "delivery", "stopThrew", "readAt", "readState", "cancelAt", "cancelSettledAt", "closedAt", "bodyCancels", "bodyCancelState", "bodyCancelAt", "bodySettledAt", "tailAt", "tails", "tailsFulfilled", "tailsRejected", "tailsPending", "acquisitionState", "ingressAbortedAtReject", "effectiveAbortedAtReject", "cancelState", "closedState", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
+  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", "operation", "closedOutcome", "cancelOutcome", "inputIndex", "readerIndex", "operationIndex", "responsePresent", "readerPresent", "reasonDefined", "signalAbortedAtJoin", "sameSignalReasonAtJoin", "sameClosedReason", "sameCancelReason", "bodyLockedAtJoin", "observedOutcome", "d_retirements", "d_promises", "d_fulfilled", "d_rejected", "d_pending", "d_violations", "pass", "cleanupPass", "cleanupRejected", "cleanupCounterTotal", "diagnosticFaults", "headerAccepted", "defined", "noResponse", "observerClean", "unique", "ingressLive", "effectiveLive", "abortedBeforeReject", "listenerRemoved", "invokeAt", "rejectAt", "ingressAt", "effectiveAt", "operationBound", "stopCalls", "stopCause", "stopAt", "stopReturnedAt", "statusBefore", "statusAfter", "delivery", "stopThrew", "readAt", "readState", "cancelAt", "cancelSettledAt", "closedAt", "bodyCancels", "bodyCancelState", "bodyCancelAt", "bodySettledAt", "tailAt", "tails", "tailsFulfilled", "tailsRejected", "tailsPending", "acquisitionState", "ingressAbortedAtReject", "effectiveAbortedAtReject", "cancelState", "closedState", "point", "localMs", "sourceMs", "receivedMs", "charged", "stateFaults", ...["h", "b", "d"].flatMap(p => ["I", "E", "S", "U", "L", "T", "P", "F", "D", "R"].map(k => p + k)), ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
   const own = (value: unknown, key: string): unknown => {
     if (!value || typeof value !== "object" || isProxy(value)) return undefined;
     try { const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined; } catch { return undefined; }
@@ -57,6 +57,16 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         || !["none", "error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"].includes(out.category as string)) return;
       for (const key of found as string[]) {
         if (keys.indexOf(key) < 8) continue;
+        if (key === "point") { if (!["readiness", "retirement"].includes(out[key] as string)) return; continue; }
+        if (["localMs", "sourceMs", "receivedMs", "charged", "stateFaults"].includes(key)) { if (key === "sourceMs" && out[key] === null) continue; if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 1_000_000_000) return; continue; }
+        if (/^[hbd][IESULTPFDR]$/.test(key)) {
+          const value = out[key], field = key.slice(1);
+          if (value === null) { if (["D", "R"].includes(field) && out.sourceMs !== null) return; continue; }
+          if (["I", "E"].includes(field)) { if (typeof value !== "boolean") return; }
+          else if (typeof value !== "number" || !Number.isSafeInteger(value) || value < (["S", "U"].includes(field) ? 100 : 0)
+            || value > (["S", "U"].includes(field) ? 599 : field === "L" ? 1023 : field === "T" ? 20 : field === "R" ? 16383 : 1000)) return;
+          continue;
+        }
         if (["pass", "cleanupPass", "cleanupRejected", "cleanupCounterTotal", "diagnosticFaults", "invokeAt", "rejectAt", "ingressAt", "effectiveAt", "stopCalls", "stopAt", "stopReturnedAt", "readAt", "cancelAt", "cancelSettledAt", "closedAt", "bodyCancels", "bodyCancelAt", "bodySettledAt", "tailAt", "tails", "tailsFulfilled", "tailsRejected", "tailsPending"].includes(key)) { if (out[key] !== null && (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 1_000_000_000)) return; continue; }
         if (["headerAccepted", "defined", "noResponse", "observerClean", "unique", "ingressLive", "effectiveLive", "abortedBeforeReject", "listenerRemoved", "operationBound", "stopThrew", "ingressAbortedAtReject", "effectiveAbortedAtReject"].includes(key)) { if (out[key] !== null && typeof out[key] !== "boolean") return; continue; }
         if (["statusBefore", "statusAfter"].includes(key)) { if (![null, "client_error", "timeout", "provider_error"].includes(out[key] as string | null)) return; continue; }
@@ -74,6 +84,12 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         if (key === "toolReturned" || key === "failureOverflow") { if (typeof out[key] !== "boolean") return; continue; }
         if (key === "name" ? !names.has(out[key] as string) : key === "code" ? !codes.has(out[key] as string)
           : key === "signal" ? ![null, "SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(out[key] as string | null) : !scalar(out[key])) return;
+      }
+      if (out.phase === "native_state") {
+        const required = ["point", "localMs", "sourceMs", "receivedMs", "charged", "stateFaults", "httpStatus", ...["h", "b", "d"].flatMap(p => ["I", "E", "S", "U", "L", "T", "P", "F", "D", "R"].map(k => p + k))];
+        if (out.layer !== "outer" || out.role !== "primary" || out.outcome !== "unknown" || out.category !== "none" || required.some(k => !Object.hasOwn(out, k))
+          || (out.sourceMs === null ? out.stateFaults === 0 || ["h", "b", "d"].some(p => ["L", "T", "P", "F", "D", "R"].some(k => out[p + k] !== null)) : out.stateFaults !== 0)
+          || (out.receivedMs as number) < (out.localMs as number) || (out.point === "readiness" ? !["abort_headers", "abort_body", "deadline_body"].includes(out.caseId as string) : out.caseId !== "none")) return;
       }
       if (out.partialDelivery !== undefined && out.partialDelivery !== null || new TextEncoder().encode(JSON.stringify(out)).length > 640) return;
       return out;
@@ -104,11 +120,11 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
     }
     return { records, invalid, observedCode };
   }
-  const keyFor = (r: Data) => [r.layer, r.route, r.caseId, r.phase, r.role, ...(["worker_original", "worker_header", "worker_termination", "worker_tail"].includes(r.phase as string) ? [r.operation, r.inputIndex, r.readerIndex, r.operationIndex] : [])].join("/");
+  const keyFor = (r: Data) => [r.layer, r.route, r.caseId, r.phase, r.role, ...(r.phase === "native_state" ? [r.point] : []), ...(["worker_original", "worker_header", "worker_termination", "worker_tail"].includes(r.phase as string) ? [r.operation, r.inputIndex, r.readerIndex, r.operationIndex] : [])].join("/");
   function emitter(write: (line: string) => unknown) {
     const records = new Map<string, Data>(), emitted = new Set<string>();
     let suppressed = 0, failed = false, finished = false, bytes = 0;
-    const priority = (r: Data) => r.phase === "helper" ? 0 : r.phase === "worker_summary" ? 1 : r.phase === "worker_header" ? 2
+    const priority = (r: Data) => r.phase === "helper" ? 0 : r.phase === "worker_summary" ? 1 : r.phase === "native_state" ? 1.5 : r.phase === "worker_header" ? 2
       : r.phase === "worker_termination" ? 3 : r.phase === "worker_tail" ? 4 : r.phase === "worker_original" ? 5
       : r.phase === "worker_cleanup_summary" ? 6 : r.role === "primary" ? 7 : r.role === "cleanup" && r.category !== "none" ? 8
       : r.phase === "final_cleanup" ? 9 : r.phase === "worker_retirement" ? 10 : r.phase === "upstream_assert" ? 11 : r.phase === "sqlite_assert" ? 12 : 13;
@@ -137,7 +153,9 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
       if (finished) return; finished = true;
       if (!failed) return;
       const remaining = [...records.values()].filter(r => !emitted.has(keyFor(r))).sort((a, b) => priority(a) - priority(b));
+      let stateRecords = 0;
       for (const r of remaining) {
+        if (r.phase === "native_state" && ++stateRecords > 2) { suppressed++; continue; }
         if (emitted.size >= 9) { suppressed++; continue; }
         emitted.add(keyFor(r)); command(r);
       }
