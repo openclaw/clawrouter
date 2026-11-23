@@ -423,7 +423,9 @@ ${createMusicPassiveState.toString()}
 ${readMusicPassiveResponse.toString()}
 ${captureMusicPassiveState.toString()}
 const passive = createMusicPassiveState(), passiveSnapshots = new Map(), passiveRecords = [], passiveErrors = [];
-const passiveEpoch = Date.now(), passiveNow = () => Date.now() - passiveEpoch;
+// Anchor diagnostic elapsed time inside a request, independently in each Worker.
+let passiveEpoch;
+const passiveNow = () => Date.now() - passiveEpoch;
 async function capturePassive(point, id = "none", status = null) {
   const record = await captureMusicPassiveState(passiveSnapshots, passiveErrors, point,
     () => passive.local(point, id, status, ingresses, inputs, bodyBudgetCharged(), passiveNow()),
@@ -500,6 +502,7 @@ async function retire() {
   return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
 }
 export default { ...handler, async fetch(request, env, context) {
+  if (passiveEpoch === undefined) passiveEpoch = Date.now();
   const path = new URL(request.url).pathname;
   if (path === "/fixture/grants") {
     for (const row of rows) if (row.kind !== "missing") await putGrantCredentials(env, "oauth/orm_" + row.id + "/openrouter", { provider: "openrouter", enabled: true, kind: "api_key", credential: "fixture-upstream-" + row.id });
@@ -680,9 +683,11 @@ ${createMusicPassiveState.toString()}
 ${createReadinessWitness.toString()}
 ${waitForReadiness.toString()}
 const readiness = createReadinessWitness(rows.map(row => row.id));
-const passive = createMusicPassiveState(), passiveEpoch = Date.now();
+const passive = createMusicPassiveState();
+let passiveEpoch;
 const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
 export default { async fetch(request, env, context) {
+  if (passiveEpoch === undefined) passiveEpoch = Date.now();
   const url = new URL(request.url);
   if (url.hostname === "fixture.example") {
     if (url.pathname === "/passive-state") {
@@ -1958,6 +1963,69 @@ test("independent passive fault does not hide original retirement counters", asy
   const records = [], faults = [];
   await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(snapshot), musicProtocol, { put: r => records.push(r) }, faults);
   assert.equal(records[0].f_acquisition, 1); assert.equal(records[0].rejected, 1); assert.equal(faults.length, 1);
+});
+
+test("generated passive clocks start once in their own request and retain elapsed bounds", async t => {
+  const unix = 1_790_000_000_000;
+  const scenarios = [
+    { name: "module zero to first Unix request", first: unix, later: unix, elapsed: 0 },
+    { name: "later request delta", first: unix, later: unix + 17, elapsed: 17 },
+    { name: "zero request epoch is not reset", first: 0, later: 17, elapsed: 17 },
+    { name: "maximum elapsed remains valid", first: unix, later: unix + 1_000_000_000, elapsed: 1_000_000_000 },
+    { name: "negative elapsed remains fatal", first: unix, later: unix - 1, invalid: true },
+    { name: "overflow remains fatal", first: unix, later: unix + 1_000_000_001, invalid: true },
+  ];
+  for (const worker of ["router", "upstream"]) for (const scenario of scenarios) {
+    await t.test(`${worker}: ${scenario.name}`, async () => {
+      let now = 0, clockReads = 0, controlReads = 0;
+      class Clock { static now() { clockReads++; return now; } }
+      class Operation { stop() {} }
+      const passive = createMusicPassiveState(nodeTypes.isProxy);
+      const origin = passive.source([], id => createReadinessWitness([id]).snapshot(id), 0);
+      const readyResponse = new Response(null, { status: 500 });
+      const script = (worker === "router" ? routerScript("native").replace(/^import[^\n]*\n/gm, "") : upstreamScript({ wav: "", mp3: "" }))
+        .replace("export default", "const clockHandler =");
+      const fixture = runInNewContext(script + "; ({ clockHandler, epoch: () => passiveEpoch, "
+        + (worker === "router" ? "passiveRecords, passiveErrors" : "calls") + " });", {
+        Date: Clock, Response, Request, Headers, URL, AbortController, AbortSignal, TextEncoder, TextDecoder, setTimeout, clearTimeout,
+        HttpOperation: Operation, bodyBudgetCharged: () => 0,
+        handler: { fetch() { return new Response(null, { status: 204 }); } },
+        fetch: async url => {
+          if (url === "https://fixture.example/started?id=abort_body") return readyResponse;
+          assert.equal(url, "https://fixture.example/passive-state"); controlReads++;
+          return Response.json(origin);
+        },
+      });
+      assert.equal(fixture.epoch(), undefined); assert.equal(clockReads, 0);
+      now = scenario.first;
+      const initial = await fixture.clockHandler.fetch(new Request(worker === "router"
+        ? "https://router.invalid/clock-start" : "https://fixture.example/passive-state"), {}, {});
+      assert.equal(initial.status, worker === "router" ? 204 : 200);
+      assert.equal(fixture.epoch(), scenario.first);
+      if (worker === "upstream") assert.equal((await initial.json()).atMs, 0);
+      now = scenario.later;
+      if (worker === "router") {
+        const result = await fixture.clockHandler.fetch(new Request("https://router.invalid/fixture/started?id=abort_body"));
+        assert.equal(result, readyResponse, "diagnostics must preserve the original readiness failure");
+        assert.equal(fixture.passiveErrors.length, scenario.invalid ? 1 : 0);
+        assert.equal(fixture.passiveRecords.length, scenario.invalid ? 0 : 1);
+        assert.equal(controlReads, scenario.invalid ? 0 : 1);
+        if (scenario.invalid) assert.equal(fixture.passiveErrors[0].message, "invalid passive music state");
+        else {
+          const record = fixture.passiveRecords[0];
+          assert.equal(record.localMs, scenario.elapsed); assert.equal(record.receivedMs, scenario.elapsed);
+          assert.equal(record.sourceMs, 0, "source elapsed time has its own epoch");
+          assert.ok(musicProtocol.validate(JSON.parse(JSON.stringify(record))));
+        }
+      } else {
+        const pending = fixture.clockHandler.fetch(new Request("https://fixture.example/passive-state"));
+        if (scenario.invalid) await assert.rejects(pending, error => error.message === "invalid passive music state");
+        else assert.equal(passive.validateSource(await (await pending).json()).atMs, scenario.elapsed);
+        assert.equal(fixture.calls.length, 0, "clock checks must not start a held source");
+      }
+      assert.equal(fixture.epoch(), scenario.first, "later requests must not reset either epoch");
+    });
+  }
 });
 
 test("generated router retains exact readiness response and first failure across passive control I/O", async () => {
