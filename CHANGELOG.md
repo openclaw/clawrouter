@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow completion review to start from a caller-supplied candidate without another draft call, preserving correction and final-check guards.
+
 - Allow a separate corrective model and verdict-only reviewer in caller-side fusion trajectories.
 
 - Add opt-in review after corrective trajectory writes, preserving checkpoint ordering and existing execution limits.

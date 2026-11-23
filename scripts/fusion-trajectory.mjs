@@ -24,7 +24,8 @@ export const runSingleTrajectory = options => runController(options, false);
 
 async function runController({ task, tools, draft, verify, repair,
   chunkSize = 4, maxModelCalls = 32, maxToolCalls = 32, maxContextBytes = 131072,
-  deadlineMs = 120000, signal, finalCheckTool, reviewSnapshot, nextAction, onCheckpoint, reviewAfterCorrection = false } = {}, reviewDrafts) {
+  deadlineMs = 120000, signal, finalCheckTool, reviewSnapshot, nextAction, onCheckpoint,
+  reviewAfterCorrection = false, initialFinalAnswer } = {}, reviewDrafts) {
   for (const [value, max] of [[chunkSize, 16], [maxModelCalls, 128], [maxToolCalls, 128],
     [maxContextBytes, 1048576], [deadlineMs, 600000]]) {
     if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error('invalid_trajectory_limit');
@@ -33,6 +34,10 @@ async function runController({ task, tools, draft, verify, repair,
     || !(reviewDrafts ? [draft, verify, repair] : [draft]).every(fn => typeof fn === 'function')) throw new Error('invalid_trajectory_config');
   if (typeof reviewAfterCorrection !== 'boolean' || reviewAfterCorrection && reviewDrafts !== 'final') {
     throw new Error('invalid_trajectory_correction_review');
+  }
+  if (initialFinalAnswer !== undefined && (reviewDrafts !== 'final'
+    || typeof initialFinalAnswer !== 'string' || !initialFinalAnswer.trim())) {
+    throw new Error('invalid_trajectory_initial_final');
   }
   if (reviewSnapshot !== undefined && (reviewDrafts !== 'final' || typeof reviewSnapshot !== 'function')) {
     throw new Error('invalid_trajectory_snapshot');
@@ -112,7 +117,8 @@ async function runController({ task, tools, draft, verify, repair,
     }
     return finish(action);
   };
-  let pendingFinal;
+  let pendingFinal = initialFinalAnswer === undefined ? undefined
+    : checkedAction({ type: 'final', content: initialFinalAnswer });
   while (true) {
     if (!reviewDrafts) {
       active.throwIfAborted();
