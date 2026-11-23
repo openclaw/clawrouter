@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow a separate corrective model and verdict-only reviewer in caller-side fusion trajectories.
+
 - Add opt-in review after corrective trajectory writes, preserving checkpoint ordering and existing execution limits.
 
 - Bound trajectory review schemas to the current segment length so acceptance cannot refer to earlier committed steps.

@@ -4,6 +4,63 @@ import { runModelTrajectory, runSingleModelTrajectory, runAdaptiveModelTrajector
 
 const answer = content => ({ action: { type: 'final', content } });
 const response = value => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] });
+
+test('a read-only critic delegates corrections to a separately metered model', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    const calls = [];
+    let writes = 0;
+    const options = fixture(async (_id, model, body) => {
+      calls.push(model);
+      if (model === 'review-model') {
+        assert.deepEqual(body.response_format.json_schema.schema.properties.replacement, { type: 'null' });
+        assert.match(body.messages[0].content, /A separate model owns corrections/);
+        return response({ accepted: writes ? 1 : 0, reason: writes ? '' : 'A write is required.', replacement: null });
+      }
+      if (model === 'repair-model') return response({ action: { type: 'tool', name: 'write', arguments: {} } });
+      return response(answer('done'));
+    });
+    options.tools.push({ name: 'write', effect: 'write',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      validate: args => Object.keys(args).length === 0, execute: async () => ({ writes: ++writes }) });
+    const result = await run({ ...options, repairModel: 'repair-model', reviewCanReplace: false, maxModelCalls: 5 });
+    assert.deepEqual(calls, ['draft-model', 'review-model', 'repair-model', 'draft-model', 'review-model']);
+    assert.equal(writes, 1);
+    assert.equal(result.stats.modelCalls, 5);
+    assert.equal(result.stats.repairs, 1);
+  }
+});
+
+test('a critic replacement is rejected locally even if transport ignores the schema', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    let calls = 0, writes = 0;
+    const options = fixture(async () => response(++calls === 1 ? answer('done') : {
+      accepted: 0, reason: 'Replace it.', replacement: { type: 'tool', name: 'write', arguments: {} },
+    }));
+    options.tools.push({ name: 'write', effect: 'write',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      validate: () => true, execute: async () => { writes++; } });
+    await assert.rejects(run({ ...options, repairModel: 'repair-model', reviewCanReplace: false }), /invalid_trajectory_verdict/);
+    assert.equal(calls, 2);
+    assert.equal(writes, 0);
+  }
+});
+
+test('separate repairs retain the shared call limit and cannot enter draft selection', async () => {
+  let calls = 0;
+  const options = fixture(async () => response(++calls === 1 ? answer('done')
+    : { accepted: 0, reason: 'Incomplete.', replacement: null }));
+  await assert.rejects(runFinalReviewedModelTrajectory({ ...options, repairModel: 'repair-model',
+    reviewCanReplace: false, maxModelCalls: 2 }), /trajectory_model_limit/);
+  assert.equal(calls, 2);
+  await assert.rejects(runAdaptiveModelTrajectory({ ...options, repairModel: 'repair-model',
+    selectModel: () => 'repair-model' }), /invalid_trajectory_selected_model/);
+  assert.equal(calls, 2);
+  for (const config of [{ repairModel: '' }, { repairModel: null }, { reviewCanReplace: 'false' }]) {
+    await assert.rejects(runFinalReviewedModelTrajectory({ ...options, ...config }), /invalid_trajectory_models/);
+  }
+  assert.equal(calls, 2);
+});
+
 function fixture(invoke) {
   return { task: 'Look up a value.', runId: 'trajectory-test', draftModel: 'draft-model', reviewModel: 'review-model',
     tools: [{ name: 'read', effect: 'read',

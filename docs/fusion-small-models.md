@@ -196,10 +196,20 @@ retain independent acceptance checks.
 - `runSingleModelTrajectory`: one fixed model, without semantic review.
 - `runFinalReviewedModelTrajectory`: execute tool actions and review completion;
   an optional `selectModel` chooses the draft model from the configured pair.
-  Verification and corrective calls use `reviewModel`.
+  Verification uses `reviewModel`; corrective calls default to the same model.
 - `runAdaptiveModelTrajectory`: a synchronous `selectModel(request)` callback
   selects either `draftModel` or `reviewModel` for each action. It sees a copied
   task and committed history; an unconfigured selection stops the run.
+
+Set `repairModel` to assign corrective calls to a separate model. Set
+`reviewCanReplace: false` to restrict the reviewer to a verdict and reason;
+its schema requires a null replacement, and the adapter rejects replacement
+actions locally before execution. For example, a stronger draft and repair
+model can use a smaller critic. Draft selection still uses only `draftModel`
+and `reviewModel`. All three roles use the same metered callback and shared
+execution limits. The defaults preserve existing behavior. This configuration
+does not establish a quality or cost gain; compare it with direct execution
+and keep independent acceptance checks.
 
 For executable-check feedback, `scripts/fusion-check-routing.mjs` exports
 `createCheckDrivenSelector({ draftModel, repairModel, checkTool, repairSteps })`.
