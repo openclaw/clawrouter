@@ -52,7 +52,7 @@ owner.
 ## Registered client acceptance fixture
 
 `test/openclaw-cloudflare-messages.test.mjs` pins OpenClaw
-`df9f72058439ec5b4d27b5f2eb52a3d076c8f80f`. Its copied SDK fixture registers the
+`3ea9ca6e79c1c9a1a7fb1629f9cb88bb6046c291`. Its copied SDK fixture registers the
 ClawRouter provider, discovers the selected credential's real catalog, prepares
 the configured model, and uses the embedded runner's
 `boundary-aware:anthropic-messages` transport. Replay uses the captured provider

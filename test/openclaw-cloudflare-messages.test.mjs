@@ -15,7 +15,7 @@ import { runOpenClawConsumer, consumerTypecheckPlan } from "./helpers/openclaw-c
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "df9f72058439ec5b4d27b5f2eb52a3d076c8f80f";
+const sourceHead = "3ea9ca6e79c1c9a1a7fb1629f9cb88bb6046c291";
 const providerId = "cloudflare-ai-gateway", modelId = providerId + "/claude-sonnet-4-6";
 const nativePath = "/v1/native/" + providerId + "/anthropic/v1/messages";
 const envelopePath = "/v1/proxy/" + providerId + "/messages";
@@ -516,6 +516,7 @@ test("Cloudflare typecheck binds only the exact client head and fixture path", (
   assert.equal(plan.sha256, "b032aa889d4ab5512e57f26871a5839a38ae326b18e765dce2dcec3b4fd80d49");
   assert.deepEqual(plan.args, ["scripts/run-tsgo.mjs", "-p", "test/tsconfig/tsconfig.extensions.test.json", "--noEmit", "--incremental", "false"]);
   assert.throws(() => consumerTypecheckPlan("0".repeat(40), path));
+  assert.throws(() => consumerTypecheckPlan("df9f72058439ec5b4d27b5f2eb52a3d076c8f80f", path));
   assert.throws(() => consumerTypecheckPlan(sourceHead, "extensions/clawrouter/foreign.test.ts"));
   assert.throws(() => consumerTypecheckPlan(sourceHead, "extensions/clawrouter/worker-google-continuation-contract.test.ts"));
   assert.throws(() => consumerTypecheckPlan("b6072e63fdf09422ea70ef4bbdc818536d871047", path));

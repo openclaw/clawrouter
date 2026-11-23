@@ -138,7 +138,7 @@ jobs:
             ref: d2e88f6ff4b34b2141ee67b30a4c2783adf0f38c
             test: test/openclaw-gradium.test.mjs
           - consumer: cloudflare-messages
-            ref: df9f72058439ec5b4d27b5f2eb52a3d076c8f80f
+            ref: 3ea9ca6e79c1c9a1a7fb1629f9cb88bb6046c291
             test: test/openclaw-cloudflare-messages.test.mjs
           - consumer: vercel
             ref: 0093b58c0d132ae1707f9553839f1cf297fb9a25
