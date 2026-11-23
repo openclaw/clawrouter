@@ -36,6 +36,9 @@ ordinary Worker startup never imports or creates a JavaScript string for it.
 Worker-first routing also guards direct artifact URLs. The deployment preserves
 main's compatibility date and flags. Native bootstrap checks the exact byte count
 and SHA-256 digest before executing code.
+Artifact selection uses the authenticated slot generation's persisted runtime
+digest, independently of the edge Worker's build. A missing journal digest or
+unavailable matching artifact fails closed; it never substitutes the edge runtime.
 JSON admission owns classification for both known and unknown
 lengths; unrelated routes and WebSocket upgrades use the original routing
 function without an extra asynchronous wrapper. Deployment provisions the

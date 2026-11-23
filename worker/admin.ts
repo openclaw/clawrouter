@@ -29,23 +29,27 @@ import {
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
-import { currentGrantRuntime, grantCredentialPresent, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantCredentialPresent, grantPriority, grantUsable, grantWeight, validCredentialBundle } from "./grant-eligibility";
+import { grantRoutingPolicy, validGrantSegment } from "./grant-routing";
+import { grantRuntimeStates, grantSelectionStats } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { hasPrimaryCredential, inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
-import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
+import { budgetStatus as policyBudgetStatus, providerBudgetStatus } from "./ledgers";
+import { usageSnapshots, grantUsageSnapshot } from "./usage-ledger-client";
 import { startOAuth } from "./oauth";
 import { miniMaxDeviceAuthorize } from "./minimax-device-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
-import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
+import { listGrantRecords, listHealth, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota } from "./providers"; import { endpointForPath, modelRoute, snapshot } from "./provider-catalog";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessSession, AssignmentRule, Env, PolicyBinding,
   GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
-import { decodePathSegment, cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { decodePathSegment, cleanId, errorResponse, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
   const authorization = await authorizeAdmin(request, env);

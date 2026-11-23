@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { hash, sandbox, readSource, readTaskContext, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
+import { hash, taskSandbox, readSource, readTaskContext, writeFiles, check, probe, validateEdits } from './fusion-workloads.mjs';
 import { toolErrorCode } from './fusion-agent-benchmark.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
 import { models } from './fusion-benchmark-accounting.mjs';
@@ -85,7 +85,7 @@ memory: every action must preserve a nonempty, concise working summary of facts 
 Visible tests pass even on the broken baseline: their success does not prove the issue fixed. Use an executable probe of the reported invariant where possible. Final acceptance tests are unavailable.`;
 
 export async function runGroundedAgent(task, image, strategy, trialId, config, invoke, _engine,
-  { makeSandbox = sandbox, read = readSource, write = writeFiles, test = check, runProbe = probe } = {}) {
+  { makeSandbox = image => taskSandbox(task, image), read = readSource, write = writeFiles, test = check, runProbe = probe } = {}) {
   if (!['strong', 'handoff', 'review'].includes(strategy)) throw new Error('invalid_grounded_strategy');
   if (strategy === 'review' && config.requireReproducer !== true) throw new Error('review_requires_reproducer');
   const box = await makeSandbox(image), started = performance.now();

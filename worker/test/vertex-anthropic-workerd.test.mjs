@@ -9,12 +9,12 @@ import { vertexAuthorization, vertexBody, vertexJson, vertexSse, vertexModelId }
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {configureVertex,vertexModelId} from './worker/test/vertex-runtime-fixture.mjs';
 const provider=structuredClone(snapshot.providers.find(p=>p.id==='anthropic'));configureVertex(provider);snapshot.providers.push(provider);
 const key='oauth/fixture/vertex';let initialized,revokeAfterBudget=false,fetches=0,pending=new Set();

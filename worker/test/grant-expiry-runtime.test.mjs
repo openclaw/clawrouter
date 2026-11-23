@@ -13,7 +13,7 @@ const router = `
   export * from "./worker/index.ts";
   import handler from "./worker/index.ts";
   import { sha256Hex } from "./worker/utils.ts";
-  import { providerById } from "./worker/providers.ts";
+  import { providerById } from "./worker/provider-catalog.ts";
   Date.now = () => ${now};
   providerById("anthropic").auth.authorization = {
     authorizeUrl: "https://fixture/authorize", tokenUrl: "https://fixture/token", clientId: "fixture-client", grantKind: "subscription",

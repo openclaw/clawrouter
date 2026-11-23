@@ -1,6 +1,7 @@
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { PublicControlBinding } from "./response-control-authorization.ts";
-import { HttpError, safeEqual } from "./utils.ts";
+import { safeEqual } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const publishedInputVersion = "clawrouter.published-input.v1";
 export const publishedInputSlot = "messages[0].content[1].image_url.url";

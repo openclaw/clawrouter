@@ -3,7 +3,8 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { planBudgetReservation } from "../accounting.ts";
-const { BackgroundStore, backgroundObservationMs, backgroundAutoRetryMs, backgroundReplayMs } = await import("../background-store.ts");
+const { BackgroundStore } = await import("../background-store.ts");
+const { backgroundObservationMs, backgroundAutoRetryMs, backgroundReplayMs } = await import("../background-record.ts");
 const { createProxyAccounting } = await import("../proxy-accounting.ts");
 
 const owner = { providerId: "fixture", endpointId: "create", grantKey: "oauth/fixture/key", lineage: "lineage", routeSha256: "a".repeat(64), policyGeneration: "generation" };

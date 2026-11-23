@@ -8,7 +8,7 @@ const { default: handler } = await import("../index.ts");
 
 test("Fusion settles the final body estimate while retaining both original reservation receipts", async (t) => {
   const { estimateCost } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
   const { DEFAULT_FUSION_CONFIG, buildAggregatorBody, buildFusionReservationProposals } = await import("../fusion.ts");
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 };
@@ -120,7 +120,7 @@ test("Fusion omitted-tier retained-envelope growth denies before reserve, advise
 });
 
 test("Fusion injected post-reserve route containment failure releases the original unclaimed IDs once", async t => {
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { DEFAULT_FUSION_CONFIG } = await import("../fusion.ts");
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 };
   const env = usageEnv([], { limit: 1_000_000, fixedCost: 7, retainContent: false });
@@ -169,7 +169,7 @@ test("Fusion injected post-reserve route containment failure releases the origin
 test("reservation reuse reassesses a final pricing gap before admission and unmetered settlement", async (t) => {
   const { reserveBudget, validateBudgetReservation } = await import("../accounting.ts");
   const { createProxyAccounting, estimateCost } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra", "llm.chat");
   const endpoint = route.provider.endpoints.find(({ id }) => id === "chat_completions");

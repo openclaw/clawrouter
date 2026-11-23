@@ -97,7 +97,7 @@ export {BudgetLedgerObject,UsageLedgerObject} from './worker/index.ts';
 import {PolicyBindingIndexObject as PolicyBase} from './worker/index.ts';
 export class PolicyBindingIndexObject extends PolicyBase { async fetch(request){if(new URL(request.url).pathname==='/fixture/alarm'){await this.alarm();return Response.json({settled:true});}return super.fetch(request);} }
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {configureVideo} from './worker/test/minimax-video-declaration-fixture.mjs';
 import {authorityCall} from './worker/authority.ts';
 import {GrantCredentialObject as BaseGrantCredentialObject,putGrantCredentials,inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
@@ -108,7 +108,7 @@ import {bodyBudgetCharged,BodyLease} from './worker/body-budget.ts';
 import {MiniMaxVideoOperation,readVideoJson,inspectVideoJson} from './worker/minimax-video-operation.ts';
 import {collectManagedPrediction} from './worker/managed-predictions.ts';
 import {resolveResponseControlOwner} from './worker/response-controls.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 const provider=snapshot.providers.find(p=>p.id==='minimax');configureVideo(provider,miniMaxFrozenVideoModels);const videoCards=provider.models.map(card=>({...card}));
 const key='oauth/fixture/video',actor={auth:'cloudflare_access',role:'admin',email:'video-admin@example.invalid'};
 const raw=globalThis.fetch.bind(globalThis),release=BodyLease.prototype.release,deferred=()=>Promise.withResolvers();

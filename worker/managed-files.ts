@@ -1,6 +1,6 @@
 import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { isMiniMaxVideoOrigin } from "./minimax-video.ts";
-import type { BackgroundRecord } from "./background-store.ts";
+import type { BackgroundRecord } from "./background-record.ts";
 import { BodyLease } from "./body-budget.ts";
 import { backgroundCall } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -15,7 +15,8 @@ import { publicControlAuthorization } from "./response-control-authorization.ts"
 import { responseControlIdentities, resolveResponseControlOwner } from "./response-controls.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import type { AccessSession, AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { errorResponse, HttpError, json } from "./utils.ts";
+import { errorResponse, json } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const managedFileLimit = 16 * 1024 * 1024;
 export interface ManagedFileMatch { create: CompiledEndpoint; action: ManagedFileAction; endpoint: CompiledEndpoint; pathParams: Record<string, string> }

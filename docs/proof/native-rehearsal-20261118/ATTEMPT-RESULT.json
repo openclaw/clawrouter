@@ -1,0 +1,107 @@
+{
+  "at": "2026-11-18T07:13:42.727022+00:00",
+  "verdict": "Passed within the tested isolated saved-Codex forward-cutover and fresh-process recovery scope",
+  "sessionContinuityPassed": true,
+  "releaseQualificationAsserted": false,
+  "source": "e3bfa63b8bd162d2bfd632bafec8842902f74a28",
+  "productBase": "6605ddd8730d3626d358b22643277a59ae5b3e65",
+  "controlSha256": "1e9d87757d9dcfce668aeb5000e95a0adb6dc26d1d0d3cc9520624835c22afa1",
+  "oldRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+  "candidateRuntimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+  "worker": "clawrouter-native-qualification-870a9258ae58",
+  "proof": {
+    "at": "2026-11-18T07:12:22.396Z",
+    "passed": true,
+    "threadId": "01a1ed7e-5bb9-7550-a356-634c01f33ce3",
+    "turns": 5,
+    "requests": 5,
+    "replays": 0,
+    "accountingEvents": 5,
+    "contextPreserved": true,
+    "manualIntervention": "none",
+    "directions": [
+      {
+        "direction": "forward",
+        "activeTurnCompletedAfterClose": true,
+        "closeToHeldTurnCompletionMs": 559,
+        "closeToContextFollowupCompletionMs": 23931,
+        "followupLatencyMs": 1512
+      },
+      {
+        "direction": "recovery",
+        "activeTurnCompletedAfterClose": true,
+        "closeToHeldTurnCompletionMs": 552,
+        "closeToContextFollowupCompletionMs": 22420,
+        "followupLatencyMs": 1512
+      }
+    ],
+    "limits": [
+      "Synthetic upstream with actual official Codex and persisted same conversation",
+      "Local exported controller and fresh-process recovery; no new GitHub Actions qualification",
+      "No production or real-provider requests"
+    ]
+  },
+  "observations": {
+    "nativeStarts": 24,
+    "maximumConfiguredSimultaneousSlots": 8,
+    "syntheticRequests": 5,
+    "completedCases": 5,
+    "contextHashes": 1,
+    "usageEvents": 5,
+    "uniqueUsageRequestIds": 5,
+    "syntheticPolicySpentMicros": 35,
+    "syntheticProviderSpentMicros": 35,
+    "realProviderRequests": 0,
+    "replays": 0,
+    "contentRetained": false,
+    "unexpectedErrors": 0
+  },
+  "controller": {
+    "forwardResult": "interrupted",
+    "recoveryResult": "recovered",
+    "freshRecoveryProcess": true,
+    "sameImmutableSource": true,
+    "remoteJournalUsed": true,
+    "forwardReceipt": "CONTROLLER-interrupt-green-RECEIPT.json",
+    "recoveryReceipt": "CONTROLLER-recover-RECEIPT.json"
+  },
+  "bounds": {
+    "activeMinutes": 20,
+    "cleanupReserveMinutes": 10,
+    "maximumNativeInstances": 8,
+    "expectedNativeStarts": 24,
+    "fixtureStartIntentCeiling": 40,
+    "intendedSyntheticRequests": 5,
+    "fixtureRequestCeiling": 64,
+    "realProviderRequests": 0,
+    "automaticCampaignRetries": false,
+    "parallelRows": 1,
+    "controllerGreenHoldSeconds": 30,
+    "fixtureHoldTimeoutSeconds": 120,
+    "cleanupAccountingObservationSeconds": 30
+  },
+  "timing": {
+    "activeStartedAt": "2026-11-18T07:10:14.431Z",
+    "proofCompletedAt": "2026-11-18T07:12:22.396Z",
+    "cleanupVerifiedAt": "2026-11-18T07:13:08.338Z",
+    "startToProofSeconds": 127.965,
+    "startToVerifiedCleanupSeconds": 173.907
+  },
+  "cleanup": {
+    "at": "2026-11-18T07:13:08.338Z",
+    "allOwnedHostedResourcesAbsent": true,
+    "actorNamespacesAbsent": true,
+    "nativeAbsent": true,
+    "productionUnchanged": true,
+    "credentialCopiesRemovedWithWorker": true,
+    "reusableCredentialsChanged": false
+  },
+  "limits": [
+    "Actual official Codex 0.167.1 and Cloudflare native slots with a synthetic upstream; zero real-provider inference",
+    "Active held turns completed during drain; no failed-turn transport retry was forced",
+    "Deliberate controller interruption and a fresh local recovery process using exported production controller functions; no new GitHub Actions qualification",
+    "One bounded success does not establish reliability rates or identify the underlying transport cause lost in the prior failed attempt",
+    "No performance campaign, production mutation, registry/hold change, source push or PR publication"
+  ],
+  "next": "Prepare the reviewed local controller and rehearsal fixes for maintainer review, carrying this scoped proof. Do not publish or change production without separate authorization."
+}

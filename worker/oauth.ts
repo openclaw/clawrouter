@@ -3,7 +3,7 @@ import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
 import { putGrantCredentials } from "./grant-credentials.ts";
-import { providerById } from "./providers";
+import { providerById } from "./provider-catalog";
 import type { Env, OAuthState, UpstreamGrant } from "./types";
 import { envValue, errorResponse, nowIso, privateJson } from "./utils";
 

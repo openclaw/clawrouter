@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "source": "0d237fb6e1bd23b27862761ada6588d818150f9b",
+  "originalArtifactsUnchanged": true,
+  "originalSha256": {
+    "two-stage-coordinator/CONTROL-ROW-RESULT.json": "e05da50dc4e4b97896978c9da51ba68af8b2aea9a8a27cfa9197310d16f73eea",
+    "two-stage-coordinator/PAYLOAD-ROW-RESULT.json": "6c640d2bb00922688f77852ed50abd35e3247e253522770e7bff81395cdd3e3c",
+    "two-stage-coordinator/CAMPAIGN-RESULT.json": "3b7e693209ccb8bbaf7deb6ea520437e97da4dd9ffb4d1878973803c0ac6a782",
+    "two-stage-coordinator/STAGE4-HARNESS-SHA256.json": "8c45d980e52b498db905f53ef6eaf2b6be2b382b6624a2506163b754e55e51fd",
+    "two-stage-coordinator/ACTIONS-CONTROLLER-PROOF.json": "5d353aedc0ff22ef94ed9c0737376172a9dbad5b959ed92c70c462658e3715eb",
+    "two-stage-coordinator/row-payload/ACTIONS-CONTROLLER-PROOF.json": "070dd2d74a66f2c1c1082477ef85ed3b29368e750db8339b2c002cbe31638081",
+    "two-stage-coordinator/payload-probes/client/evidence.json": "2df66a8b599ed876b0af51cbeaa623e51704e16c385f4edf02ec72a666a1ec5a",
+    "two-stage-coordinator/payload-probes/client/workload-lost-diagnostic.json": "c8c84a8c886f068cd7c97f82660bb7efeda33045466be3edac765770ee666674",
+    "POST-ATTEMPT-NATIVE-ABSENCE.json": "ebed38d9510c27add095f67eea44d3a176d279e97959de8266c58fea6a431cd8",
+    "POST-ATTEMPT-CLEANUP-RESULT.json": "6e539c3adc7aa9c9b97d77f5b8ecda27723d5655a46eed00c2a9d30949fa665a",
+    "POST-ATTEMPT-CONTROL-SESSION-CONTINUITY-PROOF.json": "5bdf4ace01d97017042a8cdc4f1e1a90d68de9f3eb75d373ef378e549cadaa99",
+    "POST-ATTEMPT-PAYLOAD-SESSION-CONTINUITY-PROOF.json": "55517f8371660b3bf52d3b793a89931ba4cc292fc29fe0342175d62e557f91ec",
+    "POST-ATTEMPT-NON-HTTP.json": "883545f10dd261f3e0ac6117e1191c52ff8d2afaeda91bdbff91b41ead9fec08"
+  },
+  "portableSha256": {
+    "HOSTED-PROJECTION.json": "2e944de300d0d613ad2a7980cecb53b8f28741617b56a11fc5a81de761f6f3fc",
+    "SOURCE-EQUIVALENCE.json": "4b9ac6f7432dfd9d5ebbc6e86ea18c132a39a35dcb545a4951430f25331ddef7"
+  },
+  "reusedSdkEvidenceSha256": {
+    "QUALIFICATION-ACCEPTANCE.md": "5f38ab0e740edceacdf6e7c6909849ffd465827ba9f608a77b6da6bf35282a7d",
+    "LOSS-RESPONSE.json": "cf494eef7e9f1a77b3b33ca193e22fa6d3510311cdd7939ea97bd889a918ed9f",
+    "SDK-CLIENT-PROOF.json": "fc1d30c0bad64ff9586338c247d3bfbfd841479bb2af1ea8498215652949f64c"
+  },
+  "limits": "Selected non-secret fields, not a signed hosted attestation. Original artifacts retained locally. No credentials, raw prompts/completions or private Codex state exported."
+}

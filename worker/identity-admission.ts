@@ -1,7 +1,7 @@
 import { identityJsonProfiles, isAccessDenial, parseAccessJson, type UserSourceCounts, type IdentityEnvelope } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { budgetFields, effectiveBudgetPolicy } from "./budget-overrides.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { AccessPolicy, BudgetOverride, GrantRoutingPolicy } from "./types";
 import type { AdmissionResult } from "./authority-admission.ts";
 

@@ -1,3 +1,4 @@
+import { publishedMusicRequestDigest } from "./published-music-request.ts";
 import { BodyLease } from "./body-budget.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { continuationScope } from "./http-continuation.ts";
@@ -8,7 +9,7 @@ import { prepareOpenRouterMusicBorrowed } from "./openrouter-music.ts";
 import { prepareNativeRequest, type ProxySelection } from "./proxy-selection.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { assertProviderAccess, providerById, upstreamAuth } from "./providers.ts";
+import { assertProviderAccess, upstreamAuth } from "./providers.ts"; import { providerById } from "./provider-catalog.ts";
 import { authorizePublishedInputOwner, issuedPublishedInputCaller, publishedInputPermission, publishedMusicRoute,
   publishedMusicRouteDigest, assertPublishedInputGrant } from "./published-input-authority.ts";
 import { publishedInputCall, publishedInputResponse, publishedInputUrl, publishInputBytes, resolvePublishedInputUrl,
@@ -16,16 +17,8 @@ import { publishedInputCall, publishedInputResponse, publishedInputUrl, publishI
 import { assertPublishedInputLive, publishedInputLifetimeMs, publishedInputUnavailable, samePublishedInput,
   type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
 import type { Env } from "./types.ts";
-import { HttpError, safeEqual, sha256Hex } from "./utils.ts";
-
-export async function publishedMusicRequestDigest(body: Record<string, unknown>, image: Pick<PublishedInputBinding, "digest" | "mime" | "size" | "slot">): Promise<string> {
-  // The codec has already qualified every native field. The image slot is
-  // replaced semantically, so the eventual verifier URL is not self-referential
-  // and never enters the stored request digest input as a bearer credential.
-  const message = (body.messages as { role: string; content: { text?: string }[] }[])[0];
-  return sha256Hex(JSON.stringify(["clawrouter.published-music-request.v1", body.model, body.stream, body.modalities,
-    (body.audio as { format: string }).format, message.role, message.content[0].text, image.slot, image.digest, image.mime, image.size]));
-}
+import { safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function publishedMusicAccess(env: Env, binding: PublishedInputBinding, operation: HttpOperation, admittedPolicy?: string): PublishedInputAccess {
   return { binding, operation,

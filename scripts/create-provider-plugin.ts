@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseProviderConformanceScenario, parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderConformanceScenario } from "../packages/provider-plugin-contract/src/conformance.ts";
+import { parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/plugin-descriptor.ts";
 import { loadProviderPlugin } from "./provider-plugin-loader.ts";
 
 /** Generate files only. The caller must explicitly compile and admit the provider. */

@@ -1,7 +1,7 @@
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson } from "./json-body.ts";
 import { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { planBudgetReservation } from "./accounting.ts";
-import { admitBackgroundAdmission, admitInputAllocation, type BackgroundAdmission } from "./background-store.ts";
+import { admitBackgroundAdmission, admitInputAllocation, type BackgroundAdmission } from "./background-record.ts";
 import type { ManagedInputAllocation } from "./managed-input-receipt.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { setBackgroundRecovery } from "./correlation.ts";
@@ -10,7 +10,8 @@ import type { AccountingFacts, AccountingOutcome } from "./proxy-accounting.ts";
 import { retainedResponseRoute } from "./responses-control-dispatch.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { AuthorizedIdentity, Env, ProviderConnection } from "./types.ts";
-import { HttpError, randomId } from "./utils.ts";
+import { randomId } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { WanManagedOperation } from "./managed-media-json.ts";
 
 // The HTTP request owns delivery only. Its durable scoped owner owns the

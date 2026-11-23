@@ -65,6 +65,20 @@ correlated tasks, biased graders and contaminated test sets still invalidate a
 claim. Predeclare tolerances, use enough independent cases per domain, and
 confirm the selected configuration on a fresh holdout.
 
+Cost and latency comparisons also report mean differences, ratios of case means,
+and paired bootstrap intervals. A ratio below one favors the candidate. These
+ratios divide the candidate mean by the baseline mean; they do not average
+per-case ratios. Each resample keeps the paired strategies together, after
+averaging trials within each case. Failed runs retain their cost and latency.
+
+All intervals are null for a single case. A ratio is null when its baseline mean
+is zero or the ratio exceeds numeric range. A ratio interval is null if any
+bootstrap sample has an undefined ratio; those samples are never discarded.
+Differences remain available in that case.
+The intervals describe each metric separately, not joint confidence that a
+quality, cost and latency gate passes. A favorable point estimate alone does not
+establish the required savings.
+
 Choose a measured quality/cost tradeoff, subject to latency and worst-domain
 retention constraints. Never promote a configuration solely because a judge
 prefers its prose. Keep tuning data separate from the test split.

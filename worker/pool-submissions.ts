@@ -1,9 +1,11 @@
 import { authorizationTimestamp } from "../shared/refresh-expiry.ts";
 import { authorityCall, type PoolSubmissionTicketView, type SubmissionReceipt, type SubmissionTicketClaimResult } from "./authority.ts";
 import { putGrantCredentials } from "./grant-credentials.ts";
-import { validCredentialBundle, validGrantSegment } from "./grant-selection.ts";
+import { validCredentialBundle } from "./grant-eligibility.ts";
+import { validGrantSegment } from "./grant-routing.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
-import { decodePathSegment, caughtResponse, errorResponse, HttpError, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
+import { decodePathSegment, caughtResponse, errorResponse, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const ALLOWED_FIELDS = new Set(["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "refreshTokenExpiresAt", "lastManualAuthorizationAt", "scopes", "accountId", "subscription"]);
 

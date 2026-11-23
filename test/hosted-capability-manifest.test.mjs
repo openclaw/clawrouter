@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 
 const original = parse(readFileSync(new URL("../providers/openai.provider.yaml", import.meta.url), "utf8"));
 const sol = manifest => manifest.models.entries.find(model => model.id === "openai/gpt-6.1-sol");
@@ -13,7 +13,7 @@ test("compiler preserves exact declared hosted tools and rejects unsupported con
     return compileProviderSnapshot([manifest]);
   }
   const provider = compile().providers[0];
-  assert.deepEqual(provider.models.filter(model => model.nativeCapabilities?.endpoints.responses?.hostedTools).map(model => model.id).sort(), ["openai/gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-terra"].sort());
+  assert.deepEqual(provider.models.filter(model => model.nativeCapabilities?.endpoints.responses?.hostedTools).map(model => model.id).sort(), ["openai/gpt-6-astra", "openai/gpt-6-luna", "openai/gpt-6-sol", "openai/gpt-6.1-sol", "openai/gpt-6.1-terra", "openai/gpt-6.2-astra", "openai/gpt-6.2-sol"].sort());
   assert.equal(provider.models.find(model => model.id === "openai/gpt-4.1-mini").nativeCapabilities, undefined);
   for (const mutate of [
     manifest => { sol(manifest).nativeCapabilities.endpoints.responses.hostedTools = ["future_tool"]; },

@@ -78,12 +78,12 @@ async function networkBarrier(t) {
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {configureMusic} from './worker/test/openrouter-music-runtime-fixture.mjs';
 const provider=snapshot.providers.find(value=>value.id==='openrouter');configureMusic(provider);
 provider.endpoints.find(value=>value.id==='music_generate').timeout_ms=30000;

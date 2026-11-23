@@ -2,7 +2,7 @@ import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./
 import { prepareGoogleEmbedding, readGoogleEmbedding } from "./provider-google-embeddings.ts";
 import type { CompiledEndpoint, CompiledProvider } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function nativeEmbeddingMode(format: string): "unary" | "batch" | null {
   return format === "google.embed_content" ? "unary" : format === "google.batch_embed_contents" ? "batch" : null;

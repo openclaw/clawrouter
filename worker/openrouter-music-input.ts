@@ -1,7 +1,8 @@
 import { BodyLease } from "./body-budget.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { HttpError, maxJsonBodyBytes, maxMediaJsonBodyBytes } from "./utils.ts";
+import { maxJsonBodyBytes, maxMediaJsonBodyBytes } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const MiB = 1024 * 1024;
 export const inlineMusicJsonBytes = 12 * MiB;

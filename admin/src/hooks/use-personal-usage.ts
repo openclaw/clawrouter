@@ -5,7 +5,6 @@ import type { CapturedSessionScope } from '../session-scope';
 import { emptyFilters, type PersonalUsageQuery } from '../personal-usage';
 import { parseUsageRangeInput, type UsageRangeInput } from '../usage-range';
 import { completeQueryString, completeValue, downloadUsageFile, exportRefreshedUsage, releaseUsage, usageEndpoint, usageQueryTemplate, type UsageQueryTemplate, type UsageAudience } from '../complete-usage';
-import type { PersonalUsageView } from '../personal-usage-view';
 function rangeControls(query:Pick<CompleteUsageQuery,'from'|'to'|'timezone'>):UsageRangeInput{return {from:new Date(query.from).toISOString(),to:new Date(query.to).toISOString(),timezone:query.timezone};}
 interface ReadState<T> { key:string; value?:T; loading:boolean; error:string; state?:string }
 export interface UsageHookOptions {request:ConsoleRequest;scope:CapturedSessionScope;active:boolean;full:boolean}
@@ -108,19 +107,17 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
     exportState:shownExport,startExport,cancelExport:()=>exportController.current?.abort()};
 }
 export type CompleteUsageData=ReturnType<typeof useUsageReport>;
-/** Presentation projection only. No additional fetch, authority or aggregate engine. */
+/** Personal form controls; report and event data stay in the complete contract. */
 export function usePersonalUsage(options:UsageHookOptions){
   const complete=useUsageReport(options,'personal'),v=complete.report.value,q=v?.query??complete.requestedQuery;
   const template=useMemo(()=>q??complete.queryTemplate??usageQueryTemplate('personal'),[q,complete.queryTemplate]);
-  const report=useMemo<PersonalUsageView|undefined>(()=>v?{range:{from:v.query.from,to:v.query.to,timezone:v.query.timezone,retentionStart:v.coverage.effectiveFrom,clampedStart:v.coverage.clippedFrom!==null,buckets:v.buckets.map(({start,end,label})=>({start,end,label}))},groupBy:v.query.groupBy as PersonalUsageView['groupBy'],metrics:v.metrics,costs:v.costs,groups:v.groups.map(g=>({value:g.identity.value,metrics:g.metrics,costs:g.costs})),buckets:v.buckets,groupsTruncated:v.rank.distinctGroups>v.groups.length,discoveredScopeAnswered:v.coverage.allDiscoveredSourcesAnswered,generatedAt:v.coverage.capturedBetween.to}:undefined,[v]);
-  const query=useMemo<PersonalUsageQuery>(()=>({rollingDays:complete.rollingDays,from:complete.rangeInput?.from??(q?new Date(complete.selectedQuery?.from??q.from).toISOString():''),to:complete.rangeInput?.to??(q?new Date(complete.selectedQuery?.to??q.to).toISOString():''),timezone:complete.rangeInput?.timezone??template.timezone,groupBy:template.groupBy as PersonalUsageQuery['groupBy'],filters:{...emptyFilters,...Object.fromEntries(Object.entries(template.filters).filter(([k])=>k!=='user'&&k!=='key')),key:template.filters.key?.kind==='credential'?template.filters.key.id:''}}),[q,template,complete.rollingDays,complete.rangeInput,complete.selectedQuery]);
+  const controls=useMemo<PersonalUsageQuery>(()=>({rollingDays:complete.rollingDays,from:complete.rangeInput?.from??(q?new Date(complete.selectedQuery?.from??q.from).toISOString():''),to:complete.rangeInput?.to??(q?new Date(complete.selectedQuery?.to??q.to).toISOString():''),timezone:complete.rangeInput?.timezone??template.timezone,groupBy:template.groupBy as PersonalUsageQuery['groupBy'],filters:{...emptyFilters,...Object.fromEntries(Object.entries(template.filters).filter(([k])=>k!=='user'&&k!=='key')),key:template.filters.key?.kind==='credential'?template.filters.key.id:''}}),[q,template,complete.rollingDays,complete.rangeInput,complete.selectedQuery]);
   function change(next:PersonalUsageQuery,days?:7|30){
     const filters:CompleteUsageQuery['filters']={};for(const k of ['model','provider','status','costClass','lane'] as const)if(next.filters[k])filters[k]=next.filters[k];if(next.filters.key)filters.key={kind:'credential',id:next.filters.key};else if(template.filters.key?.kind==='session')filters.key={kind:'session'};
     if(days){complete.preset(days,{...template,timezone:next.timezone,groupBy:next.groupBy,filters});return;}
     complete.customRange({...template,groupBy:next.groupBy,filters},{from:next.from,to:next.to,timezone:next.timezone});
   }
-  function clearFilters(){complete.customRange({...template,filters:{},rankOffset:0},{from:query.from,to:query.to,timezone:query.timezone},Boolean(complete.report.error));}
-  const events:Pick<CompleteUsageEvents,'events'|'nextCursor'>|undefined=complete.events.value?{events:complete.events.value.events,nextCursor:complete.events.value.nextCursor}:undefined;
-  return {...complete,complete,query,clearFilters,setQuery:(next:PersonalUsageQuery)=>change(next),choosePreset:(days:7|30,next:PersonalUsageQuery)=>change(next,days),report:{...complete.report,value:report},events:{...complete.events,value:events}};
+  function clearFilters(){complete.customRange({...template,filters:{},rankOffset:0},{from:controls.from,to:controls.to,timezone:controls.timezone},Boolean(complete.report.error));}
+  return {...complete,controls,clearFilters,setControls:(next:PersonalUsageQuery)=>change(next),choosePreset:(days:7|30,next:PersonalUsageQuery)=>change(next,days)};
 }
 export type PersonalUsageData=ReturnType<typeof usePersonalUsage>;

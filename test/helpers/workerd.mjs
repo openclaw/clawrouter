@@ -8,8 +8,14 @@ const deploymentRuntime = getStaticTOMLValue(parseTOML(readFileSync(new URL("../
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
 const { build } = require("esbuild");
 
+export function workerdRequestContext(requestContext = false, flags = []) {
+  if (typeof requestContext !== "boolean") throw new TypeError("requestContext must be boolean");
+  return { external: requestContext ? ["node:async_hooks"] : [], flags: requestContext ? [...new Set([...flags, "nodejs_als"])] : [...flags] };
+}
+
 export async function startWorkerdFixture(temporary, routerScript, upstreamScript, options) {
-  const bundle = await build({ stdin: { contents: routerScript, resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  const context = workerdRequestContext(options?.requestContext, deploymentRuntime.compatibility_flags);
+  const bundle = await build({ ...(context.external.length ? { external: context.external } : {}), stdin: { contents: routerScript, resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript, options);
 }
 
@@ -20,9 +26,10 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
 // to the production isolate hot cache (load harness, hot-path smoke).
 // bindings: fixture-only overrides (e.g. synthetic provider keys); never source
 // production environment changes or real credentials for native tests.
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false, bindings = {}, directRouter = false } = {}) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer, preventEviction, log, r2Buckets, hotCache = false, bindings = {}, directRouter = false, requestContext = false } = {}) {
+  const routerContext = workerdRequestContext(requestContext, deploymentRuntime.compatibility_flags);
   const mf = new Miniflare(convertV4MiniflareOptions({ ...(log ? { log } : {}), resourceTmpPath: temporary, ...(persistencePath ? { resourcePersistencePath: persistencePath } : {}), workers: [{
-    name: "router", modules: true, script: routerScript, compatibilityDate: deploymentRuntime.compatibility_date, compatibilityFlags: deploymentRuntime.compatibility_flags,
+    name: "router", modules: true, script: routerScript, compatibilityDate: deploymentRuntime.compatibility_date, compatibilityFlags: routerContext.flags,
     // Opt in only when testing real client-disconnect signals at this Worker.
     ...(directRouter === true ? { unsafeDirectSockets: [{ host: "127.0.0.1", port: 0 }] } : {}),
     bindings: { OPENAI_API_KEY: "fixture-upstream-key", ...(hotCache ? {} : { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: "0" }), ...bindings },

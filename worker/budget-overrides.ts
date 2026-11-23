@@ -1,5 +1,5 @@
 import type { AccessPolicy, BudgetOverride } from "./types";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const budgetFields = ["dailyBudgetMicros", "weeklyBudgetMicros", "monthlyBudgetMicros"] as const;
 export function effectiveBudgetPolicy(policyId: string, policy: AccessPolicy, overrides?: Record<string, BudgetOverride>): AccessPolicy {

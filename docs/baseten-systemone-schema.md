@@ -3,8 +3,8 @@
 This contract consumes landed [codec PR616](https://github.com/openclaw/clawrouter/pull/616),
 source head `c59d924cf64a8d7a826eb0036017e58d6193e68c`, and its
 [native contract](baseten-systemone-contract.md). It registers schema/compiler
-validation only. Source4 retains provider declarations and the separately held
-wrapper; source1 retains shared types, dispatch, admission and accounting.
+validation. The bundled provider declaration now consumes it through the landed
+wrapper; the shared runtime retains dispatch, admission and accounting.
 
 ## Native declaration
 
@@ -60,11 +60,9 @@ window or a tokenizer estimate. Do not replace it with `contextWindow`,
 one output token per question; missing/mismatched usage is rejected, not filled
 from metadata. Shared input is counted once by the native usage receipt.
 
-These fields have a closed schema specific to `baseten-systemone`. Source1 must
-project the same discriminator and fields through its shared TypeScript types;
-the existing OpenAI-only type cannot be widened by casting to an unrelated
-protocol. Source4 must consume this exact declaration before its wrapper is
-released under the coordinator's recorded handoff.
+These fields have a closed schema specific to `baseten-systemone`. The shared
+TypeScript projection retains that discriminator; it does not cast this metadata
+to an unrelated OpenAI protocol.
 
 ## Evidence and activation
 
@@ -79,5 +77,6 @@ all three identities, exact URL, 512-option boundary, native answer/usage,
 separate backend model, unknown-dollar admission and invalid declarations.
 Native duration/option/token facts do not create a tariff. Hard upstream-dollar
 budgets remain closed without qualified prices; policy-fixed accounting remains
-separate. No YAML, snapshot, wrapper, runtime or actual-client activation occurs
-in this change. Real dispatch and DecisionV2 acceptance remain required.
+separate. The bundled YAML and generated snapshot now activate the finite rows.
+Actual dispatch and registered DecisionV2 proof belong to the independently
+versioned [native integration harness](baseten-systemone-runtime.md).

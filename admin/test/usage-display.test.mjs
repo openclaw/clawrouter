@@ -6,11 +6,11 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { build } from 'vite';
 
-// Compile the real screens; only the unrelated console request boundary is inert.
+// Compile the real screens without console-context substitutes.
 // This is server-rendered output coverage, not browser or interaction proof.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = await mkdtemp(root + 'test/.usage-display-');
-let PersonalUsageSummary, MyUsageScreen, UsageScreen, CompleteUsageScreen, ExactRanking;
+let PersonalUsageSummary, MyUsageScreen, UsageScreen, CompleteUsageScreen, ExactRanking, EntityTable, Metric, UsageFreshness;
 const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 try {
@@ -18,19 +18,16 @@ try {
   Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {} }, querySelector: () => null } });
   await build({
     root, configFile: false, publicDir: false, logLevel: 'error',
-    plugins: [{
-      name: 'no-console-requests', enforce: 'pre',
-      resolveId(id) { if (id === '../console-controller-context') return '\0test-console'; },
-      load(id) { if (id === '\0test-console') return 'export function useConsole() { return { request() { throw new Error("Unexpected console request"); } }; }'; },
-    }],
     build: { ssr: true, outDir: output, minify: false, rollupOptions: {
-      input: { personal: root + 'src/screens/my-usage.tsx', admin: root + 'src/screens/users-usage.tsx', complete: root + 'src/screens/complete-usage.tsx' },
+      input: { personal: root + 'src/screens/my-usage.tsx', admin: root + 'src/screens/users-usage.tsx', complete: root + 'src/screens/complete-usage.tsx', components: root + 'src/components.tsx', analytics: root + 'src/analytics-charts.tsx' },
       output: { entryFileNames: '[name].mjs' },
     } },
   });
   ({ PersonalUsageSummary, MyUsageScreen } = await import(pathToFileURL(output + '/personal.mjs')));
   ({ UsageScreen } = await import(pathToFileURL(output + '/admin.mjs')));
   ({ CompleteUsageScreen, ExactRanking } = await import(pathToFileURL(output + '/complete.mjs')));
+  ({ EntityTable, Metric } = await import(pathToFileURL(output + '/components.mjs')));
+  ({ UsageFreshness } = await import(pathToFileURL(output + '/analytics.mjs')));
 } finally {
   if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow);
   else delete globalThis.window;
@@ -39,10 +36,9 @@ try {
   await rm(output, { recursive: true, force: true });
 }
 const emptyMetrics = { calls: 0, generationCalls: 0, utilityCalls: 0, successfulCalls: 0, errorCalls: 0, deniedCalls: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cacheWriteInputTokens: 0, reasoningOutputTokens: 0, inputReportedCalls: 0, outputReportedCalls: 0, cacheReadReportedCalls: 0, cacheWriteReportedCalls: 0, reasoningReportedCalls: 0 };
-const range = { from: 1000, to: 2000, timezone: 'UTC', retentionStart: 500, clampedStart: false };
-const report = (extra = {}) => ({ range, metrics: emptyMetrics, costs: [], groupBy: 'model', groups: [], buckets: [{ start: 1000, end: 2000, label: 'idle', metrics: emptyMetrics, costs: [] }], historyComplete: true, groupsTruncated: false, generatedAt: 2000, ...extra });
+const report = (extra = {}) => completeData(extra).report.value;
 const noop = () => {};
-const data = value => ({ report: { value, loading: false, error: '' }, query: { rollingDays: 7, from: '', to: '', timezone: 'UTC', groupBy: 'model', filters: {} }, reload: noop, setQuery: noop, showEvents: noop, events: { loading: false, error: '' }, page: 1 });
+const data = value => ({ ...completeData(), report: { value, loading: false, error: '' }, query: value?.query, controls: { rollingDays: 7, from: '', to: '', timezone: 'UTC', groupBy: 'model', filters: {} }, setControls: noop, choosePreset: noop, clearFilters: noop });
 const summary = value => renderToStaticMarkup(createElement(PersonalUsageSummary, { data: data(value) }));
 const apiCard = html => html.match(/<dt>Known API cost<\/dt>([\s\S]*?)<dt>Model calls<\/dt>/)?.[1];
 
@@ -66,10 +62,10 @@ test('subscription-only calls are not unavailable or a zero-dollar API invoice',
 
 test('incomplete, clipped, outside-retention and missing price coverage do not invent emptiness', () => {
   for (const value of [
-    report({ historyComplete: false }),
-    report({ historyComplete: undefined }),
-    report({ range: { ...range, clampedStart: true } }),
-    report({ range: { ...range, retentionStart: 1500 } }),
+    report({ coverage: { ...report().coverage, allDiscoveredSourcesAnswered: false } }),
+    report({ coverage: { ...report().coverage, allDiscoveredSourcesAnswered: undefined } }),
+    report({ coverage: { ...report().coverage, clippedFrom: 500 } }),
+    report({ coverage: { ...report().coverage, effectiveFrom: 1500 } }),
     report({ metrics: { ...emptyMetrics, calls: 1 } }),
     report({ metrics: { ...emptyMetrics, calls: 2 }, costs: [{ lane: 'subscription', costClass: 'fixed', calls: 1, amountMicros: 1 }] }),
     report({ metrics: { ...emptyMetrics, calls: 1 }, costs: [{ lane: 'unattributed', costClass: 'fixed', calls: 1, amountMicros: 1 }] }),
@@ -99,7 +95,7 @@ test('personal rendered success captions distinguish near-extremes from none and
 test('admin rendered success rate also distinguishes near-extremes from none and all', () => {
   for (const [successCount, expected] of [[9999, '&gt;99%'], [1, '&lt;1%'], [0, '0%'], [10000, '100%']]) {
     const usage = { summary: { requestCount: 10000, successCount, errorCount: 10000 - successCount, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 }, providers: [], events: [], daily: [], ledger: 'ready' };
-    const html = renderToStaticMarkup(createElement(UsageScreen, { keys: [], credentials: [], services: [], overview: null, tenants: [], usageRows: [], usage, usageLoaded: true, usageStale: false, usageError: '', usageUpdatedAt: null }));
+    const html = renderToStaticMarkup(createElement(UsageScreen, { request: async () => { throw new Error("Unexpected content request"); }, keys: [], credentials: [], services: [], overview: null, tenants: [], usageRows: [], usage, usageLoaded: true, usageStale: false, usageError: '', usageUpdatedAt: null }));
     assert.ok(html.includes('<span>success rate</span><strong>' + expected + '</strong>'), 'successCount=' + successCount);
   }
 });
@@ -108,7 +104,7 @@ function completeData(extra={},audience='personal'){
  const v={query:{from:1000,to:2000,timezone:'UTC',grain:'day',groupBy:audience==='admin'?'user':'model',rankBy:'calls',rankOffset:0,filters:{}},cut:'a'.repeat(43),metrics:emptyMetrics,costs:[],recordedChargeMicros:0,chargeReportedCalls:0,groups:[],buckets:[{start:1000,end:2000,label:'idle',metrics:emptyMetrics,costs:[]}],remainder:{metrics:emptyMetrics,costs:[],recordedChargeMicros:0,chargeReportedCalls:0},rank:{offset:0,distinctGroups:0,hasMore:false,exact:true},coverage:{authority:audience==='admin'?'admin_retained':'current_access',scope:audience==='admin'?'admin_current_plus_tracked_retired':'personal_current_access',discoveredScopeEnumeration:'complete',allDiscoveredSourcesAnswered:true,retainedAttributionComplete:true,historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',effectiveFrom:1000,clippedFrom:null,capturedBetween:{from:3000,to:3001},captureAudit:{startedAt:500,verifiedSince:500,captureGapObserved:false}},...extra};
  return {audience,report:{value:v,error:'',loading:false},query:v.query,events:{error:'',loading:false},exportState:{busy:false,message:''},page:1,eventsShown:false,reload:noop,refine:noop,back:noop,newRange:noop,preset:noop,showEvents:noop,startExport:noop,cancelExport:noop};
 }
-function personalData(extra={}){const c=completeData(extra),v=c.report.value;return {...data(report({metrics:v.metrics,costs:v.costs,historyComplete:undefined,discoveredScopeAnswered:v.coverage.allDiscoveredSourcesAnswered,range:{...range,retentionStart:v.coverage.effectiveFrom,clampedStart:v.coverage.clippedFrom!==null}})),complete:c};}
+function personalData(extra={}){return data(completeData(extra).report.value);}
 test('new discovered-scope personal zero preserves zero chart values and never promises exhaustive history',()=>{
  const html=renderToStaticMarkup(createElement(MyUsageScreen,{data:personalData()}));
  assert.match(html,/<dt>Total tokens<\/dt><dd>0<\/dd>/);assert.match(html,/<title>idle: 0 tokens<\/title>/);assert.match(html,/For your current access/);assert.match(html,/No calls in discovered locations for this range/);assert.match(html,/Not all historical locations have been assessed/);assert.doesNotMatch(html,/History complete|Gaps: not reported/);assert.match(html,/Export refreshed snapshot/);
@@ -117,7 +113,7 @@ test('new personal missing fields remain unknown, known zero money remains zero 
  const m={...emptyMetrics,calls:1,generationCalls:1,successfulCalls:1};
  const value=personalData({metrics:m,costs:[{lane:'api',costClass:'unknown',calls:1,amountMicros:0}],recordedChargeMicros:0,chargeReportedCalls:1});
  const html=renderToStaticMarkup(createElement(PersonalUsageSummary,{data:value}));assert.match(html,/<dt>Total tokens<\/dt><dd>Not reported<\/dd>/);assert.match(apiCard(html),/Unavailable/);assert.match(html,/Recorded accounting amount/);assert.match(html,/\$0\.00/);assert.match(html,/not proof of upstream price or completed budget settlement/);
- value.complete.report.value.coverage={...value.complete.report.value.coverage,effectiveFrom:1500,clippedFrom:1000,captureAudit:{startedAt:1600,verifiedSince:1600,captureGapObserved:true}};value.report.value.range={...range,retentionStart:1500,clampedStart:true};const clipped=renderToStaticMarkup(createElement(MyUsageScreen,{data:value}));assert.match(clipped,/Start clipped/);assert.match(clipped,/predates the verified tracking interval/);assert.match(clipped,/affected usage is unknown/);assert.match(clipped,/Not all historical locations have been assessed/);
+ value.report.value.coverage={...value.report.value.coverage,effectiveFrom:1500,clippedFrom:1000,captureAudit:{startedAt:1600,verifiedSince:1600,captureGapObserved:true}};const clipped=renderToStaticMarkup(createElement(MyUsageScreen,{data:value}));assert.match(clipped,/Start clipped/);assert.match(clipped,/predates the verified tracking interval/);assert.match(clipped,/affected usage is unknown/);assert.match(clipped,/Not all historical locations have been assessed/);
 });
 test('admin zero, missing values, retained identities, exact remainder and stale states are honest in rendered output',()=>{
  const d=completeData({},'admin');let html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));assert.match(html,/Usage in discovered locations/);assert.match(html,/No calls in discovered locations for this range/);assert.match(html,/Other former locations may contain retained calls/);assert.match(html,/Not all historical locations have been assessed/);assert.match(html,/Recorded accounting amount/);assert.match(html,/Not reported/);
@@ -132,7 +128,7 @@ test('invalid original calendar input remains visible as an alert with no report
  let html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
  assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
  assert.doesNotMatch(html,/Export refreshed snapshot JSON/);
- const p={...personalData(),query:{...data().query,...input,rollingDays:undefined},report:state,complete:{...d,audience:'personal'}};
+ const p={...data(),...d,audience:'personal',controls:{...data().controls,...input,rollingDays:undefined}};
  html=renderToStaticMarkup(createElement(MyUsageScreen,{data:p}));assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
  assert.ok(html.includes('<button type="button" disabled="">Export refreshed snapshot JSON</button>'));
 });
@@ -149,4 +145,71 @@ for(const audience of ['personal','admin'])test(audience+' initial failure keeps
  assert.match(html,/<label>Start<input required="" value=""/);assert.match(html,/<label>End<input required="" value=""/);
  assert.match(html,new RegExp('<option selected="">'+(audience==='admin'?'user':'model')+'</option>'));
  assert.equal(html.includes('user (exact)'),audience==='admin');assert.doesNotMatch(html,/No calls in discovered locations|Exact usage over time|Export refreshed snapshot|<dt>Model calls/);
+});
+
+test('shared table and metric markup preserve interaction, details, and labels', () => {
+  const table = renderToStaticMarkup(createElement(EntityTable, {
+    columns: ['Name'], columnTemplate: '1fr', rows: [
+      { id: 'one', active: true, onClick() {}, cells: ['First'], detail: 'Details' },
+      { id: 'two', cells: ['Second'] },
+    ],
+  }));
+  assert.match(table, /style="--cols:1;--columns:1fr"/);
+  assert.match(table, /<button type="button" class="tableRow selected interactive"><span data-label="Name">First<\/span><\/button>/);
+  assert.match(table, /<div class="tableRowDetail">Details<\/div>/);
+  assert.match(table, /<div class="tableRow"><span data-label="Name">Second<\/span><\/div>/);
+  assert.equal(renderToStaticMarkup(createElement(Metric, { label: 'Calls', value: '0', meta: 'Recorded' })), '<div class="metric"><span>Calls</span><strong>0</strong><small>Recorded</small></div>');
+});
+
+test('shared freshness preserves loading, unavailable, stale, and fresh states', () => {
+  const render = props => renderToStaticMarkup(createElement(UsageFreshness, props));
+  assert.equal(render({ loaded: true, stale: false, error: '', updatedAt: 1000 }), '');
+  assert.match(render({ loaded: false, stale: false, error: '', updatedAt: null }), /Loading usage/);
+  assert.match(render({ loaded: false, stale: true, error: 'failed', updatedAt: null }), /Spend and remaining balances are unknown/);
+  assert.match(render({ loaded: true, stale: true, error: 'failed', updatedAt: 1000 }), /<time dateTime="1970-01-01T00:00:01.000Z">.*<\/time>. Balances may have changed/);
+});
+
+test('access and catalogue rendering do not import the usage screen', async () => {
+  for (const name of ['access', 'dashboard-catalog']) {
+    const modules = new Set();
+    await build({
+      root, configFile: false, publicDir: false, logLevel: 'error',
+      plugins: [{ name: 'presentation-owners', moduleParsed(info) { modules.add(info.id); } }],
+      build: { write: false, ssr: true, rollupOptions: { input: root + 'src/screens/' + name + '.tsx' } },
+    });
+    assert.ok(!modules.has(root + 'src/screens/users-usage.tsx'), name + ' imports the usage screen');
+  }
+});
+
+
+test('shared components and ledger screens load without browser or account initialization', async () => {
+  assert.equal(typeof window, 'undefined');
+  assert.equal(typeof document, 'undefined');
+  const modules = new Set();
+  const output = await mkdtemp(root + 'test/.component-owner-');
+  try {
+    await build({
+      root, configFile: false, publicDir: false, logLevel: 'error',
+      plugins: [{ name: 'component-owner', moduleParsed(info) { modules.add(info.id); } }],
+      build: { ssr: true, outDir: output, minify: false, rollupOptions: {
+        input: { components: root + 'src/components.tsx', ledger: root + 'src/screens/users-usage.tsx' }, output: { entryFileNames: '[name].mjs' },
+      } },
+    });
+    for (const name of ['ui-config.ts', 'demo-data.ts', 'console-controller-context.tsx', 'screens/caps.tsx', 'screens/users.tsx']) {
+      assert.ok(!modules.has(root + 'src/' + name), 'presentation imports ' + name);
+    }
+    const { UsageScreen } = await import(pathToFileURL(output + '/ledger.mjs'));
+    assert.equal(typeof UsageScreen, 'function');
+    const { navItems, viewIcon, Metric } = await import(pathToFileURL(output + '/components.mjs'));
+    assert.deepEqual(navItems.map(({ id, label, section }) => [id, label, section]), [
+      ['home', 'Dashboard', 'workspace'], ['my-usage', 'My usage', 'workspace'],
+      ['catalog', 'Catalog', 'workspace'], ['playground', 'Playground', 'workspace'],
+      ['policies', 'Access', 'admin'], ['users', 'Users', 'admin'],
+      ['subscriptions', 'Subscriptions', 'admin'], ['usage', 'Usage', 'admin'],
+    ]);
+    for (const item of navItems) assert.equal(viewIcon(item.id), item.icon);
+    assert.equal(renderToStaticMarkup(createElement(Metric, { label: 'Calls', value: '0', meta: 'Recorded' })), '<div class="metric"><span>Calls</span><strong>0</strong><small>Recorded</small></div>');
+  } finally {
+    await rm(output, { recursive: true, force: true });
+  }
 });

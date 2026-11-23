@@ -1,6 +1,6 @@
 import type { Token } from "stream-json/core/parser.js";
 import { createJsonTokenizer } from "./json-tokens.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const accountingAdmissionErrors = new WeakSet<object>();
 export function accountingAdmissionFailure(): never {

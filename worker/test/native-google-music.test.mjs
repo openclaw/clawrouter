@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeGoogleMusic } = await import("../native-google-music.ts");
 const { observeGoogleMusic, prepareGoogleMusic } = await import("../google-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");

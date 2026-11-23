@@ -1,6 +1,6 @@
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // This is a qualified protocol value, never an arbitrary URL/query override.
 export type NativeQueryBinding = Readonly<{

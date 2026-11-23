@@ -5,6 +5,8 @@ const rate = (input, cached, write, output) => ({ input: input / 1e6, cached: ca
 export const nativeModels = {
   'openai/gpt-6-luna': { provider: 'openai', upstream: 'gpt-6-luna', price: rate(0.1, 0.01, 0.125, 0.5), source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' },
   'openai/gpt-6.1-sol': { provider: 'openai', upstream: 'gpt-6.1-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol' },
+  'openai/gpt-6.2-sol': { provider: 'openai', upstream: 'gpt-6.2-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', checkedAt: '2026-11-21' },
+  'openai/gpt-6.2-astra': { provider: 'openai', upstream: 'gpt-6.2-astra', price: rate(8, 0.4, 10, 40), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', checkedAt: '2026-11-21' },
   'anthropic/claude-sonnet-5.5': { provider: 'anthropic', upstream: 'claude-sonnet-5-5', price: rate(2, 0.1, 2.5, 10), source: 'https://platform.claude.com/docs/en/models/sonnet-5-5/overview' },
 };
 
@@ -187,9 +189,13 @@ export async function nativePins(env, fetcher = fetch, selected = Object.keys(na
     // though this benchmark does not request explicit cache creation.
     pins[id] = { id, canonicalSlug: entry.upstream, provider: entry.provider,
       price: { ...entry.price, input: Math.max(entry.price.write, entry.price.input * (entry.provider === 'anthropic' ? 2 : 1)) },
-      usagePrice: entry.price, source: entry.source, checkedAt: '2026-11-05', costSource: 'published-tariff-estimate' };
+      usagePrice: entry.price, source: entry.source, checkedAt: entry.checkedAt ?? '2026-11-05', costSource: 'published-tariff-estimate' };
   }
   return pins;
+}
+
+export function hasNativeSafetyNotice(body) {
+  return /this content can[’']t be shown|cybersecurity safety notice|safety refusal/i.test(JSON.stringify(body));
 }
 
 // Error messages may echo request content. Persist only finite diagnostic labels.
@@ -205,8 +211,10 @@ export function nativeErrorMetadata(body) {
   const param = typeof body?.error?.param === 'string' ? body.error.param : '';
   const providerParam = parameters.find(name => param === name || param.startsWith(name + '.') || param.startsWith(name + '[')) ?? 'unknown';
   const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
+  const policyRejection = body?.error?.type === 'invalid_request_error'
+    && body.error.code === 'invalid_prompt'
+    && message.includes('prompt was flagged as potentially violating our usage policy');
   const hints = [
-    ['safety_notice', /this content can[’']t be shown|safety refusal/],
     ['credit_balance', /credit balance/], ['spend_limit', /spend(?:ing)? (?:limit|cap)/],
     ['structured_output', /output_config|response_format|json schema|structured output/],
     ['thinking_parameters', /thinking|reasoning_effort/], ['message_format', /prefill|messages\./],
@@ -214,6 +222,6 @@ export function nativeErrorMetadata(body) {
     ['service_tier', /service_tier|service tier/],
   ];
   return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
-    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
+    errorHint: policyRejection || hasNativeSafetyNotice(body) ? 'safety_notice' : hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
     providerCode: codes.has(body?.error?.code) ? body.error.code : 'unknown', providerParam };
 }

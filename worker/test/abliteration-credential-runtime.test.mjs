@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot, configuredUpstream, providerReadinessForState } = await import("../providers.ts");
+const { configuredUpstream, providerReadinessForState } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { assertOperationConfiguration, providerSecretConfigKey } = await import("../provider-auth.ts");
 const canonical = "synthetic-canonical", legacy = "synthetic-legacy";
 const names = ["ABLIT_KEY", "ABLITERATION_API_KEY"];

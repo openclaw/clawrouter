@@ -1,5 +1,5 @@
 import type { Env } from "./types";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const dayMs = 86_400_000;
 export function credentialExpired(credential: { expiresAt?: string | null }, at = Date.now()): boolean {

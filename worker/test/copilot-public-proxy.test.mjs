@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 const { copilotPublicEndpoint, copilotPublicInferenceInput, copilotPublicRelay, CopilotPublicOwner, copilotPublicRegistry, copilotPublicObservation, decodeCopilotPublicObservation } = await import("../copilot-public-proxy.ts");
 const { copilotPrivateCandidate, grantCredentialPresent } = await import("../grant-eligibility.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { HttpOperation } = await import("../http-operation.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const { validateSelectedInput } = await import("../proxy-selection.ts");

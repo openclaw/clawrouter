@@ -6,7 +6,7 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { musicBody, musicModels, musicWire } from "./openrouter-music-runtime-fixture.mjs";
-const { modelSupportsEndpoint } = await import("../providers.ts");
+const { modelSupportsEndpoint } = await import("../../shared/route-catalog.ts");
 const source = parse(readFileSync(new URL("../../providers/openrouter.provider.yaml", import.meta.url), "utf8"));
 const compile = value => compileProviderSnapshot([value]);
 const compiled = () => compile(source).providers[0];

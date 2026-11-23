@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-import { snapshot } from "../providers.ts";
+import { snapshot } from "../provider-catalog.ts";
 import { grantSupports } from "../provider-auth.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, inspectGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";

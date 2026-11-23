@@ -1,7 +1,7 @@
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { BASETEN_SYSTEMONE_FORMAT, BASETEN_SYSTEMONE_MODELS, prepareBasetenSystemOneRequest, readBasetenSystemOneResponse } from "./provider-baseten-systemone.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // The native client encodes DecisionV2 before this boundary. The controller owns
 // destination/credential checks, capacity lifetime, admission and settlement.

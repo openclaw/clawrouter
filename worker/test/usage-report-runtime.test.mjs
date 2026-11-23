@@ -12,7 +12,8 @@ test("workerd: real session gates, owner/tenant/policy isolation, fractional zon
 export * from "./worker/index.ts";
 import handler from "./worker/index.ts";
 import { authorityCall } from "./worker/authority.ts";
-import { ingestUsage, usageStub } from "./worker/ledgers.ts";
+import { ingestUsage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
 import { migrateUsageReportShard } from "./worker/usage-report.ts";
 import { sha256Hex } from "./worker/utils.ts";
 import { usageDateTools, parseUsageReportRange } from "./worker/usage-report-range.ts";

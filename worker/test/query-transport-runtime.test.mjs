@@ -11,7 +11,7 @@ const router = `
  import worker from "./worker/index.ts";
  export * from "./worker/index.ts";
  import { sha256Hex } from "./worker/utils.ts";
- import { providerById } from "./worker/providers.ts";
+ import { providerById } from "./worker/provider-catalog.ts";
  export default { ...worker, async fetch(request, env, context) {
   const url = new URL(request.url);
   if (url.pathname === "/fixture/setup") {

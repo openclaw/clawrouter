@@ -53,6 +53,82 @@ or unqualified priority tier fails before installation. Use a producer that
 contains the selected model. Default search-enabled CLI setup needs 0.163.0 or
 newer; older producers require `--web-search disabled`.
 
+## Remote model metadata
+
+For OpenAI API credentials, opt into current upstream Codex descriptors instead
+of the installed CLI's bundled snapshot. Requires a router with
+`GET /v1/codex/models` and Codex CLI 0.169.0 or newer:
+
+```sh
+pnpm codex:connect connect \
+  --router-url https://router.example.com \
+  --provider openai --model gpt-6-sol \
+  --catalog-mode remote --web-search disabled \
+  --codex /path/to/codex --dry-run
+```
+
+Repeat without `--dry-run` to install. Add `--target desktop` for root settings.
+Existing connections retain local mode; remove and reconnect to switch modes.
+Remote mode sets the provider's `model_catalog_url` to
+`https://router.example.com/v1/codex/models`. Inference still uses
+`/v1/native/openai/v1`. It does not set `model_catalog_json`; remove any effective
+base, profile, or managed setting for that field before connecting because Codex
+prioritizes it over remote discovery. Keep `features.api_key_model_discovery`
+enabled (the client default). Managed setup rejects a disabled base/profile flag.
+Other configuration layers and command-line overrides must also permit discovery.
+
+The endpoint accepts an issued ClawRouter key and exactly one `client_version`
+(`major.minor.patch`). It fetches
+`https://chatgpt.com/backend-api/codex/models?client_version=<version>` using the
+same credential preparation as native Responses inference. It currently requires
+one public OpenAI API account: either the environment lane without a configured
+pool, or one API-key grant without environment fallback. Subscription transports,
+multi-account pools, and custom upstream origins fail explicitly. No OpenAI
+credential is sent to the Codex client.
+
+Full descriptors, instructions, unknown wrapper fields and access-program
+metadata are retained. The router exports only registered models with an eligible
+native HTTP Responses offer, and narrows advertised service tiers using pricing,
+context coverage, and offer permissions. Unknown upstream models are omitted until
+the router registers their routing and pricing. This is remote **metadata**
+discovery; it does not bypass routing policies or grant upstream Daybreak access.
+It does not resolve an upstream `access_program_not_enabled` inference rejection.
+
+The cache is private to one Worker isolate, caller, authorization context, selected
+credential revision and client version. Freshness is at most 10 seconds. Transient
+upstream errors may use a previously validated response for at most 60 seconds
+from acquisition; upstream cache controls, `Age`, and the configured hot-cache
+maximum can shorten or disable reuse. Authentication failures, redirects and
+invalid metadata invalidate the fallback. Responses sent to clients use
+`Cache-Control: no-store`. Upstream response bodies are limited to 8 MiB and
+fetch/body reads to 15 seconds; only responses up to 2 MiB are retained, with four
+entries per isolate. Larger valid responses can be served without a fallback.
+
+When no usable catalog remains, the endpoint returns HTTP 502 with
+`codex_catalog_unavailable`. The authenticated response includes
+`x-clawrouter-catalog-failure`: `upstream_http`, `upstream_timeout`,
+`upstream_transport`, `upstream_body`, `invalid_content_type`, `missing_body`,
+`body_too_large`, `invalid_utf8`, `invalid_json`, `invalid_schema`,
+`projection_failed`, or `internal`. Failures while loading upstream metadata also
+include `x-clawrouter-upstream-status` when an HTTP response was received; this
+can be 200 for invalid metadata. `projection_failed` means the router could not
+produce an authorized catalog from valid metadata. These diagnostics contain no
+upstream response content, credentials, model instructions or exception messages.
+Inspect the response headers with an HTTP client using the issued ClawRouter key;
+no underlying OpenAI credential is needed. Successful stale fallback responses
+and failures before catalog loading do not include these diagnostic headers.
+
+Remote mode uses HTTP/SSE because Codex's WebSocket setting applies to the whole
+provider, while a later metadata refresh can introduce an HTTP-only model. Desktop search remains disabled; CLI search
+modes use `?standalone_search=true` on the catalog URL, restricting refreshed
+metadata to models with qualified native search offers and Lite support. Remote
+setup keeps an audit snapshot beside its receipt, without configuring Codex to read
+that snapshot. `verify` fetches current metadata and validates the selected model
+and connection settings; ordinary metadata changes do not require `update`.
+`update` records a new audit snapshot. Neither command makes inference calls.
+
+Contract reference: [OpenAI gateway catalog specification](https://learn.chatgpt.com/docs/enterprise/roll-out-a-gateway#serve-a-catalog-to-clients).
+
 <a id="opt-in-to-built-in-cli-web-search"></a>
 
 ## Built-in CLI web search

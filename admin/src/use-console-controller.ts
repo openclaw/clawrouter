@@ -2,7 +2,7 @@ import { useAdminUsage } from "./hooks/use-admin-usage";
 import { usePersonalUsage } from "./hooks/use-personal-usage";
 import { useSubscriptions } from "./hooks/use-subscriptions";
 import { useCallback, useEffect, useRef } from "react";
-import { effectiveAccess, errorMessage, policyCoversProvider, policyUsageFallback } from "./domain";
+import { errorMessage } from "./domain";
 import { useAccessAdmin } from "./hooks/use-access-admin";
 import { useCatalog } from "./hooks/use-catalog";
 import { usePlayground } from "./hooks/use-playground";
@@ -14,9 +14,8 @@ import type { ConsoleRequest } from "./dashboard-fetch";
 import type { CapturedSessionScope } from "./session-scope";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
-import { demoClientCatalog } from "./demo-data";
+import { projectUserDemo } from "./demo-data";
 import { oauthCallbackStatus, settled, usagePolicyId } from "./ui-helpers";
-import { addUsageCounters, syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
   AdminBootstrapResponse,
@@ -27,7 +26,6 @@ import type {
   RouteCatalog,
   SessionResponse,
   UsageSnapshot,
-  UsageSummary,
 } from "./ui-types";
 
 export function useConsoleController({ session, credentialOwner, request, scope, verifySession }: {
@@ -293,35 +291,16 @@ export function useConsoleController({ session, credentialOwner, request, scope,
 
   function loadUserDemo() {
     const user = demo.users.find((candidate) => candidate.email === "research@example.com") ?? demo.users.find((candidate) => candidate.role === "user")!;
-    const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
-    const providerIds = new Set(effective.services.map((service) => service.provider));
-    const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
-    const summary = providerUsage.reduce<UsageSummary>(addUsageCounters, { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
-    const contentRetention = {
-      enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
-      retentionDays: 30,
-      policyEnabled: effective.policies.some((policy) => policy.retainRequestContent),
-      userExempt: user.contentRetentionDisabled,
-    };
-    const entitlements: EntitlementsResponse = {
-      session: { ...demo.session, ...user, auth: "demo", contentRetention },
-      catalog: demoClientCatalog(user.email),
-      contentRetention,
-      providers: demo.entitlements.providers.map((provider) => ({
-        ...provider,
-        allowed: providerIds.has(provider.provider),
-        policies: effective.policies.filter((policy) => policyCoversProvider(policy, provider.provider)).map((policy) => policy.policyId),
-      })),
-    };
-    session.setValue(entitlements.session);
+    const personal = projectUserDemo(demo, user);
+    session.setValue(personal.entitlements.session);
     catalog.setProviders(demo.providers);
     catalog.setRoutes(demo.routes);
-    catalog.setEntitlements(entitlements);
+    catalog.setEntitlements(personal.entitlements);
     access.hydrateUser(user);
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
-    usage.hydrate(effective.policies.map(policyUsageFallback), { ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
-    credentialOwner.hydrate("personal", demo.credentials.filter((credential) => credential.principalId === user.email), credentialOwner.captureHydration(), effective.policies.filter((policy) => policy.enabled).map((policy) => policy.policyId));
+    usage.hydrate(personal.usageRows, personal.usage);
+    credentialOwner.hydrate("personal", personal.credentials, credentialOwner.captureHydration(), personal.policyIds);
     session.setRefreshError("");
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local user demo loaded");

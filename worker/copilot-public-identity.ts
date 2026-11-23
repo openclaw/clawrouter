@@ -1,4 +1,5 @@
-import { HttpError, safeEqual } from "./utils.ts";
+import { safeEqual } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { AccessPolicy, Env } from "./types.ts";
 import type { CopilotRuntimeIdentity } from "./provider-copilot.ts";
 import type { ResponseControlAuthorization } from "./response-control-authorization.ts";

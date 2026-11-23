@@ -3,7 +3,8 @@ import { fullSha, versionId } from './deploy-train-policy.mjs';
 export function uploadMessage(state) {
   if (!/^\d+$/.test(String(state.run))) throw new Error('Invalid train run identity');
   if (state.native && (state.native.schema !== 1 || !/^[a-f0-9]{64}$/.test(state.native.runtimeSha ?? ''))) throw new Error('Invalid native upload receipt');
-  return `${state.migration ? 'clawrouter-migration' : 'clawrouter-candidate'}:${state.run}:${fullSha(state.sha)}:preserve-secrets:${versionId(state.blue)}${state.native ? `:native-v1:${state.native.runtimeSha}` : ''}${state.nativeSource ? `:native-source:${fullSha(state.nativeSource)}` : ''}`;
+  const nativeSource = state.nativeSource ?? (state.cutover?.kind === 'control' ? state.cutover.nativeSource : undefined);
+  return `${state.migration ? 'clawrouter-migration' : 'clawrouter-candidate'}:${state.run}:${fullSha(state.sha)}:preserve-secrets:${versionId(state.blue)}${state.native ? `:native-v1:${state.native.runtimeSha}` : ''}${nativeSource ? `:native-source:${fullSha(nativeSource)}` : ''}`;
 }
 // Wrangler inherits secrets from the latest upload, not the selected version.
 // Require every intervening upload to attest preserved secrets. A hybrid

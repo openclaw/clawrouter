@@ -2,7 +2,7 @@ import { cerebrasPublicCatalogRequest, readCerebrasPublicCatalog } from "./cereb
 import { chutesCatalogRequest, readChutesModels } from "./chutes-model-catalog.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { nvidiaPublicCatalogRequests, readNvidiaPublicCatalog } from "./nvidia-model-catalog.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { readVeniceModels, veniceCatalogRequest } from "./venice-model-catalog.ts";
 
 export type PublicModelDiscoveryResult =

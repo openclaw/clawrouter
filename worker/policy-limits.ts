@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function withLimitHint(message: string, policy: { limitHint?: string | null }): string {
   return policy.limitHint ? `${message} ${policy.limitHint}` : message;

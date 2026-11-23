@@ -30,6 +30,12 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
+  - id: llm.decisions
+    endpoint: systemone
+    methods: [POST]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -39,6 +45,21 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  models_list:
+    path: /models
+    method: GET
+    nativeProxy: true
+    requestFormat: baseten.models
+    responseFormat: baseten.models
+    headers:
+      accept: application/json
+    timeoutMs: 10000
+  systemone:
+    path: /systemone
+    method: POST
+    nativeProxy: true
+    requestFormat: baseten.systemone
+    responseFormat: baseten.systemone
 models:
   entries:
     - id: baseten/zai-org/GLM-5.3
@@ -155,15 +176,49 @@ models:
     - id: baseten/decision-models/baseten-elephant-9b-latest
       displayName: "Baseten Elephant 9B Latest"
       upstream: decision-models/baseten-elephant-9b-latest
-      capabilities: []
+      capabilities: [llm.decisions]
+      nativeCapabilities: &baseten_systemone
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          systemone:
+            sources: [https://docs.baseten.co/reference/inference-api/system-one, https://docs.baseten.co/inference/model-apis/decision-models]
+            checkedAt: "2026-11-03"
+            input: [text, json]
+            inference:
+              chat: false
+              decision:
+                protocol: baseten-systemone
+                reasoning:
+                  modes: [auto]
+                confidence: provider-specific
+                outputTokensPerQuestion: 1
+                questions:
+                  boolean:
+                    probabilities: boolean
+                    abstention: false
+                  choice:
+                    probabilities: provider-defined
+                    abstention: false
+                    minOptions: 2
+                    maxOptions: 255
+                  score:
+                    probabilities: provider-defined
+                    abstention: false
+                    minOptions: 2
+                    maxOptions: 10
+                limits:
+                  maxTotalOptions: 512
+                  maxStateAndQuestionTokens: 16384
     - id: baseten/decision-models/baseten-mammoth-27b-latest
       displayName: "Baseten Mammoth 27B Latest"
       upstream: decision-models/baseten-mammoth-27b-latest
-      capabilities: []
+      capabilities: [llm.decisions]
+      nativeCapabilities: *baseten_systemone
     - id: baseten/decision-models/baseten-joey-2b-latest
       displayName: "Baseten Joey 2B Latest"
       upstream: decision-models/baseten-joey-2b-latest
-      capabilities: []
+      capabilities: [llm.decisions]
+      nativeCapabilities: *baseten_systemone
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

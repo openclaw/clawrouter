@@ -6,7 +6,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 
 const { default: handler } = await import("../index.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { grantSupports } = await import("../provider-auth.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 

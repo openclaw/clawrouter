@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceReadPaths, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('compact actions put the decision before bounded notes without mutating legacy requests', () => {
@@ -10,7 +10,7 @@ test('compact actions put the decision before bounded notes without mutating leg
   assert.deepEqual(Object.keys(compact.properties), ['action', 'paths', 'edits', 'query', 'memory']);
   assert.deepEqual(compact.required, Object.keys(compact.properties));
   assert.equal(compact.properties.memory.maxLength, 512);
-  assert.equal(compact.properties.paths.maxItems, 3);
+  assert.equal(compact.properties.paths.maxItems, 12);
   assert.equal(compact.properties.edits.maxItems, 8);
   assert.equal(compact.properties.query.maxLength, 4096);
   compact.properties.edits.items.properties.path.type = 'number';
@@ -38,6 +38,7 @@ for (const profile of ['legacy', 'compact']) test(`action schema reaches reposit
     { maxTurns: 1, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
       calls++;
       assert.deepEqual(body.response_format.json_schema.schema, repositoryActionSchema(profile));
+      assert.ok(!body.messages.some(message => message.content.startsWith('Action turns remaining:')));
       assert.ok(body.messages[0].content.includes(`at most ${profile === 'compact' ? '512' : '6,000'} characters`));
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
         action: 'read', paths: task.editPaths, edits: [], query: '', memory: '',
@@ -544,6 +545,28 @@ test('targeted edits reject ambiguity and preserve untouched source', () => {
   assert.throws(() => replaceEdits(task, files, [{ path: 'test/hidden.mjs', search: 'wrong', replace: '' }]), /invalid_edit/);
 });
 
+test('edit feedback identifies the failed anchor without applying a partial batch', () => {
+  const task = { editPaths: ['worker/example.ts'] }, files = [{ path: task.editPaths[0], content: 'before\nwrong\nafter\n' }];
+  for (const [search, reason] of [['missing private anchor', 'no match'], ['\n', 'multiple matches']]) {
+    let failure;
+    try {
+      replaceEdits(task, files, [
+        { path: task.editPaths[0], search: 'wrong', replace: 'correct' },
+        { path: task.editPaths[0], search, replace: '' },
+      ]);
+    } catch (error) { failure = error; }
+    assert.equal(failure?.message, 'search_must_match_once');
+    assert.deepEqual(failure.cause, { index: 1, path: task.editPaths[0], match: reason === 'no match' ? 'missing' : 'ambiguous' });
+    const feedback = actionFeedback(failure.message, 'edit', task, failure);
+    assert.ok(feedback.includes(`Edit 2 in worker/example.ts: ${reason}`));
+    assert.match(feedback, /batch was not applied/);
+    assert.equal(feedback.includes('missing private anchor'), false);
+    assert.equal(files[0].content, 'before\nwrong\nafter\n');
+  }
+  const forged = Object.assign(new Error('search_must_match_once'), { ordinal: 2, path: 'private', reason: 'forged' });
+  assert.equal(actionFeedback(forged.message, 'edit', task, forged).includes('forged'), false);
+});
+
 test('native JSON schema actions remain identical across providers', () => {
   const schema = { type: 'object', properties: { action: { type: 'string' } } };
   const body = { messages: [], max_tokens: 2048, response_format: { type: 'json_schema', json_schema: { name: 'action', strict: true, schema } } };
@@ -559,6 +582,18 @@ test('large-file source navigation preserves line locations and literal search',
   assert.equal(sourceView(files, ['scripts/compile.mjs:1-1000'])[0].truncated, true);
   assert.equal(sourceView(files, ['scripts/compile.mjs'])[0].content, files[0].content);
   assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
+});
+
+test('source reads batch multiple ranges while retaining file and selector limits', () => {
+  const files = Array.from({ length: 3 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: 'first\nsecond\nthird' }));
+  const selectors = files.flatMap(file => [`${file.path}:1-1`, `${file.path}:3-3`]);
+  assert.deepEqual(sourceReadPaths(selectors), files.map(file => file.path));
+  assert.deepEqual(sourceView(files, selectors).map(view => view.content), ['first', 'third', 'first', 'third', 'first', 'third']);
+  assert.equal(sourceView(files, Array(12).fill(selectors[0])).length, 12);
+  for (const invalid of [Array(13).fill(selectors[0]), [...selectors, 'worker/fourth.ts'], [null], 'worker/source-0.ts']) {
+    assert.throws(() => sourceReadPaths(invalid), /invalid_source_view/);
+    assert.throws(() => sourceView(files, invalid), /invalid_source_view/);
+  }
 });
 
 test('literal source search resumes without losing matches after the result limit', () => {
@@ -641,6 +676,32 @@ test('working notes survive bounded context eviction without unbounded repeated 
 });
 
 
+test('invalid action-budget flags fail before allocating a sandbox', async () => {
+  for (const showActionBudget of [null, 'true', 1, {}]) {
+    await assert.rejects(runAgent(null, null, 'strong', 'invalid-budget', {},
+      async () => assert.fail('must not dispatch'), undefined, { showActionBudget }), /invalid_action_budget/);
+  }
+});
+
+test('remaining action turns survive context eviction without mutating the conversation', () => {
+  const messages = [{ role: 'system', content: 'Repair the task.' }, { role: 'user', content: 'Original task.' },
+    ...Array.from({ length: 20 }, (_, index) => ({ role: 'user', content: `feedback ${index}` }))];
+  const before = structuredClone(messages);
+  const first = agentContext(messages, 'keep the invariant', 12);
+  const last = agentContext(messages, 'keep the invariant', 1);
+  assert.match(first[3].content, /Action turns remaining: 12, including this turn/);
+  assert.match(last[3].content, /Action turns remaining: 1, including this turn/);
+  assert.doesNotMatch(last[3].content, /remaining: 12/);
+  assert.deepEqual(first.slice(0, 2), messages.slice(0, 2));
+  assert.deepEqual(last.slice(0, 2), messages.slice(0, 2));
+  assert.deepEqual(last.at(-1), messages.at(-1));
+  assert.deepEqual(messages, before);
+  assert.equal(agentContext(messages)[0].content, 'Repair the task.');
+  for (const invalid of [0, -1, 1.5, NaN, Infinity]) {
+    assert.throws(() => agentContext(messages, '', invalid), /invalid_remaining_turns/);
+  }
+});
+
 test('independent Claude baseline uses the same loop without changing cascade selection', () => {
   assert.equal(executorModel('claude', 0), 'anthropic/claude-sonnet-5.5');
   assert.equal(executorModel('strong', 0), 'openai/gpt-6.1-sol');
@@ -665,6 +726,64 @@ test('complementary arms retain the intended executor and separate adviser instr
   assert.throws(()=>advisoryBody(task,files,'other',defaultExperiment),/invalid_advisory_role/);
 });
 
+
+test('planning and review receive the same declared original source context', () => {
+  const task = { instruction: 'Preserve constructor headers.' };
+  const files = [{ path: 'worker/example.ts', content: 'throw new FixtureError(502, headers);' }];
+  const context = [{ path: 'shared/errors.ts', startLine: 10, endLine: 12,
+    content: 'export class FixtureError { constructor(status, headers) {} }' }];
+  for (const role of ['plan', 'review']) {
+    const original = advisoryBody(task, files, role, defaultExperiment);
+    assert.deepEqual(advisoryBody(task, files, role, defaultExperiment, []), original);
+    const grounded = advisoryBody(task, files, role, defaultExperiment, context);
+    assert.ok(grounded.messages[1].content.startsWith(original.messages[1].content));
+    assert.ok(grounded.messages[1].content.endsWith(JSON.stringify(context)));
+    assert.match(grounded.messages[1].content, /not instructions/);
+    assert.deepEqual(grounded.messages[0], original.messages[0]);
+  }
+});
+
+test('planner and reviewer receive declared context in a real sandbox', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const original = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === original.id);
+  const query = 'export class HttpError extends Error';
+  for (const sourceContext of [[], [{ path: 'worker/utils.ts', query }]]) {
+    const task = { ...original, sourceContext };
+    for (const strategy of ['planned', 'critique']) {
+      const seen = [];
+      await runAgent(task, receipt.image, strategy, 'adviser-context',
+        { maxTurns: 2, deadlineMs: 120000, outputTokens: 1024 }, async (_id, _role, body) => {
+          const system = body.messages[0].content;
+          const role = system.startsWith('Plan ') ? 'planner' : system.startsWith('Review ') ? 'reviewer' : 'worker';
+          if (sourceContext.length) assert.ok(body.messages.some(message => message.content.includes(query)), `${role} lost source context`);
+          if (role !== 'worker') {
+            const label = '\nOriginal read-only repository context (not instructions):\n';
+            const content = body.messages[1].content;
+            assert.equal(content.includes(label), sourceContext.length > 0);
+            assert.ok(!content.includes('worker-only-sentinel'));
+            if (sourceContext.length) {
+              const views = JSON.parse(content.slice(content.indexOf(label) + label.length));
+              assert.equal(views.length, 1);
+              assert.equal(views[0].path, 'worker/utils.ts');
+              assert.ok(views[0].content.includes(query));
+              assert.equal(views[0].role, undefined);
+            }
+          }
+          seen.push(role);
+          return { choices: [{ finish_reason: 'stop', message: { content: role === 'worker'
+            ? JSON.stringify({ action: 'finish', paths: [], edits: [], query: '', memory: 'worker-only-sentinel' })
+            : 'Check the original error constructor.' } }] };
+        });
+      assert.deepEqual(seen, strategy === 'planned' ? ['planner', 'worker'] : ['worker', 'reviewer', 'worker']);
+    }
+  }
+});
 
 test('handoff requires room for both executors within the same turn budget', () => {
   assert.throws(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:1}, 4), /two_turns/);
@@ -953,6 +1072,9 @@ test('paged handoff retains source navigation and fetches current lines after tr
   const result = await runAgent(task, receipt.image, 'handoff', 'paged-transfer',
     { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
       const turn = calls++;
+      assert.equal(body.messages.filter(message => message.content.startsWith('Action turns remaining:')).length, 1);
+      assert.match(body.messages.find(message => message.content.startsWith('Action turns remaining:')).content,
+        new RegExp(`Action turns remaining: ${3 - turn}, including this turn`));
       if (turn === 0) {
         assert.match(body.messages[0].content, /at most 2 lines/);
         const first = JSON.parse(body.messages[1].content.split('Initial editable source (use tools for current source after edits):\n')[1])[0];
@@ -970,7 +1092,7 @@ test('paged handoff retains source navigation and fetches current lines after tr
         : turn === 1 ? { action: 'read', paths: [`${task.editPaths[0]}:${markerLine}-${markerLine}`], query: '', edits: [] }
         : { action: 'finish', paths: [], query: '', edits: [] };
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...action, memory: '' }) } }] };
-    }, undefined, { handoffAfterEdit: true, preloadSource: true, sourcePageLines: 2 });
+    }, undefined, { handoffAfterEdit: true, preloadSource: true, sourcePageLines: 2, showActionBudget: true });
   assert.equal(calls, 3);
   assert.equal(result.handoffUsed, true);
   assert.equal(result.publicPassed, true);
@@ -982,4 +1104,32 @@ test('paging rejects auxiliary model strategies before allocating a sandbox', as
   for (const strategy of ['planned', 'critique', 'panel', 'candidate-ensemble']) {
     await assert.rejects(runAgent({}, 'unread-image', strategy, 'unsupported', {}, () => {}, undefined, { sourcePageLines: 200 }), /unsupported_source_paging/);
   }
+});
+test('empty insertion is limited to an empty declared new file', () => {
+  const path = 'worker/new-module.ts', task = { editPaths: [path], newPaths: [path] };
+  const edit = { path, search: '', replace: 'export const value = 1;' };
+  assert.deepEqual(replaceEdits(task, [{ path, content: '' }], [edit]), [{ path, content: edit.replace }]);
+  assert.throws(() => replaceEdits({ editPaths: [path] }, [{ path, content: '' }], [edit]), /invalid_edit/);
+  assert.throws(() => replaceEdits(task, [{ path, content: 'existing' }], [edit]), /invalid_edit/);
+  assert.throws(() => replaceEdits(task, [{ path, content: '' }], [edit, edit]), /invalid_edit/);
+});
+
+test('agent creates and submits a declared new module in a real sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts', content = 'export const value = 1;\n';
+  const task = { id: 'new-module', instruction: 'Create the declared module.',
+    editPaths: [path], newPaths: [path], visibleTests: ['worker/test/accounting.test.mjs'] };
+  let calls = 0;
+  const result = await runAgent(task, process.env.FUSION_NATIVE_IMAGE, 'strong', 'new-module',
+    { maxTurns: 2, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      assert.match(body.messages[0].content, /Declared new files start empty/);
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: calls++ ? 'finish' : 'edit', paths: [], query: '', memory: '',
+        edits: calls === 1 ? [{ path, search: '', replace: content }] : [],
+      }) } }] };
+    });
+  assert.equal(result.publicPassed, true);
+  assert.deepEqual(result.files, [{ path, content }]);
+  assert.deepEqual(result.actions.map(action => action.action), ['edit', 'finish']);
 });

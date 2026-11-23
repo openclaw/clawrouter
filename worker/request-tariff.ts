@@ -2,7 +2,7 @@ import { prepareXaiImage, type XaiImageRequest } from "./xai-images.ts";
 import { deepSeekSearchReserve, imageRequestReserve, requestOutcomeCost, type ImageRequestSelection, type RequestCostReceipt } from "./pricing.ts";
 import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { CompiledEndpoint, ProxyRequestBody } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Only admission creates this snapshot. It contains the selected scalar rate,
 // never the caller body, mutable manifest table, credential or native output.
@@ -106,6 +106,31 @@ export function selectRequestTariff(endpoint: RequestTariffEndpoint, body: Proxy
 
 export function nativeImageMode(format: string): "generate" | "edit" | null {
   return format === "xai.images_generations" ? "generate" : format === "xai.images_edits" ? "edit" : null;
+}
+
+// Frozen ApiSearchResponse/Page/ErrorResponse grammar, checked 2026-11-20:
+// https://docs.perplexity.ai/api-reference/search-post.md
+// Called only on the original bounded body after delivered-byte EOF. This is
+// receipt qualification, not URL safety validation or a second content reader.
+export function perplexitySearchOutcome(value: unknown, status: number): RequestTariffOutcome {
+  const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
+  const nullableString = (row: Record<string, unknown>, key: string) => !Object.hasOwn(row, key) || row[key] === null || typeof row[key] === "string";
+  if (!object(value)) return "unknown";
+  if (Object.hasOwn(value, "error")) {
+    const error = value.error;
+    if (!object(error) || Object.hasOwn(value, "results") || Object.hasOwn(value, "id") ||
+      typeof error.message !== "string" || typeof error.type !== "string" || !Number.isSafeInteger(error.code) || error.code !== status) return "unknown";
+    const documented = status === 400 && ["invalid_request", "invalid_language_code", "invalid_country_code"].includes(error.type)
+      || status === 401 && error.type === "invalid_api_key" || status === 429;
+    // Other statuses/shapes have no frozen free-rejection grammar here.
+    return documented ? "failed" : "unknown";
+  }
+  if (status !== 200 || typeof value.id !== "string" || !Array.isArray(value.results) || !nullableString(value, "server_time")) return "unknown";
+  for (const page of value.results) {
+    if (!object(page) || typeof page.title !== "string" || typeof page.url !== "string" || typeof page.snippet !== "string" ||
+      !nullableString(page, "date") || !nullableString(page, "last_updated")) return "unknown";
+  }
+  return "succeeded";
 }
 
 export function settleRequestTariff(tariff: SuccessfulRequestTariff, outcome: RequestTariffOutcome): { micros: number; basis: string } {

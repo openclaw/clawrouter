@@ -3,7 +3,7 @@ import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { jsonBodyTransport } from "./json-body.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Legacy protocol wrappers retain their existing reader unless explicitly
 // supplied the Wan ownership profile below.

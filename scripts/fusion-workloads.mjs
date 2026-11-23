@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 const safePath = value => typeof value === 'string' && /^(worker|shared|scripts|test)\/[A-Za-z0-9_./-]+$/.test(value)
@@ -44,6 +45,7 @@ export function validateSourceContext(task) {
       || item.path.split('/').some(part => !part || part === '.' || part === '..' || /^tests?$/.test(part))
       || /\.test\./.test(item.path) || task.editPaths.includes(item.path)
       || task.hiddenTests.includes(item.path)
+      || task.oracleSupportPaths?.includes(item.path)
       || typeof item.query !== 'string' || !item.query.trim() || item.query.length > 200
       || seen.has(JSON.stringify([item.path, item.query]))) throw new Error('invalid_source_context');
     seen.add(JSON.stringify([item.path, item.query]));
@@ -59,8 +61,16 @@ export function validateTask(task) {
       || !task[field].every(safePath)) throw new Error('invalid_task_paths');
   }
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
+  validateNewPaths(task);
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
+  if (task.oracleSupportPaths !== undefined && (!Array.isArray(task.oracleSupportPaths)
+    || task.oracleSupportPaths.length > 12 || new Set(task.oracleSupportPaths).size !== task.oracleSupportPaths.length
+    || task.oracleSupportPaths.some(path => !safePath(path) || !/^(worker\/test|test)\/.+\.mjs$/.test(path)
+      || /\.test\.mjs$/.test(path) || [...task.editPaths, ...task.visibleTests, ...task.hiddenTests].includes(path)))) {
+    throw new Error('invalid_oracle_support_paths');
+  }
   validateSourceContext(task);
+  validatePublicTestFiles(task);
   validatePreservationProbes(task.preservationProbes);
   if (task.reproducer !== undefined) validateReproducer(task.reproducer);
   return task;
@@ -120,11 +130,55 @@ export async function sandbox(image, run = command) {
   const id = (await run('docker', sandboxArgs(image))).stdout.toString().trim();
   if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('invalid_container_id');
   const exec = (args, options = {}) => run('docker', ['exec', '-i', id, ...args], options);
+  const execUnprivileged = (args, options = {}) => run('docker', ['exec', '--user', '65534:65534', '-i', id, ...args], options);
   try {
     await run('docker', ['start', id]);
     await exec(['node', '-e', `const fs=require('node:fs'); for(let i=0;i<200;i++){if(fs.existsSync('/work/.ready'))process.exit(0);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50)}process.exit(1)`]);
-    return { id, exec, close: () => run('docker', ['rm', '-f', id]) };
+    return { id, exec, execUnprivileged, close: () => run('docker', ['rm', '-f', id]) };
   } catch (error) { await run('docker', ['rm', '-f', id]); throw error; }
+}
+
+export function validateNewPaths(task) {
+  const paths = task.newPaths ?? [];
+  if (!Array.isArray(paths) || paths.length > 12 || new Set(paths).size !== paths.length
+    || paths.some(path => !safePath(path) || /(^|\/)test(s)?\//.test(path)
+      || !/\.(ts|mjs)$/.test(path) || !task.editPaths?.includes(path))) throw new Error('invalid_new_paths');
+  return paths;
+}
+
+export function validatePublicTestFiles(task) {
+  const files = task.publicTestFiles === undefined ? [] : task.publicTestFiles;
+  if (!Array.isArray(files) || (task.publicTestFiles !== undefined && !files.length)
+    || files.length > 12 || new Set(files.map(file => file?.path)).size !== files.length
+    || files.some(file => !file || !safePath(file.path) || !/\.test\.mjs$/.test(file.path)
+      || !task.visibleTests?.includes(file.path) || task.editPaths?.includes(file.path)
+      || typeof file.content !== 'string' || !file.content.trim()
+      || Buffer.byteLength(file.content) > 256 * 1024)
+    || files.reduce((bytes, file) => bytes + Buffer.byteLength(file.content), 0) > 1024 * 1024) {
+    throw new Error('invalid_public_test_files');
+  }
+  return files;
+}
+
+// Keep the immutable source image exact. Apply declared public tests and empty
+// source additions only in disposable trials, before any model sees the tree.
+export async function taskSandbox(task, image, run = command) {
+  const paths = validateNewPaths(task), publicTests = validatePublicTestFiles(task);
+  const box = await sandbox(image, run);
+  try {
+    if (paths.length) await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
+if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
+fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
+    if (publicTests.length) {
+      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
+if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
+try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}`, JSON.stringify(publicTests.map(file => file.path))]);
+      await writeFiles(box, publicTests);
+    }
+    return box;
+  } catch (error) { await box.close(); throw error; }
 }
 
 export function validateEdits(task, edits) {
@@ -192,30 +246,128 @@ export function testResult(result) {
     digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
-export async function check(box, paths, timeout = 120000) {
+function testFeedback(result) {
+  const text = Buffer.concat([result.stdout, result.stderr]).toString();
+  if (text.length <= 12000) return text;
+  const diagnostics = [];
+  let failureDepth = -1;
+  for (const line of result.stdout.toString().split('\n')) {
+    const failure = /^( *)not ok [1-9][0-9]* - /.exec(line);
+    if (failure) failureDepth = failure[1].length;
+    else if (line.trim() && line.search(/\S/) <= failureDepth) failureDepth = -1;
+    if (failureDepth >= 0) diagnostics.push(line);
+  }
+  const marker = '\n[test output omitted; showing failure diagnostics and final output]\n';
+  const tail = text.slice(-2000);
+  const failures = diagnostics.join('\n');
+  if (!failures) return marker + text.slice(-(12000 - marker.length));
+  return failures.slice(0, 12000 - marker.length - tail.length) + marker + tail;
+}
+
+function namedTestPattern(testNamePrefix) {
+  if (testNamePrefix === undefined) return undefined;
+  if (typeof testNamePrefix !== 'string' || !testNamePrefix.trim() || testNamePrefix.length > 256
+    || /[\r\n]/.test(testNamePrefix)) throw new Error('invalid_test_name_prefix');
+  return testNamePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Match Node's TAP reporter encoding without interpreting generated output.
+function tapTestName(name) {
+  const escapes = { '\b': '\\\\b', '\f': '\\\\f', '\t': '\\\\t', '\n': '\\\\n', '\r': '\\\\r', '\v': '\\\\v',
+    '\\': '\\\\', '#': '\\#' };
+  return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
+}
+
+export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  const pattern = namedTestPattern(testNamePrefix);
+  const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
-  return { ...testResult(result), feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
+    'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+  const metrics = testResult(result);
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result) };
+  // Node can report the test file itself as passing when no name matched.
+  const encodedPrefix = tapTestName(testNamePrefix);
+  const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
+  let selectedLabel;
+  const matchedTestPrefix = result.stdout.toString().split('\n').some(rawLine => {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith('# Subtest: ')) {
+      const label = line.slice('# Subtest: '.length);
+      selectedLabel = label.startsWith(encodedPrefix) && !fileLabels.some(path => label === path
+        || label.endsWith(`/${path}`) || path.endsWith(`/${label}`)) ? label : undefined;
+      return false;
+    }
+    const completed = /^(?:not )?ok \d+ - (.*)$/.exec(line);
+    if (!completed) return false;
+    // Exact equality excludes SKIP/TODO directives after the encoded name.
+    const matched = selectedLabel !== undefined && completed[1] === selectedLabel;
+    selectedLabel = undefined;
+    return matched;
+  });
+  return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
+    feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
 }
 
-export async function probe(box, source, timeout = 15000) {
+/** Final acceptance cannot let candidate imports rewrite their own tests. */
+export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000, options = {}) {
+  namedTestPattern(options.testNamePrefix);
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
+    || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {
+    throw new Error('invalid_acceptance_check');
+  }
+  const watched = [...new Set([...paths, ...supportPaths])];
+  if (watched.length > 36 || !watched.every(safePath)) throw new Error('invalid_acceptance_check');
+  const snapshot = async () => {
+    const result = await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path'),c=require('node:crypto');
+console.log(JSON.stringify(JSON.parse(process.argv[1]).map(name=>{const path=p.resolve('/work',name);if(!path.startsWith('/work/')||fs.realpathSync(path)!==path||!fs.statSync(path).isFile())throw Error('acceptance_path_changed');return c.createHash('sha256').update(fs.readFileSync(path)).digest('hex')})));`, JSON.stringify(watched)], { timeout });
+    const hashes = JSON.parse(result.stdout.toString());
+    if (!Array.isArray(hashes) || hashes.length !== watched.length || !hashes.every(value => /^[a-f0-9]{64}$/.test(value))) {
+      throw new Error('invalid_acceptance_snapshot');
+    }
+    return JSON.stringify(hashes);
+  };
+  const before = await snapshot();
+  await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
+function protect(path){const s=fs.lstatSync(path);if(s.isSymbolicLink())return;if(s.uid!==1000)throw Error('unexpected_fixture_owner');fs.chmodSync(path,s.mode&~0o022);if(s.isDirectory())for(const name of fs.readdirSync(path))protect(p.join(path,name));}protect('/work');
+fs.mkdirSync('/work/.artifacts',{recursive:true});fs.chmodSync('/work/.artifacts',0o1777);`], { timeout });
+  const admission = await box.execUnprivileged(['node', '-e', `const fs=require('node:fs'),p=require('node:path');const path=p.resolve('/work',process.argv[1]);
+const denied=fn=>{try{fn();return false}catch(e){if(!['EPERM','EACCES','EROFS'].includes(e.code))throw e;return true}};
+if(process.getuid()!==65534||![denied(()=>fs.writeFileSync(path,'changed')),denied(()=>fs.chmodSync(path,0o666)),denied(()=>fs.renameSync(path,path+'.moved')),denied(()=>fs.renameSync(p.dirname(path),p.dirname(path)+'.moved'))].every(Boolean))throw Error('acceptance_write_access');console.log('protected');`, paths[0]], { timeout });
+  if (admission.stdout.toString().trim() !== 'protected') throw new Error('acceptance_protection_failed');
+  if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
+  try {
+    return await check({ exec: (...args) => box.execUnprivileged(...args) }, paths, timeout, options);
+  } finally {
+    if (await snapshot() !== before) throw new Error('acceptance_integrity_changed');
+  }
+}
+
+export async function probe(box, source, timeout = 15000, { filterLoaderAssertions = false } = {}) {
   if (typeof source !== 'string' || !source.trim() || Buffer.byteLength(source) > 16000) throw new Error('invalid_probe');
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_probe');
+  if (typeof filterLoaderAssertions !== 'boolean') throw new Error('invalid_probe');
   const limit = Math.min(15000, timeout);
   // The in-container watchdog owns the process group; killing docker exec alone
   // would leave a hanging probe alive. Give the client time to collect its exit.
   const result = await box.exec(['timeout', '--signal=KILL', `${limit / 1000}s`, 'node', '--input-type=module'],
     { input: source, allowFailure: true, timeout: limit + 2000 });
+  const output = Buffer.concat([result.stdout, result.stderr]).toString();
+  const diagnostics = filterLoaderAssertions ? stripVTControlCharacters(output) : output;
+  // Conservative opt-in for generated probes wrapping subprocess failures.
+  // Diagnostics are not attestation; retain the legacy interpretation by default.
+  const loaderError = /^(?:Error|TypeError) \[(?:ERR_MODULE_NOT_FOUND|ERR_UNKNOWN_FILE_EXTENSION|ERR_UNSUPPORTED_DIR_IMPORT)\]:[^\n]*(?:\nDid you mean to import [^\n]*)?\n\s+at [^\n]*\(node:internal\/modules\//m;
+  const parserError = /^SyntaxError:[^\n]*\n\s+at compileSourceTextModule \(node:internal\/modules\//m;
+  const filtered = filterLoaderAssertions && (loaderError.test(diagnostics) || parserError.test(diagnostics));
   return { passed: result.code === 0,
     // node:test can rethrow an uncaught assertion from its exception handler,
     // producing Node's exit code 7 instead of the usual uncaught exit code 1.
     // node:test reporters print caught assertion diagnostics on stdout.
-    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(Buffer.concat([result.stdout, result.stderr]).toString()),
-    feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
+    assertionFailed: [1, 7].includes(result.code) && /\bERR_ASSERTION\b/.test(output) && !filtered,
+    feedback: output.slice(-12000) };
 }
 
 export async function buildTask(task, { repo, nodeImage, run = command }) {
@@ -243,17 +395,28 @@ async function revisionFiles(repo, revision, paths) {
   return Promise.all(paths.map(async path => ({ path, content: (await git(repo, ['show', `${revision}:${path}`])).toString() })));
 }
 
+export function acceptanceTestFiles(task, oracleFiles) {
+  const declared = new Map(validatePublicTestFiles(task).map(file => [file.path, file]));
+  return oracleFiles.map(file => {
+    const publicFile = declared.get(file.path);
+    // Keep append-only public guards without replacing any oracle bytes.
+    // Other public replacements must not override the hidden test contract.
+    return task.hiddenTests.includes(file.path) && publicFile?.content.startsWith(file.content) ? publicFile : file;
+  });
+}
+
 export async function verify(task, image, edits, repo) {
   validateEdits(task, edits);
-  const box = await sandbox(image);
+  const box = await taskSandbox(task, image);
   try {
     await writeFiles(box, edits);
     // Files new in the oracle do not yet exist. Create their parent/empty file
     // only inside this fresh verifier before the same guarded write operation.
-    const hidden = await revisionFiles(repo, task.oracle, task.hiddenTests);
-    await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(task.hiddenTests)]);
+    const acceptancePaths = [...task.hiddenTests, ...(task.oracleSupportPaths ?? [])];
+    const hidden = acceptanceTestFiles(task, await revisionFiles(repo, task.oracle, acceptancePaths));
+    await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');for(const f of JSON.parse(process.argv[1])){const x=p.resolve('/work',f);if(!fs.existsSync(x)){fs.mkdirSync(p.dirname(x),{recursive:true});fs.writeFileSync(x,'')}}`, JSON.stringify(acceptancePaths)]);
     await writeFiles(box, hidden);
-    const result = await check(box, [...new Set([...task.visibleTests, ...task.hiddenTests])]);
+    const result = await checkAcceptance(box, [...new Set([...task.visibleTests, ...task.hiddenTests])], task.oracleSupportPaths ?? []);
     const { feedback, ...receipt } = result;
     return receipt;
   } finally { await box.close(); }
@@ -261,7 +424,7 @@ export async function verify(task, image, edits, repo) {
 
 // The repair must pass the original visible tests before acceptance tests replace
 // any same-named files. Otherwise a benchmark can punish the correct repair.
-export async function checkOracleVisible(task, image, edits, { makeSandbox = sandbox, write = writeFiles, test = check } = {}) {
+export async function checkOracleVisible(task, image, edits, { makeSandbox = image => taskSandbox(task, image), write = writeFiles, test = check } = {}) {
   const box = await makeSandbox(image);
   try {
     await write(box, validateEdits(task, edits));
@@ -270,8 +433,14 @@ export async function checkOracleVisible(task, image, edits, { makeSandbox = san
   } finally { await box.close(); }
 }
 
-export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }) {
-  return visible?.passed === true && oracleVisible?.valid === true && oracleVisible?.passed === true
+export function baselineVisibleQualified(task, visible) {
+  const replacements = validatePublicTestFiles(task);
+  return visible?.passed === true || (replacements.length > 0 && visible?.valid === true
+    && visible.passed === false && Number.isSafeInteger(visible.failures) && visible.failures > 0);
+}
+
+export function qualificationSucceeded({ visible, oracleVisible, broken, oracle, reproduction, oracleReproduction }, task = {}) {
+  return baselineVisibleQualified(task, visible) && oracleVisible?.valid === true && oracleVisible?.passed === true
     && broken?.valid === true && broken?.passed === false && oracle?.passed === true
     && (reproduction === undefined && oracleReproduction === undefined
       || reproduction?.assertionFailed === true && oracleReproduction?.passed === true);
@@ -280,7 +449,7 @@ export function qualificationSucceeded({ visible, oracleVisible, broken, oracle,
 export async function checkPreservationProbes(task, image, edits = []) {
   const results = [];
   for (const source of validatePreservationProbes(task.preservationProbes)) {
-    const box = await sandbox(image);
+    const box = await taskSandbox(task, image);
     try {
       if (edits.length) await writeFiles(box, validateEdits(task, edits));
       const before = await readSource(box, task.editPaths);
@@ -295,7 +464,7 @@ export async function checkPreservationProbes(task, image, edits = []) {
 
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
-  const box = await sandbox(built.image);
+  const box = await taskSandbox(task, built.image);
   let visible, reproduction, oracleReproduction;
   try {
     await readTaskContext(box, task);
@@ -310,7 +479,7 @@ export async function qualify(task, options) {
   const broken = await verify(task, built.image, [], options.repo);
   const oracle = await verify(task, built.image, edits, options.repo);
   if (task.reproducer !== undefined) {
-    const repaired = await sandbox(built.image);
+    const repaired = await taskSandbox(task, built.image);
     try {
       await writeFiles(repaired, edits);
       const { feedback, ...result } = await probe(repaired, task.reproducer); oracleReproduction = result;
@@ -324,5 +493,5 @@ export async function qualify(task, options) {
     ...(preservation === undefined ? {} : { preservation }),
     ...(task.reproducer !== undefined ? { reproduction, oracleReproduction } : {}) };
   return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
-    qualified: qualificationSucceeded(evidence) && preservationQualificationMatches(task.preservationProbes, preservation) };
+    qualified: qualificationSucceeded(evidence, task) && preservationQualificationMatches(task.preservationProbes, preservation) };
 }

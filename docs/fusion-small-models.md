@@ -44,6 +44,202 @@ grading attempt remain failures; a supplied incomplete grade invalidates the run
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
 
+## Bounded caller-side tool trajectories
+
+`scripts/fusion-trajectory.mjs` exports `runTrajectory`,
+`runSingleTrajectory` and `runFinalReviewedTrajectory` for callers that need multiple tool steps. This is an
+opt-in utility; it does not register a Worker route or select models by itself.
+The caller provides model callbacks and a trusted tool registry. It also owns
+provider credentials, spending reservations and reconciliation, and tool isolation.
+
+Each tool has a unique `name`, an `effect` of `read` or `write`, a synchronous
+`validate(arguments)` callback and an asynchronous `execute(arguments, signal)`
+callback. Only tools with no external mutation may be declared `read`.
+Actions and observations must contain plain JSON values; `undefined` is invalid.
+Tool output is untrusted data, not permission to change the task or tool policy.
+
+The model callbacks receive a copied `{ task, history, segment }` and an abort
+signal. Return `{ type: "tool", name, arguments }` for a tool step or
+`{ type: "final", content }` for completion. In `runTrajectory`, `verify` returns
+`{ accepted, reason, replacement }`: `accepted` is the length of the valid prefix
+of the proposed segment, and `replacement` is one corrective action or `null`.
+Full acceptance requires a null replacement. Rejection requires a nonempty reason.
+If no usable replacement is supplied, `repair` receives only committed history
+and the reason. Rejected observations do not reach subsequent model callbacks.
+
+Read actions execute before review so the verifier can inspect their observations.
+Writes and final answers wait for review. A read-only segment is reviewed after
+`chunkSize` steps. `runSingleTrajectory` uses the same action validation, limits
+and registry but invokes only `draft`, with no semantic reviewer. This provides
+a matched execution control, not a guarantee of equivalent answer quality.
+
+All three functions return `{ content, history, stats }`. Set `maxModelCalls`,
+`maxToolCalls`, `maxContextBytes` and `deadlineMs` before execution. Every model
+callback and tool execution consumes its corresponding limit, including an
+optional final check. Set `finalCheckTool` to a registered tool that accepts `{}`
+and returns an observation with boolean `passed`. A failed final check enters
+history and continues the trajectory; only a passing check permits completion.
+
+For deterministic follow-up tools, `runSingleTrajectory` and
+`runFinalReviewedTrajectory` accept a synchronous
+`nextAction({ task, history, segment })` callback. Return a registered tool action
+to execute it before the next model call, or `null`/`undefined` to ask the model.
+For example, a caller can run tests after an edit without asking a model to
+select that already-known step. The callback receives copied history, and every
+scheduled action uses the normal validation, tool limit, deadline and history.
+It cannot return a final answer or be used with reviewed `runTrajectory`.
+An always-scheduling callback exhausts `maxToolCalls`; it does not run forever.
+
+All three controllers also accept `onCheckpoint(snapshot, signal)`. The optional
+callback receives a copied `{ task, history, stats }` after a nonempty committed
+step or segment, including scheduled tools and final checks. It never receives
+rejected observations or a held write before review and execution. The controller
+awaits the callback within the existing deadline; persistence failures stop the
+run without retrying the tool or callback. The model adapters forward this option.
+
+Use checkpoints to retain confirmed work if a later call reaches a limit. A
+checkpoint does not certify completion or authorize replay. A later interrupted
+tool can still have an unknown external outcome; reconcile that operation before
+resuming. The caller owns checkpoint storage and redaction. Existing callers that
+omit the callback retain their execution and result format; this optional utility
+introduces no persistent-state migration or Worker deployment change.
+
+The controller propagates callback errors and does not retry a failed or timed-out
+operation. Callbacks must honor their abort signal. A callback that ignores
+cancellation may continue after the controller rejects, so the caller must
+reconcile its outcome before another write or paid request. Returned history can
+contain sensitive tool data; callers must choose storage and redaction explicitly.
+
+This execution contract does not establish a fusion quality, cost or latency gain.
+Keep independent final grading and fixed-model controls in any comparison.
+
+### Completion review
+
+`runFinalReviewedTrajectory` executes each validated tool action immediately and
+reviews only a proposed final answer. Use it only with caller-owned disposable
+state: rejected completion does not roll back earlier writes. Keep external
+publication or deployment outside the trajectory, after independent acceptance.
+
+The verifier receives the committed history and one held final step. Acceptance
+requires `accepted: 1` and `replacement: null`. A rejected final answer may produce
+a corrective tool action or a separate repair call. Replacement and repaired
+final answers pass through review again; they cannot bypass it. Model calls,
+tools, checkpoints, cancellation and `finalCheckTool` retain their existing limits.
+
+An optional synchronous `reviewSnapshot({ task, history })` callback supplies a
+plain JSON snapshot for the verifier. Its request becomes `{ task, segment,
+snapshot }`; draft and repair callbacks still receive history. The controller
+copies and bounds the snapshot and preserves its own task and held segment.
+The caller must include enough evidence to review the current result. A snapshot
+or passing public check does not establish full correctness.
+
+## Connecting models to a trajectory
+
+### Supplying current source
+
+`scripts/fusion-trajectory-workspace.mjs` exports
+`workspaceModelView(request, workspace)` for callers that own an editable source
+workspace. Apply it inside the adapter's `invoke` callback before metering and
+sending the request:
+
+```js
+const request = JSON.parse(body.messages[1].content);
+const view = workspaceModelView(request, {
+  revision,
+  files: currentFiles,
+  context: publicContext,
+  publicCheck: checkedRevision === revision ? lastCheck : null,
+});
+const projected = {
+  ...body,
+  messages: [body.messages[0], {
+    ...body.messages[1], content: JSON.stringify(view),
+  }],
+};
+return invokeMetered(runId, model, projected, signal);
+```
+
+Supply a nonnegative integer revision, current `files`, read-only `context`, and
+either a current `{ passed, feedback }` check or `null`. Each file has a unique
+`path` and string `content`. The caller must update the revision and invalidate
+the check after every edit. Meter and enforce request-size limits on the final
+payload sent to the provider.
+
+The helper copies its inputs. It replaces successful `edit_source` and
+`edit_sources` arguments with affected paths only when every path is present in
+the current workspace. Failed edits and edits to unavailable paths remain intact.
+Identical `run_tests` feedback can reference `workspace.publicCheck.feedback`;
+other observations remain unchanged. Returned controller history and checkpoints
+retain their original arguments and feedback.
+
+To keep starting behavior visible during repair, callers can include immutable
+starting-source copies under distinct paths in `context`. Keep those paths out
+of the tools' editable allowlist. This helper performs no filesystem operations
+and does not enforce tool permissions or certify that source and checks are
+current. Supplying context does not establish correctness or a cost reduction;
+retain independent acceptance checks.
+
+### Choosing the model
+
+`scripts/fusion-trajectory-models.mjs` connects the controller to a caller-supplied
+`invoke(runId, model, body, signal)` function. It exports four entry points:
+
+- `runModelTrajectory`: a draft model, reviewer and corrective actions.
+- `runSingleModelTrajectory`: one fixed model, without semantic review.
+- `runFinalReviewedModelTrajectory`: execute tool actions and review completion;
+  an optional `selectModel` chooses the draft model from the configured pair.
+  Verification and corrective calls use `reviewModel`.
+- `runAdaptiveModelTrajectory`: a synchronous `selectModel(request)` callback
+  selects either `draftModel` or `reviewModel` for each action. It sees a copied
+  task and committed history; an unconfigured selection stops the run.
+
+For executable-check feedback, `scripts/fusion-check-routing.mjs` exports
+`createCheckDrivenSelector({ draftModel, repairModel, checkTool, repairSteps })`.
+Pass its result as `selectModel` and configure the adapter's `reviewModel` to
+match `repairModel`. It starts with the draft model. A boolean `passed: false`
+from the named check tool selects the repair model for four subsequent steps
+by default. Consecutive failed checks extend that window by two steps, up to
+eight; a passing check immediately returns to the draft model. Other tools,
+missing results and non-boolean values do not affect selection.
+
+The selector makes no model calls and owns no mutable state. It derives its
+choice from committed history, so the controller's existing limits still apply.
+Use a caller-owned executable check, such as supplied tests and a compiler.
+This is routing feedback, not completion evidence: configure `finalCheckTool`
+separately and keep independent acceptance checks. A weak check can miss defects;
+the helper does not establish a general quality or cost advantage. Existing
+callers and default routing remain unchanged.
+
+Supply `task`, `runId`, `tools`, `invoke` and the controller limits. Reviewed and
+adaptive runs require both model identifiers. Single-model runs use `model`.
+Each tool also supplies `parameters`, a strict JSON Schema object in which every
+property is required and `additionalProperties` is false. Use explicit nullable
+fields when needed. The adapter rejects optional properties, unsupported schema
+composition, and excessive schema depth or node count before calling a model.
+Tool argument validation still runs after the model responds.
+
+The request body uses OpenAI-compatible `messages`, `max_tokens` and a strict
+`response_format` JSON Schema. The callback must return a normalized completion
+with `choices[0].message.content` containing JSON and a completed stop reason.
+The adapter rejects refusals, truncation, unknown stops and malformed JSON; it
+never retries or switches models after a transport error. For Responses or
+other native provider APIs, the caller must translate requests and normalize
+responses. Model identifiers remain opaque to the adapter.
+
+`draftOutputTokens` bounds every action response, including corrective actions;
+`reviewOutputTokens` bounds reviewer verdicts. Both default to bounded values
+and accept 64–8192 tokens. The controller's call, tool, context and deadline
+limits apply to all three entry points. The caller still owns input admission,
+monetary reservations, usage settlement, credentials, tool isolation and
+reconciliation after cancellation. `runId` is only a correlation value passed to
+that callback; no prompt, completion or usage logging is added.
+
+For adaptive runs, public tool observations can drive the selection callback.
+This is a mechanism, not a built-in quality classifier: declare the policy before
+evaluation, use a final check when available, and compare against both fixed
+models on independently graded tasks. Model choices and tool checks alone do
+not establish correctness or a Fusion performance gain.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
@@ -501,6 +697,12 @@ JavaScript check body. A passing probe, import failure or
 syntax error does not qualify. Each probe executes in a fresh disposable
 sandbox; its writes cannot change the repair workspace.
 
+Low-level callers can use `probe(box, source, timeout, { filterLoaderAssertions: true })`
+to classify wrapped Node loader and parser diagnostics as invalid probes rather
+than behavioral assertions. The option defaults to `false`. This conservative
+output heuristic preserves assertion expectations that merely mention an error
+code; it does not authenticate generated tests or establish complete coverage.
+
 Once a reproduction fails with an assertion on the original source, freeze it
 and allow repairs. Rerun it on each candidate in another disposable sandbox.
 Submit automatically only when the reproduction and visible tests pass. Hidden
@@ -771,6 +973,17 @@ them in configuration files.
 node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
 ```
 
+For interactive pair runs, set `FUSION_PAIR_ACTION_SCHEMA_PROFILE=compact`
+to use the existing bounded action schema. It limits each response to eight
+edits and twelve path selectors, and puts the action before working notes.
+The setting applies to both fixed-model controls and the fusion arm and is
+recorded in `pair.json`. Repeat analysis rejects mixed schema profiles; old
+receipts without the field retain their legacy meaning. The default remains
+`legacy`. Single-draft, contract,
+probe-selection and draft-sampling executors reject `compact` because they
+use separate action contracts. Freeze this setting before comparing runs;
+changing it does not establish a quality improvement.
+
 The configuration must contain every field below. Set `priorCostMicros` to the
 campaign's accumulated spend and unresolved reservations before starting.
 
@@ -877,6 +1090,18 @@ no model-quality gain has been measured for paging.
 
 
 ### Optional native Responses transport
+
+The native benchmark registry also accepts `openai/gpt-6.2-sol` and
+`openai/gpt-6.2-astra` as explicit model choices. Existing defaults stay unchanged.
+Their Standard short-context tariffs were checked on 21 November 2026:
+Sol costs $2 input / $10 output per million tokens; Astra costs $8 / $40.
+Cached input and cache writes use their separate published rates, with
+cache-write prices included in conservative reservations. The existing
+200,000-input-token ceiling rejects long-context pricing that is not qualified.
+See the [Sol model card](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+and [Astra model card](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+Selecting these models enables benchmarking; it does not establish a fusion gain.
+
 
 Set `FUSION_OPENAI_API=responses` for the native pair benchmark to send OpenAI
 calls through `/v1/responses`. The default remains `chat-completions`; Anthropic
@@ -1872,3 +2097,32 @@ Reasoner used identical prompts; the pair reused the matching full-context
 Reader and question-only Reasoner prompts. These hashes identify private local
 receipts, not a bundled reproduction suite. No runtime, deployment or default
 policy changed.
+
+### Optional action-budget feedback
+
+Custom runners calling `runAgent` can pass `{ showActionBudget: true }` in the
+options argument. Each worker request then includes the remaining action turns,
+including the current turn. This counts worker action turns, not every planner
+or panel API call. The default is off, and enforcement limits do not change.
+
+Record this option in the experiment protocol and use the same value for every
+comparison arm. Budget disclosure is an experimental prompt intervention, not
+a demonstrated quality improvement. Keep the static task and system prompt
+unchanged when comparing it with the default.
+
+
+### Named fixture probes
+
+Callers can use `check(box, paths, timeout, { testNamePrefix })` to run top-level tests
+whose names start with a literal prefix. For example, `{ testNamePrefix: "fusion probe: " }` selects appended probe tests while preserving the original
+fixture imports and hooks. Regex metacharacters in the prefix are escaped.
+
+A passing test-file wrapper without a matching named test does not pass this
+check. The result includes `matchedTestPrefix` when selection is requested.
+`checkAcceptance` accepts the same options as its fifth argument and retains
+its protected-file checks. Default calls continue to run all tests.
+
+Name selection checks execution evidence. It does not establish assertion
+quality or complete requirement coverage, and it is not a substitute for the
+independent full acceptance suite. TAP output is generated by the tested code
+and is not an adversarial attestation.

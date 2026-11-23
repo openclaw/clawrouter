@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { managedLifecycleAdapter } = await import("../managed-lifecycle-adapters.ts");
 const { managedRoute, managedPaths } = await import("../managed-routes.ts");
 const source = parse(readFileSync(new URL("../../providers/kie.provider.yaml", import.meta.url), "utf8"));

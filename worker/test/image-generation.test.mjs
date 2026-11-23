@@ -1,7 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { providerById, capabilityForPath, unifiedPathForEndpoint } from "../providers.ts";
+import { providerById, unifiedPathForEndpoint } from "../provider-catalog.ts"; import { capabilityForPath } from "../../shared/route-catalog.ts";
 import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricing.ts";
 import { validateImageGeneration, extractImageUsageTokens } from "../image-generation.ts";
 import { observeUsage } from "../proxy-response.ts";

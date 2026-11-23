@@ -1,12 +1,14 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { envValue, HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { envValue, safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // accountId is projected from the original credential owner, not caller or
 // routing metadata. Absence deliberately leaves an ordinary Bearer request.

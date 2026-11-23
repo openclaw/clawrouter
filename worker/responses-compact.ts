@@ -1,7 +1,7 @@
 export { assertSingleOpenAiAccount as assertCompactAccount } from "./openai-public-account.ts";
 import { extractUsageTokens, type UsageTokens } from "./token-usage.ts";
 import type { CompiledModel } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function validateCompactRequest(body: Record<string, unknown>, model: CompiledModel | null): void {
   const pricing = model?.pricing;

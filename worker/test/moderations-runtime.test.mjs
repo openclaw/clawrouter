@@ -8,7 +8,8 @@ import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 const router = `
   import worker from "./worker/index.ts";
   export * from "./worker/index.ts";
-  import { BudgetLedgerObject as Budget, usageStub, ingestUsage } from "./worker/ledgers.ts";
+  import { BudgetLedgerObject as Budget, ingestUsage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
   import { sha256Hex } from "./worker/utils.ts";
   import { putGrantCredentials } from "./worker/grant-credentials.ts";
   export class BudgetLedgerObject extends Budget {

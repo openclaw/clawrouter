@@ -1,3 +1,8 @@
+> Production deployment: use **Deploy ClawRouter** on `main`, with no inputs.
+> [Deployment compatibility](deployment-compatibility.md) is the canonical operator
+> and developer contract. Older train/qualification instructions below describe
+> historical releases and diagnostic tools, not required deployment steps.
+
 # Deploy ClawRouter on Cloudflare
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
@@ -12,13 +17,21 @@ must be used instead of overriding the production deployment ad hoc.
 
 ## Large HTTP staged release
 
-`config/deployment-hold.json` currently holds this source out of the production
-train. Scheduled selection exits without deploying; manual selection and
+`config/deployment-hold.json` controls whether source is held out of the production
+train. When held, scheduled selection exits without deploying; manual selection and
 `pnpm cf:deploy` refuse. The hold is read from the selected commit, so an
 environment variable or a different control checkout cannot release it. Remove
 the hold only in a reviewed follow-up after separately authorized infrastructure
 preparation and a compatible recovery version exist. This does not disable the
-workflow or change an already deployed Worker.
+workflow or change an already deployed Worker. The current file has `hold: false`;
+the native source, artifact and hosted-qualification guards still apply.
+
+For a compatible control repair that must precede a native payload replacement,
+use the separately qualified `native-control` bridge described in
+[native controller qualification](native-cutover-qualification.md#compatible-control-adoption).
+It adopts current control with exact old native bytes using the ordered cutover
+and compatible recovery engine; it is not a percentage rollout or a source-guard
+override. A subsequent separately authorized `native-cutover` replaces the payload.
 
 The new `v6-large-http` Durable Object classes and cron configuration require
 an additive deployment before any percentage rollout. Do not bypass the train's

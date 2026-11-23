@@ -4,7 +4,8 @@ import { musicCoverAccounting, musicCoverCompositionAccounting, planBudgetReserv
 import { resolveConnection } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { inspectGrantCredentials, materializeGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-eligibility.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { runMiniMaxMusicCoverControls, runMiniMaxMusicCoverComposition, musicCoverUnavailable, type MiniMaxMusicCoverControl, type MusicCoverFinalRead } from "./minimax-music-cover-control.ts";
 import { isMiniMaxMusicCoverWave, type SealedMusicCoverInput, type MusicCoverInputMetadata } from "./minimax-music-cover-input.ts";
 import { prepareMiniMaxMusicCoverCompositionUpload } from "./minimax-music-cover-upload.ts";
@@ -14,7 +15,8 @@ import { authenticateProxyKey, proxyAdmission, proxyKeyVerification } from "./pr
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import { musicCoverSoftBudget, softBudgetPolicy } from "./soft-budget.ts";
 import type { AccessPolicy, AuthorizedIdentity, Env, ProviderConnection, UpstreamGrant, UsageEvent } from "./types.ts";
-import { HttpError, randomId } from "./utils.ts";
+import { randomId } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const capability = "music.generate", model = "minimax/music-cover";
 const selection = Object.freeze({ providerId: "minimax", endpointId: "music-cover", mode: "http" as const,

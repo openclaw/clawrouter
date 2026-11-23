@@ -5,15 +5,6 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-test("the standard deploy path provisions required content storage", () => {
-  const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  assert.match(pkg.scripts["cf:deploy"], /pnpm cf:content:provision/);
-  assert.ok(
-    pkg.scripts["cf:deploy"].indexOf("cf:content:provision") <
-      pkg.scripts["cf:deploy"].indexOf("wrangler deploy"),
-  );
-});
-
 test("rendered config keeps the usage queue and dead-letter queue distinct", () => {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-wrangler-test-"));
   const target = join(dir, "wrangler.toml");

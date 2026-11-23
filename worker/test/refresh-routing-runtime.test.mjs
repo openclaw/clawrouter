@@ -13,7 +13,8 @@ const router = `
   export * from "./worker/index.ts";
   import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
   import { GrantCredentialObject as Owner } from "./worker/grant-credentials.ts";
-  import { resolveGrantSelection, grantRoutingPolicy, grantSelectionStats } from "./worker/grant-selection.ts";
+  import { resolveGrantSelection, grantSelectionStats } from "./worker/grant-selection.ts";
+import { grantRoutingPolicy } from "./worker/grant-routing.ts";
   import { sha256Hex } from "./worker/utils.ts";
   let clock = ${now}; Date.now = () => clock; const events = [];
   export class PolicyBindingIndexObject extends Authority {

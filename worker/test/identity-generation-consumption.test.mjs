@@ -159,7 +159,7 @@ test('owned auth common pressure precedes derived factories and preserves the bo
 const { selectAdmissionCandidate, selectGenerationAdmissionCandidate } = await import('../authority-grant-selection.ts');
 const { chooseGrantKey, normalizedChoiceCandidates } = await import('../grant-selection-strategies.ts');
 const { normalizePolicyRecord } = await import('../authority-policy.ts');
-const { snapshot: providerSnapshot } = await import('../providers.ts');
+const { snapshot: providerSnapshot } = await import('../provider-catalog.ts');
 const { GenerationAdvisoryState } = await import('../admission-cache.ts');
 const { admissionScratchBytes, GenerationConsumptionLease } = await import('../credential-preflight-arena.ts');
 for (const strategy of ['priority', 'round_robin', 'least_used', 'most_remaining', 'threshold', 'weighted_random']) {
@@ -173,7 +173,7 @@ for (const strategy of ['priority', 'round_robin', 'least_used', 'most_remaining
       policy: { policyId: 'fixture', policy: normalizePolicyRecord({ grantRouting: { strategy } }, false) }, poolKey: 'fixture', candidates, states: {},
       identityHash: 'ab'.repeat(32), fallbackSessionHash: 'cd'.repeat(32) };
     t.mock.method(crypto, 'getRandomValues', array => { array.fill(1234567); return array; });
-    const choose = value => chooseGrantKey(value, normalizedChoiceCandidates(value.candidates), { cursorKey: 'oauth/fixture/key100', counts: new Map() });
+    const choose = value => chooseGrantKey(value, normalizedChoiceCandidates(value.candidates), 'oauth/fixture/key100', () => undefined);
     const baseline = bodyBudgetCharged(), working = GenerationConsumptionLease.reserve(1048576);
     try {
       const ordinary = selectAdmissionCandidate({}, input, choose, () => 7);

@@ -6,7 +6,7 @@ import test from "node:test";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
-const { listHealth, snapshot } = await import("../providers.ts");
+const { listHealth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
@@ -669,7 +669,9 @@ for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown
         if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
         assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
         if (providerId === "anthropic") {
-          assert.equal(view.models.length, 11);
+          assert.deepEqual(view.models.map(({ id }) => id).sort(),
+            snapshot.providers.find(({ id }) => id === providerId).models.map(({ id }) => id).sort(),
+            "API-key discovery preserves every compiled Anthropic identity exactly once");
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
           assert.equal(view.routes.length, 4);

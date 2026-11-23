@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import "./typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 
 // Register the shared extensionless-TS resolver before loading the browser helper.
 const { completeQueryString, exportRefreshedUsage, prepareUsageGroupsFile } = await import("../../admin/src/complete-usage.ts");

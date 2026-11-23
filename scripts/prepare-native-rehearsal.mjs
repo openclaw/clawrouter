@@ -10,7 +10,8 @@ import {prepareLargeHttpRelease,verifyLargeHttpRelease} from './prepare-large-ht
 import {isolatedNativeTarget} from './deploy-native-target.mjs';
 import {fullSha} from './deploy-train-policy.mjs';
 import {nativeControlDigest} from './deploy-native-qualification.mjs';
-export async function prepareNativeRehearsal({configPath,directory,nativeSource,blueRuntimeSha,minutes=60}){
+import {prepareNativeBaseline} from './build-native-baseline.mjs';
+export async function prepareNativeRehearsal({configPath,directory,nativeSource,blueRuntimeSha,controlSource,baselineSettings,minutes=60}){
  fullSha(nativeSource);
  if(!/^[a-f0-9]{64}$/.test(blueRuntimeSha)||!Number.isSafeInteger(minutes)||minutes<15||minutes>60)throw Error('Invalid rehearsal bounds');
  const source=await readFile(configPath,'utf8'),config=getStaticTOMLValue(parseTOML(source));
@@ -35,9 +36,16 @@ export async function prepareNativeRehearsal({configPath,directory,nativeSource,
  await prepareNativeRecovery({state,configPath:rendered,directory:join(root,'old-release'),syntheticRehearsal:true});
  const green=await prepareLargeHttpRelease({configPath:rendered,directory:join(root,'green-release')});
  const old=await verifyLargeHttpRelease(state.recoveryReleaseManifest);await verifyLargeHttpRelease(green.path);
+ let baseline;
+ if(controlSource){
+  const runtime=await readFile(join(build,'assets/__large_http/artifact',blueRuntimeSha+'.mjs'));
+  baseline=await prepareNativeBaseline({controlSource,runtimeSha:blueRuntimeSha,runtimeBytes:runtime.length,configPath:old.stages.green.path,directory:join(root,'baseline-release'),baselineSettings});
+ }
+ const initial=baseline?await verifyLargeHttpRelease(baseline.path):old;
  const result={schema:1,source:sha,controlSha256:nativeControlDigest(),qualified:false,worker:target.worker,origin:target.origin,fixture,
   blueRuntimeSha,greenRuntimeSha:manifest.runtime.sha256,nativeSource,green:green.path,old:state.recoveryReleaseManifest,
-  bootstrap:old.stages.bootstrap.path,blue:old.stages.green.path,recovery:old.stages.green.path};
+  bootstrap:initial.stages.bootstrap.path,blue:initial.stages.green.path,recovery:old.stages.green.path,
+  ...(baseline?{initialControlSource:controlSource,initialControlWorkerSha256:baseline.workerSha256}:{})};
  await writeFile(join(root,'preparation.json'),JSON.stringify(result,null,2)+'\n',{flag:'wx',mode:0o600});return result;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){

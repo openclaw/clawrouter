@@ -8,6 +8,7 @@ RUN corepack enable && corepack prepare pnpm@11.28.4 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY admin/package.json admin/package.json
+COPY packages/provider-plugin-contract/package.json packages/provider-plugin-contract/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY . .

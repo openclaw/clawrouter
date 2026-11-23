@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricing.ts";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 const { default: handler } = await import("../index.ts");
 
 const manifest = parse(readFileSync(new URL("../../providers/groq.provider.yaml", import.meta.url), "utf8"));

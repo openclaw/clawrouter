@@ -8,6 +8,7 @@ import {
 const source = process.argv[2] ?? "wrangler.toml";
 const target = process.argv[3] ?? ".wrangler.generated.toml";
 const deployment = deploymentTarget();
+if (deployment.environment === "edge-proof") throw new Error("edge-proof: use the dedicated projection; production template rendering is forbidden");
 
 const workerName = deployment.workerName;
 const queueName = deployment.queueName;

@@ -1,11 +1,11 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parse, stringify } from "yaml";
 import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 
@@ -19,19 +19,6 @@ function run(paths) {
   });
   assert.equal(result.error, undefined);
   return result;
-}
-function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), "provider-conformance-execution-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  cpSync(join(root, "examples/provider-plugin"), directory, { recursive: true });
-  const change = (file, yaml, mutate) => {
-    const path = join(directory, file);
-    const value = yaml ? parse(readFileSync(path, "utf8")) : JSON.parse(readFileSync(path, "utf8"));
-    mutate(value); writeFileSync(path, yaml ? stringify(value) : JSON.stringify(value));
-  };
-  return { descriptor: join(directory, "clawrouter.plugin.json"),
-    scenario: mutate => change("fixtures/request.json", false, mutate),
-    manifest: mutate => change("example.provider.yaml", true, mutate) };
 }
 function failed(result, pattern) {
   assert.equal(result.status, 1, result.stderr);
@@ -49,6 +36,36 @@ test("the starter executes through the Worker with synthetic host credentials", 
   assert.equal(report.packages[0].digest, loadProviderPlugin(example).digest);
   assert.deepEqual(report.packages[0].scenarios, [{ id: "invoke-success", fixture: "fixtures/request.json", endpoint: "invoke", capability: "tool.invoke" }]);
   assert.doesNotMatch(result.stdout, /PRIVATE_ENV_SENTINEL|synthetic-conformance|Authorization|api.example.invalid/);
+});
+
+for (const header of ["X-API-Key", "api-key", "X-Goog-Api-Key"]) test(`header API-key authentication executes with ${header}`, t => {
+  const f = fixture(t);
+  f.manifest(m => { m.auth.schemes = [{ type: "api_key", header, secretKind: "api_key" }]; });
+  f.scenario(s => { s.upstream.request.headers = { [header.toLowerCase()]: "synthetic-conformance-key" }; });
+  const result = run([f.descriptor]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).packages[0].id, "example");
+  assert.doesNotMatch(result.stdout, /PRIVATE_ENV_SENTINEL|synthetic-conformance/);
+});
+
+test("header API-key fixtures cannot supply host credentials or a second upstream authorization", t => {
+  const f = fixture(t);
+  f.manifest(m => { m.auth.schemes = [{ type: "api_key", header: "X-API-Key", secretKind: "api_key" }]; });
+  f.scenario(s => { s.request.headers = { "x-api-key": "PRIVATE_KEY_SENTINEL" }; });
+  failed(run([f.descriptor]), /authorization belongs to the host/);
+  f.scenario(s => { delete s.request.headers; });
+  f.manifest(m => { m.adapter.injectHeaders = { authorization: "Bearer PRIVATE_AUTH_SENTINEL" }; });
+  failed(run([f.descriptor]), /unexpected upstream authorization/);
+});
+
+for (const scheme of [
+  { type: "query_api_key", param: "key", secretKind: "api_key" },
+  { type: "api_key", header: "bad header", secretKind: "api_key" },
+  { type: "api_key", header: "X-API-Key", secretKind: "access_token" },
+  { type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key", required: false },
+]) test(`unsupported auth stays rejected: ${JSON.stringify(scheme)}`, t => {
+  const f = fixture(t); f.manifest(m => { m.auth.schemes = [scheme]; });
+  failed(run([f.descriptor]), /one required bearer or header API-key scheme/);
 });
 
 test("native model-free bodies stay intact while host header injection and subset assertions run", t => {
@@ -126,7 +143,7 @@ test("all packages validate before execution and failures produce no partial rep
 
 test("failed host execution restores global transport and the bundled provider registry", async t => {
   const { runProviderConformance } = await import("../scripts/run-provider-conformance.mjs");
-  const { snapshot } = await import("../worker/providers.ts");
+  const { snapshot } = await import("../worker/provider-catalog.ts");
   const before = { fetch: globalThis.fetch, providers: snapshot.providers, models: snapshot.model_index };
   const f = fixture(t); f.scenario(s => { s.response.status = 201; });
   await assert.rejects(runProviderConformance([f.descriptor]), /client response status mismatch/);

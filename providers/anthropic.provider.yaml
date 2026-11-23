@@ -64,10 +64,34 @@ products:
     offers:
       - { endpoint: models_list, capability: models.list, models: null }
       - { endpoint: models_retrieve, capability: models.retrieve, models: null }
-      - &anthropicMessagesProductOffer
-        endpoint: messages
+      - endpoint: messages
         capability: llm.messages
-        models: &anthropicProductModels
+        models: &anthropicApiModels
+          - anthropic/claude-sonnet-5-5
+          - anthropic/claude-haiku-5-5
+          - anthropic/claude-opus-5-5
+          - anthropic/claude-opus-5
+          - anthropic/claude-sonnet-5
+          - anthropic/claude-fable-5-2
+          - anthropic/claude-fable-5-1
+          - anthropic/claude-fable-5
+          - anthropic/claude-mythos-5
+          - anthropic/claude-opus-4-8
+          - anthropic/claude-sonnet-4-6
+          - anthropic/claude-haiku-4-5
+      - endpoint: count_tokens
+        capability: llm.count_tokens
+        models: *anthropicApiModels
+  - id: claude-subscription
+    displayName: Claude subscription
+    commercialModel: subscription
+    authenticationMethod: oauth2
+    binding: { type: grant-transport, grantKind: subscription }
+    endpoints: [messages, count_tokens]
+    offers:
+      - endpoint: messages
+        capability: llm.messages
+        models: &anthropicSubscriptionModels
           - anthropic/claude-sonnet-5-5
           - anthropic/claude-haiku-5-5
           - anthropic/claude-opus-5-5
@@ -79,19 +103,9 @@ products:
           - anthropic/claude-opus-4-8
           - anthropic/claude-sonnet-4-6
           - anthropic/claude-haiku-4-5
-      - &anthropicCountTokensProductOffer
-        endpoint: count_tokens
+      - endpoint: count_tokens
         capability: llm.count_tokens
-        models: *anthropicProductModels
-  - id: claude-subscription
-    displayName: Claude subscription
-    commercialModel: subscription
-    authenticationMethod: oauth2
-    binding: { type: grant-transport, grantKind: subscription }
-    endpoints: [messages, count_tokens]
-    offers:
-      - *anthropicMessagesProductOffer
-      - *anthropicCountTokensProductOffer
+        models: *anthropicSubscriptionModels
 baseUrls:
   default: https://api.anthropic.com
 routing:
@@ -460,6 +474,44 @@ models:
       pricing:
         effectiveAt: "2026-08-28"
         source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 10000000
+        cachedInputMicrosPerMillion: 1000000
+        cacheWrite5mInputMicrosPerMillion: 12500000
+        cacheWrite1hInputMicrosPerMillion: 20000000
+        outputMicrosPerMillion: 50000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-mythos-5
+      upstream: claude-mythos-5
+      capabilities: [llm.messages, llm.count_tokens]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/mythos-5/overview]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/mythos-5/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-mythos-5-standard-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://platform.claude.com/docs/en/models/mythos-5/overview
+        anthropicModifiers:
+          checkedAt: "2026-11-03"
+          sources:
+            - https://platform.claude.com/docs/en/about-claude/pricing
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode
+            - https://platform.claude.com/docs/en/api/service-tiers
+          fastMultiplier: null
+          usMultiplier: 1.1
+          serviceTiers: [standard]
         inputMicrosPerMillion: 10000000
         cachedInputMicrosPerMillion: 1000000
         cacheWrite5mInputMicrosPerMillion: 12500000

@@ -1,7 +1,7 @@
 import { readNativeJson } from "./native-json.ts";
 import { decisionBody, decisionKeys, decisionProbability, decisionRecord, decisionUsage, requireDecision } from "./provider-decision-wire.ts";
 import type { UsageInspection } from "./token-usage.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const BASETEN_SYSTEMONE_FORMAT = "baseten.systemone" as const;
 export const BASETEN_SYSTEMONE_MODELS = Object.freeze([

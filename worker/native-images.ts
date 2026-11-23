@@ -3,7 +3,8 @@ import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./
 import { imageRequestCost } from "./pricing.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { nativeImageMode, selectRequestTariff } from "./request-tariff.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { observeXaiImage, prepareXaiImage } from "./xai-images.ts";
 
 export function prepareNativeImage(selection: ProxySelection): NativeResponse | undefined {

@@ -7,18 +7,19 @@ import type { WanManagedOperation } from "./managed-media-json.ts";
 import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { resolveConnection } from "./authority.ts";
-import type { BackgroundAdmission } from "./background-store.ts";
+import type { BackgroundAdmission } from "./background-record.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedHeaderIdentity, managedProbeId } from "./managed-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
 import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
-import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, type UpstreamAuth } from "./providers.ts";
+import { configuredUpstream, type UpstreamAuth } from "./providers.ts"; import { copyRequestHeaders, upstreamPath } from "./provider-request.ts"; import { providerById } from "./provider-catalog.ts";
 import { responseIdentity } from "./response-identities.ts";
 import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface ResponseControlDispatch {
   owner: ContinuationOwner;
@@ -204,6 +205,13 @@ export function assertResponseControlRetention(env: Env, input: ResponseControlD
     throw new HttpError(403, "upstream_retention_unqualified", "the original upstream retention qualification is unavailable");
 }
 
+export function assertResponseControlDispatch(input: ResponseControlDispatch, request: Request): void {
+  if (!input.protocol) return;
+  const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
+  if (!create || create.lifecycle?.protocol !== input.protocol) unavailable();
+  assertManagedDispatch(input.protocol, request, create.request_format);
+}
+
 export async function dispatchResponseControl(env: Env, input: ResponseControlDispatch, signal: AbortSignal, wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<Response> {
   signal.throwIfAborted();
   if (input.owner.grantKey) {
@@ -243,7 +251,7 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
     assertControlDeadline(input);
     assertControlCallerLive(input.authorization);
     assertResponseControlRetention(env, input);
-    assertManagedDispatch(input.protocol, request);
+    assertResponseControlDispatch(input, request);
     return wan ? wan.nativeResponse(() => fetch(request, { signal }), signal) : fetch(request, { signal });
   } finally { preparation.stop("complete"); }
 }

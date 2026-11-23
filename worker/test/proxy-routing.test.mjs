@@ -31,7 +31,7 @@ for (const status of [401, 403, 429]) for (const cause of ["caller", "deadline"]
   { timeout: 10_000 }, async t => {
     const f = await fixture(t, true, { limit: 1_000_000, fixedCost: 7 });
     const caller = new AbortController(), entered = Promise.withResolvers(), release = Promise.withResolvers();
-    const { modelRoute } = await import("../providers.ts");
+    const { modelRoute } = await import("../provider-catalog.ts");
     const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
     const setTimer = globalThis.setTimeout;
     let deadline, canceled = false, selections = 0, pending, primary, consumed = false;

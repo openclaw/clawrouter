@@ -44,6 +44,66 @@ jobs:
           - consumer: openrouter-music
             ref: 15aeb223287b93cf26917e846f658dd53143eb4d
             test: test/openclaw-openrouter-music.test.mjs
+          - consumer: xai-search
+            ref: 3206356e0fff73751495ca6a5c8cd4f3e97caf04
+            test: test/openclaw-xai-search.test.mjs
+          - consumer: google-continuation
+            ref: b6072e63fdf09422ea70ef4bbdc818536d871047
+            test: test/openclaw-google-continuation.test.mjs
+          - consumer: pixverse-image
+            ref: b0d33f09ba5d8d0e6db804f01cbf79dcf269a351
+            test: test/openclaw-pixverse-image.test.mjs
+          - consumer: opencode
+            ref: 322cfc608526dca6bf60cfef05210b231461c1db
+            test: test/openclaw-opencode.test.mjs
+          - consumer: baseten-decisions
+            ref: 761748e1824e2ee43e886fcce4376c3b20055015
+            test: test/openclaw-baseten-decisions.test.mjs
+          - consumer: vydra-models
+            ref: 542958f2c02754de72361bfbdc016a724a4572f1
+            test: test/openclaw-vydra-models.test.mjs
+          - consumer: perplexity-search
+            ref: addccb3274d885d3e06fb4662e0a620e8829523a
+            test: test/openclaw-perplexity-search.test.mjs
+          - consumer: provider-responses
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-provider-responses.test.mjs
+          - consumer: radius
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-radius.test.mjs
+          - consumer: deepseek-vision
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-deepseek-vision.test.mjs
+          - consumer: huggingface-frozen
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-huggingface-frozen.test.mjs
+          - consumer: mythos5
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-mythos5.test.mjs
+          - consumer: fireworks-fast
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-fireworks-fast.test.mjs
+          - consumer: mistral-frozen-chat
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-mistral-frozen-chat.test.mjs
+          - consumer: zai
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-zai.test.mjs
+          - consumer: qianfan
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-qianfan.test.mjs
+          - consumer: private-catalogs
+            ref: e2a8b8d4ec290cd6c035f3568a14e4d7c6433635
+            test: test/openclaw-private-catalogs.test.mjs
+          - consumer: bifrost
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-bifrost.test.mjs
+          - consumer: qwen-regions
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-qwen-regions.test.mjs
+          - consumer: litellm
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-litellm.test.mjs
           - consumer: abliteration
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-abliteration.test.mjs
@@ -143,9 +203,6 @@ jobs:
           - consumer: xiaomi
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-xiaomi.test.mjs
-          - consumer: zai
-            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
-            test: test/openclaw-zai.test.mjs
           - consumer: qwen-global
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-qwen-global.test.mjs
@@ -165,7 +222,7 @@ jobs:
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-vertex.test.mjs
           - consumer: google-images
-            ref: 4d052fa8347c97e876eb885789a82730e860a62f
+            ref: d173f1ae09324d1fb94e445fa4235a87fc175373
             test: test/openclaw-google-images.test.mjs
           - consumer: lyria
             ref: 3645a2c86518e9e98e4df2a81d00355bc6b082c0

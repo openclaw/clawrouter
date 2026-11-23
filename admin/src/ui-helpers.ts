@@ -2,6 +2,7 @@ import providerIconManifest from "./provider-icons.json";
 import { requestPriceInput, requestPricesInput } from "./request-price-input";
 import {
   catalogProviderIds,
+  kindLabel,
   currencyInput,
   credentialOutcome,
   errorMessage,
@@ -14,7 +15,6 @@ import {
   tenantSummaryFallback,
   unique,
 } from "./domain";
-import { kindLabel } from "./components";
 import type {
   AccessPolicy,
   AccessRole,

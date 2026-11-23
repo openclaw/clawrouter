@@ -8,7 +8,7 @@ import { nativeRawFormat } from "./native-raw-input.ts";
 import { nativeImageMode, selectRequestTariff, settleRequestTariff, type RequestTariff, type RequestTariffEndpoint, type RequestTariffOutcome } from "./request-tariff.ts";
 import { reportingEstimate } from "./reporting-estimate.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import { isModelDiscovery } from "./model-discovery.ts";
+import { isModelDiscovery } from "./model-discovery-formats.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
 import { emptyReservation, accountingSinks, bindAccountingPlan, finalizeOwnedAccounting, type AccountingSinks, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";

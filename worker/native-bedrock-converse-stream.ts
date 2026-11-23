@@ -4,7 +4,8 @@ import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { bedrockConverseLimit, bedrockRecord, createBedrockConverseDecoder, prepareBedrockConverseRequest } from "./provider-bedrock-converse.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const eventKinds = new Set(["messageStart", "contentBlockStart", "contentBlockDelta", "contentBlockStop", "messageStop", "metadata"]);
 const exceptionKinds = new Set(["internalServerException", "modelStreamErrorException", "validationException", "throttlingException", "serviceUnavailableException"]);

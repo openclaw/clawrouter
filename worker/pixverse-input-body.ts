@@ -1,7 +1,7 @@
 import { BodyLease } from "./body-budget.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Private to the composed PixVerse profile. These are storage/capacity bounds,
 // never a vendor asset lifetime, price bound or generic body override.

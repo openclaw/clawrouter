@@ -11,7 +11,7 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = `
 import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
 import { putGrantCredentials, revokeGrantCredentials } from './worker/grant-credentials.ts';
-import { snapshot } from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
 const pending = [];
 export default { ...worker, async fetch(request, env, context) {

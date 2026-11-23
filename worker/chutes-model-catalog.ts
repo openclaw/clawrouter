@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const CHUTES_MODELS_FORMAT = "chutes.models";
 const LIMIT_KEYS = ["context_length", "max_model_len", "max_output_length"] as const;

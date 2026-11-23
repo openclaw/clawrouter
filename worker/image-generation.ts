@@ -1,6 +1,6 @@
 import type { ImageTokenPricing } from "./types";
 import type { UsageTokens } from "./token-usage.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const fields = new Set(["model", "prompt", "n", "size", "quality", "background", "output_format", "output_compression", "moderation", "safety_identifier", "user", "stream"]);
 

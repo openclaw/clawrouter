@@ -4,7 +4,7 @@ import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function prepareNativeGoogleMediaUnderstanding(selection: ProxySelection): NativeResponse | undefined {
   const { provider, endpoint, model, body } = selection;

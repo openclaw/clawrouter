@@ -1,4 +1,4 @@
-import { grantRoutingPolicy } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import type { AuthorizedIdentity } from "./types";
 import { sha256Hex } from "./utils.ts";
 

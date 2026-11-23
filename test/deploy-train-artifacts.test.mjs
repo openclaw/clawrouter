@@ -63,6 +63,19 @@ test('explicit native cutover freezes a different digest without weakening norma
   assert.notEqual(f.state.native.runtimeSha, f.state.cutover.blueRuntimeSha);
   assert.ok((await nativeUploadConfig(f.state, { account: 'a'.repeat(32) })).endsWith('/green.toml'));
 });
+test('control adoption selects reproduced blue payload package for both current-control uploads', async t => {
+  const f=await fixture(t),old='f'.repeat(64);
+  f.blue.annotations['workers/message']=f.blue.annotations['workers/message'].replace(/:native-v1:[a-f0-9]{64}$/ ,':native-v1:'+old);
+  const recovery={path:'/controlled/reproduced-old/manifest.json',sha256:'1'.repeat(64),sha:f.state.sha};
+  const release=await prepareNativeUpload({...f,mode:'native-control',prepareRecovery:async({state})=>{
+    assert.equal(state.cutover.kind,'control');assert.equal(state.cutover.blueRuntimeSha,old);
+    state.recoveryReleaseManifest=recovery.path;state.recoveryReleaseManifestSha256=recovery.sha256;return recovery;
+  }});
+  assert.equal(release,recovery);assert.equal(f.state.native.runtimeSha,old);
+  assert.equal(f.state.releaseManifest,f.state.recoveryReleaseManifest);
+  assert.equal(f.state.releaseManifestSha256,f.state.recoveryReleaseManifestSha256);
+  assert.match(uploadMessage(f.state),new RegExp(':native-v1:'+old+':native-source:'+'b'.repeat(40)+'$'));
+});
 for (const [name, mutate] of Object.entries({
   'disabled ingress': async f => writeFile(f.configPath, (await readFile(f.configPath, 'utf8')).replace('LARGE_HTTP_INGRESS_ENABLED = "1"', 'LARGE_HTTP_INGRESS_ENABLED = "0"')),
   'changed capacity': async f => writeFile(f.configPath, (await readFile(f.configPath, 'utf8')).replace('LARGE_HTTP_CAPACITY = "8"', 'LARGE_HTTP_CAPACITY = "7"')),

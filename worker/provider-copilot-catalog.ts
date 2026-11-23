@@ -119,7 +119,7 @@ function normalize(value: Record<string, unknown>, id: string): CopilotModelRow 
 }
 
 // Pure candidate projection only. The original owner must freshly authorize
-// publication with filterCopilotModels/current policy after the complete read.
+// publication through CopilotCatalogFlow's fresh policy intersection after the complete read.
 export function decodeCopilotModelCatalog(text: string): CopilotModelCatalog {
   preparse(text);
   let payload: unknown;

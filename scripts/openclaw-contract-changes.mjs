@@ -5,12 +5,15 @@ import { pathToFileURL } from "node:url";
 export function affectsOpenClawContract(path) {
   return (path.startsWith("worker/") && !/^worker\/test\/[^/]+\.test\.mjs$/.test(path))
     || path.startsWith("shared/")
+    || path.startsWith("packages/provider-plugin-contract/src/")
+    || path === "packages/provider-plugin-contract/tsconfig.json"
+    || path === "packages/provider-plugin-contract/copy-manifest-schema.mjs"
     || path.startsWith("providers/")
     || /^test\/openclaw-[^/]*\.test\.mjs$/.test(path)
     || /^test\/fixtures\/openclaw-[^/]*-contract\.test\.ts$/.test(path)
-    || ["test/helpers/openclaw-consumer.mjs", "test/helpers/workerd.mjs",
+    || ["test/helpers/openclaw-consumer.mjs", "test/helpers/workerd.mjs", "test/helpers/catalog-diagnostic-harness.mjs",
       ".github/workflows/openclaw-contract.yml", "scripts/openclaw-contract-changes.mjs",
-      "test/openclaw-contract-changes.test.mjs", "pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(path)
+      "test/openclaw-contract-changes.test.mjs", "pnpm-lock.yaml", "pnpm-workspace.yaml", "test/helpers/worker-outcome-fixture.mjs"].includes(path)
     || /(^|\/)package\.json$/.test(path)
     || /(^|\/)\.npmrc$/.test(path)
     || /(^|\/)\.pnpmfile\.[^/]+$/.test(path)

@@ -5,14 +5,16 @@ import { prepareContentRetention, type PreparedContentRetention, retentionRequir
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { admitAccountingFacts, createProxyAccounting, estimateCost } from "./proxy-accounting";
-import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
+import { concreteOpenAiSelection, isSelectionFailure, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
+import { nativeMatch } from "./native-route";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
-import { assertProviderAccess, providerById } from "./providers";
+import { assertProviderAccess } from "./providers"; import { providerById } from "./provider-catalog";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
 import { prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
-import { decodePathSegment, errorResponse, HttpError } from "./utils";
+import { decodePathSegment, errorResponse } from "./utils";
+import { HttpError } from "./http-error";
 
 export async function proxyResponsesWebSocket(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
   const initialAuth = await authenticateProxyKey(request.headers, env);

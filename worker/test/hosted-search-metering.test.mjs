@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { parse } from 'yaml';
-import { compileProviderSnapshot } from '../../scripts/compile-providers.mjs';
+import { compileProviderSnapshot } from '../../scripts/provider-compiler.mjs';
 import { proxyKey, sse, usageEnv } from './usage-budget-fixture.mjs';
 import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
 import { continuationAuthority } from './continuation-authority.mjs';

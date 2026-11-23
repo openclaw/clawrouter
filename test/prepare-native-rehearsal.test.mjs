@@ -8,6 +8,9 @@ import {verifyLargeHttpRelease} from '../scripts/prepare-large-http-release.mjs'
 import {getStaticTOMLValue,parseTOML} from 'toml-eslint-parser';
 import {NATIVE_ANCHOR} from '../scripts/deploy-train-runtime.mjs';
 import {createHash} from 'node:crypto';
+import {registerHooks} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import {exerciseStartupEntrypoint} from './helpers/native-startup.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 test('fixture packages unchanged current and exact launch native bytes with identical isolated bindings',async t=>{
  const d=await mkdtemp(resolve('.native-rehearsal-build-test-'));t.after(()=>rm(d,{recursive:true,force:true}));
@@ -20,6 +23,12 @@ test('fixture packages unchanged current and exact launch native bytes with iden
  assert.equal(p.greenRuntimeSha,normal.runtime.sha256);assert.equal(p.blueRuntimeSha,NATIVE_ANCHOR.runtimeSha);assert.notEqual(p.blueRuntimeSha,p.greenRuntimeSha);assert.equal(p.qualified,false);
  const green=await verifyLargeHttpRelease(p.green),old=await verifyLargeHttpRelease(p.old);
  const parse=async path=>getStaticTOMLValue(parseTOML(await readFile(path,'utf8'))),a=await parse(old.stages.green.path),b=await parse(green.stages.green.path);
+ // Load each exact packaged entrypoint. Only cloudflare:workers and Container
+ // operations are substituted locally; no live Container or provider is used.
+ const hooks=registerHooks({resolve(s,c,next){if(s==='cloudflare:workers')return {shortCircuit:true,url:'data:text/javascript,'+encodeURIComponent('export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env;}};export class WorkerEntrypoint extends DurableObject {}')};return next(s,c);}});
+ const smoke=[];
+ try{for(const path of [a.main,b.main]){const {LargeHttpSlot}=await import(pathToFileURL(path));smoke.push(await exerciseStartupEntrypoint(LargeHttpSlot));}}finally{hooks.deregister();}
+ t.diagnostic(JSON.stringify({kind:'packaged-startup-smoke',oldRuntime:p.blueRuntimeSha,candidateRuntime:p.greenRuntimeSha,entrypoints:smoke,qualified:false}));
  assert.notEqual(a.main,b.main);delete a.main;delete b.main;assert.deepEqual(a,b);assert.equal(a.vars.LARGE_HTTP_DEADLINE,undefined);assert.equal(a.vars.LARGE_HTTP_CAPACITY,'8');
  assert.ok(a.durable_objects.bindings.some(x=>x.name==='NATIVE_REHEARSAL_STATE'));assert.equal(JSON.parse(a.vars.NATIVE_REHEARSAL).maxStarts,40);
  for(const sha of [p.blueRuntimeSha,p.greenRuntimeSha])assert.equal(hash(await readFile(join(a.assets.directory,'__large_http/artifact',sha+'.mjs'))),sha);

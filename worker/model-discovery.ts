@@ -1,19 +1,16 @@
-import { isKeyedModelDiscovery, readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
-import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { readKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { isKeyedModelDiscovery, REQUESTY_MODELS_FORMAT } from "./model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
+import { filterRadiusCatalog } from "./provider-radius.ts";
 import { filterOllamaModels } from "./provider-ollama.ts";
 import { filterSyntheticModels } from "./synthetic-model-catalog.ts";
-import { REQUESTY_MODELS_FORMAT, filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
+import { filterRequestyModels, readRequestyModels } from "./requesty-model-catalog.ts";
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import type { AccessPolicy, CompiledEndpoint, CompiledModel, CompiledProvider } from "./types.ts";
 import type { HttpOperation } from "./http-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
-// These formats are metadata, not inference or a permission to delete models.
-export function isModelDiscovery(endpoint: Pick<CompiledEndpoint, "request_format">): boolean {
-  return endpoint.request_format === REQUESTY_MODELS_FORMAT || endpoint.request_format === "featherless.catalog" || publicCatalogProvider(endpoint.request_format) !== null || isKeyedModelDiscovery(endpoint.request_format) || ["openai.models", "anthropic.models", "ollama.models", "synthetic.models"].includes(endpoint.request_format);
-}
 export function discoveryModelId(provider: CompiledProvider, upstream: string): string {
   return provider.models.find(model => model.upstream === upstream)?.id ?? provider.routing.modelPrefixes[0] + upstream;
 }
@@ -114,15 +111,32 @@ async function readMetadata(response: Response, operation: HttpOperation, boundR
 // Filtered pages expose only permitted model IDs, including first/last cursors.
 // An all-hidden page is scanned internally on the SAME selected grant; never
 // repick/fail over to a different account to manufacture a combined inventory.
-export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>, registerInput?: NativeJsonInputHooks["registerInput"]): Promise<Response> {
+export async function modelDiscoveryResponse(response: Response, provider: CompiledProvider, endpoint: CompiledEndpoint, policy: AccessPolicy, query: Record<string, unknown>, operation: HttpOperation, next: (cursor: string, before: boolean) => Promise<Response>, refreshPolicy?: () => Promise<AccessPolicy>, registerInput?: NativeJsonInputHooks["registerInput"], trustedBaseUrl?: string): Promise<Response> {
   let restricted = policy.models != null;
   const seen = new Set<string>();
   for (let pages = 0; pages < 32; pages++) {
+    if (endpoint.request_format === "radius.config") {
+      if (!refreshPolicy || !trustedBaseUrl || response.status !== 200) {
+        await discardMetadata(response, registerInput); throw malformed();
+      }
+      const metadata = await readMetadata(response, operation, true, registerInput);
+      let filtered;
+      try { filtered = filterRadiusCatalog(metadata, trustedBaseUrl, id => discoveryAllows(policy, provider, id)); }
+      catch { throw malformed(); }
+      policy = await refreshPolicy(); operation.signal.throwIfAborted();
+      return metadataResponse(filterRadiusCatalog(filtered, trustedBaseUrl, id => discoveryAllows(policy, provider, id)), response);
+    }
     if (endpoint.request_format === REQUESTY_MODELS_FORMAT) {
       if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
       const metadata = await readRequestyModels(response, operation.signal, id => discoveryAllows(policy, provider, id), registerInput);
       policy = await refreshPolicy();
       return metadataResponse(filterRequestyModels(metadata, id => discoveryAllows(policy, provider, id)), response);
+    }
+    // Private catalogs never publish an upstream error payload, even when the
+    // caller is unrestricted and an original-owner refresh is available.
+    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
+      await discardMetadata(response, registerInput);
+      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
     }
     if (refreshPolicy && response.status !== 200) {
       if (response.status < 400) {
@@ -136,10 +150,6 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       if (!restricted) return metadataResponse(metadata, response);
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
-    if (isKeyedModelDiscovery(endpoint.request_format) && !response.ok) {
-      await discardMetadata(response, registerInput);
-      throw new HttpError(response.status >= 400 ? response.status : 502, "model_discovery_rejected", "upstream rejected model discovery");
-    }
     if (!response.ok) {
       if (response.status >= 300 && response.status < 400) {
         await discardMetadata(response, registerInput);
@@ -150,8 +160,13 @@ export async function modelDiscoveryResponse(response: Response, provider: Compi
       throw new HttpError(response.status, "model_discovery_rejected", "upstream rejected model discovery", { "retry-after": response.headers.get("retry-after") ?? "0" });
     }
     if (isKeyedModelDiscovery(endpoint.request_format)) {
+      if (!refreshPolicy) { await discardMetadata(response, registerInput); throw malformed(); }
       const metadata = await readKeyedModelDiscovery(endpoint.request_format, response, operation.signal, id => discoveryAllows(policy, provider, id));
-      return metadataResponse(metadata, response);
+      // The native reader has completed EOF and retirement before authority.
+      // Join the original refresh, not merely an abort race with that task.
+      policy = await refreshPolicy();
+      operation.signal.throwIfAborted();
+      return metadataResponse({ ...metadata, data: metadata.data.filter(model => discoveryAllows(policy, provider, model.id)) }, response);
     }
     if (endpoint.request_format === "synthetic.models") {
       const metadata = await readNativeJson(response, operation.signal, 2 * 1024 * 1024,

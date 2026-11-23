@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { actualModelCost, estimateModelCost, hostedToolPricingGap, requestPricingGap } from "../pricing.ts";
+import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricing.ts";
+import { hostedToolPricingGap } from "../hosted-tool-pricing.ts";
 
 const pricing = {
   effectiveAt: "2026-06-19", source: "https://example.com", inputMicrosPerMillion: 2_500_000,

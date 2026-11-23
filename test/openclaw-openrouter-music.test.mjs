@@ -84,7 +84,7 @@ after(() => {
 function compiled(route) {
   const inputs = readdirSync(join(root, "providers")).filter(name => name.endsWith(".provider.yaml")).sort()
     .map(name => parse(readFileSync(join(root, "providers", name), "utf8")));
-  assert.equal(inputs.length, 87);
+  assert.equal(inputs.length, 100);
   const baseline = compileProviderSnapshot(inputs);
   assert.deepEqual(baseline, JSON.parse(readFileSync(snapshotPath, "utf8")));
   if (route === "native") return baseline;

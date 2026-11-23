@@ -4,7 +4,7 @@ import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { putGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuotaProbe } from "../grant-quota.ts";
 import { recordGrantRuntime } from "../grant-selection.ts";
-import { modelRoute } from "../providers.ts";
+import { modelRoute } from "../provider-catalog.ts";
 import { anthropicPricing } from "../anthropic-pricing.ts";
 import { actualModelCost, estimateModelCost } from "../pricing.ts";
 

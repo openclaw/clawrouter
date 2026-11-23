@@ -1,13 +1,7 @@
+import { UsageVisibilityError, type UsageVisibilityCut } from "./usage-report-protocol.ts";
 import type { ReportSql } from './usage-report-store.ts';
 import { reportCutTtlMs, reportRetentionMs } from './usage-report-range.ts';
 
-// Private shard metadata; never a public token or shared result contract.
-export interface UsageVisibilityCut { seq: number; epoch: string; createdAt: number; expiresAt: number; floor: number; source: 'projection' | 'retained_ledger'; normalizer: 2 }
-export class UsageVisibilityError extends Error {
-  kind: 'restart' | 'unavailable';
-  reason: 'mutation' | 'source' | 'expired' | 'capacity' | 'migration';
-  constructor(kind: UsageVisibilityError['kind'], reason: UsageVisibilityError['reason']) { super('usage visibility ' + reason); this.kind = kind; this.reason = reason; }
-}
 const maximum = 9007199254740991, rowCap = 100_000, byteCap = 16 * 1024 * 1024;
 const idBytes = 'length(CAST(NEW.id AS BLOB))';
 const fits = "typeof(seq) = 'integer' AND seq >= 0 AND seq < " + maximum +

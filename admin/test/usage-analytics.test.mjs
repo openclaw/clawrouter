@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, providerChartRows, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -37,16 +37,6 @@ test("chart maximum rounds to readable tick intervals", () => {
   assert.equal(niceChartMaximum(1), 4);
   assert.equal(niceChartMaximum(11), 16);
   assert.equal(niceChartMaximum(1_284), 1_600);
-});
-
-test("synthetic usage timelines preserve their scoped summary totals", () => {
-  const timeline = syntheticUsageTimeline(Date.UTC(2026, 5, 24, 18), summary);
-  assert.equal(timeline.length, 30);
-  assert.equal(timeline.reduce((total, point) => total + point.requestCount, 0), summary.requestCount);
-  assert.equal(timeline.reduce((total, point) => total + point.successCount, 0), summary.successCount);
-  assert.equal(timeline.reduce((total, point) => total + point.errorCount, 0), summary.errorCount);
-  assert.equal(timeline.reduce((total, point) => total + point.totalTokens, 0), summary.totalTokens);
-  assert.equal(timeline.reduce((total, point) => total + point.actualCostMicros, 0), summary.actualCostMicros);
 });
 
 test("compound Fusion calls collapse into one request with aggregate cost and wall time", () => {
@@ -125,6 +115,4 @@ test("unavailable prices remain distinct from known zero and mixed accounted tot
   assert.equal(other.provider, "other-providers");
   assert.equal(other.unpricedRequestCount, 2);
   assert.equal(other.actualCostMicros, 10);
-  const synthetic = syntheticUsageTimeline(Date.now(), { ...summary, unpricedRequestCount: 3 });
-  assert.equal(synthetic.reduce((total, day) => total + day.unpricedRequestCount, 0), 3);
 });

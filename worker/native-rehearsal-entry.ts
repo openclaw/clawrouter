@@ -6,30 +6,74 @@ import {largeCreatePath} from './large-http/headers.ts';
 import {authorizeAdmin} from './access.ts';
 import {readJson,sha256Hex} from './utils.ts';
 import {rehearsalConfig,journal,journalCall,type RehearsalEnv} from './native-rehearsal/contract.ts';
+import {startupStep,readinessValid,monitorFailure} from './native-rehearsal/startup.ts';
+import {bootstrapProbePrefix,bootstrapReceiptUrl,bootstrapReceiptValid} from './native-rehearsal/bootstrap.ts';
+import {observeEgress} from './native-rehearsal/egress.ts';
 export {PolicyBindingIndexObject,BudgetLedgerObject,GrantCredentialObject,UsageLedgerObject,ContentArchiveCleanupObject} from './index.ts';
 export {LargeHttpPool} from './large-http/lifecycle.ts';
 export {NativeRehearsalState} from './native-rehearsal/state.ts';
 export class LargeHttpSlot extends ProductionSlot {
+ private lastReadiness='';
  protected override async startContainer(options:ContainerStartupOptions){
   const c=rehearsalConfig(this.env),slot=Number(options.env!.LARGE_HTTP_SLOT),generation=Number(options.env!.LARGE_HTTP_GENERATION),runtimeSha=options.env!.LARGE_HTTP_RUNTIME_SHA;
   // Durable budget intent precedes every native start, including a failed one.
   await journalCall(this.env,'start',{slot,generation,runtimeSha});
-  const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:{slot:number;generation:number;runtimeSha:string}})=>Fetcher;NativeRehearsalDeny:Fetcher};
-  const container=this.ctx.container!,outbound=exports.NativeRehearsalEgress({props:{slot,generation,runtimeSha}});
-  await container.interceptOutboundHttps('api.openai.com',outbound);
-  await container.interceptOutboundHttps(new URL(c.origin).hostname,outbound);
-  await container.interceptAllOutboundHttp(exports.NativeRehearsalDeny);
+  const identity={slot,generation,runtimeSha},env=this.env as RehearsalEnv;
+  const {outbound,deny}=await startupStep(env,identity,'export_resolution',()=>{
+   const exports=this.ctx.exports as {NativeRehearsalEgress:(options:{props:typeof identity})=>Fetcher;NativeRehearsalDeny:(options:{props:typeof identity})=>Fetcher};
+   return {outbound:exports.NativeRehearsalEgress({props:identity}),deny:exports.NativeRehearsalDeny({props:identity})};
+  });
+  const container=this.ctx.container!;
+  await startupStep(env,identity,'https_provider',()=>container.interceptOutboundHttps('api.openai.com',outbound));
+  await startupStep(env,identity,'https_callback',()=>container.interceptOutboundHttps(new URL(c.origin).hostname,outbound));
+  await startupStep(env,identity,'http_deny',()=>container.interceptAllOutboundHttp(deny));
   // No public fallback, other ports or DNS egress. Runtime-provided ephemeral CA
   // is trusted by Node; verification is never disabled. Native bytes unchanged.
   rehearsalConfig(this.env);
-  container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
-   entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+options.entrypoint![3]]});
+  await startupStep(env,identity,'container_start',()=>{
+   rehearsalConfig(this.env);
+   container.start({...options,enableInternet:false,env:{...options.env,NODE_EXTRA_CA_CERTS:'/etc/cloudflare/certs/cloudflare-containers-ca.crt'},
+    entrypoint:['node','--input-type=module','-e','setTimeout(()=>process.exit(1),'+(c.expiresAt-Date.now())+');'+bootstrapProbePrefix()+options.entrypoint![3]]});
+  });
+  // Observe the same native lifecycle without replacing the product monitor.
+  // Never persist native exception text, options, or credentials.
+  this.ctx.waitUntil(Promise.resolve().then(()=>container.monitor()).then(
+   ()=>journalCall(env,'monitor',{...identity,outcome:'exited',category:'success',name:'other',exitCode:0}),
+   error=>journalCall(env,'monitor',{...identity,outcome:'rejected',...monitorFailure(error)}),
+  ).then(()=>{},()=>{}));
+ }
+ override async fetch(r:Request):Promise<Response>{
+  const response=await super.fetch(r);
+  const path=new URL(r.url).pathname;
+  if(r.method==='POST'&&['/control/state','/control/status','/control/prepare','/control/retire'].includes(path)&&response.ok){
+   const s=await response.clone().json<any>();
+   const reason=s.reason===undefined?'unreported':s.reason;
+   if(s.generation>0&&readinessValid({phase:s.phase,reason})){
+    // Keep the observed response's generation/reason, even if state has moved
+    // on. Only the slot index comes from state; the fixture owns the immutable
+    // slot/generation -> native-digest mapping from the prior start intent.
+    const state=path==='/control/state'?s:await(await super.fetch(new Request('https://slot/control/state',{method:'POST',headers:r.headers,body:'{}'}))).json<any>();
+    const observation={slot:state.control.slot,generation:s.generation,phase:s.phase,reason},signature=JSON.stringify(observation);
+    if(signature!==this.lastReadiness){const receipt=await journalCall(this.env,'readiness',observation);if(receipt.recorded===true)this.lastReadiness=signature;}
+   }
+  }
+  return response;
  }
 }
-export class NativeRehearsalDeny extends WorkerEntrypoint {fetch(){return new Response(null,{status:403});}}
+export class NativeRehearsalDeny extends WorkerEntrypoint<RehearsalEnv,{slot:number;generation:number;runtimeSha:string}> {
+ async fetch(r:Request){
+  rehearsalConfig(this.env,Date.now(),true);
+  if(r.method!=='POST'||r.url!==bootstrapReceiptUrl)return new Response(null,{status:403});
+  let v;try{v=await readJson<any>(r,undefined,1024);}catch{return new Response(null,{status:400});}
+  if(!bootstrapReceiptValid(v))return new Response(null,{status:400});
+  const result=await journalCall(this.env,'bootstrap',{...this.ctx.props,...v});
+  return Response.json(result);
+ }
+}
 export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:number;generation:number;runtimeSha:string}> {
  async fetch(r:Request):Promise<Response>{
   const c=rehearsalConfig(this.env,Date.now(),true),u=new URL(r.url),props=this.ctx.props;
+  return observeEgress(this.env,props,r,c.origin,async forwarding=>{
   if(u.username||u.password||u.search||u.hash)return new Response(null,{status:403});
   if(u.origin==='https://api.openai.com'&&u.pathname==='/v1/responses'&&r.method==='POST'){
    rehearsalConfig(this.env);
@@ -50,9 +94,14 @@ export class NativeRehearsalEgress extends WorkerEntrypoint<RehearsalEnv,{slot:n
     const x=v.body;event.usage={idHash:await sha256Hex(String(x.id)),requestIdHash:await sha256Hex(String(x.request_id)),actualCostMicros:x.actual_cost_micros,reservedCostMicros:x.reserved_cost_micros,status:x.status,statusCode:x.status_code,contentRetained:x.content_retained};
    }
   }
-  const response=await fetch(r,{redirect:'error'});
+  await forwarding();
+  // Workers supports only follow/manual. Reject redirects without forwarding
+  // the callback credential or body to a Location target.
+  const response=await fetch(r,{redirect:'manual'});
+  if(response.status>=300&&response.status<400){await response.body?.cancel();throw Error('rehearsal_redirect_refused');}
   if(event)await journalCall(this.env,'callback',{...event,status:response.status});
   return response;
+  });
  }
 }
 export default {

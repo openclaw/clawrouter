@@ -23,6 +23,14 @@ export function grantQuotaExhausted(state: QuotaState | null | undefined, model:
   return exhaustingWindows(state, model, reserve, includeUnscoped, now).length > 0;
 }
 
+export function grantQuotaExclusionReason(state: QuotaState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true, now = Date.now()) {
+  const windows = exhaustingWindows(state, model, reserve, includeUnscoped, now);
+  if (windows.some(window => !window.models?.length && window.remaining === 0)) return "shared_quota_exhausted";
+  if (windows.some(window => window.remaining === 0)) return "model_quota_exhausted";
+  if (windows.some(window => !window.models?.length)) return "shared_quota_reserve";
+  return windows.length ? "model_quota_reserve" : null;
+}
+
 // When every exhausting window lifts. Null when one has no published reset.
 export function grantQuotaResetAt(state: QuotaState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true, now = Date.now()): number | null {
   const windows = exhaustingWindows(state, model, reserve, includeUnscoped, now);

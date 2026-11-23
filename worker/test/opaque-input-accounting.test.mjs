@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { default: handler } = await import("../index.ts");
-const { modelRoute } = await import("../providers.ts");
+const { modelRoute } = await import("../provider-catalog.ts");
 const { estimateModelCost, requestPricingGap } = await import("../pricing.ts");
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
