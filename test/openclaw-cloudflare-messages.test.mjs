@@ -65,9 +65,23 @@ function projectCloudflareObserverTypes(source) {
   assert.equal(stripTypeScriptTypes(source, { mode: "transform" }), runtime, "CF type projection preserves erased runtime");
   return source;
 }
-observerSource = projectCloudflareObserverTypes(observerSource);
+const typedObserverSource = projectCloudflareObserverTypes(observerSource);
+const cloneSource = readFileSync(new URL("./helpers/cloudflare-response-clones.ts", import.meta.url), "utf8");
+function projectCloudflareCloneObserver(source) {
+  for (const [before, after] of [
+    ['bodySucceeded: () => boolean; readProgress?', 'bodySucceeded: () => boolean; cloudflareClone?: CloudflareCloneScope; readProgress?'],
+    ['  const providerErrors = new Map<any, any>();', '  const cloudflareClones = createCloudflareCloneObserver({ sdk, operations, errors, readers, bodies, guards, safe, patch, invoke, response });\n  const providerErrors = new Map<any, any>();'],
+    ['    return value;\n  }\n  function guard(', '    cloudflareClones.observe(value, owner, acquisition);\n    return value;\n  }\n  function guard('],
+    ['    const structural: unknown[] = [...errors];', '    const cloudflareParents = cloudflareClones.joinedParents();\n    const structural: unknown[] = [...errors];'],
+    ['op.receiver === row.body));\n    const stillOwned', 'op.receiver === row.body) && !cloudflareParents.has(row));\n    const stillOwned'],
+    ['const stillOwned = bodies.some(row => row.body.locked)', 'const stillOwned = bodies.some(row => row.body.locked && !cloudflareParents.has(row))'],
+    ['  return { operations, errors, readers, bodies, guards, stamp:', '  return { cloneDiagnostic: cloudflareClones.diagnostic, operations, errors, readers, bodies, guards, stamp:'],
+  ]) { assert.equal(source.split(before).length, 2, "exact CF clone projection"); source = source.replace(before, after); }
+  return cloneSource + "\n" + source;
+}
+observerSource = projectCloudflareCloneObserver(typedObserverSource);
 const observerCode = stripTypeScriptTypes(observerSource);
-const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
+const { preserveFailures, createLifetimeObserver, joinCloudflareLifetime } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver, joinCloudflareLifetime };")();
 const bindingsSource = fixtureText.slice(fixtureText.indexOf("function retainCloudflareClaim"), fixtureText.indexOf("// END CLOUDFLARE BINDINGS"));
 const bindingsCode = stripTypeScriptTypes(bindingsSource);
 const { createCloudflareBindings, retainCloudflareClaim } = new Function(bindingsCode + "; return { createCloudflareBindings, retainCloudflareClaim };")();
@@ -427,10 +441,10 @@ test("Cloudflare source assembly pins the real SDK and preserves original workfl
   assert.match(assembledFixture, /withPluginRuntimeGenerationRegistryScope/);
 });
 test("Cloudflare observer type projection preserves runtime and refuses source drift", () => {
-  assert.equal(stripTypeScriptTypes(observerSource, { mode: "transform" }), stripTypeScriptTypes(untypedObserverSource, { mode: "transform" }));
+  assert.equal(stripTypeScriptTypes(typedObserverSource, { mode: "transform" }), stripTypeScriptTypes(untypedObserverSource, { mode: "transform" }));
   const needle = 'patch(body, "cancel", function (...args: any[])';
   assert.throws(() => projectCloudflareObserverTypes(untypedObserverSource.replace(needle, 'patch(body, "cancel", function (...changed: any[])')), /exact CF observer type projection/);
-  assert.throws(() => projectCloudflareObserverTypes(observerSource), /exact CF observer type projection/);
+  assert.throws(() => projectCloudflareObserverTypes(typedObserverSource), /exact CF observer type projection/);
 });
 test("Cloudflare binding rejects wrong route, wrong credential, duplicate and missing originals", () => {
   const binds = createCloudflareBindings(); binds.expect("cf_stream", "chat", upstreamUrl, "POST", secret("stream"), undefined, "cf-aig-authorization");
@@ -528,6 +542,214 @@ test("Cloudflare original read result and detached release survive observation; 
     if (fault === "none") await life.join(); else await assert.rejects(life.join(), error => error.errors.includes(undefined));
     life.restore(); assert.equal(value.release, release);
   }
+});
+async function cloudflareCloneControl({ ownerChange, status = 400, releaseFault, cloneFault, readerFault, stream } = {}) {
+  const owner = { id: "unpriced", kind: "chat", method: "POST", url: "http://fixture.example" + nativePath,
+    credential: token("unpriced"), header: "x-api-key", prefix: "", claimed: true, ...ownerChange };
+  const life = createLifetimeObserver({ bindings: [owner], bodySucceeded: () => true,
+    cloudflareClone: { url: "http://fixture.example" + nativePath, credential: token("unpriced") } });
+  const response = new Response(stream ?? new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); c.close(); } }), { status });
+  if (cloneFault) response.clone = () => { throw undefined; };
+  if (readerFault) {
+    // Inject one synthetic original-method failure before observation. Recovery
+    // still consumes the native tee and closes every actual reader we acquired.
+    const originalClone = response.clone;
+    response.clone = function (...args) {
+      const cloned = Reflect.apply(originalClone, this, args), body = this.body, getReader = body.getReader;
+      body.getReader = function (...operands) {
+        const reader = Reflect.apply(getReader, this, operands), original = reader[readerFault.kind]; let failed = false;
+        reader[readerFault.kind] = function (...values) {
+          if (!failed) { failed = true; if (readerFault.mode === "throw") throw undefined; return Promise.reject(undefined); }
+          return Reflect.apply(original, this, values);
+        };
+        return reader;
+      };
+      return cloned;
+    };
+  }
+  const clone = response.clone, parent = response.body, releasePromise = releaseFault === "reject" ? Promise.reject(undefined) : Promise.resolve();
+  void releasePromise.catch(() => {});
+  const release = () => { if (releaseFault === "throw") throw undefined; return releasePromise; };
+  const result = { response, release }, original = Promise.resolve(result), receiver = {}, argument = {};
+  assert.equal(life.guard(function (value) { assert.equal(this, receiver); assert.equal(value, argument); return original; }, receiver, [argument], owner), original);
+  assert.equal(await original, result);
+  return { life, owner, result, clone, parent, release, releasePromise };
+}
+async function consumeCloudflareClone(body) {
+  const reader = body.getReader();
+  await preserveFailures(async () => { for (;;) if ((await reader.read()).done) break; }, [() => reader.closed, () => reader.releaseLock()]);
+}
+test("Cloudflare clone observes exact original products and admits only both EOF descendants", async () => {
+  const f = await cloudflareCloneControl(), operand = {};
+  try {
+    const clone = Reflect.apply(f.result.response.clone, f.result.response, [operand]);
+    const left = f.result.response.body, right = clone.body, op = f.life.operations.find(row => row.kind === "response.clone");
+    assert.equal(op.original, f.clone); assert.equal(op.receiver, f.result.response); assert.equal(op.operands[0], operand); assert.equal(op.operands.length, 1);
+    assert.equal(op.value, clone); assert.equal(op.pending, clone); assert.equal(op.state, "fulfilled");
+    assert.notEqual(left, f.parent); assert.notEqual(right, f.parent); assert.notEqual(left, right);
+    assert.equal(f.life.bodies[0].body, f.parent); assert.equal(f.parent.locked, true);
+    assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+    await Promise.all([consumeCloudflareClone(left), consumeCloudflareClone(right)]);
+    const detached = f.result.release, returned = detached(); assert.equal(returned, f.releasePromise); await returned;
+    await f.life.join(); assert.equal(f.life.cloneDiagnostic().clones[0][6], 1);
+    assert.deepEqual(f.life.summary(), { operations: 11, settled: 11, rejected: 0, qualifiedReadRejections: 0, readers: 2, unlocked: 2, releases: 1 });
+    assert.equal(f.life.bodies.length, 3); assert.equal(f.life.bodies[0].body, f.parent); assert.equal(f.parent.locked, true);
+  } finally { await f.life.restore(); }
+  assert.equal(f.result.response.clone, f.clone); assert.equal(f.result.release, f.release);
+});
+test("Cloudflare clone refuses foreign owner, credential, acquisition and receiver identities", async () => {
+  for (const mode of ["id", "credential", "url", "claimed", "status", "acquisition", "receiver"]) {
+    const ownerChange = mode === "id" ? { id: "foreign" } : mode === "credential" ? { credential: "foreign" }
+      : mode === "url" ? { url: "http://fixture.example/foreign" } : mode === "claimed" ? { claimed: false } : undefined;
+    const f = await cloudflareCloneControl({ ownerChange, status: mode === "status" ? 403 : 400 });
+    const response = f.result.response, foreign = new Response(new Uint8Array([4]), { status: 400 });
+    try {
+      if (mode === "acquisition") f.result.response = foreign;
+      const receiver = mode === "receiver" ? foreign : response;
+      const clone = Reflect.apply(response.clone, receiver, []);
+      await Promise.all([consumeCloudflareClone(receiver.body), consumeCloudflareClone(clone.body), ...(receiver !== response ? [consumeCloudflareClone(response.body)] : [])]);
+      await f.result.release();
+      await assert.rejects(f.life.join()); assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      assert.ok(f.life.errors.length > 0);
+    } finally { f.result.response = response; await f.life.restore(); }
+  }
+});
+test("Cloudflare clone rejects repeated, nested, aliased and swapped original body topology", async () => {
+  for (const mode of ["repeated", "nested", "aliased", "swapped"]) {
+    const f = await cloudflareCloneControl(); let clone;
+    try {
+      clone = f.result.response.clone(); const firstLeft = f.result.response.body, firstRight = clone.body;
+      const extra = mode === "repeated" ? f.result.response.clone() : mode === "nested" ? clone.clone() : undefined;
+      if (mode === "swapped") {
+        Object.defineProperty(f.result.response, "body", { configurable: true, value: firstRight });
+        Object.defineProperty(clone, "body", { configurable: true, value: firstLeft });
+      }
+      if (mode === "aliased") Object.defineProperty(clone, "body", { configurable: true, value: firstLeft });
+      await Promise.all([consumeCloudflareClone(f.result.response.body), consumeCloudflareClone(mode === "aliased" ? firstRight : clone.body), ...(extra ? [consumeCloudflareClone(extra.body)] : [])]);
+      await f.result.release(); await assert.rejects(f.life.join());
+      assert.ok(f.life.cloneDiagnostic().clones.every(row => row[6] === 0));
+    } finally {
+      if (mode === "swapped") { Reflect.deleteProperty(f.result.response, "body"); Reflect.deleteProperty(clone, "body"); }
+      if (mode === "aliased") Reflect.deleteProperty(clone, "body");
+      await f.life.restore();
+    }
+  }
+});
+test("Cloudflare clone preserves original falsey throws and failed guard release", async () => {
+  for (const releaseFault of ["throw", "reject"]) {
+    const f = await cloudflareCloneControl({ releaseFault });
+    try {
+      const clone = f.result.response.clone(); await Promise.all([consumeCloudflareClone(f.result.response.body), consumeCloudflareClone(clone.body)]);
+      let caught = false; try { await f.result.release(); } catch (reason) { caught = true; assert.equal(reason, undefined); }
+      assert.equal(caught, true); await assert.rejects(f.life.join(), error => error.errors.includes(undefined));
+      assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+    } finally { await f.life.restore(); }
+  }
+  const f = await cloudflareCloneControl();
+  try {
+    // The brand check is still the original native method's synchronous throw.
+    let original; try { Reflect.apply(f.clone, {}, []); } catch (error) { original = error; }
+    assert(original instanceof TypeError); let escaped;
+    try { Reflect.apply(f.result.response.clone, {}, []); } catch (error) { escaped = error; }
+    assert(escaped instanceof TypeError);
+    const op = f.life.operations.find(row => row.kind === "response.clone"); assert.equal(op.state, "sync_throw"); assert.equal(op.reason, escaped);
+    await consumeCloudflareClone(f.result.response.body); await f.result.release(); await assert.rejects(f.life.join());
+  } finally { await f.life.restore(); }
+  const falsey = await cloudflareCloneControl({ cloneFault: true });
+  try {
+    let caught = false; try { falsey.result.response.clone(); } catch (error) { caught = true; assert.equal(error, undefined); }
+    assert.equal(caught, true); await consumeCloudflareClone(falsey.result.response.body); await falsey.result.release();
+    await assert.rejects(falsey.life.join(), error => error.errors.includes(undefined));
+  } finally { await falsey.life.restore(); }
+});
+test("Cloudflare clone keeps an unread sibling and rejected original reads fatal", async () => {
+  for (const mode of ["unread", "read-rejection"]) {
+    let controller;
+    const stream = mode === "read-rejection" ? new ReadableStream({ start(value) { controller = value; } }) : undefined;
+    const f = await cloudflareCloneControl({ stream }); const clone = f.result.response.clone();
+    try {
+      if (controller) controller.error(undefined);
+      await consumeCloudflareClone(f.result.response.body).catch(error => { if (mode !== "read-rejection") throw error; });
+      if (mode === "read-rejection") await consumeCloudflareClone(clone.body).catch(() => {});
+      await f.result.release(); await assert.rejects(f.life.join()); assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      if (mode === "unread") { await consumeCloudflareClone(clone.body); await f.life.join(); }
+      else assert.ok(f.life.operations.some(op => op.kind === "reader.read" && op.state === "rejected" && op.reason === undefined));
+    } finally { await f.life.restore(); }
+  }
+});
+test("Cloudflare clone retains falsey read/cancel faults through independent cleanup", async () => {
+  for (const kind of ["read", "cancel"]) for (const mode of ["throw", "reject"]) {
+    const f = await cloudflareCloneControl({ readerFault: { kind, mode }, releaseFault: "throw" });
+    const clone = f.result.response.clone(), reader = f.result.response.body.getReader();
+    let caught = false, released = false;
+    try {
+      try { await reader[kind](); } catch (reason) { caught = true; assert.equal(reason, undefined); }
+      assert.equal(caught, true);
+      while (!(await reader.read()).done) {} await reader.closed; reader.releaseLock();
+      await consumeCloudflareClone(clone.body);
+      try { await f.result.release(); } catch (reason) { released = true; assert.equal(reason, undefined); }
+      assert.equal(released, true);
+      const fault = f.life.operations.find(op => op.kind === "reader." + kind && op.state !== "fulfilled");
+      assert.equal(fault.state, mode === "throw" ? "sync_throw" : "rejected"); assert.equal(fault.reason, undefined);
+      await assert.rejects(f.life.join(), error => error.errors.filter(reason => reason === undefined).length === 2);
+      assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      assert.equal(f.life.readers.length, 2); assert.ok(f.life.readers.every(row => row.eof && row.unlocked === 1 && !row.body.locked));
+      assert.equal(f.life.operations.filter(op => op.state === "pending").length, 0);
+    } finally { await f.life.restore(); }
+  }
+});
+test("Cloudflare clone cannot substitute a foreign reader or an unfinished sibling", async () => {
+  for (const mode of ["foreign-reader", "pending-sibling"]) {
+    const f = await cloudflareCloneControl(); const clone = f.result.response.clone();
+    try {
+      await consumeCloudflareClone(f.result.response.body); await f.result.release();
+      const foreign = new Response(new Uint8Array([9]));
+      const reader = mode === "foreign-reader" ? Reflect.apply(clone.body.getReader, foreign.body, []) : clone.body.getReader();
+      const first = reader.read();
+      assert.ok(f.life.operations.some(op => op.kind === "reader.read" && op.pending === first && op.state === "pending"));
+      assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      await first;
+      if (mode === "foreign-reader") {
+        while (!(await reader.read()).done) {} await reader.closed; reader.releaseLock();
+        await consumeCloudflareClone(clone.body); await assert.rejects(f.life.join());
+        assert.ok(f.life.readers.some(row => row.body !== row.receivedBody));
+      } else {
+        await assert.rejects(f.life.join());
+        while (!(await reader.read()).done) {} await reader.closed; reader.releaseLock();
+        await f.life.join();
+      }
+    } finally { await f.life.restore(); }
+  }
+});
+test("Cloudflare clone never treats byte-limit cancellation or a pending cancel as EOF", { timeout: 5000 }, async () => {
+  for (const rejects of [false, true]) {
+    const gate = Promise.withResolvers(); let cancelled = 0;
+    const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); }, cancel() { cancelled++; return gate.promise; } });
+    const f = await cloudflareCloneControl({ stream }); const clone = f.result.response.clone();
+    const readers = [f.result.response.body.getReader(), clone.body.getReader()];
+    try {
+      for (const reader of readers) assert.equal((await reader.read()).value.byteLength, 3);
+      const cancellations = readers.map(reader => reader.cancel()); const outcomes = Promise.allSettled(cancellations);
+      for (const reader of readers) { await reader.closed; reader.releaseLock(); }
+      await f.result.release(); let settled = false;
+      const joined = f.life.join(); void joined.then(() => { settled = true; }, () => { settled = true; });
+      await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false); assert.equal(cancelled, 1);
+      assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      if (rejects) gate.reject(undefined); else gate.resolve();
+      const results = await outcomes; assert.ok(results.every(row => row.status === (rejects ? "rejected" : "fulfilled")));
+      if (rejects) for (const row of results) assert.equal(row.reason, undefined);
+      await assert.rejects(joined); assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+      assert.equal(f.life.operations.filter(op => op.state === "pending").length, 0);
+    } finally { gate.resolve(); await f.life.restore(); }
+  }
+});
+test("Cloudflare clone diagnostics keep original failures and independent reporting faults", async () => {
+  const primary = new Error("synthetic original"), lines = [];
+  const life = { join: () => Promise.reject(primary), cloneDiagnostic: () => ({ v: 1, clones: [], bodies: [] }) };
+  await assert.rejects(joinCloudflareLifetime(life, line => lines.push(line)), error => error === primary);
+  assert.equal(lines.length, 1); assert.ok(Buffer.byteLength(lines[0]) <= 4096); assert.deepEqual(JSON.parse(lines[0].slice("CLOUDFLARE_CLONE_STATE ".length)), life.cloneDiagnostic());
+  await assert.rejects(joinCloudflareLifetime(life, () => { throw undefined; }), error => error.errors[0] === primary && error.errors[1] === undefined);
+  await assert.rejects(joinCloudflareLifetime({ ...life, cloneDiagnostic: () => "x".repeat(4096) }, () => assert.fail("oversized record emitted")), error => error.errors[0] === primary && /bound/.test(error.errors[1].message));
 });
 test("Cloudflare native receipt cannot borrow another family or duplicate a successful marker", async () => {
   const exact = "CLOUDFLARE_CANCEL_RETIRED cloudflare-messages";

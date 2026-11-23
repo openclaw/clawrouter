@@ -71,7 +71,7 @@ function claim(url: any, init: any, kind: string) {
 }
 async function runCase(body: () => unknown) {
   await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
-    () => lifetime.join(), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(),
+    () => joinCloudflareLifetime(lifetime, line => console.error(line)), () => bindings.verify(), () => lifetime.restore(), () => vi.restoreAllMocks(),
     () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests(),
   ]);
   assert.equal(lifetime.guards.length, bindings.bindings.length);
@@ -143,6 +143,7 @@ describe("registered Cloudflare Messages through Worker and SQLite", { concurren
     bodySucceeded = false; cancelController = undefined; bindings = createCloudflareBindings();
     vi.stubEnv("ANTHROPIC_API_KEY", "must-not-fallback-anthropic"); vi.stubEnv("CLOUDFLARE_API_TOKEN", "must-not-fallback-cloudflare"); vi.stubEnv("CLAWROUTER_API_KEY", "");
     lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => bodySucceeded, current: () => invocation.getStore(),
+      cloudflareClone: { url: origin + nativePath, credential: key("unpriced") },
       readProgress(owner: any, value: any) {
         if (owner.id === "cancel" && !owner.partialDelivery && value?.done === false && value.value?.byteLength > 0) {
           assert.equal(owner.claimed, true); assert.equal(owner.caller, cancelController?.signal); lifetime.partial(owner); cancelController!.abort();
@@ -188,7 +189,7 @@ describe("registered Cloudflare Messages through Worker and SQLite", { concurren
   });
   it("retains provider error and releases the original response without replay", async () => {
     const result = await (await start("error")).result(); expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("synthetic-upstream-error"); expect(result.content).toEqual([]);
+    expect(result.errorMessage).toContain("synthetic-upstream-error"); expect(result.content).toEqual([{ type: "text", text: "synthetic-answer" }]);
   });
   it("cancels only from actual original transport progress and joins all owned work", async () => {
     cancelController = new AbortController(); const output = await start("cancel", { signal: cancelController.signal });
