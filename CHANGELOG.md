@@ -1,5 +1,7 @@
 # Changelog
 
+- Add opt-in review after corrective trajectory writes, preserving checkpoint ordering and existing execution limits.
+
 - Bound trajectory review schemas to the current segment length so acceptance cannot refer to earlier committed steps.
 
 - Add opt-in completion review for caller-side trajectories, with bounded snapshots and mandatory review of repaired final answers.
