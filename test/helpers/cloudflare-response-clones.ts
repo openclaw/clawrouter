@@ -98,11 +98,20 @@ function createCloudflareCloneObserver(context: {
       || reader.unlockInvocations.length !== 1 || reader.unlockReturns.length !== 1) return false;
     const work = operations.filter(op => op.reader === reader);
     const closed = work.filter(op => op.kind === "reader.closed"), reads = work.filter(op => op.kind === "reader.read");
-    const unlocks = work.filter(op => op.kind === "reader.unlock");
+    const unlocks = work.filter(op => op.kind === "reader.unlock"), cancels = work.filter(op => op.kind === "reader.cancel");
+    // The pinned guarded stream finalizes EOF by starting cancel(), unlock and
+    // guard cleanup together. Only that no-argument, post-EOF cleanup qualifies;
+    // its original promise must fulfill, even if it settles after unlocking.
+    const eofCleanup = cancels.length === 0 || cancels.length === 1 && cancels.every(op =>
+      op.receiver === reader.reader && typeof op.original === "function" && op.operands?.length === 0
+      && !!op.pending && typeof (op.pending as Promise<unknown>).then === "function" && op.state === "fulfilled"
+      && op.invoked < reader.unlockInvocations[0]!
+      && closed.length === 1 && typeof closed[0]!.settled === "number" && closed[0]!.settled < op.invoked
+      && reads.some(read => own(read.value, "done") === true && typeof read.settled === "number" && read.settled < op.invoked));
     return closed.length === 1 && closed[0]!.pending === reader.closed && closed[0]!.state === "fulfilled"
       && reads.length > 0 && reads.every(op => op.receiver === reader.reader && op.state === "fulfilled")
       && unlocks.length === 1 && unlocks[0]!.receiver === reader.reader && unlocks[0]!.state === "fulfilled"
-      && !work.some(op => op.kind === "reader.cancel")
+      && eofCleanup
       && !operations.some(op => op.kind === "body.cancel" && op.receiver === body)
       && work.every(op => op.owner === record.owner && op.acquisition === record.acquisition && op.state === "fulfilled")
       && [...closed, ...reads].every(op => typeof op.settled === "number" && op.settled < reader.unlockInvocations[0]!)

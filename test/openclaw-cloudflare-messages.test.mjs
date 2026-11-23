@@ -559,7 +559,12 @@ async function cloudflareCloneControl({ ownerChange, status = 400, releaseFault,
       body.getReader = function (...operands) {
         const reader = Reflect.apply(getReader, this, operands), original = reader[readerFault.kind]; let failed = false;
         reader[readerFault.kind] = function (...values) {
-          if (!failed) { failed = true; if (readerFault.mode === "throw") throw undefined; return Promise.reject(undefined); }
+          if (!failed) {
+            failed = true;
+            if (readerFault.mode === "held") return Reflect.apply(original, this, values).then(() => readerFault.gate.promise);
+            if (readerFault.mode === "throw") throw undefined;
+            return Promise.reject(undefined);
+          }
           return Reflect.apply(original, this, values);
         };
         return reader;
@@ -612,6 +617,47 @@ test("Cloudflare clone refuses foreign owner, credential, acquisition and receiv
       await assert.rejects(f.life.join()); assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
       assert.ok(f.life.errors.length > 0);
     } finally { f.result.response = response; await f.life.restore(); }
+  }
+});
+test("Cloudflare clone joins only exact post-EOF cleanup cancellation", { timeout: 5000 }, async () => {
+  for (const mode of ["fulfilled", "argument", "repeated", "foreign", "pending-fulfill", "pending-reject", "throw", "reject"]) {
+    const gate = Promise.withResolvers(), held = mode.startsWith("pending-");
+    const readerFault = held ? { kind: "cancel", mode: "held", gate } : ["throw", "reject"].includes(mode) ? { kind: "cancel", mode } : undefined;
+    const f = await cloudflareCloneControl({ readerFault }), clone = f.result.response.clone();
+    const reader = f.result.response.body.getReader();
+    try {
+      await consumeCloudflareClone(clone.body);
+      while (!(await reader.read()).done) {} await reader.closed;
+      const foreign = new Response(new Uint8Array([9])).body.getReader();
+      while (!(await foreign.read()).done) {} await foreign.closed;
+      const originals = []; let threw = false;
+      try {
+        originals.push(mode === "foreign" ? Reflect.apply(reader.cancel, foreign, []) : mode === "argument" ? reader.cancel(undefined) : reader.cancel());
+        if (mode === "repeated") originals.push(reader.cancel());
+      } catch (reason) { threw = true; assert.equal(reason, undefined); }
+      const results = Promise.allSettled(originals);
+      reader.releaseLock(); foreign.releaseLock();
+      const release = f.result.release();
+      let done = false; const joined = f.life.join(); void joined.then(() => { done = true; }, () => { done = true; });
+      if (held) {
+        await new Promise(resolve => setImmediate(resolve)); assert.equal(done, false);
+        assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+        if (mode === "pending-reject") gate.reject(undefined); else gate.resolve();
+      }
+      const outcomes = await results; await release;
+      if (mode === "fulfilled" || mode === "pending-fulfill") {
+        await joined; assert.equal(f.life.cloneDiagnostic().clones[0][6], 1);
+        const op = f.life.operations.find(row => row.kind === "reader.cancel");
+        assert.equal(op.pending, originals[0]); assert.equal(op.receiver, reader); assert.equal(op.operands.length, 0);
+        assert.ok(op.settled > f.life.readers.find(row => row.reader === reader).unlockInvocations[0]);
+      } else {
+        await assert.rejects(joined); assert.equal(f.life.cloneDiagnostic().clones[0][6], 0);
+        if (mode === "throw") assert.equal(threw, true);
+        if (mode === "reject" || mode === "pending-reject") assert.deepEqual(outcomes, [{ status: "rejected", reason: undefined }]);
+      }
+      assert.ok(f.life.readers.every(row => row.eof && row.unlocked === 1 && !row.body.locked));
+      assert.equal(f.life.operations.filter(op => op.state === "pending").length, 0);
+    } finally { gate.resolve(); await f.life.restore(); }
   }
 });
 test("Cloudflare clone rejects repeated, nested, aliased and swapped original body topology", async () => {
