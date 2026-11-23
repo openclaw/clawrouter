@@ -223,7 +223,7 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
   if (!response.body) throw new Error("fusion adviser response has no body");
   const reader = response.body.getReader();
   const input = inputRetirement(reader);
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let text = "";
   try {
