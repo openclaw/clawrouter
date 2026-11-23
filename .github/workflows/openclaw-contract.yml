@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: openrouter-music
+            ref: 15aeb223287b93cf26917e846f658dd53143eb4d
+            test: test/openclaw-openrouter-music.test.mjs
           - consumer: xai-search
             ref: 3206356e0fff73751495ca6a5c8cd4f3e97caf04
             test: test/openclaw-xai-search.test.mjs

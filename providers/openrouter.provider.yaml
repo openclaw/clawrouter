@@ -35,6 +35,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: music.generate
+    endpoint: music_generate
+    methods: [POST]
 endpoints:
   responses:
     modelPassthrough: {}
@@ -46,6 +49,13 @@ endpoints:
   chat_completions:
     modelPassthrough: {}
     path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  music_generate:
+    path: /v1/chat/completions
+    method: POST
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
@@ -82,6 +92,30 @@ models:
       # The live catalog advertises the endpoint, but routing/plugin fees and
       # actual billed usage still need qualification. Do not inherit direct rates.
       pricingRef: openrouter-gpt-6-1-terra-unqualified-2026-11-03
+    - id: openrouter/google/lyria-3-pro-preview
+      upstream: google/lyria-3-pro-preview
+      capabilities: [music.generate]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          music_generate:
+            sources:
+              - https://github.com/openclaw/clawrouter/blob/b8b33d5bdd771bfa0904ac493b2fc6129b2768db/docs/openrouter-music-runtime.md
+              - https://openrouter.ai/google/lyria-3-pro-preview
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: openrouter/google/lyria-3-clip-preview
+      upstream: google/lyria-3-clip-preview
+      capabilities: [music.generate]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          music_generate:
+            sources:
+              - https://github.com/openclaw/clawrouter/blob/b8b33d5bdd771bfa0904ac493b2fc6129b2768db/docs/openrouter-music-runtime.md
+              - https://openrouter.ai/google/lyria-3-clip-preview
+            checkedAt: "2026-11-04"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

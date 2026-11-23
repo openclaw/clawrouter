@@ -1,0 +1,2078 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire, stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import test, { after } from "node:test";
+import { types as nodeTypes } from "node:util";
+import { runInNewContext } from "node:vm";
+import { execFile } from "node:child_process";
+import { parse } from "yaml";
+import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { musicWave } from "../worker/test/openrouter-music-runtime-fixture.mjs";
+import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
+import { createMusicSourceLifetime } from "./helpers/music-source-lifetime.mjs";
+import { createMusicPassiveState, readMusicPassiveResponse, captureMusicPassiveState } from "./helpers/music-passive-state.mjs";
+
+// Published canonical manifest-model correction, NOT a qualified client release.
+// The previous hosted attempt failed without a typed cause; new diagnostics are unproven.
+const sourceHead = "15aeb223287b93cf26917e846f658dd53143eb4d";
+const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
+const root = fileURLToPath(new URL("../", import.meta.url));
+const snapshotPath = resolve(root, "worker/generated/provider-snapshot.json");
+const models = ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"];
+const target = "https://openrouter.ai/api/v1/chat/completions";
+const positives = models.flatMap((model, index) => ["wav", "mp3"].map(format => ({ id: `m${index}_${format}`, model, format, kind: "success" })));
+const negativeKinds = ["reference", "options", "preabort", "missing", "foreign", "revoked", "unpriced", "stalegrant",
+  "empty", "eof", "json", "utf8", "base64", "ambiguous", "partial", "error", "redirect", "wire", "audio", "transcript", "abort_headers", "abort_body", "deadline_body"];
+const cases = [...positives, ...negativeKinds.map(kind => ({ id: kind, kind, model: models[0], format: "wav" }))];
+const unsent = new Set(["reference", "options", "preabort", "missing", "foreign", "revoked", "unpriced", "stalegrant"]);
+const key = id => `clawrouter-live-orm_${id}-fixture-secret`;
+const headers = id => ({ authorization: `Bearer ${key(id)}`, "content-type": "application/json", "accept-encoding": "identity" });
+const body = row => ({ model: row.model, messages: [{ role: "user", content: `Synthetic ${row.id}` }], modalities: ["text", "audio"], audio: { format: row.format }, stream: true });
+
+
+const musicDiagnosticSource = readFileSync(new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url), "utf8");
+// The producer watchdog starts only after the SDK dispatch. Reuse its existing
+// 120s budget; it stays inside the 180s deadline-case / 240s helper ceilings.
+// No heartbeat bytes, deadline extension, or successful expiry is permitted.
+const musicSourceWatchdogMs = Number(musicDiagnosticSource.match(/mediaModels: \{ music: \{[^\n]*timeoutMs: (\d+)/)?.[1]);
+assert.equal(musicSourceWatchdogMs, 120000);
+const musicDiagnosticStart = musicDiagnosticSource.indexOf("// BEGIN music diagnostic protocol."), musicDiagnosticEnd = musicDiagnosticSource.indexOf("// END music diagnostic protocol.");
+assert.ok(musicDiagnosticStart >= 0 && musicDiagnosticEnd > musicDiagnosticStart);
+const musicDiagnosticCode = stripTypeScriptTypes(musicDiagnosticSource.slice(musicDiagnosticStart, musicDiagnosticEnd));
+const createMusicProtocol = new Function(musicDiagnosticCode + "; return musicDiagnosticProtocol;")();
+const musicProtocol = createMusicProtocol(nodeTypes.isProxy);
+const createMusicFailureCounts = musicProtocol.failureCounts;
+const musicDiagnostics = musicProtocol.emitter(line => process.stdout.write(line)), musicDiagnosticFailures = [];
+function musicOuter(phase, route = "none", caseId = "none", outcome = "entered", role = "progress", failed = false, error, facts = {}) {
+  try {
+    const record = musicProtocol.record({ layer: "outer", route, caseId, phase, role, outcome, ...facts }, failed, error);
+    if (failed) musicDiagnostics.fail(record); else musicDiagnostics.put(record);
+  } catch (failure) { musicDiagnosticFailures.push(failure); }
+}
+function musicChildObserver(route, protocol = musicProtocol, diagnostics = musicDiagnostics, failures = musicDiagnosticFailures) {
+  let records = 0, invalid = 0, observedCode = null;
+  const parse = text => {
+    try {
+      const beforeInvalid = invalid;
+      const parsed = protocol.parse(text, record => {
+        if (record.route !== route) { invalid++; return; }
+        diagnostics.put(record);
+      });
+      records += parsed.records; invalid += parsed.invalid; observedCode ??= parsed.observedCode;
+      if (invalid > beforeInvalid) failures.push(new Error("invalid fresh music diagnostic records"));
+    } catch (failure) { failures.push(failure); }
+  };
+  return { diagnostic: parse, rejection(error) {
+    // Only the ORIGINAL helper rejection's own DATA fields from this execution.
+    parse(protocol.own(error, "stdout")); parse(protocol.own(error, "stderr"));
+    const exit = protocol.own(error, "code"), killed = protocol.own(error, "killed"), signal = protocol.own(error, "signal");
+    const facts = { exit: Number.isSafeInteger(exit) && Math.abs(exit) <= 1_000_000_000 ? exit : null,
+      killed: typeof killed === "boolean" ? killed : null,
+      signal: ["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(signal) ? signal : null,
+      records, invalid, ...(observedCode ? { code: observedCode } : {}) };
+    try { diagnostics.fail(protocol.record({ layer: "outer", route, caseId: "none", phase: "helper", role: "primary", outcome: "rejected", ...facts }, true, error)); }
+    catch (failure) { failures.push(failure); }
+  }, fulfilled() {
+    try { diagnostics.put(protocol.record({ layer: "outer", route, caseId: "none", phase: "helper", role: "summary", outcome: "fulfilled", records, invalid })); }
+    catch (failure) { failures.push(failure); }
+  } };
+}
+after(() => {
+  if (musicDiagnosticFailures.length) musicOuter("final_cleanup", "none", "none", "rejected", "cleanup", true, musicDiagnosticFailures[0]);
+  try { musicDiagnostics.flush(); } catch (error) { musicDiagnosticFailures.push(error); }
+  if (musicDiagnosticFailures.length) throw new AggregateError(musicDiagnosticFailures, "music diagnostic instrumentation failed");
+});
+
+function compiled(route) {
+  const inputs = readdirSync(join(root, "providers")).filter(name => name.endsWith(".provider.yaml")).sort()
+    .map(name => parse(readFileSync(join(root, "providers", name), "utf8")));
+  assert.equal(inputs.length, 100);
+  const baseline = compileProviderSnapshot(inputs);
+  assert.deepEqual(baseline, JSON.parse(readFileSync(snapshotPath, "utf8")));
+  if (route === "native") return baseline;
+  assert.equal(route, "manifest");
+  const expected = structuredClone(baseline);
+  inputs.find(provider => provider.id === "openrouter").endpoints.music_generate.nativeProxy = false;
+  expected.providers.find(provider => provider.id === "openrouter").endpoints.find(endpoint => endpoint.id === "music_generate").native_proxy = false;
+  const variant = compileProviderSnapshot(inputs);
+  assert.deepEqual(variant, expected, "only the schema-validated music native_proxy setting differs");
+  return variant;
+}
+
+// Sidecars only: callers receive the exact original Promise/value/error. Observer
+// faults are independent evidence failures, never original-operation outcomes.
+// Sequence stamps observe JS invocation/reaction order, not physical I/O settlement.
+function musicObserve(callback, faults) { try { return callback(); } catch (error) { faults.push(error); } }
+function observeMusicPromise(pending, row, tick, faults) {
+  musicObserve(() => { row.state = "pending"; }, faults);
+  const record = (state, reason) => {
+    try { row.state = state; row.at = tick(); row.reason = reason; }
+    catch (error) { faults.push(error); }
+  };
+  try { void pending.then(() => record("fulfilled"), reason => record("rejected", reason)); }
+  catch (error) { faults.push(error); }
+  return pending;
+}
+function installMusicOperationWitness(Operation, tick, faults) {
+  const descriptor = Object.getOwnPropertyDescriptor(Operation.prototype, "stop"), rows = new WeakMap();
+  const safe = callback => musicObserve(callback, faults);
+  function stop(...args) {
+    let row, before, at;
+    safe(() => {
+      row = rows.get(this.signal);
+      if (!row) { row = { calls: 0, first: null }; rows.set(this.signal, row); }
+      row.calls++; before = { status: this.status ?? null, delivery: this.delivery ?? null }; at = tick();
+    });
+    let threw = false;
+    try { return Reflect.apply(descriptor.value, this, args); }
+    catch (error) { threw = true; throw error; }
+    finally {
+      safe(() => {
+        if (row && before && before.delivery === null && this.delivery !== undefined && !row.first) {
+          row.first = Object.freeze({ cause: ["caller", "deadline", "upstream", "publication", "complete"].includes(args[0]) ? args[0] : "unknown",
+            at, returnedAt: tick(), statusBefore: before.status, status: this.status ?? null, delivery: this.delivery ?? null, threw });
+        }
+      });
+    }
+  }
+  Object.defineProperty(Operation.prototype, "stop", { ...descriptor, value: stop });
+  return { rows, restore() {
+    if (Operation.prototype.stop !== stop) throw new Error("music operation observer ownership changed");
+    Object.defineProperty(Operation.prototype, "stop", descriptor);
+  } };
+}
+function musicWorkerDetails(input, inputIndex, inputs, ingresses, termination, tails, pass) {
+  const base = { v: 1, layer: "outer", route: input.route, caseId: input.binding?.row.id ?? "none", role: "primary", outcome: "unknown", category: "none", inputIndex, pass };
+  const records = [];
+  if (base.caseId === "abort_headers") {
+    const h = acquisitionSnapshot(input, inputs, ingresses);
+    records.push({ ...base, phase: "worker_header", acquisitionState: input.state, headerAccepted: provisionalHeaderDisposition(h),
+      defined: h.defined, noResponse: h.noResponse, observerClean: h.observerClean, unique: h.unique,
+      ingressLive: h.ingressLive, effectiveLive: h.effectiveLive, ingressAbortedAtReject: input.ingressAbortedAtReject ?? null, effectiveAbortedAtReject: input.effectiveAbortedAtReject ?? null, abortedBeforeReject: h.abortedBeforeReject, listenerRemoved: h.listenerRemoved,
+      invokeAt: input.invoke ?? null, rejectAt: input.rejected ?? null, ingressAt: input.ingressAbortAtReject ?? null, effectiveAt: input.effectiveAbort ?? null });
+  }
+  const first = termination?.first;
+  records.push({ ...base, phase: "worker_termination", operationBound: !!termination, stopCalls: termination?.calls ?? 0,
+    stopCause: first?.cause ?? "unknown", stopAt: first?.at ?? null, stopReturnedAt: first?.returnedAt ?? null,
+    statusBefore: first?.statusBefore ?? null, statusAfter: first?.status ?? null, delivery: first?.delivery ?? null, stopThrew: first?.threw ?? null,
+    rejectAt: input.rejected ?? null });
+  if (base.caseId !== "abort_headers") {
+    const readers = input.readerRows ?? [], reader = readers[0];
+    const read = reader?.operations.find(row => row.kind === "read" && row.state === "rejected");
+    const cancel = reader?.operations.find(row => row.kind === "cancel");
+    const body = input.bodyCancels?.[0];
+    records.push({ ...base, phase: "worker_tail", readers: readers.length,
+      readAt: read?.at ?? null, readState: read?.state ?? "absent", cancelAt: cancel?.invokeAt ?? null, cancelSettledAt: cancel?.at ?? null,
+      cancelState: cancel?.state ?? "absent", closedAt: reader?.closedObservation?.at ?? null, closedState: reader?.closedObservation?.state ?? "absent",
+      bodyCancels: input.bodyCancels?.length ?? 0, bodyCancelState: body?.state ?? "absent", bodyCancelAt: body?.invokeAt ?? null, bodySettledAt: body?.at ?? null,
+      tailAt: tails.length && tails.every(row => row.at !== undefined) ? Math.max(...tails.map(row => row.at)) : null,
+      // These exact-ingress handler tails include accounting and native retirement;
+      // their aggregate is not an invented identity for one physical source tail.
+      tails: tails.length, tailsFulfilled: tails.filter(row => row.state === "fulfilled").length,
+      tailsRejected: tails.filter(row => row.state === "rejected").length, tailsPending: tails.filter(row => row.state === "pending").length });
+  }
+  return records;
+}
+function retainMusicRetirement(previous, next) {
+  if (!previous.records.length) return { ...next, observerFailed: previous.observerFailed || next.observerFailed, cleanup: null };
+  return { ...previous, observerFailed: previous.observerFailed || next.observerFailed,
+    cleanup: { ...next.records[0], phase: "worker_cleanup_summary", role: "cleanup" } };
+}
+
+// Serialized into the actual Worker. Observe originals without adding reads,
+// cancellation, release, response replacement or a competing cleanup operation.
+function observeBody(response, signal, owner) {
+  const body = response.body;
+  if (!body) throw new Error("original response body missing");
+  const rows = [], getReader = body.getReader, bodyCancel = body.cancel;
+  const tick = owner.tick ?? (() => 0), faults = owner.diagnosticErrors ??= [];
+  owner.bodyCancels = [];
+  body.cancel = function(...args) {
+    const row = {};
+    musicObserve(() => { row.invokeAt = tick(); owner.bodyCancels.push(row); }, faults);
+    let pending;
+    try { pending = Reflect.apply(bodyCancel, this, args); }
+    catch (reason) { musicObserve(() => { row.state = "threw"; row.at = tick(); }, faults); throw reason; }
+    return observeMusicPromise(pending, row, tick, faults);
+  };
+  owner.readerRows = rows; owner.body = body;
+  body.getReader = function(...args) {
+    const reader = Reflect.apply(getReader, this, args);
+    const row = { reader, closed: reader.closed, operations: [], errors: [], unlocks: 0, returned: 0 };
+    rows.push(row);
+    row.closedObservation = {}; observeMusicPromise(row.closed, row.closedObservation, tick, faults);
+    for (const kind of ["read", "cancel"]) {
+      const original = reader[kind];
+      reader[kind] = function(...operands) {
+        const operation = { kind };
+        musicObserve(() => { operation.invokeAt = tick(); }, faults);
+        try {
+          const pending = Reflect.apply(original, this, operands);
+          operation.pending = pending; row.operations.push(operation);
+          observeMusicPromise(pending, operation, tick, faults);
+          return pending;
+        } catch (reason) { row.errors.push(reason); throw reason; }
+      };
+    }
+    const release = reader.releaseLock;
+    reader.releaseLock = function(...args) {
+      row.unlocks++;
+      try { const result = Reflect.apply(release, this, args); row.returned++; return result; }
+      catch (reason) { row.errors.push(reason); throw reason; }
+    };
+    return reader;
+  };
+  owner.join = async () => {
+    const failures = [];
+    if (!rows.length) { failures.push(new Error("missing original reader")); owner.failureCounts?.add("body_join"); }
+    for (const row of rows) {
+      let cursor = 0, closed;
+      do {
+        const batch = row.operations.slice(cursor); cursor = row.operations.length;
+        const results = await Promise.allSettled(batch.map(operation => operation.pending));
+        for (const [index, result] of results.entries()) {
+          batch[index].outcome = result;
+          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) { batch[index].strictFailure = true; failures.push(result.reason); owner.failureCounts?.add(batch[index].kind); }
+        }
+        closed = await Promise.allSettled([row.closed]);
+        row.closedOutcome = closed[0];
+      } while (cursor < row.operations.length);
+      if (closed[0].status === "rejected") { failures.push(closed[0].reason); owner.failureCounts?.add("closed"); }
+      failures.push(...row.errors); for (const _ of row.errors) owner.failureCounts?.add("observer_exception");
+      if (row.unlocks !== 1 || row.returned !== 1 || body.locked) { failures.push(new Error("original reader not physically released")); owner.failureCounts?.add("release_invariant"); }
+    }
+    if (failures.length) throw new AggregateError(failures, "original Worker body retirement failed");
+    return { readers: rows.length, operations: rows.reduce((n, row) => n + row.operations.length, 0), unlocked: !body.locked };
+  };
+}
+
+// Read only already-observed original outcomes. These records never classify a
+// rejection or supply retirement evidence. Identity comparisons are at join time.
+function retirementObservation(inputs, counts, errors, route, detail = {}) {
+  const records = [{ v: 1, layer: "outer", route, caseId: "none", phase: "worker_summary", role: "primary", outcome: "rejected", category: "none", rejected: errors.length, pass: detail.pass ?? 1, diagnosticFaults: detail.faults ?? 0, ...counts }];
+  let omitted = 0;
+  const add = (input, inputIndex, reader, readerIndex, operation, operationIndex, result) => {
+    if (records.length >= 4) { omitted++; return; }
+    const signal = input.effective?.signal;
+    const closed = reader?.closedOutcome;
+    const cancelOperation = reader?.operations.find(row => row.kind === "cancel");
+    const cancel = cancelOperation?.outcome;
+    const rejected = result?.status === "rejected";
+    records.push({ v: 1, layer: "outer", route, caseId: input.binding?.row.id ?? "none", phase: "worker_original", role: "cleanup", outcome: result?.status ?? "unknown", category: "none",
+      operation, inputIndex, readerIndex, operationIndex, responsePresent: input.response !== undefined, readerPresent: !!reader,
+      reasonDefined: rejected ? result.reason !== undefined : null,
+      signalAbortedAtJoin: signal ? signal.aborted : null,
+      sameSignalReasonAtJoin: rejected && signal ? result.reason === signal.reason : null,
+      sameClosedReason: rejected && closed?.status === "rejected" ? result.reason === closed.reason : null,
+      sameCancelReason: rejected && cancel?.status === "rejected" ? result.reason === cancel.reason : null,
+      closedOutcome: reader ? closed?.status ?? "unknown" : "absent", cancelOutcome: cancelOperation ? cancel?.status ?? "unknown" : "absent",
+      bodyLockedAtJoin: input.body ? input.body.locked : null,
+      releases: reader?.unlocks ?? null, returned: reader?.returned ?? null });
+  };
+  for (const [i, input] of inputs.entries()) {
+    if (input.retirementRejected && input.originalOutcome?.status === "rejected") add(input, i, undefined, null, "acquisition", null, input.originalOutcome);
+    for (const [r, reader] of (input.readerRows ?? []).entries()) {
+      for (const [o, operation] of reader.operations.entries()) if (operation.strictFailure && operation.outcome?.status === "rejected") add(input, i, reader, r, operation.kind, o, operation.outcome);
+      if (reader.closedOutcome?.status === "rejected") add(input, i, reader, r, "closed", null, reader.closedOutcome);
+    }
+  }
+  records[0].suppressed = omitted;
+  for (const [index, input] of inputs.entries()) if (["abort_headers", "abort_body", "deadline_body"].includes(input.binding?.row.id)) {
+    for (const record of musicWorkerDetails({ ...input, route }, index, inputs, detail.ingresses ?? [],
+      detail.terminations?.get(input.effective?.signal), (detail.tails ?? []).filter(row => input.binding.ingress && row.ingress === input.binding.ingress), detail.pass ?? 1)) {
+      if (records.length < 11) records.push(record); else omitted++;
+    }
+  }
+  records[0].suppressed = omitted;
+  return { records, observerFailed: false };
+}
+
+async function reportRetirementObservation(origin, expectedRoute, fetchOriginal = fetch, protocol = musicProtocol, diagnostics = musicDiagnostics, failures = musicDiagnosticFailures) {
+  try {
+    const response = await fetchOriginal(origin + "/fixture/retirement-observation");
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.ok(Buffer.byteLength(text) <= 8192);
+    const snapshot = JSON.parse(text);
+    assert.deepEqual(Object.keys(snapshot).sort(), ["cleanup", "observerFailed", "records"]);
+    assert.ok(Array.isArray(snapshot.records) && snapshot.records.length > 0 && snapshot.records.length <= 11);
+    for (const value of [...snapshot.records, ...(snapshot.cleanup ? [snapshot.cleanup] : [])]) {
+      const record = protocol.validate(value);
+      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary", "native_state"].includes(record.phase));
+      // Preserve first-pass fields. Later counts are cumulative, not additional
+      // unique operations; expose their pass/total even when detail quota fills.
+      diagnostics.put(record.phase === "worker_summary" && snapshot.cleanup ? protocol.record({ ...record,
+        cleanupPass: snapshot.cleanup.pass, cleanupRejected: snapshot.cleanup.rejected,
+        cleanupCounterTotal: Object.entries(snapshot.cleanup).filter(([key]) => key.startsWith("f_")).reduce((sum, [, value]) => sum + value, 0),
+      }) : record);
+    }
+    // Retain original counts even when an independent snapshot observer failed.
+    assert.equal(snapshot.observerFailed, false);
+  } catch (error) { failures.push(error); }
+}
+
+// These functions are used unchanged by the Worker and the local oracle tests.
+function effectiveFetch(input, init) {
+  const request = input instanceof Request ? input : undefined;
+  return {
+    url: request ? request.url : String(input),
+    method: String(init?.method ?? request?.method ?? "GET").toUpperCase(),
+    headers: new Headers(init?.headers !== undefined ? init.headers : request?.headers),
+    body: init?.body !== undefined ? init.body : request?.body,
+    // Null explicitly removes a Request signal; it is not an omitted operand.
+    signal: init?.signal !== undefined ? init.signal : request?.signal,
+    redirect: init?.redirect ?? request?.redirect ?? "follow",
+  };
+}
+function sameJson(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object" || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameJson(left[key], right[key]));
+}
+function bindAcquisition(effective, ingresses, rows, target) {
+  if (effective.url !== target || effective.method !== "POST" || effective.redirect !== "manual" || typeof effective.body !== "string") return;
+  const selected = rows.filter(row => effective.headers.get("authorization") === "Bearer fixture-upstream-" + row.id);
+  if (selected.length !== 1) return;
+  const row = selected[0], matches = ingresses.filter(ingress => ingress.id === row.id);
+  if (matches.length !== 1) return;
+  const ingress = matches[0];
+  let outgoing; try { outgoing = JSON.parse(effective.body); } catch { return; }
+  const incoming = ingress.path === "/v1/proxy/openrouter/music_generate" ? ingress.body?.body : ingress.body;
+  if (!incoming || incoming.model !== (ingress.path === "/v1/proxy/openrouter/music_generate" ? "openrouter/" + row.model : row.model)
+    || !sameJson(outgoing, { ...incoming, model: row.model })) return;
+  return { row, ingress };
+}
+function observeAcquisition(original, receiver, input, init, proof, tick) {
+  const signal = proof.effective.signal, ingress = proof.binding?.ingress;
+  proof.state = "pending"; proof.response = undefined; proof.observerErrors = [];
+  proof.invoke = tick(); proof.effectiveLive = signal?.aborted === false; proof.ingressLive = ingress?.signal.aborted === false;
+  const aborted = () => { proof.effectiveAbort ??= tick(); };
+  signal?.addEventListener("abort", aborted, { once: true });
+  const detach = () => { signal?.removeEventListener("abort", aborted); proof.listenerRemoved = true; };
+  try { proof.pending = Reflect.apply(original, receiver, [input, init]); }
+  catch (reason) { proof.state = "threw"; proof.reason = reason; detach(); throw reason; }
+  proof.observed = proof.pending.then(response => {
+    proof.state = "fulfilled"; proof.response = response;
+    try { observeBody(response, signal, proof); } catch (error) { proof.observerErrors.push(error); }
+  }, reason => {
+    proof.state = "rejected"; proof.reason = reason; proof.rejected = tick();
+    proof.effectiveAbortedAtReject = signal?.aborted;
+    proof.ingressAbortedAtReject = ingress?.signal.aborted;
+    proof.ingressAbortAtReject = ingress?.abort;
+  }).finally(detach);
+  void proof.observed.catch(() => {});
+  return proof.pending;
+}
+function acquisitionSnapshot(proof, inputs, ingresses) {
+  const binding = proof.binding;
+  return {
+    id: binding?.row.id ?? null, state: proof.state, defined: proof.reason !== undefined,
+    noResponse: proof.response === undefined, observerClean: proof.observerErrors.length === 0,
+    unique: !!binding && ingresses.filter(row => row.id === binding.row.id).length === 1
+      && inputs.filter(row => row.effective.headers.get("authorization") === "Bearer fixture-upstream-" + binding.row.id).length === 1,
+    ingressLive: proof.ingressLive, effectiveLive: proof.effectiveLive,
+    abortedBeforeReject: proof.ingressAbortedAtReject === true && proof.effectiveAbortedAtReject === true
+      && Number.isInteger(proof.ingressAbortAtReject) && proof.ingressAbortAtReject > proof.invoke && proof.ingressAbortAtReject < proof.rejected
+      && Number.isInteger(proof.effectiveAbort) && proof.effectiveAbort > proof.invoke && proof.effectiveAbort < proof.rejected,
+    listenerRemoved: proof.listenerRemoved === true,
+  };
+}
+function provisionalHeaderDisposition(snapshot) {
+  return snapshot.id === "abort_headers" && snapshot.state === "rejected" && snapshot.defined === true
+    && snapshot.noResponse === true && snapshot.observerClean === true && snapshot.unique === true
+    && snapshot.ingressLive === true && snapshot.effectiveLive === true && snapshot.abortedBeforeReject === true
+    && snapshot.listenerRemoved === true;
+}
+// A joined rejection remains rejected and cause-unclassified. Native settlement
+// may race within one turn; these observations do not prove unique causality.
+function acceptHeaderDisposition(physical, helperState, calls, receipt) {
+  const candidates = physical.candidates;
+  if (helperState !== "fulfilled" || physical.otherOperations !== "fulfilled" || physical.listenersRemoved !== true
+    || !Array.isArray(candidates) || candidates.length !== 1 || !provisionalHeaderDisposition(candidates[0])
+    || physical.requests.some(row => row.path === "/fixture/alternate")) throw new Error("unaccepted preheader disposition");
+  const matched = calls.filter(call => call.id === "abort_headers"), events = receipt?.usage?.events;
+  if (matched.length !== 1) throw new Error("ambiguous preheader upstream");
+  const [call] = matched, event = events?.[0];
+  if (call.url !== "https://openrouter.ai/api/v1/chat/completions" || call.method !== "POST" || call.redirect !== "manual"
+    || call.authorization !== "Bearer fixture-upstream-abort_headers" || call.aborted !== true || call.expired !== false
+    || call.waiter !== "fulfilled" || call.waiterListenerRemoved !== true || call.sourceReturnReached !== true
+    || events.length !== 1 || event.credential_id !== "orm_abort_headers" || event.policy_id !== "orm_abort_headers"
+    || event.model !== "openrouter/google/lyria-3-pro-preview" || event.provider !== "openrouter" || event.capability !== "music.generate"
+    || event.status !== "client_error" || event.cost_basis !== "policy_fixed" || event.actual_cost_micros !== 700
+    || receipt.budget?.spentMicros !== 700 || event.input_tokens !== null || event.output_tokens !== null || event.total_tokens !== null) {
+    throw new Error("preheader source or accounting not accepted");
+  }
+}
+function routerScript(route = "native") {
+  return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
+import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+import { HttpOperation } from "./worker/http-operation.ts";
+import { bodyBudgetCharged } from "./worker/body-budget.ts";
+const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
+const originalFetch = globalThis.fetch;
+let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0;
+const diagnosticErrors = [], taskTails = [];
+${createMusicPassiveState.toString()}
+${readMusicPassiveResponse.toString()}
+${captureMusicPassiveState.toString()}
+const passive = createMusicPassiveState(), passiveSnapshots = new Map(), passiveRecords = [], passiveErrors = [];
+// Anchor diagnostic elapsed time inside a request, independently in each Worker.
+let passiveEpoch;
+const passiveNow = () => Date.now() - passiveEpoch;
+async function capturePassive(point, id = "none", status = null) {
+  const record = await captureMusicPassiveState(passiveSnapshots, passiveErrors, point,
+    () => passive.local(point, id, status, ingresses, inputs, bodyBudgetCharged(), passiveNow()),
+    () => readMusicPassiveResponse(originalFetch, "https://fixture.example/passive-state", passive),
+    (local, source, received, faults) => passive.compact(local, source, received, ${JSON.stringify(route)}, faults), passiveNow);
+  if (record) passiveRecords.push(record);
+}
+function passiveRetirementResponse() {
+  // Preserve the primary counter envelope and cumulative cleanup separately.
+  // Extra detail omissions are counted, never disguised as absent failures.
+  const records = retirementSnapshot.records.length ? [retirementSnapshot.records[0], ...passiveRecords, ...retirementSnapshot.records.slice(1)] : [...passiveRecords];
+  const omitted = Math.max(0, records.length - 11);
+  if (records[0]?.phase === "worker_summary") records[0] = { ...records[0], suppressed: (records[0].suppressed ?? 0) + omitted, stateFaults: passiveErrors.length };
+  const snapshot = { ...retirementSnapshot, records: records.slice(0, 11), observerFailed: retirementSnapshot.observerFailed || diagnosticErrors.length > 0 || passiveErrors.length > 0 };
+  return new Response(passive.bounded(snapshot), { headers: { "content-type": "application/json" } });
+}
+${createMusicFailureCounts.toString()}
+${retirementObservation.toString()}
+${musicWorkerDetails.toString()}
+${retainMusicRetirement.toString()}
+${musicObserve.toString()}
+${observeMusicPromise.toString()}
+${installMusicOperationWitness.toString()}
+const failureCounts = musicFailureCounts();
+let sequence = 0; const tick = () => ++sequence;
+const terminationWitness = installMusicOperationWitness(HttpOperation, tick, diagnosticErrors);
+${[observeBody, effectiveFetch, sameJson, bindAcquisition, observeAcquisition, acquisitionSnapshot, provisionalHeaderDisposition].map(fn => fn.toString()).join("\n")}
+globalThis.fetch = function(input, init) {
+  const effective = effectiveFetch(input, init);
+  if (effective.url !== target) return Reflect.apply(originalFetch, this, [input, init]);
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target), failureCounts, tick, diagnosticErrors }; inputs.push(proof);
+  try { return observeAcquisition(originalFetch, this, input, init, proof, tick); }
+  catch (error) { failures.push(error); failureCounts.add("acquisition"); throw error; }
+};
+async function retire() {
+  const pass = ++retirementPass;
+  const errors = [], joined = [], candidates = [];
+  let taskCursor = 0, inputCursor = 0;
+  while (taskCursor < tasks.length || inputCursor < inputs.length) {
+    const batch = tasks.slice(taskCursor); taskCursor = tasks.length;
+    for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") { errors.push(result.reason); failureCounts.add("task"); }
+    while (inputCursor < inputs.length) {
+      const input = inputs[inputCursor++];
+      let failureKind = "acquisition";
+      try {
+        const [original] = await Promise.allSettled([input.pending]);
+        input.originalOutcome = original;
+        failureKind = "acquisition_observer"; await input.observed;
+        failureKind = "body_join";
+        errors.push(...input.observerErrors); for (const _ of input.observerErrors) failureCounts.add("observer_exception");
+        if (original.status === "rejected") {
+          const snapshot = acquisitionSnapshot(input, inputs, ingresses);
+          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else { input.retirementRejected = true; errors.push(original.reason); failureCounts.add("acquisition"); }
+        } else {
+          if (!input.join) throw new Error("acquired input unobserved");
+          joined.push(await input.join());
+        }
+      } catch (error) { errors.push(error); failureCounts.add(failureKind); }
+    }
+  }
+  // A later duplicate cannot inherit an earlier provisional unique binding.
+  for (const candidate of candidates) if (inputs.filter(input => input.effective.headers.get("authorization") === "Bearer fixture-upstream-" + candidate.id).length !== 1
+    || ingresses.filter(ingress => ingress.id === candidate.id).length !== 1) { errors.push(new Error("duplicate disposition binding")); failureCounts.add("binding"); }
+  for (const ingress of ingresses) { ingress.signal.removeEventListener("abort", ingress.listener); ingress.listenerRemoved = true; }
+  errors.push(...failures);
+  if (errors.length) {
+    try { retirementSnapshot = retainMusicRetirement(retirementSnapshot, retirementObservation(inputs, failureCounts.snapshot(), errors, ${JSON.stringify(route)},
+      { pass, faults: diagnosticErrors.length, ingresses, terminations: terminationWitness.rows, tails: taskTails })); }
+    catch { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; }
+    await capturePassive("retirement");
+    throw new AggregateError(errors, "original Worker operations failed");
+  }
+  if (diagnosticErrors.length || passiveErrors.length) { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; await capturePassive("retirement"); throw new AggregateError([...diagnosticErrors, ...passiveErrors], "music diagnostic instrumentation failed"); }
+  return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
+}
+export default { ...handler, async fetch(request, env, context) {
+  if (passiveEpoch === undefined) passiveEpoch = Date.now();
+  const path = new URL(request.url).pathname;
+  if (path === "/fixture/grants") {
+    for (const row of rows) if (row.kind !== "missing") await putGrantCredentials(env, "oauth/orm_" + row.id + "/openrouter", { provider: "openrouter", enabled: true, kind: "api_key", credential: "fixture-upstream-" + row.id });
+    return new Response(null, { status: 204 });
+  }
+  if (path === "/fixture/revoke") { const id = new URL(request.url).searchParams.get("id"); if (!rows.some(row => row.id === id)) return new Response(null, { status: 400 }); await revokeGrantCredentials(env, "oauth/orm_" + id + "/openrouter"); return new Response(null, { status: 204 }); }
+  if (path === "/fixture/retire") return Response.json(await retire());
+  if (path === "/fixture/retirement-observation") return passiveRetirementResponse();
+  if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
+  if (path === "/fixture/source-dispose") return originalFetch("https://fixture.example/dispose");
+  if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
+  if (path === "/fixture/started") {
+    const id = new URL(request.url).searchParams.get("id");
+    let response;
+    try { response = await originalFetch("https://fixture.example/started?id=" + id); }
+    catch (error) { if (passive.ids.includes(id)) await capturePassive("readiness", id); throw error; }
+    const status = musicObserve(() => passive.responseStatus(response), passiveErrors);
+    if (status !== 204 && passive.ids.includes(id)) await capturePassive("readiness", id, status);
+    return response;
+  }
+  if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
+  let ingress;
+  try {
+  if (path.startsWith("/v1/") && path !== "/v1/usage") {
+    const record = { path, method: request.method, authorization: request.headers.get("authorization"), body: null };
+    requests.push(record);
+    if (request.method === "POST" && ["/v1/native/openrouter/v1/chat/completions", "/v1/proxy/openrouter/music_generate"].includes(path)) {
+      const matches = rows.filter(row => record.authorization === "Bearer clawrouter-live-orm_" + row.id + "-fixture-secret");
+      ingress = { path, id: matches.length === 1 ? matches[0].id : null, signal: request.signal, body: null, abort: request.signal.aborted ? tick() : null };
+      ingress.listener = () => { ingress.abort ??= tick(); };
+      request.signal.addEventListener("abort", ingress.listener, { once: true }); ingresses.push(ingress);
+    }
+    if (request.method === "POST") { record.body = await request.clone().json(); if (ingress) ingress.body = record.body; }
+  }
+  const response = await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending);
+    const tail = { ingress }; taskTails.push(tail); observeMusicPromise(pending, tail, tick, diagnosticErrors);
+    context.waitUntil(pending); } });
+  if (ingress) musicObserve(() => { ingress.responseStatus = passive.responseStatus(response); }, passiveErrors);
+  return response; }
+  catch (error) { failures.push(error); failureCounts.add("handler"); throw error; }
+} };`;
+}
+
+// Closed data only; original readiness Promise/resolver remain in the handler.
+function createReadinessWitness(ids) {
+  const allowed = new Set(ids), records = new Map(); let sequence = 0;
+  const empty = id => ({ id, wait_entered: null, resolver_called: null, resolver_returned: null, wait_returned: null, matchingPosts: 0, waitCount: 0,
+    timer: "unstarted", notification: "unstarted", task: "unstarted", cancelCalls: 0, cancelReturned: false, cancelWhilePending: false,
+    timerRejectionObject: null, expired: false, joined: false, mapRemoved: false, listenerRemoved: false, failureCount: 0 });
+  const record = id => {
+    if (!allowed.has(id)) throw new Error("unknown readiness witness");
+    if (!records.has(id)) records.set(id, empty(id));
+    return records.get(id);
+  };
+  return { entered(id) { const row = record(id); row.waitCount++; row.wait_entered ??= ++sequence; },
+    called(id) { record(id).resolver_called ??= ++sequence; },
+    returned(id) { record(id).resolver_returned ??= ++sequence; },
+    resumed(id) { record(id).wait_returned ??= ++sequence; },
+    post(id) { record(id).matchingPosts++; },
+    update(id, fields) { Object.assign(record(id), fields); },
+    snapshot(id) { return allowed.has(id) ? { ...(records.get(id) ?? empty(id)) } : null; } };
+}
+function validateReadinessSnapshot(value, id) {
+  if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const sequence = ["wait_entered", "resolver_called", "resolver_returned", "wait_returned"];
+  const counts = ["matchingPosts", "waitCount", "cancelCalls", "failureCount"];
+  const states = ["timer", "notification", "task"];
+  const booleans = ["cancelReturned", "cancelWhilePending", "expired", "joined", "mapRemoved", "listenerRemoved"];
+  const fields = ["id", ...sequence, ...counts, ...states, ...booleans, "timerRejectionObject"];
+  if (Reflect.ownKeys(value).length !== fields.length) return false;
+  for (const field of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor || !("value" in descriptor)) return false;
+    const v = descriptor.value;
+    if (field === "id" ? v !== id : sequence.includes(field) ? v !== null && (!Number.isSafeInteger(v) || v <= 0 || v > 1000000)
+      : counts.includes(field) ? !Number.isSafeInteger(v) || v < 0 || v > (field === "cancelCalls" ? 1 : 1000)
+      : states.includes(field) ? !["unstarted", "pending", "fulfilled", "rejected"].includes(v)
+      : field === "timerRejectionObject" ? v !== null && typeof v !== "boolean" : typeof v !== "boolean") return false;
+  }
+  return true;
+}
+
+// This exact function runs inside the readiness GET and in the ownership tests.
+// Only its controller owns the timer. The POST retains only the notification resolver.
+async function waitForReadiness(id, waiting, readiness, signal, runtime = {
+  wait: (delay, options) => scheduler.wait(delay, options), controller: () => new AbortController(),
+}) {
+  const failures = [];
+  let controller, timer, timerObserved, notification, notificationObserved, resolveNotification, rejectNotification;
+  let timerResult, notificationResult, timerHandled = false, notificationHandled = false;
+  let listenerAttached = false, cleanupNotification = false, cleanupReason, cancelCalls = 0, cancelReturned = false, cancelWhilePending = false;
+  const aborted = () => { rejectNotification(signal.reason); };
+  const cancel = () => {
+    cancelWhilePending = timerResult === undefined; cancelCalls++;
+    readiness.update(id, { cancelCalls, cancelWhilePending });
+    controller.abort(new Error("readiness owner canceled its timer"));
+    cancelReturned = true; readiness.update(id, { cancelReturned });
+  };
+  try {
+    if (readiness.snapshot(id) === null || waiting.has(id)) throw new Error("unknown or duplicate readiness waiter");
+    if (!signal || typeof signal.aborted !== "boolean") throw new Error("readiness request signal missing");
+    if (signal.aborted) throw signal.reason;
+    controller = runtime.controller();
+    timer = runtime.wait(10000, { signal: controller.signal });
+    readiness.update(id, { timer: "pending" });
+    timerObserved = timer.then(() => {
+      timerResult = { kind: "timer", status: "fulfilled" };
+      readiness.update(id, { timer: "fulfilled", expired: true }); return timerResult;
+    }, reason => {
+      timerResult = { kind: "timer", status: "rejected", reason };
+      readiness.update(id, { timer: "rejected", timerRejectionObject: reason !== null && typeof reason === "object" }); return timerResult;
+    });
+    notification = new Promise((resolve, reject) => { resolveNotification = resolve; rejectNotification = reject; });
+    notificationObserved = notification.then(() => {
+      notificationResult = { kind: "notification", status: "fulfilled" };
+      readiness.update(id, { notification: "fulfilled" }); return notificationResult;
+    }, reason => {
+      notificationResult = { kind: "notification", status: "rejected", reason };
+      readiness.update(id, { notification: "rejected" }); return notificationResult;
+    });
+    signal.addEventListener("abort", aborted, { once: true }); listenerAttached = true;
+    waiting.set(id, resolveNotification); readiness.update(id, { notification: "pending" }); readiness.entered(id);
+    if (signal.aborted) aborted();
+    const first = await Promise.race([notificationObserved, timerObserved]);
+    if (first.kind === "timer") {
+      timerHandled = true; failures.push(first.status === "rejected" ? first.reason : new Error("readiness timer expired"));
+    } else {
+      notificationHandled = true;
+      if (first.status === "rejected") failures.push(first.reason);
+      else if (timerResult !== undefined) {
+        timerHandled = true; failures.push(timerResult.status === "rejected" ? timerResult.reason : new Error("readiness timer expired"));
+      } else {
+        readiness.resumed(id);
+        cancel();
+      }
+    }
+  } catch (reason) { failures.push(reason); }
+  finally {
+    // Failed notification paths still cancel and join their own original timer.
+    if (timerObserved && timerResult === undefined && cancelCalls === 0) {
+      try { cancel(); } catch (reason) { failures.push(reason); }
+    }
+    if (notificationObserved && notificationResult === undefined) {
+      cleanupNotification = true; cleanupReason = failures.length ? failures[0] : new Error("readiness notification incomplete");
+      rejectNotification(cleanupReason);
+    }
+    if (timerObserved) {
+      await timerObserved;
+      if (!timerHandled && !(timerResult.status === "rejected" && timerResult.reason !== null && typeof timerResult.reason === "object"
+        && cancelCalls === 1 && cancelReturned && cancelWhilePending)) {
+        failures.push(timerResult.status === "rejected" ? timerResult.reason : new Error("readiness timer expired"));
+      }
+    }
+    if (notificationObserved) {
+      await notificationObserved;
+      if (!notificationHandled && notificationResult.status === "rejected" && !(cleanupNotification && notificationResult.reason === cleanupReason)) failures.push(notificationResult.reason);
+      if (notificationResult.status === "fulfilled" && signal.aborted) failures.push(signal.reason);
+    }
+    try {
+      if (resolveNotification && waiting.get(id) === resolveNotification) waiting.delete(id);
+      if (resolveNotification && waiting.has(id)) throw new Error("readiness waiter ownership changed");
+      readiness.update(id, { mapRemoved: !waiting.has(id) });
+    } catch (reason) { failures.push(reason); }
+    try {
+      if (listenerAttached) signal.removeEventListener("abort", aborted);
+      readiness.update(id, { listenerRemoved: true });
+    } catch (reason) { failures.push(reason); }
+    if (readiness.snapshot(id) !== null) readiness.update(id, { joined: (!timer || timerResult !== undefined) && (!notification || notificationResult !== undefined), failureCount: failures.length });
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "readiness original operations failed");
+}
+
+function upstreamScript(audio) {
+  return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [], sourceOwners = [];
+${createMusicSourceLifetime.toString()}
+${createMusicPassiveState.toString()}
+${createReadinessWitness.toString()}
+${waitForReadiness.toString()}
+const readiness = createReadinessWitness(rows.map(row => row.id));
+const passive = createMusicPassiveState();
+let passiveEpoch;
+const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
+export default { async fetch(request, env, context) {
+  if (passiveEpoch === undefined) passiveEpoch = Date.now();
+  const url = new URL(request.url);
+  if (url.hostname === "fixture.example") {
+    if (url.pathname === "/passive-state") {
+      if (request.method !== "GET" || url.search) return new Response(null, { status: 400 });
+      const snapshot = passive.source(calls, id => readiness.snapshot(id), Date.now() - passiveEpoch);
+      return new Response(passive.bounded(snapshot), { headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/dispose") {
+      const outcomes = await Promise.allSettled(sourceOwners.map(owner => owner.dispose()));
+      const failures = outcomes.filter(row => row.status === "rejected").map(row => row.reason);
+      if (failures.length) throw new AggregateError(failures, "music source disposal failed");
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === "/readiness") { const snapshot = readiness.snapshot(url.searchParams.get("id")); return snapshot ? Response.json(snapshot) : new Response(null, { status: 400 }); }
+    if (url.pathname === "/state") {
+      let cursor = 0; const errors = [];
+      while (cursor < sourceTasks.length) { const batch = sourceTasks.slice(cursor); cursor = sourceTasks.length;
+        for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason); }
+      for (const result of await Promise.allSettled(sourceOwners.map(owner => owner.join()))) if (result.status === "rejected") errors.push(result.reason);
+      if (errors.length) throw new AggregateError(errors, "source waiter failed");
+      return Response.json(calls.map(call => ({ ...call, readiness: readiness.snapshot(call.id) })));
+    }
+    const id = url.searchParams.get("id");
+    if (!calls.some(call => call.id === id)) {
+      readiness.update(id, { task: "pending" });
+      const pending = waitForReadiness(id, waiting, readiness, request.signal); sourceTasks.push(pending);
+      try { await pending; readiness.update(id, { task: "fulfilled" }); }
+      catch (reason) { readiness.update(id, { task: "rejected" }); throw reason; }
+    }
+    return new Response(null, { status: 204 });
+  }
+  const row = rows.find(row => request.headers.get("authorization") === "Bearer fixture-upstream-" + row.id);
+  if (!row) return new Response("unknown fixture credential", { status: 401 });
+  const body = await request.json(), call = { id: row.id, url: request.url, method: request.method, redirect: request.redirect, authorization: request.headers.get("authorization"), body, aborted: request.signal.aborted, canceled: false, expired: false };
+  calls.push(call); readiness.post(row.id);
+  const resolver = waiting.get(row.id);
+  if (resolver !== undefined) { readiness.called(row.id); resolver(); readiness.returned(row.id); }
+  waiting.delete(row.id);
+  const held = row.kind === "abort_body" || row.kind === "deadline_body";
+  const owner = held || row.kind === "abort_headers" ? createMusicSourceLifetime(request.signal, call, context, ${musicSourceWatchdogMs}) : undefined;
+  if (owner) { sourceOwners.push(owner); sourceTasks.push(owner.joined); }
+  try {
+  if (row.kind === "abort_headers") {
+    call.waiter = "pending";
+    try { await owner.done; call.waiter = "fulfilled"; call.sourceReturnReached = true; return new Response(null, { status: 499 }); }
+    catch (reason) { call.waiter = "rejected"; throw reason; }
+    finally { call.waiterListenerRemoved = !call.sourceLifetime.listenerActive; }
+  }
+  if (!held) request.signal.addEventListener("abort", () => { call.aborted = true; }, { once: true });
+  if (row.kind === "redirect") return new Response(null, { status: 307, headers: { location: "https://alternate.example/paid" } });
+  if (row.kind === "error") return Response.json({ error: { message: "synthetic refusal" } }, { status: 429 });
+  const frame = delta => ({ model: row.model, choices: [{ index: 0, delta, finish_reason: null }] });
+  const encoded = audio[row.format];
+  let wire = event(frame({ audio: { data: encoded.slice(0, 3), transcript: "café " } })) + event(frame({ audio: { data: encoded.slice(3), transcript: "synthetic music" } })) + event({ model: row.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) + event({ choices: [], usage: { prompt_tokens: 99, completion_tokens: 999, cost: 12.34 } }) + "data: [DONE]\\n\\n";
+  if (row.kind === "empty") wire = event(frame({ audio: { transcript: "no audio" } })) + "data: [DONE]\\n\\n";
+  if (row.kind === "eof") wire = wire.replace("data: [DONE]\\n\\n", "");
+  if (row.kind === "json") wire = "data: {broken\\n\\n";
+  if (row.kind === "base64") wire = event(frame({ audio: { data: "ZE==" } })) + "data: [DONE]\\n\\n";
+  if (row.kind === "ambiguous") wire = event({ choices: [{}, {}] }) + "data: [DONE]\\n\\n";
+  if (row.kind === "partial") wire = event({ choices: [{ delta: {}, finish_reason: "length" }] });
+  if (row.kind === "wire") wire = ":" + "x".repeat(32 * 1024 * 1024) + "\\n\\n";
+  if (row.kind === "audio") wire = event(frame({ audio: { data: "AAAA".repeat(Math.ceil((16 * 1024 * 1024 + 3) / 3)) } })) + "data: [DONE]\\n\\n";
+  if (row.kind === "transcript") wire = event(frame({ audio: { data: encoded, transcript: "x".repeat(1024 * 1024 + 1) } })) + "data: [DONE]\\n\\n";
+  const bytes = row.kind === "utf8" ? new Uint8Array([255, 10]) : new TextEncoder().encode(held ? ": waiting\\n\\n" : wire);
+  let offset = 0;
+  return new Response(new ReadableStream({ type: "bytes", start(controller) {
+    if (owner) {
+      // Expiry/failure errors the real body; it is never successful EOF or a
+      // substitute cancel. Retain this original reaction in its request too.
+      const tail = owner.done.catch(reason => {
+        try { controller.error(reason); }
+        catch (cleanup) { throw new AggregateError([reason, cleanup], "music source failure and body cleanup failed"); }
+        throw reason;
+      });
+      sourceTasks.push(tail); context.waitUntil(tail);
+    }
+  }, pull(controller) {
+    try {
+      if (offset < bytes.length) { const chunk = bytes.slice(offset, offset + 16384); offset += chunk.length; controller.enqueue(chunk); }
+      else if (!held) controller.close();
+    } catch (reason) { owner?.fail(reason); throw reason; }
+  }, cancel() { if (owner) return owner.cancel(); call.canceled = true; } }), { headers: { "content-type": "text/event-stream" } });
+  } catch (reason) { owner?.fail(reason); throw reason; }
+} };`;
+}
+
+async function start(route, audio) {
+  musicOuter("worker_prepare", route);
+  const snapshot = compiled(route), temporary = await mkdtemp(join(tmpdir(), "clawrouter-openrouter-music-"));
+  let mf;
+  try {
+    const require = createRequire(import.meta.resolve("wrangler/package.json"));
+    let replacements = 0;
+    const bundle = await require("esbuild").build({ stdin: { contents: routerScript(route), resolveDir: root, sourcefile: "openrouter-music-fixture.ts", loader: "ts" },
+      write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
+      plugins: [{ name: "validated-music-snapshot", setup(build) { build.onLoad({ filter: /provider-snapshot\.json$/ }, args => {
+        if (args.path !== snapshotPath) return; replacements++; return { contents: JSON.stringify(snapshot), loader: "json" };
+      }); } }] });
+    assert.equal(replacements, 1);
+    mf = await startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript(audio), { directRouter: true });
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    musicOuter("grant_setup", route);
+    const kv = await mf.getKVNamespace("POLICY_KV", "router");
+    for (const row of cases) {
+      await kv.put(`policies/orm_${row.id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: row.kind === "foreign" ? ["openai"] : ["openrouter"],
+        models: models.map(model => `openrouter/${model}`), tenantId: "fixture", monthlyBudgetMicros: 10000, requestCostMicros: row.kind === "unpriced" ? null : 700,
+        grantRouting: { eligibleGrants: { openrouter: ["openrouter"] }, environmentFallback: false }, budgetMode: "reserve", retainRequestContent: false }));
+      await kv.put(`credentials/orm_${row.id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: `orm_${row.id}`, policyGeneration: "fixture" }));
+    }
+    await kv.put("connections/openrouter", JSON.stringify({ providerId: "openrouter", enabled: true }));
+    assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    musicOuter("worker_prepare", route, "none", "fulfilled");
+    return { mf, origin, route, async close() {
+      const failures = [];
+      // Notify only; each original request performs its own timer/listener
+      // cleanup. The control cannot declare an unfinished producer successful.
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(new Error("source disposal bound expired")), 10000);
+      try { assert.equal((await fetch(origin + "/fixture/source-dispose", { signal: controller.signal })).status, 204); }
+      catch (error) { failures.push(error); }
+      finally { clearTimeout(timer); }
+      musicOuter("worker_dispose", route);
+      try { await mf.dispose(); musicOuter("worker_dispose", route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_dispose", route, "none", "rejected", "cleanup", true, error); failures.push(error); }
+      musicOuter("scratch_cleanup", route);
+      try { await rm(temporary, { recursive: true, force: true }); musicOuter("scratch_cleanup", route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("scratch_cleanup", route, "none", "rejected", "cleanup", true, error); failures.push(error); }
+      if (failures.length) throw new AggregateError(failures, "fixture disposal failed");
+    } };
+  } catch (error) {
+    musicOuter("worker_prepare", route, "none", "rejected", "primary", true, error);
+    const errors = [error];
+    try { await mf?.dispose(); } catch (failure) { musicOuter("worker_dispose", route, "none", "rejected", "cleanup", true, failure); errors.push(failure); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (failure) { musicOuter("scratch_cleanup", route, "none", "rejected", "cleanup", true, failure); errors.push(failure); }
+    throw errors.length === 1 ? error : new AggregateError(errors, "fixture acquisition and cleanup failed");
+  }
+}
+
+async function retirement(origin, route, fetchOriginal = fetch, report = reportRetirementObservation) {
+  const response = await fetchOriginal(origin + "/fixture/retire", { method: "POST" });
+  try { assert.equal(response.status, 200, "original work must retire before disposal"); }
+  catch (error) {
+    try { await report(origin, route); } catch (reportError) { musicDiagnosticFailures.push(reportError); }
+    throw error;
+  }
+  const result = await response.json();
+  assert.ok(result.joined.every(row => row.readers > 0 && row.operations > 0 && row.unlocked));
+  return result;
+}
+async function usage(origin, id) {
+  const response = await fetch(origin + "/v1/usage", { headers: headers(id) });
+  assert.equal(response.status, 200); return response.json();
+}
+async function cleanup(f, failures) {
+  musicOuter("worker_retirement", f.route);
+  try { await retirement(f.origin, f.route); musicOuter("worker_retirement", f.route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_retirement", f.route, "none", "rejected", "cleanup", true, error); failures.push(error); }
+  try { await f.close(); } catch (error) { failures.push(error); }
+  musicOuter("final_cleanup", f.route, "none", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { rejected: failures.length });
+  if (failures.length) throw new AggregateError(failures, "music contract and cleanup failed");
+}
+
+test("all real manifests produce native-only shipping music and a single-setting manifest variant", () => {
+  const native = compiled("native"), manifest = compiled("manifest");
+  assert.equal(native.providers.find(p => p.id === "openrouter").endpoints.find(e => e.id === "music_generate").native_proxy, true);
+  assert.equal(manifest.providers.find(p => p.id === "openrouter").endpoints.find(e => e.id === "music_generate").native_proxy, false);
+});
+
+for (const boundary of ["construction", "pull"]) for (const reason of [undefined, new Error("source callback failed")]) {
+  test(`held upstream preserves ${boundary} failure and joins source cleanup (${reason === undefined ? "undefined" : "defined"})`, async () => {
+    const tails = [], controller = new AbortController();
+    class FailingStream extends ReadableStream {
+      constructor(source) {
+        if (boundary === "construction") throw reason;
+        super({ ...source, pull(original) {
+          return source.pull({ enqueue() { throw reason; }, close: () => original.close(), error: value => original.error(value) });
+        } });
+      }
+    }
+    const source = new Function("ReadableStream", upstreamScript({ wav: "", mp3: "" }).replace("export default", "const handler =") + "; return { handler, calls };")(FailingStream);
+    const request = new Request(target, { method: "POST", headers: { authorization: "Bearer fixture-upstream-abort_body" },
+      body: JSON.stringify(body(cases.find(row => row.id === "abort_body"))), signal: controller.signal });
+    const pending = source.handler.fetch(request, {}, { waitUntil(p) { tails.push(p); void p.catch(() => {}); } });
+    let reader, rejected = false, actual;
+    try {
+      const response = await pending; reader = response.body.getReader(); void reader.closed.catch(() => {});
+      await reader.read();
+    } catch (error) { rejected = true; actual = error; }
+    finally { reader?.releaseLock(); }
+    assert.equal(rejected, true); assert.equal(actual, reason);
+    const results = await Promise.allSettled(tails);
+    assert.ok(results.some(row => row.status === "rejected"));
+    const [call] = source.calls;
+    assert.equal(call.sourceLifetime.pending, 0); assert.equal(call.sourceLifetime.finished, true);
+    assert.equal(call.sourceLifetime.timerActive, false); assert.equal(call.sourceLifetime.listenerActive, false);
+    assert.equal(call.sourceLifetime.terminal, "failed"); assert.ok(call.sourceLifetime.faults > 0);
+    assert.equal(call.aborted, false); assert.equal(call.canceled, false); assert.equal(call.expired, false);
+  });
+}
+
+for (const route of ["native", "manifest"]) {
+  test(`real ${route} catalog, complete music, unknown-budget refusal and SQLite`, { timeout: 60000 }, async () => {
+    const wav = Buffer.from(musicWave()).toString("base64"), f = await start(route, { wav, mp3: wav }), failures = [];
+    try {
+      const catalog = await (await fetch(f.origin + "/v1/catalog", { headers: headers("m0_wav") })).json();
+      const offers = catalog.providers.find(p => p.id === "openrouter").offers.filter(offer => offer.endpoint === "music_generate");
+      assert.ok(offers.every(offer => offer.routeKind === route));
+      assert.deepEqual(offers.filter(offer => offer.modelId !== null).map(offer => offer.modelId).sort(), models.map(model => `openrouter/${model}`).sort());
+      assert.ok(offers.filter(offer => offer.modelId !== null).every(offer => offer.eligible));
+      if (route === "manifest") {
+        // Retain the original wrong-ID regression: the complete index distinguishes
+        // Google from OpenRouter. The corrected SDK must send the router ID.
+        const refused = await fetch(f.origin + "/v1/proxy/openrouter/music_generate", { method: "POST", headers: headers("m0_mp3"), body: JSON.stringify({ body: body(positives[0]) }) });
+        assert.equal(refused.status, 400); assert.equal((await refused.json()).error.code, "model_provider_mismatch");
+        assert.deepEqual(await (await fetch(f.origin + "/fixture/state")).json(), []);
+      }
+      for (const row of positives.filter(row => row.format === "wav")) {
+        const path = route === "native" ? "/v1/native/openrouter/v1/chat/completions" : "/v1/proxy/openrouter/music_generate";
+        const request = body(row);
+        const response = await fetch(f.origin + path, { method: "POST", headers: headers(row.id), body: JSON.stringify(route === "native" ? request : { body: { ...request, model: `openrouter/${row.model}` } }) });
+        assert.equal(response.status, 200); const wire = await response.text(); assert.match(wire, /data: \[DONE\]/); assert.match(wire, /café/);
+        await retirement(f.origin, f.route);
+        const receipt = await usage(f.origin, row.id), [event] = receipt.usage.events;
+        assert.equal(receipt.usage.events.length, 1); assert.equal(receipt.budget.spentMicros, 700);
+        assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 700); assert.equal(event.status, "success");
+        assert.equal(event.model, `openrouter/${row.model}`); assert.equal(event.capability, "music.generate");
+        assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
+      }
+      const before = await (await fetch(f.origin + "/fixture/state")).json(), request = body(cases.find(row => row.id === "unpriced"));
+      const response = await fetch(f.origin + (route === "native" ? "/v1/native/openrouter/v1/chat/completions" : "/v1/proxy/openrouter/music_generate"), {
+        method: "POST", headers: headers("unpriced"), body: JSON.stringify(route === "native" ? request : { body: { ...request, model: `openrouter/${request.model}` } }) });
+      assert.equal((await response.json()).error.code, "pricing_required");
+      assert.deepEqual(await (await fetch(f.origin + "/fixture/state")).json(), before);
+      assert.equal((await usage(f.origin, "unpriced")).budget.spentMicros, 0);
+    } catch (error) { failures.push(error); }
+    await cleanup(f, failures);
+  });
+}
+
+test("actual registered OpenRouter music client through both real configurations", { skip: !source, timeout: 600000 }, async t => {
+  let diagnosticRoute = "none", diagnosticCase = "none", diagnosticPhase = "media_fixture";
+  musicOuter(diagnosticPhase);
+  try {
+  const mp3 = readFileSync(join(source, "test/fixtures/media/lyria-silence.mp3"));
+  assert.equal(createHash("sha256").update(mp3).digest("hex"), "94bf451427043b32a9893976aefdea79d784323e5422f1f986fb22548615162b");
+  for (const route of ["native", "manifest"]) {
+    diagnosticRoute = route; diagnosticPhase = "worker_prepare";
+    const audio = { wav: Buffer.from(musicWave()).toString("base64"), mp3: mp3.toString("base64") }, f = await start(route, audio), failures = [];
+    let helperState = "pending";
+    const observer = musicChildObserver(route);
+    try {
+      diagnosticPhase = "helper"; musicOuter(diagnosticPhase, route);
+      try {
+      await runOpenClawConsumer({ diagnostic: observer.diagnostic }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url),
+        testPath: "src/agents/tools/worker-openrouter-music-contract.test.ts",
+        env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_ROUTE: route, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases) } });
+      } catch (error) { observer.rejection(error); throw error; }
+      helperState = "fulfilled"; observer.fulfilled();
+      diagnosticPhase = "worker_retirement"; musicOuter(diagnosticPhase, route);
+      const physical = await retirement(f.origin, f.route);
+      musicOuter(diagnosticPhase, route, "none", "fulfilled");
+      diagnosticPhase = "upstream_state"; musicOuter(diagnosticPhase, route);
+      const calls = await (await fetch(f.origin + "/fixture/state")).json();
+      assert.equal(physical.requests.filter(row => row.path === "/fixture/alternate").length, 0);
+      let headerReceipt;
+      for (const row of cases) {
+        diagnosticCase = row.id; diagnosticPhase = "sqlite_read"; musicOuter(diagnosticPhase, route, row.id);
+        const matched = calls.filter(call => call.id === row.id), receipt = await usage(f.origin, row.id);
+        diagnosticPhase = "upstream_assert"; musicOuter(diagnosticPhase, route, row.id);
+        if (row.id === "abort_headers") headerReceipt = receipt;
+        if (unsent.has(row.kind)) { assert.equal(matched.length, 0, row.id); assert.equal(receipt.budget.spentMicros, 0, row.id); continue; }
+        assert.equal(matched.length, 1, row.id); const [call] = matched;
+        assert.equal(call.url, target); assert.equal(call.method, "POST"); assert.equal(call.redirect, "manual");
+        assert.equal(call.authorization, `Bearer fixture-upstream-${row.id}`); assert.equal(call.body.model, row.model);
+        assert.equal(call.body.stream, true); assert.equal(call.body.audio.format, row.format);
+        if (row.kind.startsWith("abort") || row.kind === "deadline_body") { assert.ok(call.aborted || call.canceled); assert.equal(call.expired, false); }
+        diagnosticPhase = "sqlite_assert"; musicOuter(diagnosticPhase, route, row.id);
+        assert.equal(receipt.usage.events.length, 1); const [event] = receipt.usage.events;
+        assert.equal(event.credential_id, `orm_${row.id}`); assert.equal(event.policy_id, `orm_${row.id}`);
+        assert.equal(event.model, `openrouter/${row.model}`); assert.equal(event.provider, "openrouter"); assert.equal(event.capability, "music.generate");
+        assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.actual_cost_micros, 700); assert.equal(receipt.budget.spentMicros, 700);
+        assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
+        assert.equal(event.status, row.kind === "success" ? "success" : row.kind.startsWith("abort") || row.kind === "deadline_body" ? "client_error" : "provider_error");
+      }
+      // Only after every independent source/SQLite oracle. /retire is provisional.
+      diagnosticCase = "abort_headers"; diagnosticPhase = "header_disposition"; musicOuter(diagnosticPhase, route, diagnosticCase);
+      acceptHeaderDisposition(physical, helperState, calls, headerReceipt);
+    } catch (error) { musicOuter(diagnosticPhase, route, diagnosticCase, "rejected", "primary", true, error); failures.push(error); }
+    diagnosticPhase = "final_cleanup";
+    await cleanup(f, failures);
+  }
+  } catch (error) { musicOuter(diagnosticPhase, diagnosticRoute, diagnosticCase, "rejected", "primary", true, error); throw error; }
+});
+
+test("retirement observation retains strict original read cancel and closed failures including undefined", async () => {
+  for (const reason of [new Error("controlled stored error"), undefined]) {
+    const signal = new AbortController().signal;
+    const response = new Response(new ReadableStream({ start(controller) { controller.error(reason); } }));
+    const counts = createMusicFailureCounts(), input = { response, effective: { signal }, binding: { row: { id: "error" } }, failureCounts: counts };
+    observeBody(response, signal, input);
+    const reader = response.body.getReader(), read = reader.read(), cancel = reader.cancel();
+    const outcomes = await Promise.allSettled([read, cancel]); reader.releaseLock();
+    assert.ok(outcomes.every(row => row.status === "rejected" && row.reason === reason));
+    let failure;
+    try { await input.join(); } catch (error) { failure = error; }
+    assert.ok(failure instanceof AggregateError); assert.ok(failure.errors.every(error => error === reason));
+    assert.equal(input.readerRows[0].operations[0].pending, read);
+    assert.equal(input.readerRows[0].operations[1].pending, cancel);
+    const snapshot = retirementObservation([input], counts.snapshot(), failure.errors, "native");
+    assert.equal(snapshot.records.length, 4); assert.equal(snapshot.observerFailed, false);
+    assert.deepEqual(snapshot.records.slice(1).map(row => row.operation), ["read", "cancel", "closed"]);
+    for (const record of snapshot.records.slice(1)) {
+      assert.equal(record.reasonDefined, reason !== undefined); assert.equal(record.sameClosedReason, true); assert.equal(record.sameCancelReason, true);
+      assert.equal(record.signalAbortedAtJoin, false); assert.equal(record.bodyLockedAtJoin, false);
+      assert.equal(record.closedOutcome, "rejected"); assert.equal(record.cancelOutcome, "rejected");
+      assert.equal(record.releases, 1); assert.equal(record.returned, 1); assert.ok(musicProtocol.validate(record));
+    }
+  }
+});
+
+test("retirement observation is captured before the original serialized Worker rejection", async () => {
+  const script = routerScript("native"), begin = script.indexOf("async function retire() {"), end = script.indexOf("\nexport default", begin);
+  const create = new Function("inputs", "tasks", "ingresses", "failures", "failureCounts", "retirementObservation", "acquisitionSnapshot", "provisionalHeaderDisposition", "retainMusicRetirement",
+    'let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0; const diagnosticErrors = [], taskTails = [], terminationWitness = { rows: new WeakMap() }; const requests = []; const passiveErrors = []; const capturePassive = async () => {};\n'  + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
+  for (const reason of [new Error("controlled acquisition"), undefined]) {
+    for (const snapshotFails of [false, true]) {
+      const pending = deferredOriginal(), proof = { effective: { signal: null, headers: new Headers() }, observerErrors: [], observed: Promise.resolve(), state: "rejected", reason };
+      proof.pending = pending.pending;
+      const fixture = create([proof], [], [], [], createMusicFailureCounts(), snapshotFails ? () => { throw undefined; } : retirementObservation, acquisitionSnapshot, provisionalHeaderDisposition, retainMusicRetirement);
+      let settled = false; const originalRetirement = fixture.retire();
+      void originalRetirement.then(() => { settled = true; }, () => { settled = true; });
+      await Promise.resolve(); assert.equal(settled, false); assert.deepEqual(fixture.snapshot().records, []);
+      pending.reject(reason);
+      await assert.rejects(originalRetirement, error => error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === reason);
+      assert.equal(proof.pending, pending.pending); assert.equal(proof.originalOutcome.reason, reason);
+      const snapshot = fixture.snapshot(); assert.equal(snapshot.observerFailed, snapshotFails);
+      if (!snapshotFails) {
+        assert.equal(snapshot.records[0].f_acquisition, 1); assert.equal(snapshot.records[1].operation, "acquisition");
+        assert.equal(snapshot.records[1].reasonDefined, reason !== undefined); assert.equal(snapshot.records[1].responsePresent, false);
+        assert.ok(snapshot.records.every(row => musicProtocol.validate(row)));
+        const firstBytes = JSON.stringify(snapshot.records);
+        await assert.rejects(fixture.retire(), error => error instanceof AggregateError && error.errors[0] === reason);
+        assert.equal(JSON.stringify(fixture.snapshot().records), firstBytes);
+        assert.equal(fixture.snapshot().records[0].pass, 1); assert.equal(fixture.snapshot().cleanup.pass, 2);
+        assert.equal(fixture.snapshot().cleanup.f_acquisition, 2);
+      }
+    }
+  }
+});
+
+test("retirement observation schema is closed bounded and preserves separate original operations", () => {
+  const reason = new Proxy({}, { get() { throw new Error("must not inspect reason"); } });
+  const input = { effective: { signal: null }, originalOutcome: { status: "rejected", reason }, retirementRejected: true };
+  const snapshot = retirementObservation(Array(12).fill(input), { f_acquisition: 12 }, Array(12).fill(reason), "manifest");
+  assert.equal(snapshot.records.length, 4); assert.equal(snapshot.records[0].suppressed, 9);
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) <= 3072);
+  for (const value of snapshot.records) assert.ok(musicProtocol.validate(value));
+  const record = snapshot.records[1];
+  for (const fields of [{ operation: "foreign" }, { reasonDefined: "true" }, { inputIndex: -1 }, { closedOutcome: "pending" }, { message: "forbidden" }]) {
+    assert.equal(musicProtocol.validate({ ...record, ...fields }), undefined);
+  }
+  const lines = [], diagnostics = musicProtocol.emitter(line => lines.push(line));
+  diagnostics.fail(musicProtocol.record(musicDiagnosticContext("manifest"), true, undefined));
+  for (const value of snapshot.records) diagnostics.put(value);
+  for (const id of musicProtocol.ids) diagnostics.put(musicProtocol.record(musicDiagnosticContext("native", id, "body_assert"), true, undefined));
+  diagnostics.flush(); assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => Buffer.byteLength(line) <= 768 && line.startsWith("::error ")));
+  const decoded = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(decoded.filter(row => row.phase === "worker_original").length, 3);
+});
+
+test("retirement observation reporting cannot replace the original status or undefined acquisition rejection", async () => {
+  const reporting = [], lines = [], failures = [], diagnostics = musicProtocol.emitter(line => lines.push(line));
+  const snapshot = { ...retirementObservation([], { f_task: 1 }, [undefined], "native"), cleanup: null };
+  await reportRetirementObservation("https://fixture.invalid", "native", async url => {
+    assert.equal(url, "https://fixture.invalid/fixture/retirement-observation"); return Response.json(snapshot);
+  }, musicProtocol, diagnostics, failures);
+  assert.deepEqual(failures, []); diagnostics.flush(); assert.deepEqual(lines, [], "observations alone cannot emit an error");
+  for (const invalid of [{ ...snapshot, observerFailed: true }, { ...snapshot, extra: true }, { ...snapshot, records: snapshot.records.map(row => ({ ...row, route: "manifest" })) }]) {
+    const errors = [];
+    await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(invalid), musicProtocol, musicProtocol.emitter(() => {}), errors);
+    assert.equal(errors.length, 1);
+  }
+  await assert.rejects(retirement("https://fixture.invalid", "native", async () => new Response(null, { status: 500 }), async () => { reporting.push(true); }),
+    error => error.code === "ERR_ASSERTION" && error.actual === 500 && error.expected === 200);
+  assert.deepEqual(reporting, [true]);
+  let caught = false;
+  try { await retirement("https://fixture.invalid", "native", () => Promise.reject(undefined), () => { assert.fail("no response to observe"); }); }
+  catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+  const before = musicDiagnosticFailures.length;
+  try {
+    await assert.rejects(retirement("https://fixture.invalid", "native", async () => new Response(null, { status: 500 }), async () => { throw undefined; }),
+      error => error.code === "ERR_ASSERTION" && error.actual === 500);
+    assert.deepEqual(musicDiagnosticFailures.slice(before), [undefined]);
+  } finally { musicDiagnosticFailures.splice(before); }
+});
+
+test("reader observer joins the original cancel and rejects cleanup failure including undefined", async () => {
+  const cause = new Error("owned cleanup failure");
+  for (const reason of [cause, undefined]) {
+    const response = new Response(new ReadableStream({ cancel() { return Promise.reject(reason); } }));
+    const proof = {};
+    observeBody(response, undefined, proof);
+    const reader = response.body.getReader();
+    const original = reader.cancel(reason);
+    await assert.rejects(original, error => error === reason);
+    reader.releaseLock();
+    await assert.rejects(proof.join(), error => error instanceof AggregateError && error.errors.some(value => value === reason));
+  }
+});
+
+// Oracle regressions exercise the exact serialized functions. Controlled promises
+// here test classification only; they do not supply hosted transport evidence.
+async function headerOracle(order = "abort-first", reason, response) {
+  if (arguments.length < 2) reason = new Error("unclassified native rejection");
+  const row = cases.find(row => row.id === "abort_headers"), ingressController = new AbortController(), effectiveController = new AbortController();
+  let sequence = 0; const tick = () => ++sequence;
+  const ingress = { id: row.id, path: "/v1/native/openrouter/v1/chat/completions", signal: ingressController.signal, body: body(row), abort: null };
+  ingress.signal.addEventListener("abort", () => { ingress.abort = tick(); }, { once: true });
+  const init = { method: "POST", headers: { authorization: `Bearer fixture-upstream-${row.id}` }, body: JSON.stringify(body(row)), signal: effectiveController.signal, redirect: "manual" };
+  const effective = effectiveFetch(target, init), ingresses = [ingress];
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, cases, target) };
+  let reject, fulfill;
+  const original = new Promise((resolve, fail) => { fulfill = resolve; reject = fail; });
+  const receiver = {};
+  assert.equal(observeAcquisition(function(input, options) {
+    assert.equal(this, receiver); assert.equal(input, target); assert.equal(options, init); return original;
+  }, receiver, target, init, proof, tick), original);
+  const abort = () => { ingressController.abort(new Error("ingress abort")); effectiveController.abort(new Error("effective abort")); };
+  if (order === "abort-first") abort();
+  if (response !== undefined) fulfill(response); else reject(reason);
+  await proof.observed;
+  if (order === "reject-first") abort();
+  return { proof, ingresses, init, snapshot: acquisitionSnapshot(proof, [proof], ingresses) };
+}
+function headerEvidence(snapshot) {
+  return {
+    physical: { candidates: [snapshot], requests: [], otherOperations: "fulfilled", listenersRemoved: true },
+    calls: [{ id: "abort_headers", url: target, method: "POST", redirect: "manual", authorization: "Bearer fixture-upstream-abort_headers",
+      aborted: true, expired: false, waiter: "fulfilled", waiterListenerRemoved: true, sourceReturnReached: true }],
+    receipt: { budget: { spentMicros: 700 }, usage: { events: [{ credential_id: "orm_abort_headers", policy_id: "orm_abort_headers",
+      model: "openrouter/google/lyria-3-pro-preview", provider: "openrouter", capability: "music.generate", status: "client_error",
+      cost_basis: "policy_fixed", actual_cost_micros: 700, input_tokens: null, output_tokens: null, total_tokens: null }] } },
+    helper: "fulfilled",
+  };
+}
+
+test("preheader disposition retains original rejection and requires observed abort order", async () => {
+  const good = await headerOracle();
+  assert.equal(good.proof.state, "rejected"); assert.equal(good.proof.reason.message, "unclassified native rejection");
+  assert.equal(provisionalHeaderDisposition(good.snapshot), true);
+  for (const order of ["reject-first", "no-abort"]) {
+    assert.equal(provisionalHeaderDisposition((await headerOracle(order)).snapshot), false, order);
+  }
+  const missing = await headerOracle("abort-first", undefined);
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(missing.proof, [missing.proof], missing.ingresses)), false);
+  const response = new Response(null), observed = await headerOracle("abort-first", new Error("unused"), response);
+  assert.equal(observed.proof.response, response); assert.equal(observed.proof.state, "fulfilled");
+  assert.equal(observed.proof.observerErrors.length, 1);
+  assert.equal(provisionalHeaderDisposition(observed.snapshot), false, "observer error is not native acquisition rejection");
+});
+
+test("effective fetch binding uses replacement headers, original body and explicit null signal", async () => {
+  const good = await headerOracle(), request = new Request(target, { method: "POST", headers: good.init.headers, body: good.init.body, signal: good.init.signal, redirect: "manual" });
+  const replaced = effectiveFetch(request, { headers: { "x-fixture": "replacement" }, body: good.init.body, signal: null });
+  assert.equal(replaced.headers.has("authorization"), false); assert.equal(replaced.signal, null);
+  assert.equal(bindAcquisition(replaced, good.ingresses, cases, target), undefined);
+  const nullSignal = effectiveFetch(request, { ...good.init, signal: null });
+  const proof = { effective: nullSignal, binding: bindAcquisition(nullSignal, good.ingresses, cases, target) };
+  observeAcquisition(() => Promise.reject(new Error("defined")), null, request, { ...good.init, signal: null }, proof, () => 1);
+  await proof.observed;
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(proof, [proof], good.ingresses)), false);
+  for (const change of [
+    { method: "GET" }, { url: "https://alternate.example/paid" }, { redirect: "follow" },
+    { headers: new Headers({ authorization: "Bearer foreign-fixture" }) },
+    { body: JSON.stringify({ ...JSON.parse(good.init.body), model: "foreign" }) },
+    { body: JSON.stringify({ ...JSON.parse(good.init.body), messages: [] }) }, { body: null },
+  ]) assert.equal(bindAcquisition({ ...good.proof.effective, ...change }, good.ingresses, cases, target), undefined);
+  assert.equal(bindAcquisition(good.proof.effective, [...good.ingresses, good.ingresses[0]], cases, target), undefined);
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(good.proof, [good.proof, { effective: good.proof.effective }], good.ingresses)), false);
+  const manifest = { ...good.ingresses[0], path: "/v1/proxy/openrouter/music_generate", body: { body: { ...good.ingresses[0].body, model: "openrouter/" + models[0] } } };
+  assert.equal(bindAcquisition(good.proof.effective, [manifest], cases, target)?.ingress, manifest);
+});
+
+test("preheader oracle preserves synchronous native exceptions including undefined", () => {
+  for (const reason of [new Error("sync fixture failure"), undefined]) {
+    const controller = new AbortController(), proof = { effective: { signal: controller.signal } };
+    let threw = false;
+    try { observeAcquisition(() => { throw reason; }, null, target, {}, proof, () => 1); }
+    catch (error) { threw = true; assert.equal(error, reason); }
+    assert.equal(threw, true); assert.equal(proof.state, "threw"); assert.equal(proof.listenerRemoved, true);
+  }
+});
+
+test("source waiter completes and removes its original abort listener before evidence", async () => {
+  const controller = new AbortController(), call = { aborted: false }, tails = [];
+  const owner = createMusicSourceLifetime(controller.signal, call, { waitUntil: p => tails.push(p) }, musicSourceWatchdogMs);
+  assert.equal(call.sourceLifetime.finished, false); assert.equal(call.sourceLifetime.listenerActive, true);
+  controller.abort(new Error("owned source abort")); await owner.done; await Promise.all(tails); await owner.join();
+  assert.equal(call.aborted, true); assert.equal(call.sourceLifetime.finished, true);
+  assert.equal(call.sourceLifetime.listenerActive, false); assert.equal(call.sourceLifetime.timerActive, false);
+  assert.equal(call.sourceLifetime.pending, 0); assert.equal(call.sourceLifetime.abortReturned, 1);
+});
+
+test("final preheader acceptance requires helper, source, one POST, accounting and all cleanup", async () => {
+  const { snapshot } = await headerOracle();
+  const accept = e => acceptHeaderDisposition(e.physical, e.helper, e.calls, e.receipt);
+  assert.doesNotThrow(() => accept(headerEvidence(snapshot)));
+  const changes = [
+    e => { e.helper = "pending"; }, e => { e.helper = "rejected"; },
+    e => { e.physical.otherOperations = "pending"; }, e => { e.physical.otherOperations = "rejected"; },
+    e => { e.physical.listenersRemoved = false; }, e => { e.physical.candidates = []; },
+    e => { e.physical.candidates.push(e.physical.candidates[0]); },
+    e => { e.physical.candidates[0].id = "deadline_body"; }, e => { e.physical.candidates[0].unique = false; },
+    e => { e.physical.candidates[0].defined = false; }, e => { e.physical.candidates[0].noResponse = false; },
+    e => { e.physical.candidates[0].observerClean = false; }, e => { e.physical.candidates[0].abortedBeforeReject = false; },
+    e => { e.physical.candidates[0].ingressLive = false; }, e => { e.physical.candidates[0].effectiveLive = false; },
+    e => { e.physical.candidates[0].listenerRemoved = false; },
+    e => { e.physical.requests.push({ path: "/fixture/alternate" }); },
+    e => { e.calls = []; }, e => { e.calls.push(e.calls[0]); }, e => { e.calls[0].id = "abort_body"; },
+    e => { e.calls[0].aborted = false; }, e => { e.calls[0].expired = true; },
+    e => { e.calls[0].waiter = "pending"; }, e => { e.calls[0].waiter = "rejected"; },
+    e => { e.calls[0].waiterListenerRemoved = false; }, e => { e.calls[0].sourceReturnReached = false; },
+    e => { e.calls[0].authorization = "Bearer foreign-fixture"; }, e => { e.calls[0].method = "GET"; },
+    e => { e.receipt.usage.events[0].status = "provider_error"; },
+    e => { e.receipt.usage.events[0].credential_id = "orm_foreign"; }, e => { e.receipt.usage.events[0].policy_id = "orm_foreign"; },
+    e => { e.receipt.usage.events[0].model = "foreign"; }, e => { e.receipt.usage.events[0].cost_basis = "none"; },
+    e => { e.receipt.usage.events[0].actual_cost_micros = 0; }, e => { e.receipt.usage.events[0].input_tokens = 0; },
+    e => { e.receipt.budget.spentMicros = 0; }, e => { e.receipt.usage.events.push(e.receipt.usage.events[0]); },
+  ];
+  for (const [index, change] of changes.entries()) {
+    const evidence = structuredClone(headerEvidence(snapshot)); change(evidence);
+    assert.throws(() => accept(evidence), undefined, `required evidence ${index}`);
+  }
+});
+
+
+test("reader join includes an original cancel added while closed is pending", async () => {
+  for (const reason of [new Error("late original cancel failure"), undefined]) {
+    let rejectCancel;
+    const pending = new Promise((_, reject) => { rejectCancel = reject; });
+    const response = new Response(new ReadableStream({ cancel() { return pending; } })), proof = {};
+    observeBody(response, undefined, proof);
+    const reader = response.body.getReader(), joining = proof.join();
+    const verdict = joining.then(() => ({ ok: true }), error => ({ ok: false, error }));
+    await Promise.resolve(); await Promise.resolve();
+    const cancel = reader.cancel(); void cancel.catch(() => {}); reader.releaseLock();
+    rejectCancel(reason);
+    const result = await verdict;
+    assert.equal(result.ok, false);
+    assert.ok(result.error instanceof AggregateError && result.error.errors.some(error => error === reason));
+    await assert.rejects(cancel, error => error === reason);
+  }
+});
+
+
+function sdkOriginalJoin() {
+  const text = readFileSync(new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url), "utf8");
+  const section = (first, next) => {
+    const begin = text.indexOf(first), end = text.indexOf(next, begin);
+    assert.ok(begin >= 0 && end > begin && text.indexOf(first, begin + 1) === -1);
+    return stripTypeScriptTypes(text.slice(begin, end));
+  };
+  // Extract only the real observer helper and its unchanged classification rule;
+  // no SDK imports, registration, runtime setup or hosted case executes locally.
+  const code = section("function ownedStoredAbort(", "function observeResponse(")
+    + section("async function joinOriginalSdkOperations(", "function configuration(");
+  return new Function(code + "; return input => joinOriginalSdkOperations(input, ownedStoredAbort);")();
+}
+function deferredOriginal() {
+  let resolve, reject;
+  const pending = new Promise((accept, fail) => { resolve = accept; reject = fail; });
+  void pending.catch(() => {});
+  return { pending, resolve, reject };
+}
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+for (const failure of ["none", "cancel", "body_cancel", "retirement"]) {
+  for (const undefinedReason of failure === "none" ? [false] : [false, true]) {
+    test(`SDK actual dynamic join retains late originals: ${failure}/${undefinedReason ? "undefined" : "defined"}`, async () => {
+      const join = sdkOriginalJoin(), reason = undefinedReason ? undefined : new Error("owned original failure");
+      const cancelOwner = deferredOriginal(), bodyOwner = deferredOriginal(), firstRetirement = deferredOriginal(), lateRetirement = deferredOriginal();
+      const response = new Response(new ReadableStream({ cancel() { return cancelOwner.pending; } }));
+      const bodyResponse = new Response(new ReadableStream({ cancel() { return bodyOwner.pending; } }));
+      const reader = response.body.getReader(), row = { body: response.body, closed: reader.closed, releases: 0, returned: 0, operations: [] };
+      const input = { readers: [row], bodyOperations: [], acquisitions: [], observationErrors: [], agents: [{ retirements: 1, pending: [firstRetirement.pending] }] };
+      let finished = false;
+      const joining = join(input).then(value => { finished = true; return value; });
+      await nextTurn(); assert.equal(finished, false);
+      const originalRead = reader.read(), originalCancel = reader.cancel(), originalBodyCancel = bodyResponse.body.cancel();
+      void originalRead.catch(() => {}); void originalCancel.catch(() => {}); void originalBodyCancel.catch(() => {});
+      const operation = (kind, pending, body) => ({ kind, pending, body, expectedAbort: false, invokeAborted: false, invokeReason: undefined });
+      row.operations.push(operation("read", originalRead, response.body), operation("cancel", originalCancel, response.body));
+      input.bodyOperations.push(operation("body_cancel", originalBodyCancel, bodyResponse.body));
+      row.releases++; reader.releaseLock(); row.returned++;
+      input.agents.push({ retirements: 1, pending: [lateRetirement.pending] });
+      firstRetirement.resolve();
+      await nextTurn(); assert.equal(finished, false, "new cancel/body/retirement originals remain held");
+      if (failure === "cancel") cancelOwner.reject(reason); else cancelOwner.resolve();
+      if (failure === "body_cancel") bodyOwner.reject(reason); else bodyOwner.resolve();
+      await nextTurn(); assert.equal(finished, false, "late original dispatcher retirement is still held");
+      if (failure === "retirement") lateRetirement.reject(reason); else lateRetirement.resolve();
+      const failures = await joining;
+      assert.equal(response.body.locked, false); assert.equal(bodyResponse.body.locked, false);
+      if (failure === "none") assert.deepEqual(failures, []);
+      else { assert.equal(failures.length, 1); assert.equal(failures[0], reason); }
+    });
+  }
+}
+
+test("SDK actual drain revisits acquisitions, response hooks and original closed state", async () => {
+  const join = sdkOriginalJoin(), acquired = deferredOriginal(), response = new Response(new ReadableStream());
+  const input = { readers: [], bodyOperations: [], acquisitions: [], observationErrors: [], agents: [] };
+  let reader, row;
+  const observed = acquired.pending.then(original => {
+    reader = original.body.getReader();
+    row = { body: original.body, closed: reader.closed, releases: 0, returned: 0, operations: [] };
+    input.readers.push(row);
+  });
+  input.acquisitions.push({ pending: acquired.pending, observed, expectedAbort: false });
+  let finished = false;
+  const joining = join(input).then(value => { finished = true; return value; });
+  acquired.resolve(response); await nextTurn();
+  assert.equal(finished, false, "captured closed belongs to the newly observed response");
+  const cancel = reader.cancel();
+  row.operations.push({ kind: "cancel", pending: cancel, body: response.body, expectedAbort: false, invokeAborted: false, invokeReason: undefined });
+  row.releases++; reader.releaseLock(); row.returned++;
+  assert.deepEqual(await joining, []);
+});
+
+test("SDK dynamic drain keeps observation failures and exact retirement/release invariants", async () => {
+  const join = sdkOriginalJoin(), failure = new Error("observer failure");
+  const raw = Promise.resolve(new Response(null)), observed = Promise.reject(undefined); void observed.catch(() => {});
+  const input = { acquisitions: [{ pending: raw, observed, expectedAbort: false }], readers: [], bodyOperations: [],
+    agents: [{ retirements: 0, pending: [] }], observationErrors: [failure] };
+  const failures = await join(input);
+  assert.equal(failures.length, 3); assert.equal(failures[0], undefined); assert.equal(failures[2], failure);
+  const body = new ReadableStream(), reader = body.getReader();
+  const closed = reader.closed; await reader.cancel();
+  const releaseFailures = await join({ acquisitions: [], bodyOperations: [], agents: [], observationErrors: [],
+    readers: [{ body, closed, releases: 0, returned: 0, operations: [] }] });
+  assert.equal(releaseFailures.length, 1); assert.match(releaseFailures[0].message, /not released/);
+  reader.releaseLock();
+});
+
+
+const musicDiagnosticContext = (route = "native", caseId = "abort_headers", phase = "helper", role = "primary") =>
+  ({ layer: "outer", route, caseId, phase, role, outcome: "rejected" });
+
+test("music diagnostic validator rejects hostile fields and preserves undefined without getters", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), context = musicDiagnosticContext();
+  assert.equal(protocol.record(context, true, undefined).category, "undefined");
+  assert.equal(protocol.record(context, true, null).category, "null");
+  let reads = 0;
+  const hostile = Object.defineProperties({}, { message: { get() { reads++; throw undefined; } }, name: { get() { reads++; throw undefined; } }, stdout: { get() { reads++; throw undefined; } } });
+  assert.equal(protocol.record(context, true, hostile).name, "unknown");
+  assert.equal(protocol.own(hostile, "stdout"), undefined);
+  const proxy = new Proxy({}, { getOwnPropertyDescriptor() { reads++; throw undefined; }, getPrototypeOf() { reads++; throw undefined; } });
+  assert.equal(protocol.validate(proxy), undefined); assert.equal(protocol.own(proxy, "code"), undefined);
+  const good = protocol.record(context);
+  for (const change of [{ caseId: "not_a_case" }, { route: "foreign" }, { phase: "private\n::error::" }, { partialDelivery: true },
+    { actual: "private payload" }, { actual: Infinity }, { stack: "private" }, { url: "https://private.example" }, { code: "secret" }]) assert.equal(protocol.validate({ ...good, ...change }), undefined);
+  assert.equal(protocol.validate(Object.defineProperty({ ...good }, "actual", { get() { reads++; throw undefined; } })), undefined);
+  assert.equal(reads, 0);
+});
+
+test("music diagnostic parser reads only fresh fixed records and closed module codes", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), records = [];
+  const record = protocol.record({ ...musicDiagnosticContext(), layer: "sdk" }, true, undefined);
+  const raw = "unowned output with a path and payload\n" + protocol.prefix + JSON.stringify(record) + "\nERR_MODULE_NOT_FOUND: unowned path\n";
+  const result = protocol.parse(raw, value => records.push(value));
+  assert.deepEqual(records, [record]); assert.equal(result.records, 1); assert.equal(result.observedCode, "ERR_MODULE_NOT_FOUND");
+  assert.equal(result.invalid, 0);
+  assert.equal(protocol.parse(protocol.prefix + '{"message":"not a record"}\n', () => assert.fail()).invalid, 1);
+  assert.equal(protocol.parse("x".repeat(2 * 1024 * 1024 + 1), () => assert.fail()).invalid, 1);
+  assert.deepEqual(protocol.parse(undefined, () => assert.fail()), { records: 0, invalid: 0, observedCode: null });
+});
+
+test("music diagnostic adapter parses success and original child failure without forwarding streams", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], failures = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const observer = musicChildObserver("native", protocol, diagnostics, failures);
+  const record = protocol.record({ ...musicDiagnosticContext(), layer: "sdk", phase: "body_assert" }, true, undefined);
+  observer.diagnostic("unowned success prose\n" + protocol.prefix + JSON.stringify(record) + "\n");
+  observer.fulfilled(); assert.deepEqual(lines, []);
+  let getters = 0;
+  const child = Object.defineProperties({ code: 1, killed: false, signal: "SIGTERM", stdout: protocol.prefix + JSON.stringify(record) + "\n", stderr: "ERR_PACKAGE_PATH_NOT_EXPORTED: private path" }, {
+    message: { get() { getters++; throw undefined; } }, stack: { get() { getters++; throw undefined; } }, cause: { get() { getters++; throw undefined; } },
+  });
+  observer.rejection(child); diagnostics.flush();
+  assert.equal(getters, 0); assert.deepEqual(failures, []);
+  assert.ok(lines.length > 0 && lines.every(line => !line.includes("private") && !line.includes("unowned")));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const helper = records.find(row => row.phase === "helper" && row.role === "primary");
+  assert.equal(helper.exit, 1); assert.equal(helper.killed, false); assert.equal(helper.signal, "SIGTERM"); assert.equal(helper.code, "ERR_PACKAGE_PATH_NOT_EXPORTED");
+  assert.ok(helper.records >= 1);
+});
+
+test("music diagnostic zero-record helper failure stays unknown and foreign-route records fail independently", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], failures = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const observer = musicChildObserver("native", protocol, diagnostics, failures);
+  observer.rejection(undefined); diagnostics.flush();
+  const helper = JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length));
+  assert.equal(helper.category, "undefined"); assert.equal(helper.records, 0); assert.equal(helper.exit, null); assert.equal(helper.signal, null);
+  assert.equal(helper.code, undefined); assert.deepEqual(failures, []);
+  observer.diagnostic(protocol.prefix + JSON.stringify(protocol.record({ ...musicDiagnosticContext("manifest"), layer: "sdk" })) + "\n");
+  assert.equal(failures.length, 1);
+});
+
+test("music diagnostic emitter preserves route phase identity, final state and one step-wide 9 plus 1 budget", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const first = protocol.record(musicDiagnosticContext(), true, undefined);
+  diagnostics.fail(first);
+  for (const route of ["native", "manifest"]) {
+    for (const id of protocol.ids) {
+      diagnostics.put(protocol.record(musicDiagnosticContext(route, id, "body_assert"), true, new Error("never emitted")));
+      diagnostics.put(protocol.record(musicDiagnosticContext(route, id, "body_assert"), true, new Error("never emitted")));
+    }
+  }
+  diagnostics.flush(); const count = lines.length; diagnostics.flush();
+  assert.equal(count, 10); assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => line.startsWith("::error title=Music contract diagnostic::") && Buffer.byteLength(line) <= 768 && line.split("\n").length === 2));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(records.at(-1).phase, "capacity"); assert.ok(records.at(-1).suppressed > 0);
+  assert.equal(new Set(records.slice(0, 9).map(row => [row.layer, row.route, row.caseId, row.phase, row.role].join("/"))).size, 9);
+  const separated = [], second = protocol.emitter(line => separated.push(line));
+  for (const route of ["native", "manifest"]) for (const phase of ["body_assert", "original_join"]) second.fail(protocol.record(musicDiagnosticContext(route, "abort_headers", phase), true, undefined));
+  second.flush(); assert.equal(separated.length, 4);
+  const passing = []; const pass = protocol.emitter(line => passing.push(line));
+  pass.put(protocol.record({ ...musicDiagnosticContext(), outcome: "entered", role: "progress" })); pass.flush(); assert.deepEqual(passing, []);
+});
+
+test("music diagnostic writer failure retains primary undefined and independent cleanup failure", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), instrumentation = new Error("writer failed"), cleanupFailure = new Error("cleanup failed");
+  const diagnostics = protocol.emitter(() => { throw instrumentation; }), reporting = [], originals = [];
+  const observer = musicChildObserver("native", protocol, diagnostics, reporting);
+  try { throw undefined; } catch (error) { observer.rejection(error); originals.push(error); }
+  try { throw cleanupFailure; } catch (error) { originals.push(error); }
+  assert.deepEqual(originals, [undefined, cleanupFailure]); assert.deepEqual(reporting, [instrumentation]);
+  // An instrumentation failure is still independently failing when no body failed.
+  const isolated = [], bad = musicChildObserver("native", protocol, protocol.emitter(() => {}), isolated);
+  bad.diagnostic(protocol.prefix + "invalid-json\n"); assert.equal(isolated.length, 1);
+});
+
+test("music diagnostic pending progress is not fulfilled join evidence", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], diagnostics = protocol.emitter(line => lines.push(line));
+  diagnostics.put(protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "original_join", "progress"), outcome: "entered", settled: null, partialDelivery: null }));
+  diagnostics.fail(protocol.record(musicDiagnosticContext(), true, undefined)); diagnostics.flush();
+  const rows = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const pending = rows.find(row => row.phase === "original_join");
+  assert.equal(pending.outcome, "entered"); assert.equal(pending.settled, null); assert.equal(pending.partialDelivery, null);
+});
+
+test("music diagnostic synthetic reporter child", { skip: process.env.CLAWROUTER_MUSIC_REPORTER_PROBE !== "1" }, () => {
+  const diagnostics = musicProtocol.emitter(line => process.stdout.write(line));
+  diagnostics.fail(musicProtocol.record(musicDiagnosticContext(), true, undefined));
+  for (const id of musicProtocol.ids) diagnostics.put(musicProtocol.record(musicDiagnosticContext("manifest", id, "body_assert"), true, undefined));
+  diagnostics.flush();
+});
+test("music diagnostic commands survive the actual Node24 default reporter at column zero", { skip: process.env.CLAWROUTER_MUSIC_REPORTER_PROBE === "1", timeout: 20000 }, async () => {
+  assert.match(process.version, /^v24\.22\./);
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const stdout = await new Promise((resolve, reject) => execFile(process.execPath,
+    ["--test", "--test-name-pattern=^music diagnostic synthetic reporter child$", fileURLToPath(import.meta.url)],
+    { env: { ...env, CLAWROUTER_MUSIC_REPORTER_PROBE: "1" }, timeout: 15000, maxBuffer: 64 * 1024 }, (error, output) => {
+      if (error) reject(new Error("fresh synthetic diagnostic subprocess failed")); else resolve(output);
+    }));
+  const prefix = "::error title=Music contract diagnostic::", lines = stdout.split(/\r?\n/).filter(line => line.includes(prefix));
+  assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix)));
+  assert.ok(lines.every(line => musicProtocol.validate(JSON.parse(line.slice(prefix.length)))));
+  assert.ok(Buffer.byteLength(lines.join("\n")) <= 8192);
+});
+
+
+test("music diagnostic preabort stages enforce closed status, returned and failure-count fields", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy);
+  for (const phase of ["tool_dispatch", "tool_returned", "started_fetch", "started_status"]) {
+    const value = protocol.record({ ...musicDiagnosticContext("native", "abort_headers", phase), httpStatus: 500, toolReturned: true, callerAborted: false, partialDelivery: null }, true, undefined);
+    assert.equal(value.httpStatus, 500); assert.equal(value.category, "undefined");
+    for (const fields of [{ httpStatus: 99 }, { httpStatus: 600 }, { httpStatus: 204.5 }, { httpStatus: "204" }, { toolReturned: 1 },
+      { f_read: -1 }, { f_read: 65536 }, { f_read: true }, { f_unknown: 1 }, { failureOverflow: 1 }]) assert.equal(protocol.validate({ ...value, ...fields }), undefined);
+  }
+  const counts = protocol.failureCounts();
+  for (const kind of counts.kinds) counts.add(kind);
+  assert.throws(() => counts.add("unknown"));
+  const snapshot = counts.snapshot(); assert.equal(Object.keys(snapshot).length, 14);
+  assert.ok(Object.values(snapshot).every(count => count === 1));
+  for (let i = 1; i < 65536; i++) counts.add("read");
+  assert.equal(counts.snapshot().f_read, 65535); assert.equal(counts.snapshot().failureOverflow, true);
+  const lines = [], emit = protocol.emitter(line => lines.push(line));
+  emit.fail(protocol.record({ ...musicDiagnosticContext("native", "abort_body", "original_join", "cleanup"), ...counts.snapshot(), partialDelivery: null }, true, undefined)); emit.flush();
+  assert.equal(lines.length, 1); assert.ok(Buffer.byteLength(lines[0]) <= 768);
+  const delivered = JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length));
+  assert.equal(delivered.f_read, 65535); assert.equal(delivered.f_cancel, 1); assert.equal(delivered.category, "undefined");
+});
+
+test("SDK actual drain sidecar classifies original failures without replacing undefined or order", async () => {
+  const join = sdkOriginalJoin(), counts = createMusicFailureCounts(), reason = new Error("owned test failure");
+  const rejected = value => { const pending = Promise.reject(value); void pending.catch(() => {}); return pending; };
+  const body = new ReadableStream(), reader = body.getReader();
+  const read = reader.read(), cancel = reader.cancel(); reader.releaseLock(); await Promise.all([read, cancel]);
+  // Original helper is exercised with explicit rejected originals for each branch.
+  const acquisition = rejected(undefined), observed = rejected(reason), closed = rejected(undefined);
+  const readFailure = rejected(reason), cancelFailure = rejected(undefined), bodyFailure = rejected(reason), dispatcher = rejected(undefined);
+  const failures = await join({ failureCounts: counts,
+    acquisitions: [{ pending: acquisition, observed, expectedAbort: false }],
+    readers: [{ body, closed, releases: 0, returned: 0, operations: [{ kind: "read", pending: readFailure, body, expectedAbort: false }, { kind: "cancel", pending: cancelFailure, body, expectedAbort: false }] }],
+    bodyOperations: [{ kind: "body_cancel", pending: bodyFailure, body, expectedAbort: false }],
+    agents: [{ retirements: 0, pending: [dispatcher] }], observationErrors: [undefined],
+  });
+  assert.equal(failures.length, 10);
+  assert.deepEqual(failures.slice(0, 6), [reason, undefined, reason, reason, undefined, undefined]);
+  assert.equal(failures[7], undefined); assert.equal(failures[9], undefined);
+  assert.deepEqual(counts.snapshot(), { f_acquisition_observer: 1, f_acquisition: 1, f_body_cancel: 1, f_read: 1, f_cancel: 1, f_closed: 1, f_release_invariant: 1, f_dispatcher_promise: 1, f_dispatcher_invariant: 1, f_observer_exception: 1, d_retirements: 0, d_promises: 1, d_fulfilled: 0, d_rejected: 1, d_pending: 0, d_violations: 1 });
+});
+
+test("reader actual observer sidecar preserves original closed and read rejection", async () => {
+  const reason = new Error("owned test failure"), counts = createMusicFailureCounts(); let controller;
+  const response = new Response(new ReadableStream({ start(value) { controller = value; } }));
+  const proof = { failureCounts: counts }; observeBody(response, undefined, proof);
+  const reader = response.body.getReader(), read = reader.read(); void read.catch(() => {});
+  controller.error(reason); await assert.rejects(read, error => error === reason); reader.releaseLock();
+  await assert.rejects(proof.join(), error => error instanceof AggregateError && error.errors.length === 2 && error.errors.every(value => value === reason));
+  assert.deepEqual(counts.snapshot(), { f_read: 1, f_closed: 1 });
+});
+
+// One pre-POST snapshot witnesses the actual original waiter branch. The extra
+// control request changes scheduling; no SDK or native error-cause claim follows.
+test("original native waiter witness before one positive POST coordination", { timeout: 60000 }, async () => {
+  const proof = { ready: "unstarted", readyStatus: null, post: "unstarted", postStatus: null, sse: "unknown", upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown", control: "unstarted", controlStatus: null, controlCount: 0, informative: false, preWitness: null, finalWitness: null, readyBeforePost: "unknown", readyStatusBeforePost: null };
+  const failures = [], f = await start("native", { wav: Buffer.from(musicWave()).toString("base64"), mp3: Buffer.from(musicWave()).toString("base64") });
+  const emit = () => { try { process.stdout.write("MUSIC_COORDINATION " + JSON.stringify(proof) + "\n"); } catch (error) { failures.push(error); } };
+  try {
+    const row = positives[0];
+    proof.ready = "pending";
+    const ready = fetch(f.origin + "/fixture/started?id=" + row.id);
+    const observedReady = { state: "pending", status: null };
+    const readyObservation = ready.then(response => { observedReady.state = "fulfilled"; observedReady.status = response.status; }, () => { observedReady.state = "rejected"; });
+    proof.control = "pending"; proof.controlCount++; emit();
+    try {
+      const control = await fetch(f.origin + "/fixture/readiness?id=" + row.id);
+      proof.controlStatus = control.status; assert.equal(control.status, 200);
+      const snapshot = await control.json(); assert.equal(validateReadinessSnapshot(snapshot, row.id), true);
+      proof.preWitness = snapshot; proof.control = "fulfilled";
+      proof.informative = snapshot.wait_entered !== null && snapshot.waitCount === 1 && snapshot.resolver_called === null && snapshot.resolver_returned === null && snapshot.wait_returned === null && snapshot.matchingPosts === 0;
+    } catch (error) { proof.control = "rejected"; failures.push(error); }
+    // One scheduled normal POST still runs after an inconclusive snapshot.
+    proof.readyBeforePost = observedReady.state; proof.readyStatusBeforePost = observedReady.status;
+    proof.post = "pending";
+    const posted = fetch(f.origin + "/v1/native/openrouter/v1/chat/completions", { method: "POST", headers: headers(row.id), body: JSON.stringify(body(row)) });
+    emit();
+    const [readyResult, postResult] = await Promise.allSettled([ready, posted]);
+    await readyObservation;
+    proof.ready = readyResult.status; proof.post = postResult.status;
+    if (readyResult.status === "fulfilled") proof.readyStatus = readyResult.value.status; else failures.push(readyResult.reason);
+    if (postResult.status === "fulfilled") proof.postStatus = postResult.value.status; else failures.push(postResult.reason);
+    emit();
+    if (postResult.status === "fulfilled") {
+      try { const wire = await postResult.value.text(); assert.equal(postResult.value.status, 200); assert.match(wire, /data: \[DONE\]/); assert.match(wire, /café/); proof.sse = "fulfilled"; }
+      catch (error) { proof.sse = "rejected"; failures.push(error); }
+    }
+    try { assert.equal(proof.informative, true, "original waiter entry was not established"); assert.equal(proof.readyStatus, 204); } catch (error) { failures.push(error); }
+    try { await retirement(f.origin, f.route); proof.retirement = "fulfilled"; } catch (error) { proof.retirement = "rejected"; failures.push(error); }
+    emit();
+    try {
+      const calls = await (await fetch(f.origin + "/fixture/state")).json();
+      assert.equal(calls.length, 1); assert.equal(calls[0].id, row.id); assert.equal(calls[0].authorization, "Bearer fixture-upstream-" + row.id);
+      assert.equal(calls[0].method, "POST"); assert.equal(calls[0].url, target); assert.deepEqual(calls[0].body, body(row)); assert.equal(calls[0].expired, false);
+      assert.equal(validateReadinessSnapshot(calls[0].readiness, row.id), true); proof.finalWitness = calls[0].readiness;
+      const witnessed = proof.finalWitness;
+      assert.equal(witnessed.waitCount, 1); assert.equal(witnessed.matchingPosts, 1);
+      assert.ok(witnessed.wait_entered !== null && witnessed.wait_entered < witnessed.resolver_called && witnessed.resolver_called < witnessed.resolver_returned && witnessed.resolver_returned < witnessed.wait_returned);
+      assert.deepEqual([witnessed.timer, witnessed.notification, witnessed.task], ["rejected", "fulfilled", "fulfilled"]);
+      assert.equal(witnessed.cancelCalls, 1); assert.equal(witnessed.failureCount, 0);
+      for (const field of ["cancelReturned", "cancelWhilePending", "timerRejectionObject", "joined", "mapRemoved", "listenerRemoved"]) assert.equal(witnessed[field], true, field);
+      assert.equal(witnessed.expired, false);
+      proof.upstream = "fulfilled";
+    } catch (error) { proof.upstream = "rejected"; failures.push(error); }
+    try {
+      const receipt = await usage(f.origin, row.id); assert.equal(receipt.usage.events.length, 1);
+      const event = receipt.usage.events[0]; assert.equal(receipt.budget.spentMicros, 700); assert.equal(event.actual_cost_micros, 700); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.status, "success");
+      assert.equal(event.credential_id, "orm_" + row.id); assert.equal(event.policy_id, "orm_" + row.id); assert.equal(event.model, "openrouter/" + row.model);
+      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]); proof.sqlite = "fulfilled";
+    } catch (error) { proof.sqlite = "rejected"; failures.push(error); }
+  } catch (error) { failures.push(error); }
+  finally {
+    try { await f.close(); proof.dispose = proof.scratch = "fulfilled"; } catch (error) { failures.push(error); }
+    emit();
+  }
+  if (failures.length) throw new AggregateError(failures, "original native readiness coordination failed");
+});
+
+
+test("request-owned native readiness expiry joins originals without a POST", { timeout: 60000 }, async () => {
+  const proof = { readyStatus: null, snapshot: null, stateStatus: null, upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown" };
+  const failures = [], f = await start("native", { wav: Buffer.from(musicWave()).toString("base64"), mp3: Buffer.from(musicWave()).toString("base64") });
+  try {
+    const response = await fetch(f.origin + "/fixture/started?id=m0_wav");
+    proof.readyStatus = response.status; assert.equal(response.status, 500);
+    const snapshot = await (await fetch(f.origin + "/fixture/readiness?id=m0_wav")).json();
+    assert.equal(validateReadinessSnapshot(snapshot, "m0_wav"), true); proof.snapshot = snapshot;
+    assert.deepEqual([snapshot.timer, snapshot.notification, snapshot.task], ["fulfilled", "rejected", "rejected"]);
+    assert.equal(snapshot.expired, true); assert.equal(snapshot.matchingPosts, 0); assert.equal(snapshot.waitCount, 1);
+    assert.equal(snapshot.cancelCalls, 0); assert.equal(snapshot.failureCount, 1);
+    assert.equal(snapshot.resolver_called, null); assert.equal(snapshot.wait_returned, null);
+    for (const field of ["joined", "mapRemoved", "listenerRemoved"]) assert.equal(snapshot[field], true, field);
+    // This control joins the retained failed source task and must preserve its failure.
+    const state = await fetch(f.origin + "/fixture/state"); proof.stateStatus = state.status;
+    assert.equal(state.status, 500); proof.upstream = "fulfilled";
+    const receipt = await usage(f.origin, "m0_wav");
+    assert.equal(receipt.usage.events.length, 0); assert.equal(receipt.budget.spentMicros, 0); proof.sqlite = "fulfilled";
+    await retirement(f.origin, f.route); proof.retirement = "fulfilled";
+  } catch (reason) { failures.push(reason); }
+  finally {
+    try { await f.close(); proof.dispose = proof.scratch = "fulfilled"; } catch (reason) { failures.push(reason); }
+    try { process.stdout.write("MUSIC_EXPIRY " + JSON.stringify(proof) + "\n"); } catch (reason) { failures.push(reason); }
+  }
+  if (failures.length) throw new AggregateError(failures, "native readiness expiry proof failed");
+});
+
+// Fault injection qualifies this exact fixture function, not native host behavior.
+function readinessTestHarness({ cancel, requestSignal, waiting = new Map() } = {}) {
+  const witness = createReadinessWitness(["m0_wav", "m1_wav"]), native = new AbortController(), request = new AbortController();
+  const timer = deferredOriginal(), cancellation = deferredOriginal(), reason = new Error("controlled original timer rejection");
+  let timerCalls = 0, delay, passedSignal;
+  const controller = { signal: native.signal, abort(value) {
+    cancellation.resolve();
+    if (cancel) return cancel({ native, value, timer, reason });
+    native.abort(value); timer.reject(reason);
+  } };
+  const runtime = { controller: () => controller, wait(value, options) { timerCalls++; delay = value; passedSignal = options.signal; return timer.pending; } };
+  let settled = false;
+  const pending = waitForReadiness("m0_wav", waiting, witness, requestSignal ?? request.signal, runtime);
+  const outcome = pending.then(value => { settled = true; return { status: "fulfilled", value }; }, reason => { settled = true; return { status: "rejected", reason }; });
+  return { witness, waiting, timer, cancellation, pending, outcome, request, native, reason, runtime,
+    get settled() { return settled; }, get timerCalls() { return timerCalls; }, get delay() { return delay; }, get passedSignal() { return passedSignal; },
+    notify(id = "m0_wav") {
+      witness.post(id); const resolver = waiting.get(id);
+      if (resolver !== undefined) { witness.called(id); resolver(); witness.returned(id); }
+      waiting.delete(id);
+    } };
+}
+
+test("readiness owner joins the original pending timer after notification and cancels once", async () => {
+  const h = readinessTestHarness({ cancel({ native, value }) { native.abort(value); } });
+  assert.equal(h.timerCalls, 1); assert.equal(h.delay, 10000); assert.equal(h.passedSignal, h.native.signal);
+  const originalResolver = h.waiting.get("m0_wav"); assert.equal(typeof originalResolver, "function");
+  h.notify("m1_wav"); assert.equal(h.waiting.get("m0_wav"), originalResolver); assert.equal(h.settled, false);
+  h.notify(); await h.cancellation.pending;
+  assert.equal(h.settled, false); assert.equal(h.witness.snapshot("m0_wav").joined, false);
+  h.timer.reject(h.reason); assert.equal((await h.outcome).status, "fulfilled");
+  const row = h.witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot(row, "m0_wav"), true);
+  assert.deepEqual([row.timer, row.notification, row.cancelCalls, row.failureCount], ["rejected", "fulfilled", 1, 0]);
+  for (const field of ["cancelReturned", "cancelWhilePending", "timerRejectionObject", "joined", "mapRemoved", "listenerRemoved"]) assert.equal(row[field], true);
+});
+
+test("readiness owner expiry rejects and joins the original notification without success", async () => {
+  const h = readinessTestHarness(); h.timer.resolve(); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); const row = h.witness.snapshot("m0_wav");
+  assert.deepEqual([row.timer, row.notification, row.expired, row.cancelCalls, row.failureCount], ["fulfilled", "rejected", true, 0, 1]);
+  assert.equal(row.resolver_called, null); assert.equal(row.joined, true); assert.equal(h.waiting.size, 0);
+});
+
+for (const reason of [undefined, null, 1, new Error("controlled early timer failure")]) {
+  test("readiness owner retains early timer rejection " + (reason === undefined ? "undefined" : reason === null ? "null" : typeof reason), async () => {
+    const h = readinessTestHarness(); h.timer.reject(reason); const result = await h.outcome;
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason);
+    assert.equal(h.witness.snapshot("m0_wav").cancelCalls, 0); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+    assert.equal(h.waiting.size, 0);
+  });
+}
+
+for (const reason of [undefined, null, "unexpected primitive"]) {
+  test("readiness owner refuses nonobject rejection after cancellation " + String(reason), async () => {
+    const h = readinessTestHarness({ cancel({ native, value, timer }) { native.abort(value); timer.reject(reason); } });
+    h.notify(); const result = await h.outcome;
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+  });
+}
+
+test("readiness owner preserves undefined cancellation throw and joins later original expiry", async () => {
+  const h = readinessTestHarness({ cancel() { throw undefined; } }); h.notify(); await h.cancellation.pending;
+  assert.equal(h.settled, false); h.timer.resolve(); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); assert.ok(result.reason instanceof AggregateError);
+  assert.equal(result.reason.errors[0], undefined); assert.equal(result.reason.errors.length, 2);
+  assert.equal(h.witness.snapshot("m0_wav").cancelReturned, false); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+});
+
+test("readiness owner preabort performs no timer or resolver acquisition", async () => {
+  const reason = new Error("controlled request preabort"), h = readinessTestHarness({ requestSignal: AbortSignal.abort(reason) });
+  assert.equal((await h.outcome).reason, reason); assert.equal(h.timerCalls, 0); assert.equal(h.waiting.size, 0);
+  assert.equal(h.witness.snapshot("m0_wav").wait_entered, null);
+});
+
+test("readiness owner joins request abort and removes its original listener", async () => {
+  const original = new AbortController(), listeners = new Set(), reason = new Error("controlled request abort");
+  const signal = { get aborted() { return original.signal.aborted; }, get reason() { return original.signal.reason; },
+    addEventListener(type, listener, options) { listeners.add(listener); original.signal.addEventListener(type, listener, options); },
+    removeEventListener(type, listener) { original.signal.removeEventListener(type, listener); listeners.delete(listener); } };
+  const h = readinessTestHarness({ requestSignal: signal }); assert.equal(listeners.size, 1);
+  original.abort(reason); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(listeners.size, 0);
+  assert.equal(h.witness.snapshot("m0_wav").joined, true); assert.equal(h.waiting.size, 0);
+});
+
+test("readiness owner cleanup retains undefined removal failure and foreign map ownership", async () => {
+  const original = new AbortController(), foreign = () => {}, signal = {
+    get aborted() { return original.signal.aborted; }, get reason() { return original.signal.reason; },
+    addEventListener(...args) { original.signal.addEventListener(...args); },
+    removeEventListener(...args) { original.signal.removeEventListener(...args); throw undefined; } };
+  const h = readinessTestHarness({ requestSignal: signal }); h.notify(); h.waiting.set("m0_wav", foreign);
+  const result = await h.outcome; assert.equal(result.status, "rejected"); assert.ok(result.reason instanceof AggregateError);
+  assert.equal(result.reason.errors.length, 2); assert.equal(result.reason.errors[1], undefined); assert.equal(h.waiting.get("m0_wav"), foreign);
+  assert.equal(h.witness.snapshot("m0_wav").listenerRemoved, false);
+});
+
+test("readiness owner refuses duplicate and unknown bindings without touching their resolvers", async () => {
+  const resolver = () => {}, waiting = new Map([["m0_wav", resolver]]), h = readinessTestHarness({ waiting });
+  assert.equal((await h.outcome).status, "rejected"); assert.equal(h.timerCalls, 0); assert.equal(waiting.get("m0_wav"), resolver);
+  await assert.rejects(waitForReadiness("unknown", waiting, h.witness, new AbortController().signal, h.runtime));
+  assert.equal(h.timerCalls, 0); assert.equal(waiting.get("m0_wav"), resolver);
+});
+
+test("readiness closed snapshot validator refuses open fields and bounds worst-case state", () => {
+  const witness = createReadinessWitness(["m0_wav"]), row = witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot({ ...row, timer: "resolved" }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, cancelCalls: 2 }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, joined: null }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, failureCount: 1001 }, "m0_wav"), false);
+  const worst = { ...row, wait_entered: 1000000, resolver_called: 1000000, resolver_returned: 1000000, wait_returned: 1000000,
+    matchingPosts: 1000, waitCount: 1000, cancelCalls: 1, failureCount: 1000, timer: "fulfilled", notification: "fulfilled", task: "fulfilled" };
+  assert.equal(validateReadinessSnapshot(worst, "m0_wav"), true); assert.ok(Buffer.byteLength(JSON.stringify(worst)) < 768);
+});
+
+test("original readiness witness snapshots do not resolve, replace or react to the waiter", async () => {
+  const witness = createReadinessWitness(["m0_wav"]), waiting = new Map(); let originalResolver, returned = false;
+  const pending = new Promise(resolve => { originalResolver = resolve; waiting.set("m0_wav", resolve); witness.entered("m0_wav"); });
+  const continuation = (async () => { await pending; witness.resumed("m0_wav"); returned = true; })();
+  const before = witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot(before, "m0_wav"), true);
+  assert.deepEqual(before, { ...createReadinessWitness(["m0_wav"]).snapshot("m0_wav"), wait_entered: 1, waitCount: 1 });
+  assert.equal(waiting.get("m0_wav"), originalResolver); assert.equal(returned, false);
+  before.wait_returned = 99; assert.equal(witness.snapshot("m0_wav").wait_returned, null);
+  assert.equal(witness.snapshot("unknown"), null); assert.throws(() => witness.entered("unknown"));
+  witness.post("m0_wav"); const resolver = waiting.get("m0_wav"); witness.called("m0_wav"); resolver(); witness.returned("m0_wav"); waiting.delete("m0_wav");
+  assert.equal(returned, false); await continuation;
+  assert.deepEqual(witness.snapshot("m0_wav"), { ...createReadinessWitness(["m0_wav"]).snapshot("m0_wav"), wait_entered: 1, resolver_called: 2, resolver_returned: 3, wait_returned: 4, matchingPosts: 1, waitCount: 1 });
+  const plain = witness.snapshot("m0_wav"); let accesses = 0;
+  assert.equal(validateReadinessSnapshot({ ...plain, extra: true }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot(Object.defineProperty({ ...plain }, "matchingPosts", { get() { accesses++; return 1; } }), "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot(new Proxy(plain, { getPrototypeOf() { accesses++; throw undefined; } }), "m0_wav"), false);
+  assert.equal(accesses, 0);
+});
+
+test("original tool outcome callbacks retain case ownership and original values including undefined", async () => {
+  const source = musicDiagnosticSource, first = source.indexOf("// BEGIN original tool outcome observation."), last = source.indexOf("// END original tool outcome observation.");
+  assert.ok(first >= 0 && last > first);
+  const attach = new Function("pending", "observedTool", stripTypeScriptTypes(source.slice(first, last)) + ";return outcome;");
+  const firstOwner = { state: "pending" }, nextOwner = { state: "pending" }, original = deferredOriginal();
+  const observed = attach(original.pending, firstOwner); assert.equal(firstOwner.state, "pending");
+  original.reject(undefined); const rejected = await observed;
+  assert.deepEqual(rejected, { ok: false, reason: undefined }); assert.equal(firstOwner.state, "rejected"); assert.equal(nextOwner.state, "pending");
+  const value = {}, normal = await attach(Promise.resolve(value), nextOwner);
+  assert.equal(normal.value, value); assert.deepEqual(normal, { ok: true, value }); assert.equal(nextOwner.state, "fulfilled");
+});
+
+test("music diagnostic dispatcher snapshot reports offending original membership and outcome counts", async () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), counts = protocol.failureCounts();
+  const fulfilled = Promise.resolve(), rejected = Promise.reject(undefined), unobserved = new Promise(() => {}); void rejected.catch(() => {});
+  const outcomes = new Map([[fulfilled, { status: "fulfilled", value: undefined }], [rejected, { status: "rejected", reason: undefined }]]);
+  counts.dispatcher({ retirements: 2, pending: [fulfilled, fulfilled, rejected, unobserved] }, outcomes);
+  counts.dispatcher({ retirements: 0, pending: [] }, outcomes);
+  assert.deepEqual(counts.snapshot(), { d_retirements: 2, d_promises: 4, d_fulfilled: 1, d_rejected: 1, d_pending: 1, d_violations: 2 });
+  const record = protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "original_join", "cleanup"), ...counts.snapshot(), observedOutcome: "pending", partialDelivery: null }, true, undefined);
+  assert.equal(protocol.validate({ ...record, observedOutcome: "resolved" }), undefined);
+  assert.equal(protocol.validate({ ...record, d_pending: -1 }), undefined);
+  const lines = [], emitter = protocol.emitter(line => lines.push(line));
+  emitter.fail(protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "started_status"), httpStatus: 500, observedOutcome: "rejected", toolReturned: true, callerAborted: false, partialDelivery: null }, true, undefined));
+  emitter.put(record); emitter.flush();
+  assert.equal(lines.length, 2); assert.ok(lines.every(line => Buffer.byteLength(line) <= 768));
+  assert.equal(JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length)).observedOutcome, "rejected");
+  assert.equal(JSON.parse(lines[1].slice("::error title=Music contract diagnostic::".length)).d_promises, 4);
+  await Promise.allSettled([fulfilled, rejected]);
+});
+
+// Passive observations use real operation/stream owners. They confer no native
+// cancellation, source-retirement or billing qualification.
+test("music owner witness preserves first caller, deadline and earlier upstream outcomes", async () => {
+  const { HttpOperation, InternalHttpAbort } = await import("../worker/http-operation.ts");
+  const original = Object.getOwnPropertyDescriptor(HttpOperation.prototype, "stop"), faults = [];
+  let sequence = 0; const tick = () => ++sequence;
+  const witness = installMusicOperationWitness(HttpOperation, tick, faults);
+  try {
+    for (const cause of ["caller", "upstream", "deadline"]) {
+      const caller = new AbortController(), operation = new HttpOperation(caller.signal), reason = cause === "deadline" ? new InternalHttpAbort("deadline", "synthetic") : {};
+      if (cause === "caller") caller.abort(reason); else operation.stop(cause, reason);
+      const first = witness.rows.get(operation.signal).first;
+      assert.equal(first.cause, cause); assert.equal(first.statusBefore, null); assert.equal(first.threw, false);
+      assert.equal(first.status, cause === "caller" ? "client_error" : cause === "deadline" ? "timeout" : "provider_error");
+      assert.equal(first.delivery, cause === "caller" ? "canceled" : "failed");
+      assert.equal(operation.signal.reason, reason); assert.ok(first.at < first.returnedAt); assert.ok(Object.isFrozen(first));
+      operation.stop("caller", {}); assert.equal(witness.rows.get(operation.signal).first, first);
+      assert.equal(witness.rows.get(operation.signal).calls, 2);
+      assert.equal(witness.rows.get(new AbortController().signal), undefined);
+    }
+    const selected = new HttpOperation(); selected.acceptRejection(503); selected.cancel({});
+    assert.equal(witness.rows.get(selected.signal).first.statusBefore, "provider_error");
+    assert.equal(witness.rows.get(selected.signal).first.status, "provider_error", "a later cancel cannot erase earlier rejection");
+    assert.deepEqual(faults, []);
+  } finally { witness.restore(); }
+  assert.deepEqual(Object.getOwnPropertyDescriptor(HttpOperation.prototype, "stop"), original);
+});
+
+test("music owner observer faults and synchronous undefined never replace the original call", () => {
+  const reason = {}, faults = [], receiver = new class {
+    signal = new AbortController().signal; status; delivery;
+    stop(...args) { assert.equal(this, receiver); assert.deepEqual(args, ["caller", reason]); throw undefined; }
+  }();
+  const original = receiver.stop, witness = installMusicOperationWitness(receiver.constructor, () => { throw reason; }, faults);
+  try {
+    let threw = false; try { receiver.stop("caller", reason); } catch (error) { threw = true; assert.equal(error, undefined); }
+    assert.equal(threw, true); assert.ok(faults.includes(reason));
+  } finally { witness.restore(); }
+  assert.equal(receiver.stop, original);
+});
+
+test("music promise sidecar returns originals and retains falsey errors without joining early", async () => {
+  for (const reason of [undefined, null, false, 0, {}]) {
+    const original = deferredOriginal(), row = {}, faults = []; let sequence = 0;
+    assert.equal(observeMusicPromise(original.pending, row, () => ++sequence, faults), original.pending);
+    await Promise.resolve(); assert.equal(row.state, "pending");
+    original.reject(reason); const [result] = await Promise.allSettled([original.pending]);
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(row.reason, reason); assert.equal(row.at, 1);
+    assert.deepEqual(faults, []);
+    const broken = {}, failures = [];
+    assert.equal(observeMusicPromise(original.pending, broken, () => { throw undefined; }, failures), original.pending);
+    await Promise.resolve(); assert.deepEqual(failures, [undefined]);
+  }
+});
+
+test("music body observation preserves direct cancel receiver arguments promise and independent faults", async () => {
+  const pending = deferredOriginal(), reason = {}, faults = []; let calls = 0, sequence = 0;
+  const body = { getReader() { assert.fail("observation must not acquire a reader"); }, cancel(...args) {
+    calls++; assert.equal(this, body); assert.deepEqual(args, [reason]); return pending.pending;
+  } };
+  const owner = { tick: () => ++sequence, diagnosticErrors: faults };
+  observeBody({ body }, new AbortController().signal, owner);
+  assert.equal(body.cancel(reason), pending.pending); assert.equal(calls, 1); assert.equal(owner.bodyCancels[0].state, "pending");
+  pending.reject(undefined); await Promise.allSettled([pending.pending]);
+  assert.equal(owner.bodyCancels[0].state, "rejected"); assert.ok(owner.bodyCancels[0].invokeAt < owner.bodyCancels[0].at);
+  await assert.rejects(owner.join(), AggregateError, "missing reader remains a strict failure; observing direct cancel grants no exemption");
+  assert.deepEqual(faults, []);
+});
+
+test("music preheader detail distinguishes original settlement ordering and keeps all admission gates", async () => {
+  for (const order of ["abort-first", "reject-first", "no-abort"]) {
+    const h = await headerOracle(order), proof = { ...h.proof, route: "native" };
+    const [record] = musicWorkerDetails(proof, 16, [proof], h.ingresses, undefined, [], 1);
+    assert.equal(record.headerAccepted, order === "abort-first");
+    assert.equal(record.abortedBeforeReject, h.snapshot.abortedBeforeReject); assert.equal(record.acquisitionState, "rejected");
+    assert.equal(record.invokeAt, h.proof.invoke); assert.equal(record.rejectAt, h.proof.rejected);
+    assert.equal(record.ingressAt, h.proof.ingressAbortAtReject ?? null); assert.equal(record.effectiveAt, h.proof.effectiveAbort ?? null);
+    assert.ok(musicProtocol.validate(record), JSON.stringify(record));
+    assert.equal(provisionalHeaderDisposition(h.snapshot), order === "abort-first", "diagnostic does not change the oracle");
+  }
+});
+
+test("music first retirement is retained separately from cumulative cleanup and immutable earlier facts", () => {
+  const first = retirementObservation([], { f_read: 1 }, [undefined], "native", { pass: 1 });
+  const saved = retainMusicRetirement({ records: [], observerFailed: false, cleanup: null }, first), before = JSON.stringify(saved.records);
+  const next = retirementObservation([], { f_read: 2 }, [undefined], "native", { pass: 2 });
+  const later = retainMusicRetirement(saved, next);
+  assert.equal(JSON.stringify(later.records), before); assert.equal(later.records[0].pass, 1); assert.equal(later.records[0].f_read, 1);
+  assert.equal(later.cleanup.pass, 2); assert.equal(later.cleanup.f_read, 2); assert.equal(later.cleanup.phase, "worker_cleanup_summary");
+  assert.ok(musicProtocol.validate(later.cleanup));
+  assert.equal(retainMusicRetirement({ records: [], observerFailed: true, cleanup: null }, next).observerFailed, true);
+});
+
+test("music diagnostic owner and task tails fit unchanged annotation quota without promoting pending", async () => {
+  const h = await headerOracle(), tails = [{ id: "abort_body", state: "pending" }, { id: "abort_body", state: "rejected" }];
+  const input = { route: "native", binding: { row: { id: "abort_body" } }, readerRows: [], bodyCancels: [] };
+  const owner = { calls: 2, first: { cause: "caller", at: 3, returnedAt: 6, statusBefore: null, status: "client_error", delivery: "canceled", threw: false } };
+  const records = [
+    ...musicWorkerDetails({ ...h.proof, route: "native" }, 16, [h.proof], h.ingresses, owner, [], 1),
+    ...musicWorkerDetails(input, 17, [], [], owner, tails, 1),
+    ...musicWorkerDetails({ ...input, binding: { row: { id: "deadline_body" } } }, 18, [], [], undefined, [], 1),
+  ];
+  const lines = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  for (const record of records) {
+    assert.ok(musicProtocol.validate(record), JSON.stringify(record)); emitter.put(record);
+    const widest = Object.fromEntries(Object.entries(record).map(([key, value]) => [key, key === "v" ? value : typeof value === "number" ? 1_000_000_000 : value]));
+    assert.ok(musicProtocol.validate(widest), `${record.phase}: ${Buffer.byteLength(JSON.stringify(widest))} bytes`);
+    for (const key of ["pass", "stopAt", "tails"]) if (key in record) assert.equal(musicProtocol.validate({ ...record, [key]: -1 }), undefined);
+  }
+  const tail = records.find(row => row.phase === "worker_tail"); assert.equal(tail.tailsPending, 1); assert.equal(tail.tailsRejected, 1); assert.equal(tail.tailsFulfilled, 0);
+  assert.equal(records.at(-2).operationBound, false); assert.equal(records.at(-2).stopCause, "unknown");
+  for (let i = 0; i < 10; i++) emitter.put(musicProtocol.record(musicDiagnosticContext("manifest", "m0_wav", "body_assert")));
+  emitter.flush(); assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => Buffer.byteLength(line) <= 768));
+});
+
+test("music tail binding rejects a foreign ingress with the same label and reports cleanup separately", async () => {
+  const ingress = {}, foreign = {}, input = { binding: { row: { id: "abort_body" }, ingress }, effective: { signal: new AbortController().signal }, readerRows: [] };
+  const first = retirementObservation([input], { f_read: 1 }, [undefined], "native", { pass: 1, tails: [
+    { ingress, state: "fulfilled", at: 5 }, { ingress: foreign, state: "rejected", at: 6 },
+  ] });
+  const tail = first.records.find(row => row.phase === "worker_tail");
+  assert.deepEqual([tail.tails, tail.tailsFulfilled, tail.tailsRejected, tail.tailAt], [1, 1, 0, 5]);
+  const later = retainMusicRetirement(retainMusicRetirement({ records: [], observerFailed: false }, first),
+    retirementObservation([input], { f_read: 2 }, [undefined], "native", { pass: 2 }));
+  const lines = [], errors = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(later), musicProtocol, emitter, errors);
+  emitter.flush(); assert.deepEqual(errors, []);
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const summary = records.find(row => row.phase === "worker_summary");
+  assert.deepEqual([summary.pass, summary.f_read, summary.cleanupPass, summary.cleanupRejected, summary.cleanupCounterTotal], [1, 1, 2, 1, 2]);
+  assert.ok(Buffer.byteLength(JSON.stringify(later)) <= 8192);
+});
+
+test("passive source endpoint snapshots the actual held handler without joining or ending it", async () => {
+  const source = new Function(upstreamScript({ wav: "", mp3: "" }).replace("export default", "const handler =") + "; return { handler, calls };")();
+  const controller = new AbortController(), tails = [];
+  const pending = source.handler.fetch(new Request(target, { method: "POST", headers: { authorization: "Bearer fixture-upstream-abort_headers" },
+    body: JSON.stringify(body(cases.find(row => row.id === "abort_headers"))), signal: controller.signal }), {}, { waitUntil(p) { tails.push(p); void p.catch(() => {}); } });
+  let settled = false; void pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    // Wait only for request.json's existing reaction to enter the producer.
+    for (let i = 0; i < 20 && !source.calls.length; i++) await Promise.resolve();
+    assert.equal(source.calls.length, 1); const before = JSON.stringify(source.calls);
+    const response = await source.handler.fetch(new Request("https://fixture.example/passive-state"));
+    assert.equal(response.status, 200);
+    const passive = createMusicPassiveState(nodeTypes.isProxy), snapshot = passive.validateSource(await response.json());
+    assert.equal(snapshot.rows[0].lifetime.pending, 3); assert.equal(snapshot.rows[0].lifetime.terminal, null);
+    assert.equal(snapshot.rows[0].readiness.matchingPosts, 1); assert.equal(snapshot.rows[1].lifetime, null);
+    assert.equal(settled, false); assert.equal(JSON.stringify(source.calls), before);
+    for (const request of [new Request("https://fixture.example/passive-state?foreign=1"), new Request("https://fixture.example/passive-state", { method: "POST" })]) {
+      assert.equal((await source.handler.fetch(request)).status, 400);
+    }
+    assert.equal(settled, false);
+  } finally { controller.abort(new Error("test-owned cleanup")); }
+  assert.equal((await pending).status, 499);
+  const outcomes = await Promise.allSettled(tails); assert.ok(outcomes.every(row => row.status === "fulfilled"));
+  assert.equal(source.calls[0].sourceLifetime.pending, 0); assert.equal(source.calls[0].sourceLifetime.timerActive, false);
+});
+
+test("passive state records preserve failure census and original detail suppression within 9+1", () => {
+  const passive = createMusicPassiveState(nodeTypes.isProxy), origin = passive.source([], id => createReadinessWitness([id]).snapshot(id), 25);
+  const lines = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  const counts = createMusicFailureCounts(); for (const kind of counts.kinds) counts.add(kind);
+  emitter.put(retirementObservation([], counts.snapshot(), [undefined], "native").records[0]);
+  for (const route of ["native", "manifest"]) for (const point of ["readiness", "retirement"]) {
+    const local = passive.local(point, point === "readiness" ? "abort_body" : "none", point === "readiness" ? 500 : null, [], [], 123, 12);
+    const record = passive.compact(local, origin, 29, route);
+    assert.ok(musicProtocol.validate(record)); emitter.put(record);
+    const missing = { ...record }; delete missing.hI; assert.equal(musicProtocol.validate(missing), undefined);
+    assert.equal(musicProtocol.validate({ ...record, hL: 1024 }), undefined);
+    assert.equal(musicProtocol.validate({ ...record, receivedMs: 11 }), undefined);
+    assert.equal(musicProtocol.validate({ ...record, bR: null }), undefined);
+  }
+  for (let i = 0; i < 20; i++) emitter.put(musicProtocol.record({ ...musicDiagnosticContext("native", "abort_body", "worker_original"), operation: "read", inputIndex: i }));
+  emitter.flush();
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(records.filter(r => r.phase === "native_state").length, 2);
+  const summary = records.find(r => r.phase === "worker_summary");
+  for (const kind of counts.kinds) assert.equal(summary["f_" + kind], 1);
+  assert.equal(summary.rejected, 1); assert.ok(records.at(-1).suppressed > 0);
+  assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  for (const record of records) assert.ok(Buffer.byteLength(JSON.stringify(record)) <= 640);
+});
+
+test("independent passive fault does not hide original retirement counters", async () => {
+  const snapshot = { ...retainMusicRetirement({ records: [], observerFailed: false }, retirementObservation([], { f_acquisition: 1 }, [undefined], "native")), observerFailed: true };
+  const records = [], faults = [];
+  await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(snapshot), musicProtocol, { put: r => records.push(r) }, faults);
+  assert.equal(records[0].f_acquisition, 1); assert.equal(records[0].rejected, 1); assert.equal(faults.length, 1);
+});
+
+test("generated passive clocks start once in their own request and retain elapsed bounds", async t => {
+  const unix = 1_790_000_000_000;
+  const scenarios = [
+    { name: "module zero to first Unix request", first: unix, later: unix, elapsed: 0 },
+    { name: "later request delta", first: unix, later: unix + 17, elapsed: 17 },
+    { name: "zero request epoch is not reset", first: 0, later: 17, elapsed: 17 },
+    { name: "maximum elapsed remains valid", first: unix, later: unix + 1_000_000_000, elapsed: 1_000_000_000 },
+    { name: "negative elapsed remains fatal", first: unix, later: unix - 1, invalid: true },
+    { name: "overflow remains fatal", first: unix, later: unix + 1_000_000_001, invalid: true },
+  ];
+  for (const worker of ["router", "upstream"]) for (const scenario of scenarios) {
+    await t.test(`${worker}: ${scenario.name}`, async () => {
+      let now = 0, clockReads = 0, controlReads = 0;
+      class Clock { static now() { clockReads++; return now; } }
+      class Operation { stop() {} }
+      const passive = createMusicPassiveState(nodeTypes.isProxy);
+      const origin = passive.source([], id => createReadinessWitness([id]).snapshot(id), 0);
+      const readyResponse = new Response(null, { status: 500 });
+      const script = (worker === "router" ? routerScript("native").replace(/^import[^\n]*\n/gm, "") : upstreamScript({ wav: "", mp3: "" }))
+        .replace("export default", "const clockHandler =");
+      const fixture = runInNewContext(script + "; ({ clockHandler, epoch: () => passiveEpoch, "
+        + (worker === "router" ? "passiveRecords, passiveErrors" : "calls") + " });", {
+        Date: Clock, Response, Request, Headers, URL, AbortController, AbortSignal, TextEncoder, TextDecoder, setTimeout, clearTimeout,
+        HttpOperation: Operation, bodyBudgetCharged: () => 0,
+        handler: { fetch() { return new Response(null, { status: 204 }); } },
+        fetch: async url => {
+          if (url === "https://fixture.example/started?id=abort_body") return readyResponse;
+          assert.equal(url, "https://fixture.example/passive-state"); controlReads++;
+          return Response.json(origin);
+        },
+      });
+      assert.equal(fixture.epoch(), undefined); assert.equal(clockReads, 0);
+      now = scenario.first;
+      const initial = await fixture.clockHandler.fetch(new Request(worker === "router"
+        ? "https://router.invalid/clock-start" : "https://fixture.example/passive-state"), {}, {});
+      assert.equal(initial.status, worker === "router" ? 204 : 200);
+      assert.equal(fixture.epoch(), scenario.first);
+      if (worker === "upstream") assert.equal((await initial.json()).atMs, 0);
+      now = scenario.later;
+      if (worker === "router") {
+        const result = await fixture.clockHandler.fetch(new Request("https://router.invalid/fixture/started?id=abort_body"));
+        assert.equal(result, readyResponse, "diagnostics must preserve the original readiness failure");
+        assert.equal(fixture.passiveErrors.length, scenario.invalid ? 1 : 0);
+        assert.equal(fixture.passiveRecords.length, scenario.invalid ? 0 : 1);
+        assert.equal(controlReads, scenario.invalid ? 0 : 1);
+        if (scenario.invalid) assert.equal(fixture.passiveErrors[0].message, "invalid passive music state");
+        else {
+          const record = fixture.passiveRecords[0];
+          assert.equal(record.localMs, scenario.elapsed); assert.equal(record.receivedMs, scenario.elapsed);
+          assert.equal(record.sourceMs, 0, "source elapsed time has its own epoch");
+          assert.ok(musicProtocol.validate(JSON.parse(JSON.stringify(record))));
+        }
+      } else {
+        const pending = fixture.clockHandler.fetch(new Request("https://fixture.example/passive-state"));
+        if (scenario.invalid) await assert.rejects(pending, error => error.message === "invalid passive music state");
+        else assert.equal(passive.validateSource(await (await pending).json()).atMs, scenario.elapsed);
+        assert.equal(fixture.calls.length, 0, "clock checks must not start a held source");
+      }
+      assert.equal(fixture.epoch(), scenario.first, "later requests must not reset either epoch");
+    });
+  }
+});
+
+test("generated router retains exact readiness response and first failure across passive control I/O", async () => {
+  const passive = createMusicPassiveState(nodeTypes.isProxy);
+  const source = passive.source([], id => createReadinessWitness([id]).snapshot(id), 7);
+  for (const sourceFails of [false, true]) for (const readyThrows of [false, true]) {
+    const readyResponse = new Response("original readiness failure", { status: 500 }), original = Object.freeze({ primary: true });
+    let originalReads = 0, controlReads = 0;
+    Object.defineProperty(readyResponse, "body", { get() { originalReads++; throw new Error("must not read readiness body"); } });
+    Object.defineProperty(readyResponse, "clone", { value() { assert.fail("must not clone readiness response"); } });
+    const nativeResponse = new Response("held original body", { status: 503 });
+    Object.defineProperty(nativeResponse, "body", { get() { assert.fail("original handler body read"); } });
+    Object.defineProperty(nativeResponse, "clone", { value() { assert.fail("original handler response clone"); } });
+    class Operation { stop() {} }
+    const script = routerScript("native").replace(/^import[^\n]*\n/gm, "").replace("export default", "const router =");
+    const fixture = runInNewContext(script + "; ({ router, passiveRecords, passiveSnapshots, passiveErrors });", {
+      Response, Request, Headers, URL, AbortController, AbortSignal, TextEncoder, TextDecoder, setTimeout, clearTimeout,
+      HttpOperation: Operation, bodyBudgetCharged: () => 222,
+      handler: { async fetch(request) { if (new URL(request.url).pathname === "/failing-original") throw original; return nativeResponse; } },
+      fetch: async url => {
+        if (url === "https://fixture.example/started?id=abort_body") { if (readyThrows) throw undefined; return readyResponse; }
+        assert.equal(url, "https://fixture.example/passive-state"); controlReads++;
+        if (sourceFails) throw undefined;
+        return Response.json(source);
+      },
+    });
+    const nativeResult = await fixture.router.fetch(new Request("https://router.invalid/v1/native/openrouter/v1/chat/completions", {
+      method: "POST", headers: headers("abort_headers"), body: JSON.stringify(body(cases.find(row => row.id === "abort_headers"))),
+    }), {}, {});
+    assert.equal(nativeResult, nativeResponse);
+    const readyPending = fixture.router.fetch(new Request("https://router.invalid/fixture/started?id=abort_body"));
+    if (readyThrows) await assert.rejects(readyPending, error => error === undefined);
+    else assert.equal(await readyPending, readyResponse); assert.equal(originalReads, 0); assert.equal(controlReads, 1);
+    const first = fixture.passiveRecords[0];
+    assert.ok(musicProtocol.validate(JSON.parse(JSON.stringify(first)))); assert.equal(first.point, "readiness"); assert.equal(first.charged, 222); assert.equal(first.httpStatus, readyThrows ? null : 500); assert.equal(first.hS, 503);
+    assert.equal(first.stateFaults, sourceFails ? 1 : 0); assert.equal(first.sourceMs, sourceFails ? null : 7);
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/failing-original"), {}, { waitUntil() { assert.fail("unexpected tail"); } }), error => error === original);
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/fixture/retire", { method: "POST" })), error => error.errors.length === 1 && error.errors[0] === original);
+    const response = await fixture.router.fetch(new Request("https://router.invalid/fixture/retirement-observation"));
+    const text = await response.text(), snapshot = JSON.parse(text);
+    assert.ok(Buffer.byteLength(text) <= 8192); assert.equal(snapshot.observerFailed, sourceFails);
+    assert.equal(snapshot.records[0].f_handler, 1); assert.equal(snapshot.records[0].rejected, 1);
+    assert.equal(snapshot.records[0].stateFaults, sourceFails ? 2 : 0);
+    assert.equal(fixture.passiveRecords.length, 2); assert.equal(fixture.passiveRecords[0], first); assert.equal(controlReads, 2);
+    for (const record of snapshot.records) assert.ok(musicProtocol.validate(record));
+    await assert.rejects(fixture.router.fetch(new Request("https://router.invalid/fixture/retire", { method: "POST" })), error => error.errors[0] === original);
+    assert.equal(controlReads, 2); assert.equal(fixture.passiveRecords[0], first);
+    if (sourceFails) { assert.equal(fixture.passiveErrors.length, 2); assert.ok(fixture.passiveErrors.every(error => error.errors[0] === undefined)); }
+  }
+});
