@@ -449,3 +449,107 @@ test('cancellation during completion review prevents acceptance without replayin
   }), /cancelled/);
   assert.equal(writes, 1);
 });
+
+test('correction review checks the updated source without another draft turn', async () => {
+  for (const inline of [true, false]) {
+    let value = 0, checked = 0, drafts = 0, reviews = 0;
+    const events = [];
+    const result = await runFinalReviewedTrajectory({
+      task: 'Set the value to one.', reviewAfterCorrection: true,
+      maxModelCalls: inline ? 3 : 4, maxToolCalls: 3,
+      tools: [
+        { name: 'write', effect: 'write', validate: args => Number.isInteger(args.value),
+          execute: async args => { value = args.value; events.push('write'); return { value }; } },
+        { name: 'check', effect: 'read', validate: args => Object.keys(args).length === 0,
+          execute: async () => { checked = value; events.push('check'); return { passed: value === 1 }; } },
+      ],
+      onCheckpoint: async ({ history }) => {
+        await Promise.resolve(); events.push(`checkpoint:${history.length}`);
+      },
+      finalCheckTool: 'check',
+      nextAction: () => value !== checked ? { type: 'tool', name: 'check', arguments: {} } : null,
+      reviewSnapshot: () => ({ value, checked }),
+      draft: async () => { drafts++; return final('done'); },
+      repair: async () => write(1),
+      verify: async ({ segment, snapshot }) => {
+        events.push('review'); reviews++;
+        if (reviews === 1) return { accepted: 0, reason: 'Value is not one.', replacement: inline ? write(1) : null };
+        assert.deepEqual(snapshot, { value: 1, checked: 1 });
+        return accept(segment);
+      },
+    });
+    assert.equal(drafts, 1); assert.equal(reviews, 2);
+    assert.equal(result.stats.modelCalls, inline ? 3 : 4);
+    assert.deepEqual(events, ['review', 'write', 'checkpoint:1', 'check', 'checkpoint:2', 'review', 'check', 'checkpoint:3']);
+  }
+});
+
+test('correction review remains bounded and rejects invalid modes before callbacks', async () => {
+  for (const runner of [runTrajectory, runSingleTrajectory]) {
+    await assert.rejects(runner(fixture({ reviewAfterCorrection: true }).options), /invalid_trajectory_correction_review/);
+  }
+  await assert.rejects(runFinalReviewedTrajectory(fixture({ reviewAfterCorrection: 'true' }).options), /invalid_trajectory_correction_review/);
+  let drafts = 0;
+  const { options, events } = fixture({ reviewAfterCorrection: true, maxModelCalls: 2,
+    draft: async () => { drafts++; return final('done'); },
+    verify: async () => ({ accepted: 0, reason: 'Change required.', replacement: write(1) }),
+  });
+  await assert.rejects(runFinalReviewedTrajectory(options), /trajectory_model_limit/);
+  assert.equal(drafts, 1); assert.deepEqual(events, [['write', 1]]);
+});
+
+test('read-only corrections resume drafting and corrected finals still require passing checks', async () => {
+  let drafts = 0, reviews = 0;
+  const { options, events } = fixture({ reviewAfterCorrection: true,
+    draft: async () => { drafts++; return final('done'); },
+    verify: async ({ segment }) => ++reviews === 1
+      ? { accepted: 0, reason: 'Read the record.', replacement: read('record') } : accept(segment),
+  });
+  await runFinalReviewedTrajectory(options);
+  assert.equal(drafts, 2); assert.deepEqual(events, [['read', 'record']]);
+
+  let checks = 0;
+  const checked = fixture({ reviewAfterCorrection: true, maxModelCalls: 3, finalCheckTool: 'check',
+    verify: async ({ segment, history }) => history.length
+      ? accept(segment) : { accepted: 0, reason: 'Update.', replacement: write(1) },
+  });
+  checked.options.tools.push({ name: 'check', effect: 'read', validate: () => true,
+    execute: async () => { checks++; return { passed: false }; } });
+  await assert.rejects(runFinalReviewedTrajectory(checked.options), /trajectory_model_limit/);
+  assert.equal(checks, 1);
+});
+
+test('correction review is opt-in and default writes return to drafting', async () => {
+  let drafts = 0, reviews = 0;
+  const { options } = fixture({ draft: async () => { drafts++; return final('done'); },
+    verify: async ({ segment }) => ++reviews === 1
+      ? { accepted: 0, reason: 'Update.', replacement: write(1) } : accept(segment),
+  });
+  await runFinalReviewedTrajectory(options);
+  assert.equal(drafts, 2); assert.equal(reviews, 2);
+});
+
+
+test('correction checkpoints stop failed or cancelled persistence before another review', async () => {
+  for (const cancel of [false, true]) {
+    const controller = new AbortController();
+    const failure = new Error('checkpoint stopped');
+    let writes = 0, drafts = 0, reviews = 0;
+    await assert.rejects(runFinalReviewedTrajectory({
+      task: 'Correct once.', reviewAfterCorrection: true, signal: controller.signal,
+      tools: [{ name: 'write', effect: 'write', validate: () => true,
+        execute: async () => { writes++; return { applied: true }; } }],
+      draft: async () => { drafts++; return final('done'); },
+      verify: async () => { reviews++; return { accepted: 0, reason: 'Correct the value.', replacement: write(1) }; },
+      repair: async () => { throw new Error('unexpected repair'); },
+      onCheckpoint: async ({ history }) => {
+        assert.equal(history.length, 1);
+        if (cancel) { controller.abort(failure); return new Promise(() => {}); }
+        throw failure;
+      },
+    }), error => error === failure);
+    assert.equal(writes, 1);
+    assert.equal(drafts, 1);
+    assert.equal(reviews, 1);
+  }
+});

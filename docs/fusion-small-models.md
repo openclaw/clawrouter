@@ -126,6 +126,14 @@ a corrective tool action or a separate repair call. Replacement and repaired
 final answers pass through review again; they cannot bypass it. Model calls,
 tools, checkpoints, cancellation and `finalCheckTool` retain their existing limits.
 
+Set `reviewAfterCorrection: true` to review the held final answer again after a
+corrective write, without another draft call. The controller awaits the write
+and its checkpoint before running scheduled checks and requesting the next
+review. Read-only corrections still return to drafting. The option applies only
+to completion review, defaults to `false`, and retains every call, tool and
+final-check limit. A failed or cancelled checkpoint stops the run without
+retrying the write or requesting another review.
+
 An optional synchronous `reviewSnapshot({ task, history })` callback supplies a
 plain JSON snapshot for the verifier. Its request becomes `{ task, segment,
 snapshot }`; draft and repair callbacks still receive history. The controller
