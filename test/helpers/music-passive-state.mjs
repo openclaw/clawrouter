@@ -165,7 +165,7 @@ export async function readMusicPassiveResponse(fetchOriginal, url, protocol, run
   const controller = new AbortController(), errors = []; let timer, reader, closed, value;
   try {
     timer = runtime.setTimeout(() => controller.abort(new Error("passive observation bound expired")), 10000);
-    const response = await fetchOriginal(url, { method: "GET", signal: controller.signal, redirect: "error" });
+    const response = await fetchOriginal(url, { method: "GET", signal: controller.signal, redirect: "manual" });
     const status = protocol.responseStatus(response), body = response.body;
     if (body) reader = body.getReader();
     // Observe this exact diagnostic reader's original closed Promise at

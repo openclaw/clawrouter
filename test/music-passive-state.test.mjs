@@ -135,7 +135,7 @@ test("control fetch consumes only its bounded state response and closes its own 
     requested = { url, options }; return Response.json(origin());
   }, "https://fixture.example/passive-state", protocol, runtime);
   assert.deepEqual(result, origin()); assert.equal(requested.url, "https://fixture.example/passive-state");
-  assert.equal(requested.options.method, "GET"); assert.equal(requested.options.redirect, "error"); assert.equal(requested.options.signal.aborted, false);
+  assert.equal(requested.options.method, "GET"); assert.equal(requested.options.redirect, "manual"); assert.equal(requested.options.signal.aborted, false);
   assert.equal(runtime.active.size, 0);
 });
 
@@ -200,9 +200,35 @@ test("successful EOF still joins the exact control closed Promise before release
   assert.deepEqual(order, ["release", "clear"]);
 });
 
-test("bad control HTTP status still cancels and joins its own body", async () => {
-  let canceled = 0; const runtime = timers();
-  const response = new Response(new ReadableStream({ cancel() { canceled++; } }), { status: 503 });
-  await assert.rejects(readMusicPassiveResponse(async () => response, "https://fixture.example/passive-state", protocol, runtime), AggregateError);
-  assert.equal(canceled, 1); assert.equal(response.body.locked, false); assert.equal(runtime.active.size, 0);
+test("control redirects and errors reject before body parsing and join their own cleanup", async t => {
+  for (const status of [301, 302, 303, 307, 308, 503]) await t.test(String(status), async () => {
+    let canceled = 0, fetched = 0, reads = 0, validated = 0, closedSettled = false;
+    const runtime = timers(), order = [], bytes = new TextEncoder().encode(JSON.stringify(origin()));
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(bytes); },
+      cancel() { canceled++; },
+    }), { status, headers: { location: "https://alternate.example/must-not-follow", "content-type": "application/json" } });
+    const originalGetReader = response.body.getReader;
+    response.body.getReader = function(...args) {
+      const reader = Reflect.apply(originalGetReader, this, args);
+      const read = reader.read, cancel = reader.cancel, release = reader.releaseLock;
+      void reader.closed.then(() => { closedSettled = true; order.push("closed"); });
+      reader.read = function(...args) { reads++; return Reflect.apply(read, this, args); };
+      reader.cancel = function(...args) { order.push("cancel"); return Reflect.apply(cancel, this, args); };
+      reader.releaseLock = function(...args) {
+        assert.equal(closedSettled, true); order.push("release"); return Reflect.apply(release, this, args);
+      };
+      return reader;
+    };
+    await assert.rejects(readMusicPassiveResponse(async (url, options) => {
+      fetched++; assert.equal(url, "https://fixture.example/passive-state"); assert.equal(options.redirect, "manual");
+      return response;
+    }, "https://fixture.example/passive-state", { ...protocol, validateSource() { validated++; assert.fail("bad status parsed"); } }, {
+      setTimeout: runtime.setTimeout,
+      clearTimeout(timer) { order.push("clear"); runtime.clearTimeout(timer); },
+    }), error => error instanceof AggregateError && error.errors.length === 1 && error.errors[0].message === "passive observation HTTP failure");
+    assert.deepEqual([fetched, reads, validated, canceled], [1, 0, 0, 1]);
+    assert.deepEqual(order, ["cancel", "closed", "release", "clear"]);
+    assert.equal(response.body.locked, false); assert.equal(runtime.active.size, 0);
+  });
 });
