@@ -292,3 +292,24 @@ test("MiniMax caller abort cancels the actual exchange and retains UNKNOWN witho
   assert.equal((await body(await f.action("poll", begin.attemptId))).status, "unknown");
   assert.equal(f.sent.length, 2); assert.equal(f.record().accessToken, undefined);
 });
+
+for (const cleanup of ["pending", "rejected"]) test(`MiniMax final admin rejection does not wait for ${cleanup} body cancellation`, { timeout: 3000 }, async t => {
+  const f = await fixture(t), cancelled = deferred();
+  let cancellations = 0;
+  t.after(() => cancelled.resolve());
+  f.env.GRANT_CREDENTIALS.get = () => ({ async fetch() {
+    await f.user(false);
+    return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"status":"pending"}')); },
+      cancel() {
+        cancellations++;
+        return cleanup === "pending" ? cancelled.promise : Promise.reject(new Error("synthetic cleanup failure"));
+      },
+    }));
+  } });
+  const rejected = await body(await f.begin(), 403);
+  assert.equal(rejected.error.code, "access_admin_required");
+  assert.equal(cancellations, 1);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.record(), undefined);
+});

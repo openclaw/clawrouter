@@ -62,7 +62,8 @@ export async function miniMaxDeviceAuthorize(request: Request, env: Env, key: st
     await miniMaxDeviceAdmin(request, env);
     return new Response(response.body, { status: response.status, headers: privateJson({}).headers });
   } catch (error) {
-    await response?.body?.cancel().catch(() => undefined);
+    // Cleanup must not delay the authorization rejection.
+    void response?.body?.cancel().catch(() => undefined);
     return privateJson({ error: { code: error instanceof HttpError ? error.code : "minimax_device_unavailable",
       message: "MiniMax device operation unavailable" } }, error instanceof HttpError ? error.status : 503);
   }
