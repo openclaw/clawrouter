@@ -14,12 +14,17 @@ const manifestPath = `/v1/proxy/${providerId}/universal`;
 const nativePath = `/v1/native/${providerId}/`;
 const usage = { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 };
 
-test("generated gateway smoke reaches the Worker upstream unchanged and settles once", async (t) => {
+test("generated Universal gateway smoke reaches the Worker upstream unchanged and settles once", async (t) => {
   const fixture = await gatewayFixture(t);
-  const { target } = buildProviderSmokePlan(snapshot, {
+  const provider = snapshot.providers.find(provider => provider.id === providerId);
+  const universal = { ...provider, endpoints: provider.endpoints.filter(endpoint => endpoint.id === "universal"),
+    capabilities: provider.capabilities.filter(capability => capability.endpoint === "universal") };
+  assert.equal(universal.endpoints.length, 1);
+  const { target } = buildProviderSmokePlan({ ...snapshot, providers: [universal] }, {
     ...fixture.env,
     CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: "synthetic-inline-key",
   }).providers.find(({ id }) => id === providerId);
+  assert.equal(target.route, manifestPath);
   const wire = JSON.stringify({ choices: [{ message: { content: "ok" } }], usage });
   const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
     assert.equal(String(url), "https://gateway.ai.cloudflare.com/v1/fixture-account/fixture-gateway/");
