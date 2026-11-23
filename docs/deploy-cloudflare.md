@@ -205,7 +205,7 @@ CLAWROUTER_ADMIN_TOKEN_SHA256
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
-CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
+CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional legacy Universal smoke-only key
 ```
 
 Set the queue variables when overriding their defaults. Set the Access
@@ -335,12 +335,22 @@ pnpm exec wrangler secret put CLOUDFLARE_AI_GATEWAY_ID --config .wrangler.genera
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config .wrangler.generated.toml
 ```
 
-For a Cloudflare AI Gateway live smoke, configure the gateway with provider
-defaults or pass an upstream OpenAI key only to the smoke runner:
+The bundled Cloudflare AI Gateway smoke now prefers the declared Messages
+operation: `/v1/proxy/cloudflare-ai-gateway/messages`, selecting
+`cloudflare-ai-gateway/claude-sonnet-4-6` with `max_tokens: 16`. The Worker sends
+`claude-sonnet-4-6` to `/anthropic/v1/messages` using the selected gateway
+credential. The gateway must resolve the provider credential through its stored
+BYOK or Unified Billing configuration. This declaration is not live account or
+SDK qualification.
 
-```sh
-export CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY=...
-```
+`CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY` and
+`CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL` apply only when a Universal smoke target is
+selected; they neither choose Universal nor supply credentials/model overrides
+to Messages. Existing Universal routes remain available. Gateway vendor pricing
+is unknown: an enforced budget requires an explicit policy-fixed request fee,
+with authoritative admission and settlement. That fee does not certify vendor
+invoice cost or establish account entitlement. See
+[Cloudflare native Messages](cloudflare-native-messages.md).
 
 ## Render and Deploy
 

@@ -4,6 +4,8 @@
 
 - Return DuckDuckGo HTML admission and read errors without waiting for stream cancellation.
 
+- Add Cloudflare AI Gateway native Anthropic Messages for the frozen Sonnet 4.6 identity using gateway authentication and stored BYOK/Unified Billing. Preserve Universal requests and leave account-dependent charges unpriced.
+
 - Return MiniMax device authorization failures without waiting for rejected-response body cleanup.
 
 - Allow completion review to start from a caller-supplied candidate without another draft call, preserving correction and final-check guards.
