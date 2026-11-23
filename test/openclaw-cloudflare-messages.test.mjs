@@ -43,6 +43,29 @@ for (const [before, after] of [
   ["bodySucceeded: () => boolean; current?", "bodySucceeded: () => boolean; readProgress?: (owner: any, value: any) => void; current?"],
   ["if (value?.done === true) row.eof = true;", "if (value?.done === true) row.eof = true; sdk?.readProgress?.(owner, value);"],
 ]) { assert.equal(observerSource.split(before).length, 2); observerSource = observerSource.replace(before, after); }
+const untypedObserverSource = observerSource;
+// CF's owning compiler graph checks this copied observer. The donor stays
+// immutable; these annotations must erase to exactly the same runtime code.
+function projectCloudflareObserverTypes(source) {
+  const runtime = stripTypeScriptTypes(source, { mode: "transform" });
+  const guardedRead = `    return cancel.length === 1 && closed.length === 1 && closed[0].pending === row.closed && closed[0].state === "fulfilled"
+      && cancel[0].state === "fulfilled" && cancel[0].owner === owner && cancel[0].receiver === row.reader && cancel[0].unlocksAtInvoke === 0
+      && op.invoked < cancel[0].invoked && cancel[0].invoked < op.settled! && op.settled! < row.unlockInvocations[0]
+      && cancel[0].settled! < row.unlockInvocations[0] && related.filter(item => item.state !== "fulfilled").length === 1;`;
+  assert.equal([...guardedRead.matchAll(/\b(?:cancel|closed)\[0\]/g)].length, 9);
+  for (const [before, after] of [
+    ['patch(body, "cancel", function (...args: any[])', 'patch(body, "cancel", function (this: unknown, ...args: any[])'],
+    ['patch(body, "getReader", function (...args: any[])', 'patch(body, "getReader", function (this: unknown, ...args: any[])'],
+    ['patch(reader, kind, function (...operands: any[])', 'patch(reader, kind, function (this: unknown, ...operands: any[])'],
+    ['patch(reader, "releaseLock", function (...operands: any[])', 'patch(reader, "releaseLock", function (this: unknown, ...operands: any[])'],
+    ['patch(result, "release", function (...operands: any[])', 'patch(result, "release", function (this: unknown, ...operands: any[])'],
+    ['row.unlockInvocations.every(unlock =>', 'row.unlockInvocations.every((unlock: number) =>'],
+    [guardedRead, guardedRead.replace(/\b(cancel|closed)\[0\]/g, "$1[0]!")],
+  ]) { assert.equal(source.split(before).length, 2, "exact CF observer type projection"); source = source.replace(before, after); }
+  assert.equal(stripTypeScriptTypes(source, { mode: "transform" }), runtime, "CF type projection preserves erased runtime");
+  return source;
+}
+observerSource = projectCloudflareObserverTypes(observerSource);
 const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
 const bindingsSource = fixtureText.slice(fixtureText.indexOf("function retainCloudflareClaim"), fixtureText.indexOf("// END CLOUDFLARE BINDINGS"));
@@ -402,6 +425,12 @@ test("Cloudflare source assembly pins the real SDK and preserves original workfl
   assert.equal(snapshot.model_index[modelId].nativeCapabilities.endpoints.messages.maxOutputTokens, undefined);
   assert.match(assembledFixture, /boundary-aware:anthropic-messages/);
   assert.match(assembledFixture, /withPluginRuntimeGenerationRegistryScope/);
+});
+test("Cloudflare observer type projection preserves runtime and refuses source drift", () => {
+  assert.equal(stripTypeScriptTypes(observerSource, { mode: "transform" }), stripTypeScriptTypes(untypedObserverSource, { mode: "transform" }));
+  const needle = 'patch(body, "cancel", function (...args: any[])';
+  assert.throws(() => projectCloudflareObserverTypes(untypedObserverSource.replace(needle, 'patch(body, "cancel", function (...changed: any[])')), /exact CF observer type projection/);
+  assert.throws(() => projectCloudflareObserverTypes(observerSource), /exact CF observer type projection/);
 });
 test("Cloudflare binding rejects wrong route, wrong credential, duplicate and missing originals", () => {
   const binds = createCloudflareBindings(); binds.expect("cf_stream", "chat", upstreamUrl, "POST", secret("stream"), undefined, "cf-aig-authorization");
