@@ -291,3 +291,17 @@ test('completion review uses a strong correction and forwards opt-in re-review',
     assert.equal(result.stats.reviews, 2); assert.equal(result.stats.repairs, 1);
   }
 });
+
+test('a supplied candidate makes only the metered reviewer call before acceptance', async () => {
+  const calls = [];
+  const options = fixture(async (_run, model, body) => {
+    calls.push(model);
+    assert.equal(body.response_format.json_schema.name, 'trajectory_verdict');
+    const request = JSON.parse(body.messages[1].content);
+    assert.deepEqual(request.segment, [{ action: { type: 'final', content: 'restored candidate' }, observation: null }]);
+    return response({ accepted: 1, reason: '', replacement: null });
+  });
+  const result = await runFinalReviewedModelTrajectory({ ...options, initialFinalAnswer: 'restored candidate', maxModelCalls: 1 });
+  assert.deepEqual(calls, ['review-model']); assert.equal(result.stats.modelCalls, 1);
+  assert.equal(result.content, 'restored candidate');
+});

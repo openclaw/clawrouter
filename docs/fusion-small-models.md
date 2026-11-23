@@ -126,6 +126,15 @@ a corrective tool action or a separate repair call. Replacement and repaired
 final answers pass through review again; they cannot bypass it. Model calls,
 tools, checkpoints, cancellation and `finalCheckTool` retain their existing limits.
 
+Set `initialFinalAnswer` to a nonempty string to start by reviewing an existing
+candidate without a new draft callback. This option applies only to completion
+review, including its model adapter. The caller must restore the candidate's
+working state and supply its evidence through tools or `reviewSnapshot`.
+The answer remains held for review and final checks; rejection follows the
+normal correction flow. Scheduled tools still run before review. This does not
+restore history or certify a checkpoint. Include the original draft's cost and
+time when comparing complete workflows.
+
 Set `reviewAfterCorrection: true` to review the held final answer again after a
 corrective write, without another draft call. The controller awaits the write
 and its checkpoint before running scheduled checks and requesting the next

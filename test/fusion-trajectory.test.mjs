@@ -553,3 +553,80 @@ test('correction checkpoints stop failed or cancelled persistence before another
     assert.equal(reviews, 1);
   }
 });
+
+test('an existing candidate reaches review after scheduled tools without a draft call', async () => {
+  let checked = 0; const checkpoints = [];
+  const result = await runFinalReviewedTrajectory({ task: 'Review the restored candidate.', initialFinalAnswer: 'existing result',
+    maxModelCalls: 1, maxToolCalls: 2, finalCheckTool: 'check',
+    tools: [{ name: 'check', effect: 'read', validate: args => Object.keys(args).length === 0,
+      execute: async () => { checked++; return { passed: true }; } }],
+    nextAction: () => checked ? null : { type: 'tool', name: 'check', arguments: {} },
+    onCheckpoint: snapshot => checkpoints.push(snapshot),
+    draft: async () => { throw Error('unexpected draft'); },
+    repair: async () => { throw Error('unexpected repair'); },
+    verify: async ({ history, segment }) => {
+      assert.equal(checkpoints.length, 1);
+      assert.deepEqual(history[0].observation, { passed: true });
+      assert.deepEqual(segment, [{ action: final('existing result'), observation: null }]);
+      return accept(segment);
+    },
+  });
+  assert.equal(result.content, 'existing result'); assert.equal(result.stats.modelCalls, 1);
+  assert.equal(result.stats.toolCalls, 2); assert.equal(result.stats.reviews, 1);
+  assert.equal(checkpoints.length, 2);
+});
+
+test('an existing candidate still requires correction, checkpointing and re-review', async () => {
+  let reviews = 0, persisted = false;
+  const { events, options } = fixture({ initialFinalAnswer: 'existing result', reviewAfterCorrection: true, maxModelCalls: 3,
+    draft: async () => { throw Error('unexpected draft'); },
+    verify: async ({ segment }) => {
+      if (++reviews === 1) return { accepted: 0, reason: 'Correct the value.', replacement: null };
+      assert.equal(persisted, true); return accept(segment);
+    },
+    repair: async () => write(7),
+    onCheckpoint: async () => { persisted = true; },
+  });
+  const result = await runFinalReviewedTrajectory(options);
+  assert.deepEqual(events, [['write', 7]]); assert.equal(result.content, 'existing result');
+  assert.equal(result.stats.modelCalls, 3); assert.equal(result.stats.repairs, 1); assert.equal(reviews, 2);
+});
+
+test('a failed final check returns an existing candidate to normal drafting', async () => {
+  let ready = false, drafts = 0, checks = 0;
+  const { options } = fixture({ initialFinalAnswer: 'stale claim', finalCheckTool: 'check', maxModelCalls: 3,
+    draft: async () => { drafts++; ready = true; return final('checked result'); },
+  });
+  options.tools.push({ name: 'check', effect: 'read', validate: args => Object.keys(args).length === 0,
+    execute: async () => { checks++; return { passed: ready }; } });
+  const result = await runFinalReviewedTrajectory(options);
+  assert.equal(result.content, 'checked result'); assert.equal(drafts, 1); assert.equal(checks, 2);
+  assert.equal(result.stats.reviews, 2);
+});
+
+test('initial answers are bounded and exclusive to completion review', async () => {
+  let calls = 0;
+  const { options } = fixture({ initialFinalAnswer: 'existing', draft: async () => { calls++; return final('unexpected'); },
+    verify: async () => { calls++; return accept([]); } });
+  for (const run of [runSingleTrajectory, runTrajectory]) {
+    await assert.rejects(run(options), /invalid_trajectory_initial_final/);
+  }
+  for (const initialFinalAnswer of ['', '  ', null, false, {}]) {
+    await assert.rejects(runFinalReviewedTrajectory({ ...options, initialFinalAnswer }), /invalid_trajectory_initial_final/);
+  }
+  await assert.rejects(runFinalReviewedTrajectory({ ...options, initialFinalAnswer: 'x'.repeat(512), maxContextBytes: 256 }), /trajectory_context_limit/);
+  assert.equal(calls, 0);
+});
+
+test('initial answers cannot bypass cancellation or the shared model limit', async () => {
+  let calls = 0;
+  const { options } = fixture({ initialFinalAnswer: 'existing', maxModelCalls: 1,
+    verify: async () => { calls++; return { accepted: 0, reason: 'Repair required.', replacement: null }; },
+    repair: async () => { throw Error('repair exceeded model budget'); },
+  });
+  await assert.rejects(runFinalReviewedTrajectory(options), /trajectory_model_limit/);
+  assert.equal(calls, 1);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(runFinalReviewedTrajectory({ ...options, signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(calls, 1);
+});
