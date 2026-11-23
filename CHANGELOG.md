@@ -1,5 +1,7 @@
 # Changelog
 
+- Discard malformed UTF-8 fusion adviser responses instead of silently altering their text.
+
 - Return DuckDuckGo HTML admission and read errors without waiting for stream cancellation.
 
 - Return MiniMax device authorization failures without waiting for rejected-response body cleanup.
