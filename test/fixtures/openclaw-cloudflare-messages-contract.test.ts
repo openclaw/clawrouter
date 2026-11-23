@@ -21,6 +21,9 @@ import plugin from "./index.js";
 /* OWNED_LIFETIME_IMPLEMENTATION */
 
 // BEGIN CLOUDFLARE BINDINGS
+function retainCloudflareClaim<T>(lifetime: { errors: unknown[] }, claim: () => T): T {
+  try { return claim(); } catch (error) { lifetime.errors.push(error); throw error; }
+}
 function createCloudflareBindings() {
   const bindings: any[] = [];
   return {
@@ -42,6 +45,17 @@ function createCloudflareBindings() {
 }
 // END CLOUDFLARE BINDINGS
 
+// BEGIN CLOUDFLARE HISTORY
+function cloudflareHistory(id: string, assistant?: AgentMessage): AgentMessage[] {
+  const history: AgentMessage[] = [
+    { role: "user", content: "Synthetic Cloudflare request", timestamp: 1 },
+    { role: "user", content: "fixture cf_" + (assistant ? "seed" : id), timestamp: 2 },
+  ];
+  if (assistant) history.push(assistant, { role: "toolResult", toolCallId: "tool_fixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: 3 });
+  return history;
+}
+// END CLOUDFLARE HISTORY
+
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const modelId = "cloudflare-ai-gateway/claude-sonnet-4-6";
 const key = (id: string) => `clawrouter-live-cf_${id}-fixture-secret`;
@@ -53,8 +67,7 @@ let cancelController: AbortController | undefined;
 assert.equal(process.env.CLAWROUTER_CF_CONTRACT, "cloudflare-messages");
 
 function claim(url: any, init: any, kind: string) {
-  try { const owner = bindings.claim(url, init, kind); assert.equal(owner, invocation.getStore()); return owner; }
-  catch (error) { lifetime.errors.push(error); throw error; }
+  return retainCloudflareClaim(lifetime, () => { const owner = bindings.claim(url, init, kind); assert.equal(owner, invocation.getStore()); return owner; });
 }
 async function runCase(body: () => unknown) {
   await preserveFailures(async () => { await body(); bodySucceeded = true; }, [
@@ -103,9 +116,9 @@ async function selected(id: string, denied = false) {
 async function start(id: string, options: { selected?: NonNullable<Awaited<ReturnType<typeof selected>>>; apiKey?: string; signal?: AbortSignal; assistant?: any; simple?: boolean } = {}) {
   const current = options.selected ?? await selected(id); assert(current);
   const { provider, registry, model, config } = current;
-  const history: AgentMessage[] = [{ role: "user", content: "Synthetic Cloudflare request", timestamp: 1 }];
-  if (options.assistant) history.push(options.assistant, { role: "toolResult", toolCallId: "tool_fixture", toolName: "lookup", content: [{ type: "text", text: "synthetic-tool-result" }], isError: false, timestamp: 3 });
-  history.push({ role: "user", content: "fixture cf_" + id, timestamp: 4 });
+  // A tool result continues the seed turn. A fresh user turn would make its
+  // signed thinking historical, which the real replay sanitizer must drop.
+  const history = cloudflareHistory(id, options.assistant);
   const messages = await withOpenClawTestState({ label: "cloudflare-messages-replay" }, state => withPluginRuntimeGenerationRegistryScope(registry, () => sanitizeSessionHistory({
     provider: "clawrouter", modelId, modelApi: model.api, model, config, env: {}, workspaceDir: state.workspaceDir, sessionId: "cf-" + id,
     policy: resolveTranscriptPolicy({ provider: "clawrouter", modelId, modelApi: model.api, model, runtimeHandle: { provider: "clawrouter", plugin: provider } }),
@@ -120,7 +133,8 @@ async function start(id: string, options: { selected?: NonNullable<Awaited<Retur
     expect(transport.strategy).toBe("boundary-aware:anthropic-messages");
     const hook = options.simple ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
     const wrapped = hook?.({ provider: "clawrouter", modelId, model, sourceApi: model.api, streamFn: transport.streamFn }); assert(wrapped);
-    return transport.wrapApiKey(wrapped)(model, context, { apiKey, maxTokens: 100, signal: options.signal, maxRetries: 0 });
+    return transport.wrapApiKey(wrapped)(model, context, { apiKey, maxTokens: 100, signal: options.signal, maxRetries: 0,
+      ...(["seed", "replay"].includes(id) ? { reasoning: "low" as const } : {}) });
   }));
 }
 

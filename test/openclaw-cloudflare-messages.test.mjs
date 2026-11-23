@@ -11,7 +11,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { createWorkerOutcomeFixture } from "./helpers/worker-outcome-fixture.mjs";
-import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { runOpenClawConsumer, consumerTypecheckPlan } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
@@ -45,9 +45,11 @@ for (const [before, after] of [
 ]) { assert.equal(observerSource.split(before).length, 2); observerSource = observerSource.replace(before, after); }
 const observerCode = stripTypeScriptTypes(observerSource);
 const { preserveFailures, createLifetimeObserver } = new Function(observerCode + "; return { preserveFailures, createLifetimeObserver };")();
-const bindingsSource = fixtureText.slice(fixtureText.indexOf("function createCloudflareBindings()"), fixtureText.indexOf("// END CLOUDFLARE BINDINGS"));
+const bindingsSource = fixtureText.slice(fixtureText.indexOf("function retainCloudflareClaim"), fixtureText.indexOf("// END CLOUDFLARE BINDINGS"));
 const bindingsCode = stripTypeScriptTypes(bindingsSource);
-const { createCloudflareBindings } = new Function(bindingsCode + "; return { createCloudflareBindings };")();
+const { createCloudflareBindings, retainCloudflareClaim } = new Function(bindingsCode + "; return { createCloudflareBindings, retainCloudflareClaim };")();
+const historySource = fixtureText.slice(fixtureText.indexOf("function cloudflareHistory"), fixtureText.indexOf("// END CLOUDFLARE HISTORY"));
+const { cloudflareHistory } = new Function(stripTypeScriptTypes(historySource) + "; return { cloudflareHistory };")();
 const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
 const assembledFixture = fixtureText.replace(marker, observerSource);
@@ -70,17 +72,75 @@ function assertProof(proof) {
   assert.equal(proof.settled, proof.operations); assert.equal(proof.readers, proof.unlocked);
   assert.equal(proof.rejected, proof.qualifiedReadRejections ?? 0);
 }
+// Observe the original namespace/stub calls without replacing their promises,
+// reading response bodies, or writing ledger state. Every record owns ingress.
+function observeCloudflareBudgets(namespace, lifetime, owner, calls) {
+  const names = new Map();
+  return new Proxy(namespace, { get(target, key) {
+    if (key === "idFromName") return function (...args) {
+      const id = Reflect.apply(target.idFromName, target, args); names.set(id, args[0]); return id;
+    };
+    if (key === "get") return function (...args) {
+      const stub = Reflect.apply(target.get, target, args), objectName = names.get(args[0]);
+      return new Proxy(stub, { get(original, method) {
+        if (method === "fetch") return function (...operands) {
+          const record = retainCloudflareClaim(lifetime, () => {
+            if (typeof objectName !== "string" || typeof operands[0] !== "string") throw new Error("unbound Cloudflare budget call");
+            const path = new URL(operands[0]).pathname;
+            if (path === "/status") return undefined;
+            if (!["/reserve", "/dispatch", "/settle"].includes(path) || operands[1]?.method !== "POST" || typeof operands[1]?.body !== "string") throw new Error("unexpected Cloudflare budget operation");
+            const body = JSON.parse(operands[1].body);
+            if (typeof body.reservationId !== "string" || !body.reservationId) throw new Error("missing Cloudflare reservation identity");
+            const row = { owner, objectName, path, reservationId: body.reservationId, policyId: body.policyId,
+              windowKey: body.windowKey, scopeKey: body.scopeKey, costMicros: body.costMicros, dispatched: body.dispatched, actualCostMicros: body.actualCostMicros, status: undefined };
+            calls.push(row); return row;
+          });
+          return lifetime.invoke("budget.fetch", original.fetch, original, operands, owner, response => { if (record) record.status = response.status; });
+        };
+        const value = Reflect.get(original, method, original); return typeof value === "function" ? value.bind(original) : value;
+      } });
+    };
+    const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+  } });
+}
+function assertCloudflareSettled(event, id, observations, rows) {
+  const owner = "cf_" + id, own = observations.filter(row => row.ownerId === owner);
+  assert.equal(own.length, 4, id + " original dispatched reserve and settlement on both scopes");
+  for (const objectName of ["fixture:cf_" + id, "provider:" + providerId]) {
+    const calls = own.filter(row => row.objectName === objectName);
+    assert.deepEqual(calls.map(row => row.path), ["/reserve", "/settle"]);
+    assert.ok(calls.every(row => row.requestId === event.request_id && typeof row.requestId === "string" && row.requestId.length > 0 && row.status === 200));
+    const [reserved, settled] = calls;
+    // This shipping proxy path reserves with dispatched:true (proxy.ts). It
+    // does not issue a second /dispatch call for an acknowledged reservation.
+    assert.equal(reserved.dispatched, true); assert.equal(reserved.costMicros, 7); assert.equal(settled.actualCostMicros, 7);
+    assert.equal(settled.reservationId, reserved.reservationId);
+    const matching = rows.filter(row => row.objectName === objectName && row.reservation_id === reserved.reservationId);
+    assert.equal(matching.length, 1); const [row] = matching;
+    assert.equal(row.policy_id, reserved.policyId); assert.equal(row.window_key, reserved.windowKey); assert.equal(row.budget_scope_key, reserved.scopeKey);
+    assert.equal(row.reserved_micros, 7); assert.equal(row.dispatch_started, 1); assert.equal(row.settled, 1, id + " original SQLite settlement");
+  }
+}
 function routerFixture() {
-  return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
+  return `import handler, { BudgetLedgerObject as OriginalBudgetLedger } from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 import { HttpOperation } from "./worker/http-operation.ts";
 import { qianfanOutcome } from "qianfan-outcome-witness";
 ${observerCode}
 ${bindingsCode}
+${observeCloudflareBudgets.toString()}
+// Fixture-only read surface; all original reserve/dispatch/settle code is inherited.
+export class BudgetLedgerObject extends OriginalBudgetLedger {
+  constructor(state) { super(state); this.fixtureStorage = state.storage; }
+  fetch(request) {
+    if (request.method === "GET" && new URL(request.url).pathname === "/fixture/reservations") return Response.json([...this.fixtureStorage.sql.exec("SELECT reservation_id, policy_id, window_key, budget_scope_key, reserved_micros, dispatch_started, settled FROM budget_reservations ORDER BY reservation_id")]);
+    return super.fetch(request);
+  }
+}
 const assert = value => { if (!value) throw new Error("Cloudflare catalog fixture identity"); };
 ${rejectCatalog.toString()}
 const ingress = createCloudflareBindings(), outbound = createCloudflareBindings();
-let sourceCancellation, acceptedConsumer = false;
+let sourceCancellation, acceptedConsumer = false; const budgetCalls = [];
 const lifetime = createLifetimeObserver(undefined, { ownerId: "cf_cancel", source: () => acceptedConsumer ? sourceCancellation : undefined, outcome: op => qianfanOutcome.current.matches(op) });
 qianfanOutcome.current = createWorkerOutcomeWitness(lifetime, ingress.bindings, outbound.bindings, HttpOperation);
 for (const id of ${JSON.stringify([...charged, ...denied])}) {
@@ -90,9 +150,11 @@ for (const id of ${JSON.stringify([...charged, ...denied])}) {
 for (const id of ${JSON.stringify(charged)}) outbound.expect("cf_" + id, "chat", ${JSON.stringify(upstreamUrl)}, "POST", "synthetic-gateway-" + id, undefined, "cf-aig-authorization");
 const originalFetch = globalThis.fetch;
 lifetime.patch(globalThis, "fetch", function (...args) {
-  const owner = outbound.claim(args[0], args[1], "chat");
-  owner.ingress = ingress.bindings.find(row => row.id === owner.id && row.claimed);
-  if (!owner.ingress) throw new Error("unbound Cloudflare outbound");
+  const owner = retainCloudflareClaim(lifetime, () => {
+    const owner = outbound.claim(args[0], args[1], "chat");
+    owner.ingress = ingress.bindings.find(row => row.id === owner.id && row.claimed);
+    if (!owner.ingress) throw new Error("unbound Cloudflare outbound"); return owner;
+  });
   lifetime.signal(owner, args[1]?.signal ?? (args[0] instanceof Request ? args[0].signal : undefined));
   return lifetime.invoke("fetch", originalFetch, this, args, owner, response => lifetime.response(response, owner));
 });
@@ -115,6 +177,15 @@ export default { ...handler, fetch(request, env, context) {
     return new Response(null, { status: 204 });
   })();
   if (path === "/fixture/retire") return retire(request);
+  if (path === "/fixture/budgets" && request.method === "GET") return (async () => {
+    const names = [${JSON.stringify("provider:" + providerId)}, ...${JSON.stringify(charged)}.map(id => "fixture:cf_" + id)], rows = [];
+    for (const objectName of names) {
+      const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://fixture.example/fixture/reservations");
+      if (response.status !== 200) throw new Error("Cloudflare ledger readback failed");
+      rows.push(...(await response.json()).map(row => ({ objectName, ...row })));
+    }
+    return Response.json({ rows, calls: budgetCalls.map(({ owner, ...row }) => ({ ownerId: owner.id, requestId: owner.requestId, ...row })) });
+  })();
   if (path === "/v1/catalog") return (async () => {
     const response = await handler.fetch(request, env, context);
     const id = request.headers.get("authorization")?.match(/^Bearer clawrouter-live-cf_(offers_empty|offers_invalid|model_missing)-fixture-secret$/)?.[1];
@@ -123,10 +194,11 @@ export default { ...handler, fetch(request, env, context) {
   })();
   if (![${JSON.stringify(nativePath)}, ${JSON.stringify(envelopePath)}].includes(path)) return handler.fetch(request, env, context);
   for (const row of ingress.bindings) if (row.url.startsWith("/")) row.url = new URL(request.url).origin + row.url;
-  const owner = ingress.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
+  const owner = retainCloudflareClaim(lifetime, () => ingress.claim(request, undefined, "chat")); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
   lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
-  return lifetime.invoke("handler", handler.fetch, handler, [request, env, context], owner);
+  const selected = { ...env, BUDGET_LEDGER: observeCloudflareBudgets(env.BUDGET_LEDGER, lifetime, owner, budgetCalls) };
+  return lifetime.invoke("handler", handler.fetch, handler, [request, selected, context], owner, response => { owner.requestId = response.headers.get("x-request-id"); });
 } };`;
 }
 function upstreamFixture() {
@@ -196,7 +268,7 @@ export default { fetch(request, env, context) {
       failed: owned.filter(op => !["pending", "fulfilled"].includes(op.state)).length };
     return Response.json({ ...lifetime.summary(), accepted, sourceCancellation });
   })();
-  const owner = bindings.claim(request, undefined, "chat"); lifetime.signal(owner, request.signal);
+  const owner = retainCloudflareClaim(lifetime, () => bindings.claim(request, undefined, "chat")); lifetime.signal(owner, request.signal);
   const waitUntil = context.waitUntil;
   lifetime.patch(context, "waitUntil", function (...args) { lifetime.watch("waitUntil", args[0], owner); return Reflect.apply(waitUntil, context, args); });
   return lifetime.invoke("handler", serve, undefined, [request, context, owner], owner);
@@ -231,6 +303,10 @@ async function verifyCallsAndUsage(mf, origin, native) {
     assert.equal(call.headers["anthropic-version"], "2023-06-01");
     assert.equal(call.body.model, "claude-sonnet-4-6"); assert.equal(call.body.max_tokens, 100); assert.equal(call.body.stream, true); assert.equal(call.expired, false);
     if (successful.includes(call.id)) { assert.equal(call.eof, true); assert.equal(call.cancelled, false); }
+    if (native && ["seed", "replay"].includes(call.id)) {
+      assert.deepEqual(call.body.thinking, { type: "adaptive", display: "summarized" });
+      assert.deepEqual(call.body.output_config, { effort: "low" });
+    }
     if (native && call.id === "replay") {
       const blocks = call.body.messages.flatMap(message => Array.isArray(message.content) ? message.content : []);
       assert.equal(blocks.filter(block => block.type === "thinking").length, 1);
@@ -240,6 +316,7 @@ async function verifyCallsAndUsage(mf, origin, native) {
     }
     assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback|clawrouterRoute/);
   }
+  const events = new Map();
   for (const id of cases.filter(id => id !== "invalid")) {
     let usage;
     const expected = catalogOnly.includes(id) ? 0 : 1;
@@ -252,6 +329,7 @@ async function verifyCallsAndUsage(mf, origin, native) {
     const cost = charged.includes(id) ? 7 : 0; assert.equal(usage.budget.spentMicros, cost, id);
     if (!expected) continue;
     const [event] = usage.usage.events;
+    events.set(id, event);
     assert.equal(event.credential_id, "cf_" + id); assert.equal(event.policy_id, "cf_" + id); assert.equal(event.actual_cost_micros, cost);
     if (charged.includes(id)) {
       assert.equal(event.provider, providerId); assert.equal(event.model, modelId); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.reserved_cost_micros, 7);
@@ -264,6 +342,10 @@ async function verifyCallsAndUsage(mf, origin, native) {
     }
     assert.doesNotMatch(JSON.stringify(event), /synthetic-tool-result|synthetic-gateway|fixture-secret|must-not-fallback/);
   }
+  const response = await fetch(origin + "/fixture/budgets"); assert.equal(response.status, 200);
+  const proof = await response.json();
+  assert.equal(proof.calls.filter(row => charged.some(id => row.ownerId === "cf_" + id)).length, charged.length * 4);
+  for (const id of charged) assertCloudflareSettled(events.get(id), id, proof.calls, proof.rows);
 }
 async function retire(mf, acceptedConsumer) {
   let upstream;
@@ -284,7 +366,7 @@ async function runNative(t, fixture, origin, controlOrigin, invoke = runOpenClaw
   let receipts = 0;
   const observed = new Proxy(t, { get(target, key, receiver) { if (key !== "diagnostic") return Reflect.get(target, key, receiver);
     return text => { receipts += text.split("\n").filter(line => line.trim() === "CLOUDFLARE_CANCEL_RETIRED cloudflare-messages").length; t.diagnostic(text); }; } });
-  await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/clawrouter/worker-contract.test.ts",
+  await invoke(observed, { source, sourceHead, fixture: pathToFileURL(fixture), testPath: "extensions/clawrouter/worker-contract.test.ts", typecheck: true,
     env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CF_CONTROL_ORIGIN: controlOrigin, CLAWROUTER_CF_CONTRACT: "cloudflare-messages", NO_COLOR: "1" } });
   assert.equal(receipts, 1, "exact original SDK cancellation and cleanup receipt");
 }
@@ -339,6 +421,62 @@ test("Cloudflare malformed catalog controls remove facts without inventing eligi
   }
   assert.throws(() => rejectCatalog(structuredClone(original), "future")); assert.equal(original.providers[0].offers[0].eligible, true);
 });
+test("Cloudflare replay continues the original assistant turn without fabricating thinking", () => {
+  const assistant = Object.freeze({ role: "assistant", content: Object.freeze([]) });
+  const seed = cloudflareHistory("seed"), replay = cloudflareHistory("replay", assistant);
+  assert.deepEqual(replay.slice(0, 2), seed);
+  assert.equal(replay[2], assistant); assert.equal(replay[3].role, "toolResult");
+  assert.equal(replay[3].toolCallId, "tool_fixture");
+  assert.deepEqual(replay[3].content, [{ type: "text", text: "synthetic-tool-result" }]);
+  assert.equal(replay.length, 4); assert.deepEqual(assistant.content, []);
+});
+test("Cloudflare caught extra and foreign claims remain independently fatal through cleanup", async () => {
+  for (const fault of ["extra", "foreign", "undefined"]) {
+    const life = createLifetimeObserver(), binds = createCloudflareBindings();
+    const expected = binds.expect("cf_stream", "chat", upstreamUrl, "POST", secret("stream"), undefined, "cf-aig-authorization");
+    const init = { method: "POST", headers: { "cf-aig-authorization": "Bearer " + secret("stream") } };
+    assert.equal(retainCloudflareClaim(life, () => binds.claim(upstreamUrl, init, "chat")), expected);
+    let original, escaped, caught = false, restored = false;
+    try { retainCloudflareClaim(life, () => {
+      try { if (fault === "undefined") throw undefined; binds.claim(fault === "foreign" ? upstreamUrl + "/foreign" : upstreamUrl, init, "chat"); }
+      catch (error) { original = error; throw error; }
+    }); } catch (error) { caught = true; escaped = error; }
+    assert.equal(caught, true); assert.equal(escaped, original); binds.verify();
+    assert.equal(life.errors.length, 1); assert.equal(life.errors[0], original);
+    await assert.rejects(preserveFailures(() => life.join(), [() => { life.restore(); restored = true; }]), error => error.errors.includes(original));
+    assert.equal(restored, true); assert.equal(life.errors[0], original);
+  }
+});
+test("Cloudflare budget observation preserves original receiver, arguments and promise", async () => {
+  const life = createLifetimeObserver(), owner = {}, calls = [], id = {}, response = new Response(null), original = Promise.resolve(response);
+  const url = "https://fixture.example/reserve", init = { method: "POST", body: JSON.stringify({ reservationId: "reservation", costMicros: 7 }) };
+  const stub = { fetch(...args) { assert.equal(this, stub); assert.equal(args[0], url); assert.equal(args[1], init); return original; } };
+  const namespace = { idFromName(name) { assert.equal(this, namespace); assert.equal(name, "fixture:cf_stream"); return id; },
+    get(value) { assert.equal(this, namespace); assert.equal(value, id); return stub; } };
+  const observed = observeCloudflareBudgets(namespace, life, owner, calls), bound = observed.get(observed.idFromName("fixture:cf_stream"));
+  assert.equal(bound.fetch(url, init), original); assert.equal(await original, response); await life.join();
+  assert.equal(calls.length, 1); assert.equal(calls[0].owner, owner); assert.equal(calls[0].status, 200);
+  let caught = false;
+  try { bound.fetch(url, { get method() { throw undefined; } }); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); await assert.rejects(life.join(), error => error.errors.includes(undefined)); life.restore();
+});
+test("Cloudflare settlement requires original request and both exact settled SQLite rows", () => {
+  const calls = [], rows = [], event = { request_id: "original-request" };
+  for (const objectName of ["fixture:cf_stream", "provider:" + providerId]) {
+    const reservationId = objectName + ":reservation", common = { ownerId: "cf_stream", requestId: event.request_id, objectName, reservationId, status: 200 };
+    calls.push({ ...common, path: "/reserve", policyId: objectName, windowKey: "window", scopeKey: "scope", costMicros: 7, dispatched: true },
+      { ...common, path: "/settle", actualCostMicros: 7 });
+    rows.push({ objectName, reservation_id: reservationId, policy_id: objectName, window_key: "window", budget_scope_key: "scope", reserved_micros: 7, dispatch_started: 1, settled: 1 });
+  }
+  assertCloudflareSettled(event, "stream", calls, rows);
+  for (const change of [
+    (c, r) => { r[0].settled = 0; }, (c, r) => { r[1].settled = 2; },
+    (c, r) => { r[0].reservation_id = "foreign"; }, (c, r) => { r[0].budget_scope_key = "foreign"; },
+    (c, r) => { r[0].dispatch_started = 0; }, (c, r) => { r.push(r[0]); },
+    c => { c[0].requestId = "foreign"; }, c => { c[1].status = 500; }, c => { c[0].dispatched = false; },
+    c => { c[1].reservationId = "foreign"; }, c => { c.pop(); }, c => { c.push(c[0]); },
+  ]) { const copied = structuredClone({ calls, rows }); change(copied.calls, copied.rows); assert.throws(() => assertCloudflareSettled(event, "stream", copied.calls, copied.rows)); }
+});
 test("Cloudflare cleanup preserves falsey primary and independent failures", async () => {
   const seen = [];
   await assert.rejects(preserveFailures(() => { throw undefined; }, [() => { seen.push(1); throw null; }, () => seen.push(2)]), error => error.errors[0] === undefined && error.errors[1] === null);
@@ -366,11 +504,21 @@ test("Cloudflare native receipt cannot borrow another family or duplicate a succ
   const exact = "CLOUDFLARE_CANCEL_RETIRED cloudflare-messages";
   const invoke = lines => async (context, options) => {
     assert.equal(options.sourceHead, sourceHead); assert.equal(options.testPath, "extensions/clawrouter/worker-contract.test.ts");
+    assert.equal(options.typecheck, true);
     assert.equal(options.env.CLAWROUTER_CF_CONTRACT, "cloudflare-messages");
     for (const line of lines) context.diagnostic(line);
   };
   await runNative({ diagnostic() {} }, "/synthetic/cloudflare.test.ts", "http://127.0.0.1:1", "http://127.0.0.1:2", invoke([exact]));
   for (const lines of [[], ["MYTHOS_CANCEL_RETIRED mythos5"], [exact, exact]]) await assert.rejects(runNative({ diagnostic() {} }, "/synthetic/cloudflare.test.ts", "http://127.0.0.1:1", "http://127.0.0.1:2", invoke(lines)));
+});
+test("Cloudflare typecheck binds only the exact client head and fixture path", () => {
+  const path = "extensions/clawrouter/worker-contract.test.ts", plan = consumerTypecheckPlan(sourceHead, path);
+  assert.equal(plan.sha256, "b032aa889d4ab5512e57f26871a5839a38ae326b18e765dce2dcec3b4fd80d49");
+  assert.deepEqual(plan.args, ["scripts/run-tsgo.mjs", "-p", "test/tsconfig/tsconfig.extensions.test.json", "--noEmit", "--incremental", "false"]);
+  assert.throws(() => consumerTypecheckPlan("0".repeat(40), path));
+  assert.throws(() => consumerTypecheckPlan(sourceHead, "extensions/clawrouter/foreign.test.ts"));
+  assert.throws(() => consumerTypecheckPlan(sourceHead, "extensions/clawrouter/worker-google-continuation-contract.test.ts"));
+  assert.throws(() => consumerTypecheckPlan("b6072e63fdf09422ea70ef4bbdc818536d871047", path));
 });
 test("Cloudflare producer joins real cancellation and retains expiry as failure", { timeout: 15000 }, async () => {
   for (const mode of ["cancel", "expiry"]) {
@@ -406,6 +554,15 @@ test("Cloudflare real Worker and SQLite locally verify the fixture, independentl
         let state;
         for (let i = 0; i < 150; i++) { state = await (await upstream.fetch("https://fixture.example/fixture/state")).json(); if (state.wireSent) break; await new Promise(resolve => setTimeout(resolve, 20)); }
         assert.deepEqual(state, { wireSent: true, eof: false, expired: false }); assert.equal(done, false);
+        // The real ledger counts this outstanding reservation as spent. It must
+        // not qualify as settlement before the original body reaches true EOF.
+        const pendingUsage = await (await fetch(origin + "/v1/usage", { headers: { authorization: "Bearer " + token(id) } })).json();
+        assert.equal(pendingUsage.budget.spentMicros, 7);
+        const pending = await (await fetch(origin + "/fixture/budgets")).json();
+        const reserved = pending.calls.find(row => row.ownerId === "cf_eof" && row.objectName === "fixture:cf_eof" && row.path === "/reserve"); assert(reserved);
+        const row = pending.rows.find(row => row.objectName === reserved.objectName && row.reservation_id === reserved.reservationId); assert(row);
+        assert.equal(row.reserved_micros, 7); assert.equal(row.settled, 0); assert.equal(row.dispatch_started, 1);
+        assert.throws(() => assertCloudflareSettled({ request_id: response.headers.get("x-request-id") }, id, pending.calls, pending.rows));
         assert.equal((await upstream.fetch("https://fixture.example/fixture/release")).status, 200); await reading;
       } else if (id === "cancel") {
         const reader = response.body.getReader(); let text = "";

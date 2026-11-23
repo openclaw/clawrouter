@@ -82,6 +82,7 @@ export function consumerTypecheckPlan(sourceHead, testPath) {
     ["b6072e63fdf09422ea70ef4bbdc818536d871047", "extensions/clawrouter/worker-google-continuation-contract.test.ts"],
     ["3206356e0fff73751495ca6a5c8cd4f3e97caf04", "extensions/clawrouter/worker-xai-search-contract.test.ts"],
     ["d173f1ae09324d1fb94e445fa4235a87fc175373", "extensions/clawrouter/worker-google-images-contract.test.ts"],
+    ["df9f72058439ec5b4d27b5f2eb52a3d076c8f80f", "extensions/clawrouter/worker-contract.test.ts"],
   ];
   assert.ok(fixtures.some(([head, path]) => sourceHead === head && testPath === path), "unqualified client owning test graph");
   const project = "test/tsconfig/tsconfig.extensions.test.json";
