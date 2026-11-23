@@ -14,6 +14,7 @@ import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import { musicWave } from "../worker/test/openrouter-music-runtime-fixture.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
+import { createMusicSourceLifetime } from "./helpers/music-source-lifetime.mjs";
 
 // Published canonical manifest-model correction, NOT a qualified client release.
 // The previous hosted attempt failed without a typed cause; new diagnostics are unproven.
@@ -34,6 +35,11 @@ const body = row => ({ model: row.model, messages: [{ role: "user", content: `Sy
 
 
 const musicDiagnosticSource = readFileSync(new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url), "utf8");
+// The producer watchdog starts only after the SDK dispatch. Reuse its existing
+// 120s budget; it stays inside the 180s deadline-case / 240s helper ceilings.
+// No heartbeat bytes, deadline extension, or successful expiry is permitted.
+const musicSourceWatchdogMs = Number(musicDiagnosticSource.match(/mediaModels: \{ music: \{[^\n]*timeoutMs: (\d+)/)?.[1]);
+assert.equal(musicSourceWatchdogMs, 120000);
 const musicDiagnosticStart = musicDiagnosticSource.indexOf("// BEGIN music diagnostic protocol."), musicDiagnosticEnd = musicDiagnosticSource.indexOf("// END music diagnostic protocol.");
 assert.ok(musicDiagnosticStart >= 0 && musicDiagnosticEnd > musicDiagnosticStart);
 const musicDiagnosticCode = stripTypeScriptTypes(musicDiagnosticSource.slice(musicDiagnosticStart, musicDiagnosticEnd));
@@ -401,17 +407,6 @@ function acceptHeaderDisposition(physical, helperState, calls, receipt) {
     throw new Error("preheader source or accounting not accepted");
   }
 }
-async function waitForSourceAbort(signal, call) {
-  call.waiter = "pending";
-  let listener;
-  const pending = new Promise(resolve => {
-    listener = () => { call.aborted = true; resolve(); };
-    if (signal.aborted) listener(); else signal.addEventListener("abort", listener, { once: true });
-  });
-  try { await pending; call.waiter = "fulfilled"; }
-  finally { signal.removeEventListener("abort", listener); call.waiterListenerRemoved = true; }
-}
-
 function routerScript(route = "native") {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
@@ -488,6 +483,7 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture/retire") return Response.json(await retire());
   if (path === "/fixture/retirement-observation") return Response.json(retirementSnapshot);
   if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
+  if (path === "/fixture/source-dispose") return originalFetch("https://fixture.example/dispose");
   if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
@@ -642,20 +638,27 @@ async function waitForReadiness(id, waiting, readiness, signal, runtime = {
 }
 
 function upstreamScript(audio) {
-  return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [];
-${waitForSourceAbort.toString()}
+  return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [], sourceOwners = [];
+${createMusicSourceLifetime.toString()}
 ${createReadinessWitness.toString()}
 ${waitForReadiness.toString()}
 const readiness = createReadinessWitness(rows.map(row => row.id));
 const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
-export default { async fetch(request) {
+export default { async fetch(request, env, context) {
   const url = new URL(request.url);
   if (url.hostname === "fixture.example") {
+    if (url.pathname === "/dispose") {
+      const outcomes = await Promise.allSettled(sourceOwners.map(owner => owner.dispose()));
+      const failures = outcomes.filter(row => row.status === "rejected").map(row => row.reason);
+      if (failures.length) throw new AggregateError(failures, "music source disposal failed");
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === "/readiness") { const snapshot = readiness.snapshot(url.searchParams.get("id")); return snapshot ? Response.json(snapshot) : new Response(null, { status: 400 }); }
     if (url.pathname === "/state") {
       let cursor = 0; const errors = [];
       while (cursor < sourceTasks.length) { const batch = sourceTasks.slice(cursor); cursor = sourceTasks.length;
         for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason); }
+      for (const result of await Promise.allSettled(sourceOwners.map(owner => owner.join()))) if (result.status === "rejected") errors.push(result.reason);
       if (errors.length) throw new AggregateError(errors, "source waiter failed");
       return Response.json(calls.map(call => ({ ...call, readiness: readiness.snapshot(call.id) })));
     }
@@ -675,8 +678,17 @@ export default { async fetch(request) {
   const resolver = waiting.get(row.id);
   if (resolver !== undefined) { readiness.called(row.id); resolver(); readiness.returned(row.id); }
   waiting.delete(row.id);
-  if (row.kind === "abort_headers") { const pending = waitForSourceAbort(request.signal, call); sourceTasks.push(pending); await pending; call.sourceReturnReached = true; return new Response(null, { status: 499 }); }
-  request.signal.addEventListener("abort", () => { call.aborted = true; }, { once: true });
+  const held = row.kind === "abort_body" || row.kind === "deadline_body";
+  const owner = held || row.kind === "abort_headers" ? createMusicSourceLifetime(request.signal, call, context, ${musicSourceWatchdogMs}) : undefined;
+  if (owner) { sourceOwners.push(owner); sourceTasks.push(owner.joined); }
+  try {
+  if (row.kind === "abort_headers") {
+    call.waiter = "pending";
+    try { await owner.done; call.waiter = "fulfilled"; call.sourceReturnReached = true; return new Response(null, { status: 499 }); }
+    catch (reason) { call.waiter = "rejected"; throw reason; }
+    finally { call.waiterListenerRemoved = !call.sourceLifetime.listenerActive; }
+  }
+  if (!held) request.signal.addEventListener("abort", () => { call.aborted = true; }, { once: true });
   if (row.kind === "redirect") return new Response(null, { status: 307, headers: { location: "https://alternate.example/paid" } });
   if (row.kind === "error") return Response.json({ error: { message: "synthetic refusal" } }, { status: 429 });
   const frame = delta => ({ model: row.model, choices: [{ index: 0, delta, finish_reason: null }] });
@@ -691,13 +703,26 @@ export default { async fetch(request) {
   if (row.kind === "wire") wire = ":" + "x".repeat(32 * 1024 * 1024) + "\\n\\n";
   if (row.kind === "audio") wire = event(frame({ audio: { data: "AAAA".repeat(Math.ceil((16 * 1024 * 1024 + 3) / 3)) } })) + "data: [DONE]\\n\\n";
   if (row.kind === "transcript") wire = event(frame({ audio: { data: encoded, transcript: "x".repeat(1024 * 1024 + 1) } })) + "data: [DONE]\\n\\n";
-  const held = row.kind === "abort_body" || row.kind === "deadline_body";
   const bytes = row.kind === "utf8" ? new Uint8Array([255, 10]) : new TextEncoder().encode(held ? ": waiting\\n\\n" : wire);
   let offset = 0;
-  return new Response(new ReadableStream({ type: "bytes", pull(controller) {
-    if (offset < bytes.length) { const chunk = bytes.slice(offset, offset + 16384); offset += chunk.length; controller.enqueue(chunk); }
-    else if (!held) controller.close();
-  }, cancel() { call.canceled = true; } }), { headers: { "content-type": "text/event-stream" } });
+  return new Response(new ReadableStream({ type: "bytes", start(controller) {
+    if (owner) {
+      // Expiry/failure errors the real body; it is never successful EOF or a
+      // substitute cancel. Retain this original reaction in its request too.
+      const tail = owner.done.catch(reason => {
+        try { controller.error(reason); }
+        catch (cleanup) { throw new AggregateError([reason, cleanup], "music source failure and body cleanup failed"); }
+        throw reason;
+      });
+      sourceTasks.push(tail); context.waitUntil(tail);
+    }
+  }, pull(controller) {
+    try {
+      if (offset < bytes.length) { const chunk = bytes.slice(offset, offset + 16384); offset += chunk.length; controller.enqueue(chunk); }
+      else if (!held) controller.close();
+    } catch (reason) { owner?.fail(reason); throw reason; }
+  }, cancel() { if (owner) return owner.cancel(); call.canceled = true; } }), { headers: { "content-type": "text/event-stream" } });
+  } catch (reason) { owner?.fail(reason); throw reason; }
 } };`;
 }
 
@@ -729,6 +754,12 @@ async function start(route, audio) {
     musicOuter("worker_prepare", route, "none", "fulfilled");
     return { mf, origin, route, async close() {
       const failures = [];
+      // Notify only; each original request performs its own timer/listener
+      // cleanup. The control cannot declare an unfinished producer successful.
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(new Error("source disposal bound expired")), 10000);
+      try { assert.equal((await fetch(origin + "/fixture/source-dispose", { signal: controller.signal })).status, 204); }
+      catch (error) { failures.push(error); }
+      finally { clearTimeout(timer); }
       musicOuter("worker_dispose", route);
       try { await mf.dispose(); musicOuter("worker_dispose", route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_dispose", route, "none", "rejected", "cleanup", true, error); failures.push(error); }
       musicOuter("scratch_cleanup", route);
@@ -772,6 +803,38 @@ test("all real manifests produce native-only shipping music and a single-setting
   assert.equal(native.providers.find(p => p.id === "openrouter").endpoints.find(e => e.id === "music_generate").native_proxy, true);
   assert.equal(manifest.providers.find(p => p.id === "openrouter").endpoints.find(e => e.id === "music_generate").native_proxy, false);
 });
+
+for (const boundary of ["construction", "pull"]) for (const reason of [undefined, new Error("source callback failed")]) {
+  test(`held upstream preserves ${boundary} failure and joins source cleanup (${reason === undefined ? "undefined" : "defined"})`, async () => {
+    const tails = [], controller = new AbortController();
+    class FailingStream extends ReadableStream {
+      constructor(source) {
+        if (boundary === "construction") throw reason;
+        super({ ...source, pull(original) {
+          return source.pull({ enqueue() { throw reason; }, close: () => original.close(), error: value => original.error(value) });
+        } });
+      }
+    }
+    const source = new Function("ReadableStream", upstreamScript({ wav: "", mp3: "" }).replace("export default", "const handler =") + "; return { handler, calls };")(FailingStream);
+    const request = new Request(target, { method: "POST", headers: { authorization: "Bearer fixture-upstream-abort_body" },
+      body: JSON.stringify(body(cases.find(row => row.id === "abort_body"))), signal: controller.signal });
+    const pending = source.handler.fetch(request, {}, { waitUntil(p) { tails.push(p); void p.catch(() => {}); } });
+    let reader, rejected = false, actual;
+    try {
+      const response = await pending; reader = response.body.getReader(); void reader.closed.catch(() => {});
+      await reader.read();
+    } catch (error) { rejected = true; actual = error; }
+    finally { reader?.releaseLock(); }
+    assert.equal(rejected, true); assert.equal(actual, reason);
+    const results = await Promise.allSettled(tails);
+    assert.ok(results.some(row => row.status === "rejected"));
+    const [call] = source.calls;
+    assert.equal(call.sourceLifetime.pending, 0); assert.equal(call.sourceLifetime.finished, true);
+    assert.equal(call.sourceLifetime.timerActive, false); assert.equal(call.sourceLifetime.listenerActive, false);
+    assert.equal(call.sourceLifetime.terminal, "failed"); assert.ok(call.sourceLifetime.faults > 0);
+    assert.equal(call.aborted, false); assert.equal(call.canceled, false); assert.equal(call.expired, false);
+  });
+}
 
 for (const route of ["native", "manifest"]) {
   test(`real ${route} catalog, complete music, unknown-budget refusal and SQLite`, { timeout: 60000 }, async () => {
@@ -1069,11 +1132,13 @@ test("preheader oracle preserves synchronous native exceptions including undefin
 });
 
 test("source waiter completes and removes its original abort listener before evidence", async () => {
-  const controller = new AbortController(), call = { aborted: false };
-  const pending = waitForSourceAbort(controller.signal, call);
-  assert.equal(call.waiter, "pending"); assert.equal(call.waiterListenerRemoved, undefined);
-  controller.abort(new Error("owned source abort")); await pending;
-  assert.deepEqual(call, { aborted: true, waiter: "fulfilled", waiterListenerRemoved: true });
+  const controller = new AbortController(), call = { aborted: false }, tails = [];
+  const owner = createMusicSourceLifetime(controller.signal, call, { waitUntil: p => tails.push(p) }, musicSourceWatchdogMs);
+  assert.equal(call.sourceLifetime.finished, false); assert.equal(call.sourceLifetime.listenerActive, true);
+  controller.abort(new Error("owned source abort")); await owner.done; await Promise.all(tails); await owner.join();
+  assert.equal(call.aborted, true); assert.equal(call.sourceLifetime.finished, true);
+  assert.equal(call.sourceLifetime.listenerActive, false); assert.equal(call.sourceLifetime.timerActive, false);
+  assert.equal(call.sourceLifetime.pending, 0); assert.equal(call.sourceLifetime.abortReturned, 1);
 });
 
 test("final preheader acceptance requires helper, source, one POST, accounting and all cleanup", async () => {
