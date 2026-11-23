@@ -97,25 +97,117 @@ function compiled(route) {
   return variant;
 }
 
+// Sidecars only: callers receive the exact original Promise/value/error. Observer
+// faults are independent evidence failures, never original-operation outcomes.
+// Sequence stamps observe JS invocation/reaction order, not physical I/O settlement.
+function musicObserve(callback, faults) { try { return callback(); } catch (error) { faults.push(error); } }
+function observeMusicPromise(pending, row, tick, faults) {
+  musicObserve(() => { row.state = "pending"; }, faults);
+  const record = (state, reason) => {
+    try { row.state = state; row.at = tick(); row.reason = reason; }
+    catch (error) { faults.push(error); }
+  };
+  try { void pending.then(() => record("fulfilled"), reason => record("rejected", reason)); }
+  catch (error) { faults.push(error); }
+  return pending;
+}
+function installMusicOperationWitness(Operation, tick, faults) {
+  const descriptor = Object.getOwnPropertyDescriptor(Operation.prototype, "stop"), rows = new WeakMap();
+  const safe = callback => musicObserve(callback, faults);
+  function stop(...args) {
+    let row, before, at;
+    safe(() => {
+      row = rows.get(this.signal);
+      if (!row) { row = { calls: 0, first: null }; rows.set(this.signal, row); }
+      row.calls++; before = { status: this.status ?? null, delivery: this.delivery ?? null }; at = tick();
+    });
+    let threw = false;
+    try { return Reflect.apply(descriptor.value, this, args); }
+    catch (error) { threw = true; throw error; }
+    finally {
+      safe(() => {
+        if (row && before && before.delivery === null && this.delivery !== undefined && !row.first) {
+          row.first = Object.freeze({ cause: ["caller", "deadline", "upstream", "publication", "complete"].includes(args[0]) ? args[0] : "unknown",
+            at, returnedAt: tick(), statusBefore: before.status, status: this.status ?? null, delivery: this.delivery ?? null, threw });
+        }
+      });
+    }
+  }
+  Object.defineProperty(Operation.prototype, "stop", { ...descriptor, value: stop });
+  return { rows, restore() {
+    if (Operation.prototype.stop !== stop) throw new Error("music operation observer ownership changed");
+    Object.defineProperty(Operation.prototype, "stop", descriptor);
+  } };
+}
+function musicWorkerDetails(input, inputIndex, inputs, ingresses, termination, tails, pass) {
+  const base = { v: 1, layer: "outer", route: input.route, caseId: input.binding?.row.id ?? "none", role: "primary", outcome: "unknown", category: "none", inputIndex, pass };
+  const records = [];
+  if (base.caseId === "abort_headers") {
+    const h = acquisitionSnapshot(input, inputs, ingresses);
+    records.push({ ...base, phase: "worker_header", acquisitionState: input.state, headerAccepted: provisionalHeaderDisposition(h),
+      defined: h.defined, noResponse: h.noResponse, observerClean: h.observerClean, unique: h.unique,
+      ingressLive: h.ingressLive, effectiveLive: h.effectiveLive, ingressAbortedAtReject: input.ingressAbortedAtReject ?? null, effectiveAbortedAtReject: input.effectiveAbortedAtReject ?? null, abortedBeforeReject: h.abortedBeforeReject, listenerRemoved: h.listenerRemoved,
+      invokeAt: input.invoke ?? null, rejectAt: input.rejected ?? null, ingressAt: input.ingressAbortAtReject ?? null, effectiveAt: input.effectiveAbort ?? null });
+  }
+  const first = termination?.first;
+  records.push({ ...base, phase: "worker_termination", operationBound: !!termination, stopCalls: termination?.calls ?? 0,
+    stopCause: first?.cause ?? "unknown", stopAt: first?.at ?? null, stopReturnedAt: first?.returnedAt ?? null,
+    statusBefore: first?.statusBefore ?? null, statusAfter: first?.status ?? null, delivery: first?.delivery ?? null, stopThrew: first?.threw ?? null,
+    rejectAt: input.rejected ?? null });
+  if (base.caseId !== "abort_headers") {
+    const readers = input.readerRows ?? [], reader = readers[0];
+    const read = reader?.operations.find(row => row.kind === "read" && row.state === "rejected");
+    const cancel = reader?.operations.find(row => row.kind === "cancel");
+    const body = input.bodyCancels?.[0];
+    records.push({ ...base, phase: "worker_tail", readers: readers.length,
+      readAt: read?.at ?? null, readState: read?.state ?? "absent", cancelAt: cancel?.invokeAt ?? null, cancelSettledAt: cancel?.at ?? null,
+      cancelState: cancel?.state ?? "absent", closedAt: reader?.closedObservation?.at ?? null, closedState: reader?.closedObservation?.state ?? "absent",
+      bodyCancels: input.bodyCancels?.length ?? 0, bodyCancelState: body?.state ?? "absent", bodyCancelAt: body?.invokeAt ?? null, bodySettledAt: body?.at ?? null,
+      tailAt: tails.length && tails.every(row => row.at !== undefined) ? Math.max(...tails.map(row => row.at)) : null,
+      // These exact-ingress handler tails include accounting and native retirement;
+      // their aggregate is not an invented identity for one physical source tail.
+      tails: tails.length, tailsFulfilled: tails.filter(row => row.state === "fulfilled").length,
+      tailsRejected: tails.filter(row => row.state === "rejected").length, tailsPending: tails.filter(row => row.state === "pending").length });
+  }
+  return records;
+}
+function retainMusicRetirement(previous, next) {
+  if (!previous.records.length) return { ...next, observerFailed: previous.observerFailed || next.observerFailed, cleanup: null };
+  return { ...previous, observerFailed: previous.observerFailed || next.observerFailed,
+    cleanup: { ...next.records[0], phase: "worker_cleanup_summary", role: "cleanup" } };
+}
+
 // Serialized into the actual Worker. Observe originals without adding reads,
 // cancellation, release, response replacement or a competing cleanup operation.
 function observeBody(response, signal, owner) {
   const body = response.body;
   if (!body) throw new Error("original response body missing");
-  const rows = [], getReader = body.getReader;
+  const rows = [], getReader = body.getReader, bodyCancel = body.cancel;
+  const tick = owner.tick ?? (() => 0), faults = owner.diagnosticErrors ??= [];
+  owner.bodyCancels = [];
+  body.cancel = function(...args) {
+    const row = {};
+    musicObserve(() => { row.invokeAt = tick(); owner.bodyCancels.push(row); }, faults);
+    let pending;
+    try { pending = Reflect.apply(bodyCancel, this, args); }
+    catch (reason) { musicObserve(() => { row.state = "threw"; row.at = tick(); }, faults); throw reason; }
+    return observeMusicPromise(pending, row, tick, faults);
+  };
   owner.readerRows = rows; owner.body = body;
   body.getReader = function(...args) {
     const reader = Reflect.apply(getReader, this, args);
     const row = { reader, closed: reader.closed, operations: [], errors: [], unlocks: 0, returned: 0 };
     rows.push(row);
-    void row.closed.catch(() => {});
+    row.closedObservation = {}; observeMusicPromise(row.closed, row.closedObservation, tick, faults);
     for (const kind of ["read", "cancel"]) {
       const original = reader[kind];
       reader[kind] = function(...operands) {
+        const operation = { kind };
+        musicObserve(() => { operation.invokeAt = tick(); }, faults);
         try {
           const pending = Reflect.apply(original, this, operands);
-          row.operations.push({ kind, pending });
-          void pending.catch(() => {});
+          operation.pending = pending; row.operations.push(operation);
+          observeMusicPromise(pending, operation, tick, faults);
           return pending;
         } catch (reason) { row.errors.push(reason); throw reason; }
       };
@@ -154,8 +246,8 @@ function observeBody(response, signal, owner) {
 
 // Read only already-observed original outcomes. These records never classify a
 // rejection or supply retirement evidence. Identity comparisons are at join time.
-function retirementObservation(inputs, counts, errors, route) {
-  const records = [{ v: 1, layer: "outer", route, caseId: "none", phase: "worker_summary", role: "cleanup", outcome: "rejected", category: "none", rejected: errors.length, ...counts }];
+function retirementObservation(inputs, counts, errors, route, detail = {}) {
+  const records = [{ v: 1, layer: "outer", route, caseId: "none", phase: "worker_summary", role: "primary", outcome: "rejected", category: "none", rejected: errors.length, pass: detail.pass ?? 1, diagnosticFaults: detail.faults ?? 0, ...counts }];
   let omitted = 0;
   const add = (input, inputIndex, reader, readerIndex, operation, operationIndex, result) => {
     if (records.length >= 4) { omitted++; return; }
@@ -183,6 +275,13 @@ function retirementObservation(inputs, counts, errors, route) {
     }
   }
   records[0].suppressed = omitted;
+  for (const [index, input] of inputs.entries()) if (["abort_headers", "abort_body", "deadline_body"].includes(input.binding?.row.id)) {
+    for (const record of musicWorkerDetails({ ...input, route }, index, inputs, detail.ingresses ?? [],
+      detail.terminations?.get(input.effective?.signal), (detail.tails ?? []).filter(row => input.binding.ingress && row.ingress === input.binding.ingress), detail.pass ?? 1)) {
+      if (records.length < 11) records.push(record); else omitted++;
+    }
+  }
+  records[0].suppressed = omitted;
   return { records, observerFailed: false };
 }
 
@@ -191,15 +290,20 @@ async function reportRetirementObservation(origin, expectedRoute, fetchOriginal 
     const response = await fetchOriginal(origin + "/fixture/retirement-observation");
     assert.equal(response.status, 200);
     const text = await response.text();
-    assert.ok(Buffer.byteLength(text) <= 3072);
+    assert.ok(Buffer.byteLength(text) <= 8192);
     const snapshot = JSON.parse(text);
-    assert.deepEqual(Object.keys(snapshot).sort(), ["observerFailed", "records"]);
+    assert.deepEqual(Object.keys(snapshot).sort(), ["cleanup", "observerFailed", "records"]);
     assert.equal(snapshot.observerFailed, false);
-    assert.ok(Array.isArray(snapshot.records) && snapshot.records.length > 0 && snapshot.records.length <= 4);
-    for (const value of snapshot.records) {
+    assert.ok(Array.isArray(snapshot.records) && snapshot.records.length > 0 && snapshot.records.length <= 11);
+    for (const value of [...snapshot.records, ...(snapshot.cleanup ? [snapshot.cleanup] : [])]) {
       const record = protocol.validate(value);
-      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original"].includes(record.phase));
-      diagnostics.put(record);
+      assert.ok(record && record.layer === "outer" && record.route === expectedRoute && ["worker_summary", "worker_original", "worker_header", "worker_termination", "worker_tail", "worker_cleanup_summary"].includes(record.phase));
+      // Preserve first-pass fields. Later counts are cumulative, not additional
+      // unique operations; expose their pass/total even when detail quota fills.
+      diagnostics.put(record.phase === "worker_summary" && snapshot.cleanup ? protocol.record({ ...record,
+        cleanupPass: snapshot.cleanup.pass, cleanupRejected: snapshot.cleanup.rejected,
+        cleanupCounterTotal: Object.entries(snapshot.cleanup).filter(([key]) => key.startsWith("f_")).reduce((sum, [, value]) => sum + value, 0),
+      }) : record);
     }
   } catch (error) { failures.push(error); }
 }
@@ -311,22 +415,31 @@ async function waitForSourceAbort(signal, call) {
 function routerScript(route = "native") {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+import { HttpOperation } from "./worker/http-operation.ts";
 const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
 const originalFetch = globalThis.fetch;
-let retirementSnapshot = { records: [], observerFailed: false };
+let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0;
+const diagnosticErrors = [], taskTails = [];
 ${createMusicFailureCounts.toString()}
 ${retirementObservation.toString()}
+${musicWorkerDetails.toString()}
+${retainMusicRetirement.toString()}
+${musicObserve.toString()}
+${observeMusicPromise.toString()}
+${installMusicOperationWitness.toString()}
 const failureCounts = musicFailureCounts();
 let sequence = 0; const tick = () => ++sequence;
+const terminationWitness = installMusicOperationWitness(HttpOperation, tick, diagnosticErrors);
 ${[observeBody, effectiveFetch, sameJson, bindAcquisition, observeAcquisition, acquisitionSnapshot, provisionalHeaderDisposition].map(fn => fn.toString()).join("\n")}
 globalThis.fetch = function(input, init) {
   const effective = effectiveFetch(input, init);
   if (effective.url !== target) return Reflect.apply(originalFetch, this, [input, init]);
-  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target), failureCounts }; inputs.push(proof);
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target), failureCounts, tick, diagnosticErrors }; inputs.push(proof);
   try { return observeAcquisition(originalFetch, this, input, init, proof, tick); }
   catch (error) { failures.push(error); failureCounts.add("acquisition"); throw error; }
 };
 async function retire() {
+  const pass = ++retirementPass;
   const errors = [], joined = [], candidates = [];
   let taskCursor = 0, inputCursor = 0;
   while (taskCursor < tasks.length || inputCursor < inputs.length) {
@@ -357,10 +470,12 @@ async function retire() {
   for (const ingress of ingresses) { ingress.signal.removeEventListener("abort", ingress.listener); ingress.listenerRemoved = true; }
   errors.push(...failures);
   if (errors.length) {
-    try { retirementSnapshot = retirementObservation(inputs, failureCounts.snapshot(), errors, ${JSON.stringify(route)}); }
-    catch { retirementSnapshot = { records: [], observerFailed: true }; }
+    try { retirementSnapshot = retainMusicRetirement(retirementSnapshot, retirementObservation(inputs, failureCounts.snapshot(), errors, ${JSON.stringify(route)},
+      { pass, faults: diagnosticErrors.length, ingresses, terminations: terminationWitness.rows, tails: taskTails })); }
+    catch { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; }
     throw new AggregateError(errors, "original Worker operations failed");
   }
+  if (diagnosticErrors.length) { retirementSnapshot = { ...retirementSnapshot, observerFailed: true }; throw new AggregateError(diagnosticErrors, "music diagnostic instrumentation failed"); }
   return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved), failureCounts: failureCounts.snapshot() };
 }
 export default { ...handler, async fetch(request, env, context) {
@@ -376,11 +491,11 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
+  let ingress;
   try {
   if (path.startsWith("/v1/") && path !== "/v1/usage") {
     const record = { path, method: request.method, authorization: request.headers.get("authorization"), body: null };
     requests.push(record);
-    let ingress;
     if (request.method === "POST" && ["/v1/native/openrouter/v1/chat/completions", "/v1/proxy/openrouter/music_generate"].includes(path)) {
       const matches = rows.filter(row => record.authorization === "Bearer clawrouter-live-orm_" + row.id + "-fixture-secret");
       ingress = { path, id: matches.length === 1 ? matches[0].id : null, signal: request.signal, body: null, abort: request.signal.aborted ? tick() : null };
@@ -389,7 +504,9 @@ export default { ...handler, async fetch(request, env, context) {
     }
     if (request.method === "POST") { record.body = await request.clone().json(); if (ingress) ingress.body = record.body; }
   }
-  return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending); context.waitUntil(pending); } }); }
+  return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending);
+    const tail = { ingress }; taskTails.push(tail); observeMusicPromise(pending, tail, tick, diagnosticErrors);
+    context.waitUntil(pending); } }); }
   catch (error) { failures.push(error); failureCounts.add("handler"); throw error; }
 } };`;
 }
@@ -778,13 +895,13 @@ test("retirement observation retains strict original read cancel and closed fail
 
 test("retirement observation is captured before the original serialized Worker rejection", async () => {
   const script = routerScript("native"), begin = script.indexOf("async function retire() {"), end = script.indexOf("\nexport default", begin);
-  const create = new Function("inputs", "tasks", "ingresses", "failures", "failureCounts", "retirementObservation", "acquisitionSnapshot", "provisionalHeaderDisposition",
-    'let retirementSnapshot = { records: [], observerFailed: false }; const requests = [];\n' + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
+  const create = new Function("inputs", "tasks", "ingresses", "failures", "failureCounts", "retirementObservation", "acquisitionSnapshot", "provisionalHeaderDisposition", "retainMusicRetirement",
+    'let retirementSnapshot = { records: [], observerFailed: false, cleanup: null }, retirementPass = 0; const diagnosticErrors = [], taskTails = [], terminationWitness = { rows: new WeakMap() }; const requests = [];\n'  + script.slice(begin, end) + '\nreturn { retire, snapshot: () => retirementSnapshot };');
   for (const reason of [new Error("controlled acquisition"), undefined]) {
     for (const snapshotFails of [false, true]) {
       const pending = deferredOriginal(), proof = { effective: { signal: null, headers: new Headers() }, observerErrors: [], observed: Promise.resolve(), state: "rejected", reason };
       proof.pending = pending.pending;
-      const fixture = create([proof], [], [], [], createMusicFailureCounts(), snapshotFails ? () => { throw undefined; } : retirementObservation, acquisitionSnapshot, provisionalHeaderDisposition);
+      const fixture = create([proof], [], [], [], createMusicFailureCounts(), snapshotFails ? () => { throw undefined; } : retirementObservation, acquisitionSnapshot, provisionalHeaderDisposition, retainMusicRetirement);
       let settled = false; const originalRetirement = fixture.retire();
       void originalRetirement.then(() => { settled = true; }, () => { settled = true; });
       await Promise.resolve(); assert.equal(settled, false); assert.deepEqual(fixture.snapshot().records, []);
@@ -796,6 +913,11 @@ test("retirement observation is captured before the original serialized Worker r
         assert.equal(snapshot.records[0].f_acquisition, 1); assert.equal(snapshot.records[1].operation, "acquisition");
         assert.equal(snapshot.records[1].reasonDefined, reason !== undefined); assert.equal(snapshot.records[1].responsePresent, false);
         assert.ok(snapshot.records.every(row => musicProtocol.validate(row)));
+        const firstBytes = JSON.stringify(snapshot.records);
+        await assert.rejects(fixture.retire(), error => error instanceof AggregateError && error.errors[0] === reason);
+        assert.equal(JSON.stringify(fixture.snapshot().records), firstBytes);
+        assert.equal(fixture.snapshot().records[0].pass, 1); assert.equal(fixture.snapshot().cleanup.pass, 2);
+        assert.equal(fixture.snapshot().cleanup.f_acquisition, 2);
       }
     }
   }
@@ -824,7 +946,7 @@ test("retirement observation schema is closed bounded and preserves separate ori
 
 test("retirement observation reporting cannot replace the original status or undefined acquisition rejection", async () => {
   const reporting = [], lines = [], failures = [], diagnostics = musicProtocol.emitter(line => lines.push(line));
-  const snapshot = retirementObservation([], { f_task: 1 }, [undefined], "native");
+  const snapshot = { ...retirementObservation([], { f_task: 1 }, [undefined], "native"), cleanup: null };
   await reportRetirementObservation("https://fixture.invalid", "native", async url => {
     assert.equal(url, "https://fixture.invalid/fixture/retirement-observation"); return Response.json(snapshot);
   }, musicProtocol, diagnostics, failures);
@@ -1533,4 +1655,140 @@ test("music diagnostic dispatcher snapshot reports offending original membership
   assert.equal(JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length)).observedOutcome, "rejected");
   assert.equal(JSON.parse(lines[1].slice("::error title=Music contract diagnostic::".length)).d_promises, 4);
   await Promise.allSettled([fulfilled, rejected]);
+});
+
+// Passive observations use real operation/stream owners. They confer no native
+// cancellation, source-retirement or billing qualification.
+test("music owner witness preserves first caller, deadline and earlier upstream outcomes", async () => {
+  const { HttpOperation, InternalHttpAbort } = await import("../worker/http-operation.ts");
+  const original = Object.getOwnPropertyDescriptor(HttpOperation.prototype, "stop"), faults = [];
+  let sequence = 0; const tick = () => ++sequence;
+  const witness = installMusicOperationWitness(HttpOperation, tick, faults);
+  try {
+    for (const cause of ["caller", "upstream", "deadline"]) {
+      const caller = new AbortController(), operation = new HttpOperation(caller.signal), reason = cause === "deadline" ? new InternalHttpAbort("deadline", "synthetic") : {};
+      if (cause === "caller") caller.abort(reason); else operation.stop(cause, reason);
+      const first = witness.rows.get(operation.signal).first;
+      assert.equal(first.cause, cause); assert.equal(first.statusBefore, null); assert.equal(first.threw, false);
+      assert.equal(first.status, cause === "caller" ? "client_error" : cause === "deadline" ? "timeout" : "provider_error");
+      assert.equal(first.delivery, cause === "caller" ? "canceled" : "failed");
+      assert.equal(operation.signal.reason, reason); assert.ok(first.at < first.returnedAt); assert.ok(Object.isFrozen(first));
+      operation.stop("caller", {}); assert.equal(witness.rows.get(operation.signal).first, first);
+      assert.equal(witness.rows.get(operation.signal).calls, 2);
+      assert.equal(witness.rows.get(new AbortController().signal), undefined);
+    }
+    const selected = new HttpOperation(); selected.acceptRejection(503); selected.cancel({});
+    assert.equal(witness.rows.get(selected.signal).first.statusBefore, "provider_error");
+    assert.equal(witness.rows.get(selected.signal).first.status, "provider_error", "a later cancel cannot erase earlier rejection");
+    assert.deepEqual(faults, []);
+  } finally { witness.restore(); }
+  assert.deepEqual(Object.getOwnPropertyDescriptor(HttpOperation.prototype, "stop"), original);
+});
+
+test("music owner observer faults and synchronous undefined never replace the original call", () => {
+  const reason = {}, faults = [], receiver = new class {
+    signal = new AbortController().signal; status; delivery;
+    stop(...args) { assert.equal(this, receiver); assert.deepEqual(args, ["caller", reason]); throw undefined; }
+  }();
+  const original = receiver.stop, witness = installMusicOperationWitness(receiver.constructor, () => { throw reason; }, faults);
+  try {
+    let threw = false; try { receiver.stop("caller", reason); } catch (error) { threw = true; assert.equal(error, undefined); }
+    assert.equal(threw, true); assert.ok(faults.includes(reason));
+  } finally { witness.restore(); }
+  assert.equal(receiver.stop, original);
+});
+
+test("music promise sidecar returns originals and retains falsey errors without joining early", async () => {
+  for (const reason of [undefined, null, false, 0, {}]) {
+    const original = deferredOriginal(), row = {}, faults = []; let sequence = 0;
+    assert.equal(observeMusicPromise(original.pending, row, () => ++sequence, faults), original.pending);
+    await Promise.resolve(); assert.equal(row.state, "pending");
+    original.reject(reason); const [result] = await Promise.allSettled([original.pending]);
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(row.reason, reason); assert.equal(row.at, 1);
+    assert.deepEqual(faults, []);
+    const broken = {}, failures = [];
+    assert.equal(observeMusicPromise(original.pending, broken, () => { throw undefined; }, failures), original.pending);
+    await Promise.resolve(); assert.deepEqual(failures, [undefined]);
+  }
+});
+
+test("music body observation preserves direct cancel receiver arguments promise and independent faults", async () => {
+  const pending = deferredOriginal(), reason = {}, faults = []; let calls = 0, sequence = 0;
+  const body = { getReader() { assert.fail("observation must not acquire a reader"); }, cancel(...args) {
+    calls++; assert.equal(this, body); assert.deepEqual(args, [reason]); return pending.pending;
+  } };
+  const owner = { tick: () => ++sequence, diagnosticErrors: faults };
+  observeBody({ body }, new AbortController().signal, owner);
+  assert.equal(body.cancel(reason), pending.pending); assert.equal(calls, 1); assert.equal(owner.bodyCancels[0].state, "pending");
+  pending.reject(undefined); await Promise.allSettled([pending.pending]);
+  assert.equal(owner.bodyCancels[0].state, "rejected"); assert.ok(owner.bodyCancels[0].invokeAt < owner.bodyCancels[0].at);
+  await assert.rejects(owner.join(), AggregateError, "missing reader remains a strict failure; observing direct cancel grants no exemption");
+  assert.deepEqual(faults, []);
+});
+
+test("music preheader detail distinguishes original settlement ordering and keeps all admission gates", async () => {
+  for (const order of ["abort-first", "reject-first", "no-abort"]) {
+    const h = await headerOracle(order), proof = { ...h.proof, route: "native" };
+    const [record] = musicWorkerDetails(proof, 16, [proof], h.ingresses, undefined, [], 1);
+    assert.equal(record.headerAccepted, order === "abort-first");
+    assert.equal(record.abortedBeforeReject, h.snapshot.abortedBeforeReject); assert.equal(record.acquisitionState, "rejected");
+    assert.equal(record.invokeAt, h.proof.invoke); assert.equal(record.rejectAt, h.proof.rejected);
+    assert.equal(record.ingressAt, h.proof.ingressAbortAtReject ?? null); assert.equal(record.effectiveAt, h.proof.effectiveAbort ?? null);
+    assert.ok(musicProtocol.validate(record), JSON.stringify(record));
+    assert.equal(provisionalHeaderDisposition(h.snapshot), order === "abort-first", "diagnostic does not change the oracle");
+  }
+});
+
+test("music first retirement is retained separately from cumulative cleanup and immutable earlier facts", () => {
+  const first = retirementObservation([], { f_read: 1 }, [undefined], "native", { pass: 1 });
+  const saved = retainMusicRetirement({ records: [], observerFailed: false, cleanup: null }, first), before = JSON.stringify(saved.records);
+  const next = retirementObservation([], { f_read: 2 }, [undefined], "native", { pass: 2 });
+  const later = retainMusicRetirement(saved, next);
+  assert.equal(JSON.stringify(later.records), before); assert.equal(later.records[0].pass, 1); assert.equal(later.records[0].f_read, 1);
+  assert.equal(later.cleanup.pass, 2); assert.equal(later.cleanup.f_read, 2); assert.equal(later.cleanup.phase, "worker_cleanup_summary");
+  assert.ok(musicProtocol.validate(later.cleanup));
+  assert.equal(retainMusicRetirement({ records: [], observerFailed: true, cleanup: null }, next).observerFailed, true);
+});
+
+test("music diagnostic owner and task tails fit unchanged annotation quota without promoting pending", async () => {
+  const h = await headerOracle(), tails = [{ id: "abort_body", state: "pending" }, { id: "abort_body", state: "rejected" }];
+  const input = { route: "native", binding: { row: { id: "abort_body" } }, readerRows: [], bodyCancels: [] };
+  const owner = { calls: 2, first: { cause: "caller", at: 3, returnedAt: 6, statusBefore: null, status: "client_error", delivery: "canceled", threw: false } };
+  const records = [
+    ...musicWorkerDetails({ ...h.proof, route: "native" }, 16, [h.proof], h.ingresses, owner, [], 1),
+    ...musicWorkerDetails(input, 17, [], [], owner, tails, 1),
+    ...musicWorkerDetails({ ...input, binding: { row: { id: "deadline_body" } } }, 18, [], [], undefined, [], 1),
+  ];
+  const lines = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  for (const record of records) {
+    assert.ok(musicProtocol.validate(record), JSON.stringify(record)); emitter.put(record);
+    const widest = Object.fromEntries(Object.entries(record).map(([key, value]) => [key, key === "v" ? value : typeof value === "number" ? 1_000_000_000 : value]));
+    assert.ok(musicProtocol.validate(widest), `${record.phase}: ${Buffer.byteLength(JSON.stringify(widest))} bytes`);
+    for (const key of ["pass", "stopAt", "tails"]) if (key in record) assert.equal(musicProtocol.validate({ ...record, [key]: -1 }), undefined);
+  }
+  const tail = records.find(row => row.phase === "worker_tail"); assert.equal(tail.tailsPending, 1); assert.equal(tail.tailsRejected, 1); assert.equal(tail.tailsFulfilled, 0);
+  assert.equal(records.at(-2).operationBound, false); assert.equal(records.at(-2).stopCause, "unknown");
+  for (let i = 0; i < 10; i++) emitter.put(musicProtocol.record(musicDiagnosticContext("manifest", "m0_wav", "body_assert")));
+  emitter.flush(); assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => Buffer.byteLength(line) <= 768));
+});
+
+test("music tail binding rejects a foreign ingress with the same label and reports cleanup separately", async () => {
+  const ingress = {}, foreign = {}, input = { binding: { row: { id: "abort_body" }, ingress }, effective: { signal: new AbortController().signal }, readerRows: [] };
+  const first = retirementObservation([input], { f_read: 1 }, [undefined], "native", { pass: 1, tails: [
+    { ingress, state: "fulfilled", at: 5 }, { ingress: foreign, state: "rejected", at: 6 },
+  ] });
+  const tail = first.records.find(row => row.phase === "worker_tail");
+  assert.deepEqual([tail.tails, tail.tailsFulfilled, tail.tailsRejected, tail.tailAt], [1, 1, 0, 5]);
+  const later = retainMusicRetirement(retainMusicRetirement({ records: [], observerFailed: false }, first),
+    retirementObservation([input], { f_read: 2 }, [undefined], "native", { pass: 2 }));
+  const lines = [], errors = [], emitter = musicProtocol.emitter(line => lines.push(line));
+  emitter.fail(musicProtocol.record(musicDiagnosticContext("native"), true, undefined));
+  await reportRetirementObservation("https://fixture.invalid", "native", async () => Response.json(later), musicProtocol, emitter, errors);
+  emitter.flush(); assert.deepEqual(errors, []);
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const summary = records.find(row => row.phase === "worker_summary");
+  assert.deepEqual([summary.pass, summary.f_read, summary.cleanupPass, summary.cleanupRejected, summary.cleanupCounterTotal], [1, 1, 2, 1, 2]);
+  assert.ok(Buffer.byteLength(JSON.stringify(later)) <= 8192);
 });
