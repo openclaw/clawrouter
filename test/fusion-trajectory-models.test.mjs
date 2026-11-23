@@ -204,26 +204,33 @@ test('model adapters forward checkpoint hooks without adding inference calls', a
 });
 
 
-test('completion review uses a strong correction despite the draft selector and meters every call', async () => {
-  const models = []; let value = 0;
-  const result = await runFinalReviewedModelTrajectory({ task: 'Set two.', runId: 'final-review',
-    draftModel: 'draft-model', reviewModel: 'review-model', selectModel: () => 'draft-model',
-    maxModelCalls: 6, maxToolCalls: 3, finalCheckTool: 'check',
-    tools: [{ name: 'write', effect: 'write', parameters: { type: 'object', properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false },
-      validate: args => Number.isInteger(args.value), execute: async args => { value = args.value; return { value }; } },
-    { name: 'check', effect: 'read', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
-      validate: args => Object.keys(args).length === 0, execute: async () => ({ passed: value === 2 }) }],
-    invoke: async (_id, model, body) => {
-      models.push(model);
-      const step = models.length;
-      if (step === 1 || step === 4) return response({ action: { type: 'tool', name: 'write', arguments: { value: step === 1 ? 1 : 2 } } });
-      if (step === 2 || step === 5) return response(answer('done'));
-      assert.match(body.messages[0].content, /Passing public checks is not proof/);
-      return response(step === 3 ? { accepted: 0, reason: 'Wrong value.', replacement: null }
-        : { accepted: 1, reason: '', replacement: null });
-    } });
-  assert.equal(value, 2);
-  assert.deepEqual(models, ['draft-model', 'draft-model', 'review-model', 'review-model', 'draft-model', 'review-model']);
-  assert.equal(result.stats.modelCalls, 6); assert.equal(result.stats.toolCalls, 3);
-  assert.equal(result.stats.reviews, 2); assert.equal(result.stats.repairs, 1);
+test('completion review uses a strong correction and forwards opt-in re-review', async () => {
+  for (const reviewAfterCorrection of [false, true]) {
+    const models = [], checkpoints = []; let value = 0;
+    const result = await runFinalReviewedModelTrajectory({ task: 'Set two.', runId: 'final-review',
+      draftModel: 'draft-model', reviewModel: 'review-model', selectModel: () => 'draft-model',
+      reviewAfterCorrection, maxModelCalls: reviewAfterCorrection ? 5 : 6, maxToolCalls: 3, finalCheckTool: 'check',
+      tools: [{ name: 'write', effect: 'write', parameters: { type: 'object', properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false },
+        validate: args => Number.isInteger(args.value), execute: async args => { value = args.value; return { value }; } },
+      { name: 'check', effect: 'read', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+        validate: args => Object.keys(args).length === 0, execute: async () => ({ passed: value === 2 }) }],
+      onCheckpoint: async ({ history }) => { await Promise.resolve(); checkpoints.push(history.length); },
+      invoke: async (_id, model, body) => {
+        models.push(model);
+        const step = models.length;
+        if (step === 1 || step === 4) return response({ action: { type: 'tool', name: 'write', arguments: { value: step === 1 ? 1 : 2 } } });
+        if (step === 2 || step === 5 && !reviewAfterCorrection) return response(answer('done'));
+        assert.match(body.messages[0].content, /Passing public checks is not proof/);
+        if (step > 3) assert.deepEqual(checkpoints, [1, 2]);
+        return response(step === 3 ? { accepted: 0, reason: 'Wrong value.', replacement: null }
+          : { accepted: 1, reason: '', replacement: null });
+      } });
+    assert.equal(value, 2);
+    assert.deepEqual(models, ['draft-model', 'draft-model', 'review-model', 'review-model',
+      ...(reviewAfterCorrection ? [] : ['draft-model']), 'review-model']);
+    assert.deepEqual(checkpoints, [1, 2, 3]);
+    assert.equal(result.stats.modelCalls, reviewAfterCorrection ? 5 : 6);
+    assert.equal(result.stats.toolCalls, 3);
+    assert.equal(result.stats.reviews, 2); assert.equal(result.stats.repairs, 1);
+  }
 });
