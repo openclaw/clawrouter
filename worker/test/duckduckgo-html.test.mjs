@@ -66,3 +66,30 @@ test("DuckDuckGo fragmented native HTML reaches EOF before exposing results", as
   } });
   await assert.rejects(() => readDuckDuckGoHtml(response(failed)), { message: "invalid_duckduckgo_body" });
 });
+
+for (const cleanup of ["pending", "rejected"]) {
+  for (const [name, headers, status, chunk, message] of [
+    ["HTTP rejection", { "content-type": "text/html" }, 403, null, "invalid_duckduckgo_response"],
+    ["MIME rejection", { "content-type": "application/json" }, 200, null, "invalid_duckduckgo_response"],
+    ["declared byte limit", { "content-type": "text/html", "content-length": "2097153" }, 200, null, "duckduckgo_response_too_large"],
+    ["streamed byte limit", { "content-type": "text/html" }, 200, new Uint8Array(2097153), "duckduckgo_response_too_large"],
+    ["invalid UTF-8", { "content-type": "text/html" }, 200, new Uint8Array([0xff]), "invalid_duckduckgo_body"],
+  ]) {
+    test(`DuckDuckGo ${name} preserves its error when cancellation is ${cleanup}`, async () => {
+      let cancellations = 0;
+      const stream = new ReadableStream({
+        start(controller) { if (chunk) controller.enqueue(chunk); },
+        cancel() {
+          cancellations++;
+          return cleanup === "pending" ? new Promise(() => {}) : Promise.reject(new Error("cleanup failed"));
+        },
+      });
+      const outcome = readDuckDuckGoHtml(new Response(stream, { headers, status }))
+        .then(() => "unexpected success", error => error.message);
+      const actual = await Promise.race([outcome, new Promise(resolve => setImmediate(() => resolve("still waiting for cleanup")))]);
+      assert.equal(actual, message);
+      assert.equal(cancellations, 1);
+      assert.equal(stream.locked, false);
+    });
+  }
+}

@@ -1,5 +1,7 @@
 # Changelog
 
+- Return DuckDuckGo HTML admission and read errors without waiting for stream cancellation.
+
 - Return MiniMax device authorization failures without waiting for rejected-response body cleanup.
 
 - Allow completion review to start from a caller-supplied candidate without another draft call, preserving correction and final-check guards.

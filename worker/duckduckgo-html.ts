@@ -17,12 +17,12 @@ export function prepareDuckDuckGoSearch(query: URLSearchParams): { url: string; 
 
 export async function readDuckDuckGoHtml(response: Response, count = 5): Promise<{ html: string; results: DuckDuckGoResult[] }> {
   if (response.redirected || response.status !== 200 || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "text/html" || !response.body) {
-    await response.body?.cancel().catch(() => undefined);
+    void response.body?.cancel().catch(() => undefined);
     throw new Error("invalid_duckduckgo_response");
   }
   const length = response.headers.get("content-length");
   if (length !== null && /^\d+$/.test(length) && Number(length) > maxHtmlBytes) {
-    await response.body.cancel().catch(() => undefined);
+    void response.body.cancel().catch(() => undefined);
     throw new Error("duckduckgo_response_too_large");
   }
   const reader = response.body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
@@ -38,7 +38,7 @@ export async function readDuckDuckGoHtml(response: Response, count = 5): Promise
     html += decoder.decode();
     return { html, results: parseDuckDuckGoHtml(html, count) };
   } catch (error) {
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
     if (error instanceof Error && /^duckduckgo_[a-z_]+$/.test(error.message)) throw error;
     throw new Error("invalid_duckduckgo_body");
   } finally { reader.releaseLock(); }
