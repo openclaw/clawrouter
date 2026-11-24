@@ -48,18 +48,20 @@ run()
 '''
 
 CONTROLLER = CODEC + r'''
-import secrets, subprocess, sys
+import resource, secrets, subprocess, sys
 payload = json.load(sys.stdin)
 worker = subprocess.Popen([sys.executable, "-I", "-B", "-c", payload.pop("worker")],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     user=65534, group=65534, extra_groups=[], cwd="/tmp",
     env={"PATH": "/usr/local/bin:/usr/bin:/bin"}, bufsize=0)
 out = {"valid": False, "passed": False}
+phase, completed = "startup", 0
 try:
     write_frame(worker.stdin.fileno(), {"code": payload["code"]})
     if read_frame(worker.stdout.fileno()) != {"ready": True}:
         raise ValueError("worker_startup")
     failures, errors = 0, 0
+    phase = "case"
     for case in payload["cases"]:
         nonce = secrets.token_hex(16)
         write_frame(worker.stdin.fileno(), {"nonce": nonce, "args": case["args"]})
@@ -74,15 +76,22 @@ try:
             failures += int(value != case["expected"])
         else:
             raise ValueError("worker_shape")
+        completed += 1
     out = {"valid": True, "passed": failures == errors == 0, "tests": len(payload["cases"]),
         "failures": failures, "errors": errors, "skipped": 0}
 except BaseException as error:
     out["failure"] = type(error).__name__
+    out["failureStage"] = phase
+    out["completedCases"] = completed
 finally:
     worker.stdin.close()
     try: worker.wait(timeout=0.5)
     except subprocess.TimeoutExpired: pass
     worker.stdout.close()
+    if not out["valid"]:
+        out["workerReturnCode"] = worker.poll()
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        out["workerCpuSeconds"] = round(usage.ru_utime + usage.ru_stime, 6)
 print(json.dumps(out))
 '''
 

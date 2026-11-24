@@ -60,6 +60,22 @@ class FrameTests(unittest.TestCase):
 
 class DockerSmoke(unittest.TestCase):
     @unittest.skipUnless(os.getenv('FUSION_FRAMED_SMOKE') == '1', 'explicit cached Docker smoke')
+    def test_worker_exit_diagnostics_do_not_expose_candidate_text(self):
+        for code, expected_stage, exit_code in (
+            ('import os\nos._exit(23)', 'startup', 23),
+            ('import os\ndef solve(): os._exit(37)', 'case', 37),
+        ):
+            result = framed.grade(code, [{'args': (), 'expected': 0}])
+            self.assertFalse(result['valid'])
+            self.assertFalse(result['passed'])
+            self.assertEqual(result['failure'], 'EOFError')
+            self.assertEqual(result['failureStage'], expected_stage)
+            self.assertEqual(result['completedCases'], 0)
+            self.assertEqual(result['workerReturnCode'], exit_code)
+            self.assertGreaterEqual(result['workerCpuSeconds'], 0)
+            self.assertNotIn('os._exit', json.dumps(result))
+
+    @unittest.skipUnless(os.getenv('FUSION_FRAMED_SMOKE') == '1', 'explicit cached Docker smoke')
     def test_isolated_large_input_and_fail_closed(self):
         cases = [{'args': ([1] * 100000,), 'expected': 100000}]
         good = framed.grade('def solve(values): return sum(values)', cases)

@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.
+
 - Add a replayable hard-task behavioral-majority control: six successes at 30.92% lower accounted cost than Terra, with exposure, pair-control and production limits.
 
 - Report sparse fusion correction controls: exact Terra edits repaired a hard task, but a public-test fallback matched the score for less.
