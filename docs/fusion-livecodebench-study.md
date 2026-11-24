@@ -6,6 +6,7 @@ once if requested. It passed all 12 tasks for 33.7% less model cost than the
 strong direct control. This is exploratory evidence, not a production-qualified
 gain or an official LiveCodeBench score. Production Fusion is unchanged.
 
+Subsequent cohorts did **not** establish a quality-preserving cost advantage.
 A disjoint confirmation did **not** reproduce the cost advantage: fusion cost
 2.4% more than strong direct. It also exposed an invalid upstream private input,
 so it cannot qualify the policy for promotion. See [the follow-up](#disjoint-confirmation).
@@ -124,15 +125,62 @@ rows, costs and diagnostic status alongside the first study. Requested model
 ids are mutable, this remains adapted evaluation, and the new result does not
 establish a production latency or cost advantage.
 
+## Input-validated follow-up
+
+A third cohort used all 11 untouched exact-output tasks remaining in the
+bounded pool: three medium and eight hard. It was not balanced by dropping
+harder tasks. Handwritten input-contract checks matched the public problem
+statements and passed every supplied input: 27 public and 404 private cases.
+Three independent reference solvers also matched all supplied outputs for
+those three tasks; expected outputs for the other eight still rely on the
+dataset. The frozen runtime sample used all 27 public and 164 private cases.
+One task supplied only four private cases.
+
+| Policy | Tasks passed | Model cost (USD) |
+| --- | ---: | ---: |
+| Luna direct | 8/11 | $0.019949 |
+| Sol 6.2 direct | 11/11 | $0.107324 |
+| Luna draft, Sol 6.2 review, optional Luna repair | 10/11 | $0.110843 |
+| Luna draft, Luna review, optional Luna repair | 8/11 | $0.035141 |
+| Public-gated strong review and small repair | 9/11 | $0.077607 |
+
+The fifth policy was declared before inference and projected from the same
+calls: retain a public-passing small draft; otherwise use its strong-review
+and small-repair result. Its cost includes the complete chosen path. This
+projection required no extra API calls and does not establish its independent
+execution latency or cache behavior. All 48 actual calls were charged once:
+22 direct, 22 review and four repair, costing $0.233359 total.
+
+Always-review cost 3.3% more than strong direct and lost one strong success.
+The gate cost 27.7% less but lost two strong successes. Self-review preserved
+the small model's 8/11 score at higher cost. Neither review policy passed the
+quality-preservation requirement. Independent replay matched all distinct
+grades and the full call ledger.
+
+The failure modes were concrete. The small draft for AtCoder `arc194_d`
+passed public examples but failed four private assertions. Strong review
+repaired it; the public gate retained the wrong draft. For `arc194_e`, the
+small draft and both small-model repairs exhausted the 8,192-token limit,
+while strong direct passed. Both models used the frozen medium reasoning
+effort. No limit was raised after the result, and no failure was dropped.
+
+These results retire the fixed policies from further paid tuning on these
+used cohorts. The first study remains a development lead that failed to
+become a general quality/cost advantage. This follow-up supports choosing
+strong direct when preserving quality on this cohort; it does not justify a
+production Fusion default. Future policy changes need separate development
+and fresh confirmation data.
+
 ## What to do next
 
 Keep this as a candidate for a caller-side coding workflow, not a new default
 routing policy. The current `clawrouter/fusion` adviser/synthesizer implementation
 is a different topology; these results do not measure it.
 
-Qualify fixture validity on a clean disjoint cohort before another paid run.
-The first disjoint attempt exposed a data defect; it must not be used as
-promotion evidence. Repeat the unchanged policy on qualified data before tuning it.
+The input-validated follow-up failed quality preservation. Do not repeat these
+unchanged policies on used cohorts as fresh evidence. Develop a materially
+different policy before spending on another confirmation, and validate the
+new task inputs before inference.
 Include the same direct and self-review controls, plus a separately declared
 public-test-gated cascade. Measure complete end-to-end execution latency and
 all charged calls. Use repeated trials to expose sampling variance, then test

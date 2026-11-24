@@ -781,5 +781,398 @@
         }
       }
     ]
+  },
+  "validatedFollowup": {
+    "sourceCommit": "72c3a48",
+    "claim": "fixed review policies do not preserve strong quality",
+    "cohortProtocolSha256": "598666cd239dd7eda425ee580c039198db553720a6cc3aa682cb217af7f7fa7d",
+    "trialProtocolSha256": "f9c62103ef515012075828cc54a6ff6cf5e8a592ef664a4b77736cb68c64f65d",
+    "terminalAuditSha256": "db1cc5726e6c6acf549ef2bdc78dfbe43646621da2c40b71272197cd1c1eedca",
+    "inputContractAuditSha256": "3fd468317a88c2d95a97e346fe1dac00aefb86683eae92e58005921b779a6e04",
+    "tasksCheckedForInputValidity": 11,
+    "referenceOutputValidatedTasks": 3,
+    "arms": {
+      "weak": {
+        "passed": 8,
+        "costMicros": 19949
+      },
+      "strong": {
+        "passed": 11,
+        "costMicros": 107324
+      },
+      "fusion": {
+        "passed": 10,
+        "costMicros": 110843
+      },
+      "self-review": {
+        "passed": 8,
+        "costMicros": 35141
+      },
+      "public-gated-review": {
+        "passed": 9,
+        "costMicros": 77607
+      }
+    },
+    "lostStrongSuccesses": 1,
+    "gatedLostStrongSuccesses": 2,
+    "qualifiedFusionGain": false,
+    "uniquePaidCalls": 48,
+    "uniquePaidCostMicros": 233359,
+    "publicTests": 27,
+    "privateTests": 164,
+    "tasks": [
+      {
+        "id": "lcb-aceb1f6774a9d9e5",
+        "identity": "atcoder:abc394_c",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 580
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3364
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3134
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 885
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 580
+          }
+        }
+      },
+      {
+        "id": "lcb-38c847159f6eca34",
+        "identity": "atcoder:arc193_b",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2071
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9650
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6550
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3429
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2071
+          }
+        }
+      },
+      {
+        "id": "lcb-28dd5bc970358a71",
+        "identity": "atcoder:abc397_b",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 220
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2024
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1748
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 573
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 220
+          }
+        }
+      },
+      {
+        "id": "lcb-46b691f856853c23",
+        "identity": "atcoder:arc192_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 4167
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 13578
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 21830
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 6288
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 21830
+          }
+        }
+      },
+      {
+        "id": "lcb-553840119c01c911",
+        "identity": "atcoder:abc400_c",
+        "difficulty": "medium",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 414
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2092
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1710
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 906
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 414
+          }
+        }
+      },
+      {
+        "id": "lcb-34f39be9005b60db",
+        "identity": "atcoder:abc390_g",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1772
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9838
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6046
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2373
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1772
+          }
+        }
+      },
+      {
+        "id": "lcb-1ee8d9579100e66a",
+        "identity": "atcoder:arc194_d",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 1833
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 6800
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9005
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 2621
+          },
+          "public-gated-review": {
+            "passed": false,
+            "publicPassed": true,
+            "costMicros": 1833
+          }
+        }
+      },
+      {
+        "id": "lcb-cd4c8e5d44ce84f1",
+        "identity": "atcoder:abc397_f",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2314
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 19302
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 7665
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 3954
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2314
+          }
+        }
+      },
+      {
+        "id": "lcb-a1af912b9c4ca43f",
+        "identity": "atcoder:abc400_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 985
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4058
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4076
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1616
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 985
+          }
+        }
+      },
+      {
+        "id": "lcb-c10b917ae6fa6298",
+        "identity": "atcoder:arc194_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 4181
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 27240
+          },
+          "fusion": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 44176
+          },
+          "self-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 9924
+          },
+          "public-gated-review": {
+            "passed": false,
+            "publicPassed": false,
+            "costMicros": 44176
+          }
+        }
+      },
+      {
+        "id": "lcb-224c7df46e7dcbad",
+        "identity": "atcoder:abc393_e",
+        "difficulty": "hard",
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1412
+          },
+          "strong": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 9378
+          },
+          "fusion": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 4903
+          },
+          "self-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 2572
+          },
+          "public-gated-review": {
+            "passed": true,
+            "publicPassed": true,
+            "costMicros": 1412
+          }
+        }
+      }
+    ]
   }
 }

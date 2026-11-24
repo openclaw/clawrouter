@@ -8,8 +8,9 @@ The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
 The disjoint follow-up did not reproduce the cost advantage and exposed a
-malformed private fixture. Promotion still requires clean confirmation and
-realistic latency measurement.
+malformed private fixture. A subsequent input-validated cohort lost strong-model
+successes under both always-review and public-gated review. These fixed policies
+are not promotion candidates; future policy changes need fresh confirmation.
 
 Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
 includes its tools, visible checks and sandbox cleanup. Grading time measures
