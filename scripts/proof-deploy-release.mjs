@@ -18,9 +18,10 @@ import { inspectSyntheticInput } from '../worker/native-rehearsal/input.ts';
 import { nativeProviderSnapshotPlugin } from './large-http-provider-snapshot.mjs';
 import { archiveDeploymentSource } from './archive-deployment-source.mjs';
 
-const out=resolve(process.argv[2]), binary=resolve(process.env.CLAWROUTER_CODEX_BINARY??'');
-assert(process.argv[2]&&process.env.CLAWROUTER_CODEX_BINARY,'Usage: CLAWROUTER_CODEX_BINARY=<official binary> node scripts/proof-deploy-release.mjs <new outside directory>');
-assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli 0.164.0');
+const out=resolve(process.argv[2]), binary=resolve(process.env.CLAWROUTER_CODEX_BINARY??''),setupFailure=process.argv[3]==='--setup-failure';
+assert(process.argv[2]&&(setupFailure||process.env.CLAWROUTER_CODEX_BINARY),'Usage: CLAWROUTER_CODEX_BINARY=<official binary> node scripts/proof-deploy-release.mjs <new outside directory> [--setup-failure]');
+if(!setupFailure)assert.equal(execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),'codex-cli 0.164.0');
+const privateSetupMarker='private-setup-fixture-'+randomUUID();
 await mkdir(out,{mode:0o700});
 const hash=x=>createHash('sha256').update(x).digest('hex'),sha=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
 const parse=text=>{const {getStaticTOMLValue,parseTOML}=createRequire(resolve('package.json'))('toml-eslint-parser');return getStaticTOMLValue(parseTOML(text));};
@@ -152,7 +153,10 @@ const server=createServer(async(r,s)=>{
     if(staleControl-->0)s.setHeader('x-clawrouter-version-id',previousVersion);
     return json(s,snapshot());
   }
-  if(path==='/__native_rehearsal/setup'){seedHash=body.seedHash;credentialHash=body.credentialHash;return json(s,{});}
+  if(path==='/__native_rehearsal/setup'){
+   if(setupFailure){s.setHeader('x-private-fixture',privateSetupMarker);return json(s,{error:privateSetupMarker},503);}
+   seedHash=body.seedHash;credentialHash=body.credentialHash;return json(s,{});
+  }
   if(path==='/__native_rehearsal/snapshot')return json(s,fixture());
   if(path==='/__native_rehearsal/release'){cases.find(x=>x.id===body.id).releasedAt=Date.now();return json(s,{});}
   if(path==='/v1/catalog')return json(s,{version:'clawrouter.client-catalog.v1',scope:{authType:'proxy_key',credentialId:'fixture'},providers:[{id:'openai',allowed:true,nativeBaseUrl:'/v1/native/openai',policies:['fixture'],models:[{id:'openai/gpt-6-astra',upstream:'gpt-6-astra',capabilities:['llm.responses']}],routes:[{endpoint:'responses',path:'/v1/responses',methods:['POST'],requestFormat:'openai.responses',responseFormat:'openai.responses',streaming:'sse'}],offers:[{eligible:true,routeKind:'native',policyId:'fixture',policyGeneration:'1',affordability:'exact-covered',modelId:'openai/gpt-6-astra',endpoint:'responses',route:'/v1/native/openai/v1/responses',transport:'http'}]}]});
@@ -204,9 +208,22 @@ const config=process.env.CODEX_HOME+'/config.toml';if(existsSync(config)){const 
 const a=process.argv.slice(2);if(a[0]!=='app-server'){const r=spawnSync(binary,a,{stdio:'inherit'});process.exit(r.status??1);}const p=spawn(binary,a,{stdio:'inherit'});for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>p.kill(signal));p.on('close',c=>process.exit(c??1));`,{mode:0o700});
 const proofEnv={...env,NODE_OPTIONS:'--import='+preload,CLAWROUTER_RELEASE_PROOF_TARGETS:JSON.stringify({origin,local,binary})};
 try{
- const output=await child(['scripts/deploy-release-qualification.mjs'],{...proofEnv,PATH:join(out,'bin')+':'+env.PATH,QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper});
+ const output=await child(['scripts/deploy-release-qualification.mjs'],{...proofEnv,PATH:join(out,'bin')+':'+env.PATH,QUALIFICATION_PLAN_PATH:plan,CLAWROUTER_CODEX_BINARY:wrapper}).catch(error=>{if(!setupFailure)throw error;return error.message;});
  await writeFile(join(out,'entrypoint.log'),output);
  const receipt=JSON.parse(await readFile(join(env.TRAIN_EVIDENCE_DIRECTORY,'public/qualification-release.json'),'utf8'));
+ if(setupFailure){
+  assert.equal(receipt.qualified,false);assert.equal(receipt.cases.setup.outcome,'failed');assert.equal(receipt.cases.cleanup.outcome,'passed');
+  const diagnostic=receipt.clientDiagnostics.find(x=>x.name==='setup-diagnostic.json');
+  assert.equal(diagnostic.stage,'fixture_setup');assert.equal(diagnostic.outcome,'failed');assert.deepEqual(diagnostic.failure,{kind:'http',status:503});assert.deepEqual(diagnostic.response,{status:503});
+  assert(Number.isSafeInteger(diagnostic.elapsedMs)&&diagnostic.elapsedMs>=0);
+  assert.deepEqual(Object.keys(diagnostic).sort(),['command','elapsedMs','failure','name','outcome','response','schema','stage','startedAt','updatedAt']);
+  assert(!JSON.stringify(receipt).includes(privateSetupMarker));assert(!output.includes(privateSetupMarker));
+  assert.equal(requests.filter(x=>x.path==='/__native_rehearsal/setup').length,1);assert.equal(deployments.length,0);assert.equal(cases.length,0);
+  assert.equal(kv,null);assert.equal(bucket,null);assert.equal(worker,null);assert.equal(app,null);assert.equal(queues.length,0);
+  await assert.rejects(access(join(env.TRAIN_EVIDENCE_DIRECTORY,'private/release')));
+  const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; actual qualification and client CLI',case:'setup-failure',diagnostic,setupRequests:1,inferenceRequests:0,blueActivations:0,privateTextRetained:false,cleanup:true,productionMutations:0,limits:['Cloudflare resource/upload APIs are controlled loopback services; no hosted Cloudflare or Codex inference.','Exercises real release packaging, subprocess failure, public diagnostic collection and private-directory cleanup.']};
+  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
+ }else{
  assert.equal(receipt.qualified,true);assert.equal(receipt.controlSha256,nativeControlDigest());
  assert.equal(receipt.actual.providerAttempts,8);assert.equal(receipt.actual.replays,0);
  const lost=receipt.clientDiagnostics.find(x=>x.name==='workload-lost-diagnostic.json');
@@ -224,6 +241,7 @@ try{
  assert(requests.slice(beforeFreshCleanup).every(x=>x.method==='GET'),'fresh completed cleanup must only observe, never replay writes');
  const proof={passed:true,head:sha,node:process.version,provider:'local controlled HTTP APIs; official Codex 0.164.0',cases:receipt.cases,providerAttempts:cases.length,deployments:deployments.length,readRequests:requests.filter(x=>x.method==='GET').length,peakConnections,delayedDeploymentRead:true,nonmonotonicDeploymentRead:true,previousControlRead:true,lostQueueAck:true,hiddenQueueInventory:true,receiptQueueCustody:true,freshRunnerCleanup:true,lostDeploymentAck:true,lostAdmissionAck:true,lostBodyJsonInvalid:true,diagnosticsPreserved:true,queueConsumerDetached:!queueConsumer,asyncQueueDrainObserved:usageDrainReads>=3,productionMutations:0,limits:['Cloudflare APIs, allocator, accounting and upload CLI are controlled; no hosted Cloudflare proof.','Actual release packaging, coordinator and native client CLI entrypoints; real Codex saved thread with synthetic-only Responses.','Independent real Worker/DO/accounting coverage remains in native-rehearsal tests.']};
  await writeFile(join(out,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
+ }
 }finally{
  await writeFile(join(out,'requests.json'),JSON.stringify(requests,null,2));
  server.closeAllConnections();await new Promise(ok=>server.close(ok));
