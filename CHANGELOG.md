@@ -1,5 +1,7 @@
 # Changelog
 
+- Report failed Access fusion and verifier diagnostics, including the absent-field fixture correction and limits of public-test acceptance.
+
 - Record the failed matched-planner fusion trial, including the cheap-only planner control and complete accounting.
 
 - Document two failed fusion construction trials and the limits of public-test acceptance and contract review.
