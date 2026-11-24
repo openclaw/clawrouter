@@ -1,5 +1,7 @@
 # Changelog
 
+- Record the diverse-output fusion follow-up: revision matched direct controls but cost more, with strict and adapted scores reported separately.
+
 - Report a matched-control functional fusion pilot: Terra direct matched fusion for less, and the only rescued Luna failure was an entrypoint mismatch.
 
 - Record the failed fresh small-reviewer cascade replication, complete costs and the limits of its earlier Terra diagnostic.
