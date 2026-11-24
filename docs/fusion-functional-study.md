@@ -66,6 +66,45 @@ mismatch. It did not establish an algorithmic advantage from combining models.
 Future algorithm-focused protocols should predeclare how declared entrypoint
 names are adapted and report strict instruction-following separately.
 
+## Diverse-output follow-up
+
+A separate, prospectively frozen pilot used six unused tasks: three medium and
+three hard. Selection deliberately covered lists, nested lists, booleans,
+strings and integers; it was not a random population sample. Typed canonical
+input hashes selected 95 private cases while retaining all 17 public cases.
+All 257 supplied cases passed input and output-structure checks. Independent
+references checked 199 exact outputs and another 42 caption minimum costs;
+caption lexicographic tie-breaking and the remaining answers retained dataset
+trust. Positive and negative sandbox controls passed before model calls.
+
+This pilot applied a deterministic, public-signature-only entrypoint adapter
+equally to all three direct arms and both revision arms before public checks.
+It retained original strict scores separately. No output actually required
+adaptation, so the strict and adapted results were identical. Effort, token
+limits, sandbox limits, matched revision instructions and the development
+screen remained as described above. Every inference call finished before
+private grading.
+
+| Arm | Passed | Model cost (USD) |
+| --- | ---: | ---: |
+| Luna direct | 3/6 | $0.005821 |
+| Terra direct | 6/6 | $0.041700 |
+| Sol 6.2 direct | 6/6 | $0.048564 |
+| Luna draft → Terra revision | 6/6 | $0.061997 |
+| Terra draft → Terra revision | 6/6 | $0.067075 |
+
+Fusion cost 48.67% more than Terra direct and 27.66% more than Sol direct,
+with no additional correct answers. It again failed the development screen.
+All three Luna failures were on the hard tasks. Its alternating-permutation
+solution passed the three public examples but failed nine full-batch
+assertions, so public success alone would not have identified every failure.
+
+The 30 unique calls cost $0.177636. An audit replay reproduced the scores and
+accounting. [Per-task results and provenance](fusion-functional-diverse-study.json)
+keep this pilot separate from the eight-task result. This evidence does not
+justify more tuning of the same always-revise policy; the cheaper direct
+control remains necessary for any subsequent collaboration claim.
+
 ## Limits and next gate
 
 Eight tasks are a smoke test, not sufficient confirmation. The sample was new
