@@ -2349,6 +2349,85 @@ imported modules; they do not prove missing context caused the result. Any
 subsequent diagnostic on this exposed task must be reported separately from
 fresh-task evidence. No routing default or deployment changed.
 
+## Access repair and verifier diagnostics, 2026-11-24
+
+A historical [Access application-selection repair](https://github.com/openclaw/clawrouter/pull/174)
+produced no accepted solution. Strong and small planners improved public-test
+results from the same Luna draft, but neither passed the complete suite.
+
+| Arm | Full tests passed | Public tests passed | Model cost |
+| --- | ---: | ---: | ---: |
+| Direct strong | 13/16 | 9/9 | $0.052994 |
+| Direct Luna | 9/16 | 7/9 | $0.003318 |
+| Strong planner, Luna implementation | 13/16 | 9/9 | $0.040859 |
+| Luna planner, Luna implementation | 13/16 | 9/9 | $0.007258 |
+
+Every suite completed with zero skips; Node syntax checks passed. The reference
+passed 16/16 full and 9/9 public tests. Policy costs include the shared initial
+draft, which was billed once. Total new spend was $0.097793. Equal final pass
+counts do not establish identical failed tests or successful collaboration.
+
+A separate, explicitly exposed diagnostic asked strong and small models to
+generate declarative mock scenarios. They received the same original source,
+public tests and contract, without the reference implementation, candidate
+draft or held-out tests. Trusted code owned the assertions. Each entire batch
+had to pass the reference and reject the same public-passing Luna candidate
+before it could guide one small-model repair.
+
+Both models generated nine cases. The strong batch passed 15/18 reference tests
+and 18/18 candidate tests; the small batch passed 16/18 reference tests and
+17/18 candidate tests. Both batches were rejected, so neither triggered a
+repair call. Generation cost $0.052747. A later model-free analysis retained
+every individually reference-valid case before checking the candidate. All
+six retained strong cases and all seven retained small cases passed on the
+candidate too. Filtering therefore found no useful discriminator.
+
+This exposed a fixture and wording defect: the initial generator treated an
+empty array as an absent field. Cloudflare documents that provided
+`destinations` supersede `self_hosted_domains`; `domain` remains a separate
+field. The corrected fixture format uses `null` to omit an optional array and
+preserves `[]` as explicitly present. It also names `self_hosted_domains` in
+the contract instead of the ambiguous phrase “legacy domain.” A real CLI
+reference smoke passed all 11 tests, including the distinct absent/empty cases.
+See the [Cloudflare application contract](https://developers.cloudflare.com/api/typescript/resources/zero_trust/subresources/access/subresources/applications/methods/get/).
+
+The corrected diagnostic produced reference-valid, discriminating batches from
+both models. Each batch then guided one Luna repair from the same saved
+candidate. Both repairs passed their expanded public suites and syntax checks,
+but neither passed full acceptance.
+
+| Verifier | Generated cases | Reference tests passed | Starting candidate tests passed | Repaired full tests passed | Incremental model cost |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Strong | 12 | 21/21 | 18/21 | 14/16 | $0.058491 |
+| Luna | 7 | 16/16 | 14/16 | 14/16 | $0.004750 |
+
+Incremental costs include generation and repair, excluding the already-paid
+saved candidate. All suites completed without skips. The new total was
+$0.063241. Moving from 13/16 to 14/16 is an incomplete repair, not a successful
+fusion result. The strong verifier did not produce a better final pass count.
+The original failed results remain closed. A clarification-only control was
+frozen before these full results existed. It gave each direct model the same
+saved candidate and clarified contract, with the original public tests and no
+generated probes. Direct strong and direct Luna each remained at 13/16 full
+tests while passing all nine public tests and syntax checks. Their incremental
+costs were $0.028901 and $0.001600, respectively.
+
+Clarification alone therefore did not reproduce the one-test improvement in
+this run. The verifier paths also had an additional model call, so the result
+does not isolate test feedback from an extra repair opportunity. Every arm
+still failed acceptance, and this exposed task cannot qualify a deployment or
+generalized capability gain.
+
+| Experiment | Protocol SHA-256 | Terminal audit SHA-256 |
+| --- | --- | --- |
+| Access repair | `e82469b8ad511eada707ff1d2e1954387f6c5cace54baa97fb35c34a89a31771` | `db69842acfadf154cf092a6372c64f44a15419604a86695f04833a4ddb0097f5` |
+| Initial verifier diagnostic | `4288605099edff9825ca0e3c923eb03e64a72c10e930d3a4771e5366a9250e49` | `b23c1f66ce89d015fe8a29db77470530974225ddf318facb7010c0b7ba4ed443` |
+| Corrected verifier diagnostic | `0304c9bee41b50c2eb7a69d961f3514fc42b895d00bc21591f34ccd14dd121ad` | `8f3378c2aa45a35d9b3be298f44ee8a1acef3b533127411e855157acc09cbb0f` |
+| Clarification-only control | `689aeb2eb1fef5776ed5343ad2e1ca939b37167a2da5d07ac66453b033bc40b5` | `55be5f78cb91d236a52fe2cb66b8c06df6d7b111390fe396f43eadb1d9ba40ea` |
+
+These identify private receipts, not an independently reproducible bundled
+benchmark. No production routing, model selection or deployment changed.
+
 ## Node-only cheap-first check, 2026-11-24
 
 A subsequent [Cloudflare KV provisioning repair](https://github.com/openclaw/clawrouter/pull/219)

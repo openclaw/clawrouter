@@ -1,5 +1,7 @@
 # Changelog
 
+- Report failed Access fusion and verifier diagnostics, including the absent-field fixture correction and limits of public-test acceptance.
+
 - Record an audited Node-only cheap-first cost win, with isolated runtime admission and no collaboration-gain claim.
 
 - Record the failed matched-planner fusion trial, including the cheap-only planner control and complete accounting.
