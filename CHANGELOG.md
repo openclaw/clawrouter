@@ -1,5 +1,7 @@
 # Changelog
 
+- Expose trusted structured edit-rejection details for custom fusion benchmark runners without weakening atomic matching.
+
 - Document two failed fusion construction trials and the limits of public-test acceptance and contract review.
 
 - Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.

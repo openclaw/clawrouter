@@ -2302,3 +2302,14 @@ reproduction suite. Do not use these held-out failures to repair and rescore the
 same tasks as fresh evidence. The earlier three-task cost result remains valid
 for its stated sample; these construction failures prevent generalizing it to
 new-module correctness or claiming a demonstrated fusion capability gain.
+
+
+### Structured edit rejection details
+
+Custom benchmark runners can call `editFailureDetail(error)` after `replaceEdits`
+rejects a search that does not match exactly once. The helper returns a frozen
+copy containing the one-based edit ordinal within the submitted batch, the
+editable file path, and either `no match` or `multiple matches`. It returns
+`undefined` for other errors, including errors with forged detail properties.
+The original batch remains unapplied; this helper does not loosen matching or
+include source snippets, replacement text, or raw exception messages.
