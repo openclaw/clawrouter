@@ -1,5 +1,7 @@
 # Changelog
 
+- Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
+
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
 
 - Document supplied-candidate fusion review with separate corrective models and final executable checks.
