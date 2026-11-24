@@ -1,6 +1,7 @@
 # Changelog
 
 - Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+- Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
 - Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
 
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
@@ -154,6 +155,8 @@
 - Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
 
 ## Unreleased
+
+- Validate `access_programs` on unified Responses and reject unsupported selections before dispatch to other providers or Fusion Chat.
 
 - Clarify the existing Copilot catalog normalization of reported reasoning-effort tags, including unknown tags and missing, null, or empty observations.
 

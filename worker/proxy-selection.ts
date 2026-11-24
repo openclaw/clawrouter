@@ -1,4 +1,5 @@
 import { nativeParams } from "./native-route.ts";
+import { normalizeUnifiedAccessPrograms } from "./access-programs.ts";
 import { prepareMiniMaxSearch } from "./minimax-search.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
@@ -155,7 +156,10 @@ export function concreteOpenAiSelection(path: string, body: Record<string, unkno
   if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
     const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env, preparation);
-    const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env, preparation);
+    const upstreamBody = { ...body, model: upstreamModel };
+    if (capability === "llm.responses" || (capability === "llm.chat" && route.provider.id !== "openai"))
+      normalizeUnifiedAccessPrograms(upstreamBody, route.provider.id === "openai");
+    const transformed = transformRequestBody(route.provider, path, upstreamModel, upstreamBody, env, preparation);
     return { preparation, provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
   } catch (error) {
     if (isPreparationLimit(error)) throw error;
