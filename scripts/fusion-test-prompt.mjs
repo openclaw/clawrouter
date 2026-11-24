@@ -8,11 +8,21 @@ function statements(file, parse) {
   const program = parse(file.content, file.path).program;
   assert.ok(Array.isArray(program.body), 'invalid_test_ast');
   const nodes = [...(program.interpreter ? [program.interpreter] : []), ...(program.directives ?? []), ...program.body];
-  return nodes.map(node => {
+  const rows = [], ordered = nodes.sort((a, b) => a.start - b.start);
+  let end = 0;
+  const gap = until => {
+    const content = file.content.slice(end, until).trim();
+    if (content) rows.push({ content, group: false });
+  };
+  for (const node of ordered) {
     assert.ok(Number.isSafeInteger(node.start) && Number.isSafeInteger(node.end)
-      && node.start >= 0 && node.end > node.start && node.end <= file.content.length, 'invalid_test_span');
-    return { node, content: file.content.slice(node.start, node.end), group: registration(node) };
-  });
+      && node.start >= end && node.end > node.start && node.end <= file.content.length, 'invalid_test_span');
+    gap(node.start);
+    rows.push({ node, content: file.content.slice(node.start, node.end), group: registration(node) });
+    end = node.end;
+  }
+  gap(file.content.length);
+  return rows;
 }
 
 function fileMap(files) {

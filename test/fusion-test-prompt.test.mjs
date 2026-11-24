@@ -44,6 +44,14 @@ test('changed scaffolding preserves tests whose meaning may have changed', () =>
   assert.deepEqual(compactTestContext(moved, [file(old + setup)], parse), moved);
 });
 
+test('changed environment docblocks remain part of the prompt scaffolding', () => {
+  const baseline = [file('/** @jest-environment node */\n' + old)];
+  const current = [file('/** @jest-environment jsdom */\n' + old + added)];
+  assert.deepEqual(compactTestContext(current, baseline, parse), current);
+  const moved = [file(old + '\n/** @jest-environment node */\n' + added)];
+  assert.deepEqual(compactTestContext(moved, baseline, parse), moved);
+});
+
 test('duplicate additions remain visible and malformed inputs fail closed', () => {
   const [result] = compactTestContext([file(old + old + added)], [file(old)], parse);
   assert.equal(result.content.match(/checkOld/g).length, 1);
