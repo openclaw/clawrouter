@@ -413,7 +413,10 @@ rejected all three saved drafts and retained all three correct strong answers.
 With the checks visible in a separate retest, both strategies passed all three
 repetitions. The cascade cost 53.7% less after cache normalization but took
 81.1% longer. This exposed-task result improved the verifier and met the cost
-screen; it failed the latency gate and does not establish a general model gain.
+screen; it failed the latency gate and does not establish a general model gain. A
+follow-up with lower draft reasoning lost one correct strong answer because it
+omitted required helpers while passing all negative checks. Include positive
+dependency coverage as well; passing exclusion checks alone is insufficient.
 
 For an informed fallback, set `fallbackMode: 'repair'` with `strategy: 'cascade'`.
 The second invocation receives a clone of the rejected artifact and its verifier

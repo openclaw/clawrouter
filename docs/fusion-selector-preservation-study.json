@@ -338,6 +338,7 @@
     "Qualified preservation checks rejected all three bad drafts and retained all three correct strong outputs without model calls. This is retrospective verifier repair, not unseen-task efficacy.",
     "With preservation checks visible, two of three cheap drafts passed directly and one required fresh strong fallback. All six final outputs passed 54 tests without skips. The cascade cost 53.7% less after cache normalization but took 81.1% longer; it met the cost screen and failed the latency gate.",
     "Changing the public tests after seeing a failure and retesting the same task is development. This does not establish a causal effect across tasks, an unseen-task success rate, or production readiness.",
+    "Reducing draft reasoning to none lost one strong-model success through public false acceptance, despite the preservation checks. It cost only 1.9% less on invoice estimates and took 32.8% longer. This setting is rejected; negative checks do not prove positive dependency coverage.",
     "No deployment or default change. The original 30 unseen tasks by three trials promotion requirement remains unmet."
   ],
   "guardedRetest": {
@@ -561,5 +562,244 @@
       }
     ],
     "terminalAuditSha256": "1f62b14c75a590062065a3da3cb37509ec2beab7b2e57cb25ec24bd94af09dab"
+  },
+  "effortFollowup": {
+    "protocolSha256": "8d0298fbf98a0cd55c02311361d339cba1870d68423b9912c740f1c0909424a8",
+    "resultSha256": "c1682735a3703ba15b29e0a8d2356824ff00bef60f6e693708294eedd05803f2",
+    "draftReasoning": "none",
+    "scope": "Same exposed task and all preservation checks, new calls and fresh strong controls. Only cheap draft reasoning changes. Sequential variants are development observations, not a causal cross-effort estimate.",
+    "publicTests": 23,
+    "fullTests": 54,
+    "summary": {
+      "strong": {
+        "passed": 3,
+        "costMicros": 9318,
+        "elapsedMs": 27705.824083000007
+      },
+      "cascade": {
+        "passed": 2,
+        "costMicros": 9142,
+        "elapsedMs": 36786.501875
+      },
+      "falseAccepts": 1,
+      "strongLosses": 1,
+      "rescues": 2,
+      "escalations": 2,
+      "costRatio": 0.9811118265722258,
+      "elapsedRatio": 1.3277533909403474,
+      "costComparison": {
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "strong": {
+          "costMicros": 9318,
+          "normalizedMicros": 57909
+        },
+        "cascade": {
+          "costMicros": 9142,
+          "normalizedMicros": 44179
+        },
+        "costRatio": 0.9811118265722258,
+        "normalizedCostRatio": 0.7629038664110933,
+        "invoiceCostScreen": false,
+        "normalizedCostScreen": true,
+        "costScreen": false
+      },
+      "qualityMatchedCostScreen": false,
+      "liveDevelopmentLead": false,
+      "qualifiedProductionGain": false
+    },
+    "calls": [
+      {
+        "id": "history-d7c0556b1dde/repeat-0/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3056,
+        "normalizedMicros": 19253,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 440
+        },
+        "disposition": "complete",
+        "elapsedMs": 6131.774709000001
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-0/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 2349,
+        "normalizedMicros": 1922,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 17050,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 433
+        },
+        "disposition": "complete",
+        "elapsedMs": 3723.5972920000004
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-0/fallback",
+        "arm": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 2986,
+        "normalizedMicros": 19183,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 426
+        },
+        "disposition": "complete",
+        "elapsedMs": 6013.573041
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-1/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 326,
+        "normalizedMicros": 1861,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 310
+        },
+        "disposition": "complete",
+        "elapsedMs": 3070.1270000000004
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-1/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3131,
+        "normalizedMicros": 19328,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 455
+        },
+        "disposition": "complete",
+        "elapsedMs": 6502.068000000003
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-2/control",
+        "arm": "control",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3131,
+        "normalizedMicros": 19328,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 455
+        },
+        "disposition": "complete",
+        "elapsedMs": 6111.483
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-2/draft",
+        "arm": "draft",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 405,
+        "normalizedMicros": 1940,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 468
+        },
+        "disposition": "complete",
+        "elapsedMs": 4628.469750000004
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-2/fallback",
+        "arm": "fallback",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 3076,
+        "normalizedMicros": 19273,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 17050,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 444
+        },
+        "disposition": "complete",
+        "elapsedMs": 6067.166916999995
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "history-d7c0556b1dde/repeat-0",
+        "strategy": "strong",
+        "publicPassed": true,
+        "passed": true,
+        "escalated": false,
+        "costMicros": 3056,
+        "normalizedMicros": 19253,
+        "elapsedMs": 9242.057583
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-0",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "passed": true,
+        "escalated": true,
+        "costMicros": 5335,
+        "normalizedMicros": 21105,
+        "elapsedMs": 14141.040249999998
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-1",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "passed": false,
+        "escalated": false,
+        "costMicros": 326,
+        "normalizedMicros": 1861,
+        "elapsedMs": 5894.368834000001
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-1",
+        "strategy": "strong",
+        "publicPassed": true,
+        "passed": true,
+        "escalated": false,
+        "costMicros": 3131,
+        "normalizedMicros": 19328,
+        "elapsedMs": 9528.6155
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-2",
+        "strategy": "strong",
+        "publicPassed": true,
+        "passed": true,
+        "escalated": false,
+        "costMicros": 3131,
+        "normalizedMicros": 19328,
+        "elapsedMs": 8935.151000000005
+      },
+      {
+        "id": "history-d7c0556b1dde/repeat-2",
+        "strategy": "cascade",
+        "publicPassed": true,
+        "passed": true,
+        "escalated": true,
+        "costMicros": 3481,
+        "normalizedMicros": 21213,
+        "elapsedMs": 16751.092791000003
+      }
+    ],
+    "failure": "The one directly accepted cheap draft omitted required native test helpers, including test/helpers/cloudflare-response-clones.ts. All five negative preservation checks passed, but 12 full-suite tests failed. Both escalated drafts were recovered by fresh strong fallbacks.",
+    "terminalAuditSha256": "52a5ddcda9c0248bd8e019b2791fec170d65a5be5cce7667f4c4ba8bcf7ab279"
   }
 }
