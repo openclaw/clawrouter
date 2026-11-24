@@ -1,6 +1,7 @@
 # Changelog
 
 - Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+- Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
 
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
 

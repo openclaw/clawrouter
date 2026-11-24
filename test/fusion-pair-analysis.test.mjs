@@ -43,6 +43,25 @@ test('equal aggregate score cannot hide a lost strong-model repair', () => {
   assert.equal(report.controlOracleSolved, 2);
 });
 
+test('joint outcomes separate shared failures, rescues and lost control successes', () => {
+  const outcomes = [0, 1].flatMap(cheap => [0, 1].flatMap(strong => [0, 1].map(candidate => [cheap, strong, candidate])));
+  const report = analyzePairRun(fixture(outcomes));
+  assert.deepEqual(report.controlJointOutcomes, {
+    bothPassed: { candidatePassed: 1, candidateFailed: 1 },
+    cheapOnly: { candidatePassed: 1, candidateFailed: 1 },
+    strongOnly: { candidatePassed: 1, candidateFailed: 1 },
+    bothFailed: { candidatePassed: 1, candidateFailed: 1 },
+  });
+  assert.equal(report.controlOracleSolved, 6);
+  assert.equal(report.totals[2].solved, 4);
+  const repeated = analyzePairRepeats(repeats(outcomes));
+  assert.equal(repeated.distinctTasks, 8);
+  assert.equal(repeated.attemptsPerStrategy, 16);
+  for (const cell of Object.values(repeated.controlJointOutcomes)) {
+    assert.deepEqual(cell, { candidatePassed: 2, candidateFailed: 2 });
+  }
+});
+
 test('incomplete, missing, duplicate and unverified outcomes cannot yield a gain', () => {
   for (const mutate of [
     run => { run.complete = false; },
