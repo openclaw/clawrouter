@@ -399,6 +399,22 @@ execution of generated code. Adapter errors, malformed receipts, deadlines and
 cancellation stop the workflow rather than triggering fallback. This caller-side
 mode does not enable a Worker routing policy or establish a model-quality gain.
 
+For selector repairs, include preservation checks for inputs that must remain
+unselected. Build these checks from the baseline contract before generating a
+candidate, and run them for both strong controls and cheap drafts. Keep the
+original tests and check that the reference implementation passes the complete
+suite without skips. A dependency graph alone does not establish that every
+unreachable path should be excluded; qualify that invariant for the task.
+
+The [selector preservation study](fusion-selector-preservation-study.json)
+records a concrete failure: three cheap drafts passed the public tests but
+selected an unrelated provider operation. Five baseline-derived negative checks
+rejected all three saved drafts and retained all three correct strong answers.
+With the checks visible in a separate retest, both strategies passed all three
+repetitions. The cascade cost 53.7% less after cache normalization but took
+81.1% longer. This exposed-task result improved the verifier and met the cost
+screen; it failed the latency gate and does not establish a general model gain.
+
 For an informed fallback, set `fallbackMode: 'repair'` with `strategy: 'cascade'`.
 The second invocation receives a clone of the rejected artifact and its verifier
 receipt in `draft` and `feedback`. A missing artifact stays `null`. This mode still
