@@ -1,7 +1,5 @@
 # Changelog
 
-- Add opt-in Fusion grading for declared Node test timeouts, counting fully accounted timeouts as failures while rejecting unresolved cancellation.
-
 - Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
 
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
@@ -19,6 +17,8 @@
 - Report verified cascade studies: a tuned cost-saving development gain, a failed fresh-task confirmation, and quality recovery with feedback repair that still fails latency.
 
 - Allow an opt-in two-call cascade repair to pass the rejected artifact and verifier feedback to its fallback, preserving the fresh-fallback default.
+
+- Add opt-in Fusion grading for declared Node test timeouts, counting fully accounted timeouts as failures while rejecting unresolved cancellation.
 
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
