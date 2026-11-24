@@ -2356,3 +2356,47 @@ narrowing errors. These motivate testing bounded context from unchanged
 imported modules; they do not prove missing context caused the result. Any
 subsequent diagnostic on this exposed task must be reported separately from
 fresh-task evidence. No routing default or deployment changed.
+
+## Node-only cheap-first check, 2026-11-24
+
+A subsequent [Cloudflare KV provisioning repair](https://github.com/openclaw/clawrouter/pull/219)
+passed all 32 final tests with both GPT-6.2 Sol and GPT-6 Luna. The checked
+cheap-first policy retained the Luna draft and used **94.88% less model cost**
+than the direct strong control on this task. No planner or correction ran, so
+this is another cheap-sufficient result, not a collaboration capability gain.
+
+| Arm | Full tests passed | Public tests passed | Node syntax | Model cost | Model seconds |
+| --- | ---: | ---: | --- | ---: | ---: |
+| Direct GPT-6.2 Sol | 32/32 | 31/31 | Pass | $0.031546 | 9.527 |
+| Checked GPT-6 Luna | 32/32 | 31/31 | Pass | $0.001616 | 7.927 |
+
+The task was selected from a fixed local-history discovery order after excluding
+prior model-request exposure and unsuitable runtime candidates. The reference
+passed all 32 full and 31 public tests. The unchanged baseline executed the same
+counts, failing 22 full and 21 public tests. All suites had zero skips. One new
+test group was held out by the existing deterministic hash split before model
+calls; unchanged groups and two changed groups remained public.
+
+This used the existing cached Node 24.22.1 image with its entire source/dependency
+seed masked. Only two original script modules and one original JSON configuration
+file were copied in. The sandbox had no external network or host mounts, and
+candidate execution could not modify the protected tests. The original fixtures
+mocked child-process commands and Cloudflare fetches; no cloud resource was
+created. Node syntax checks do not constitute TypeScript type checking.
+
+Direct controls received identical public request bodies except model identity.
+The policy reused the Luna call, charged once across the experiment. Total new
+model spend was **$0.033162**. Model seconds exclude local verification and are
+not end-to-end latency. The planned strong/Luna planner comparison did not run
+because the cheap draft passed its public gate; duplicate policy result rows
+are not additional independent trials.
+
+The terminal audit replayed all requests, public decisions, full grades and
+accounting without new inference. Protocol SHA-256:
+`7d9569ab7a8f793a3dedcdcf76acb23903c718dd9486b1bba8ba3ed4a18d7c39`;
+audit SHA-256:
+`21c05d50b291cdf5706ad85569b25d3173ea4e7979ea7d8df2b73f87be2d281b`.
+These identify private receipts, not a bundled independent reproduction suite.
+This single convenience-sampled historical task does not establish statistical
+reliability, independence from model training, production savings or a routing
+default. It also did not exercise the new invalid-edit preservation behavior.
