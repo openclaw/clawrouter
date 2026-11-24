@@ -1,5 +1,7 @@
 # Changelog
 
+- Run OpenClaw consumer qualification when native fixture cleanup, catalog, observer or reporter helpers change on their own.
+
 - Discard malformed UTF-8 fusion adviser responses instead of silently altering their text.
 
 - Return DuckDuckGo HTML admission and read errors without waiting for stream cancellation.
