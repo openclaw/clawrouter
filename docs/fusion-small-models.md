@@ -2313,3 +2313,48 @@ editable file path, and either `no match` or `multiple matches`. It returns
 `undefined` for other errors, including errors with forged detail properties.
 The original batch remains unapplied; this helper does not loosen matching or
 include source snippets, replacement text, or raw exception messages.
+
+## Matched planner control, 2026-11-24
+
+A subsequent [managed-prediction state task](https://github.com/openclaw/clawrouter/pull/404)
+compared strong and cheap planners from the same Luna draft. Neither policy nor
+either direct model passed acceptance. This is a negative result, not a fusion
+capability gain or cost-saving success.
+
+| Arm | Full tests passed | Public tests passed | Compiler | Model cost |
+| --- | ---: | ---: | --- | ---: |
+| Direct strong | 1/9 | 1/6 | Pass | $0.117991 |
+| Direct Luna | 0/9 | 0/6 | Fail | $0.004717 |
+| Strong planner, Luna implementation | 1/9 | 1/6 | Fail | $0.098575 |
+| Luna planner, Luna implementation | 0/9 | 0/6 | Pass | $0.017599 |
+
+Both planner branches started from the identical original Luna candidate and
+public feedback. Their planner request bodies differed only in model identity;
+each could supply a plan, receive one Luna implementation and take at most one
+Luna correction. Both used all three calls. Neither branch received the other's
+plan or edits. All inference completed before any full-suite grading. This
+controls the additional planning opportunity, not equal dollars, random seeds
+or repeated samples. A one-test difference on one failed task cannot establish
+complementarity.
+
+The six-module task came from the existing fixed local-history discovery order.
+Its complete reference passed all nine full and six public tests and the
+compiler. Its complete baseline failed eight full and five public tests. One
+new module was explicitly declared; the normal complete-baseline admission
+passed without a construction exception. The dependency image was already
+cached. No runtime download or live provider integration was involved.
+
+All candidate suites completed with zero skips. Policy costs include the shared
+initial Luna draft; it was billed once across the experiment. Total new model
+spend was $0.229448. The terminal audit replayed requests, decisions, complete
+grades and accounting without new inference. Protocol SHA-256:
+`85bdee644677e7c160d249826b80741cf3c6a57d94ad724910c6196085eef7ce`;
+audit SHA-256:
+`8d5c410079a6c58514bc58c623d1fd5f9b5dd1dc24f93a7371666d8a52f29253`.
+These identify private receipts, not a bundled independent reproduction suite.
+
+Public failures included continuation/recovery interface misuse and type
+narrowing errors. These motivate testing bounded context from unchanged
+imported modules; they do not prove missing context caused the result. Any
+subsequent diagnostic on this exposed task must be reported separately from
+fresh-task evidence. No routing default or deployment changed.
