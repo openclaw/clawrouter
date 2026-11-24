@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "study": "shared-verifier-bench-v1",
+  "sourceSha": "c6f4e6e0a57f06e69b4ad44741f06d11757cfb28",
+  "protocolSha256": "67d9d016955d67ebbe759e804904cf3a9d79a9396d9fd3b4e6f7b27c3eeb90e7",
+  "resultSha256": "233458865efb43ee198b75b9ff5bba27c52c7af7a04d69fbf5f3222c7218835b",
+  "pairs": 16,
+  "trialsPerCandidate": 2,
+  "noPaidCalls": true,
+  "totalsMs": {
+    "shared": 25152.973080999993,
+    "separate": 38394.972044999995
+  },
+  "ratio": 0.6551111184954113,
+  "records": [
+    {
+      "id": "history-0b4dc5546417/strong",
+      "iteration": 0,
+      "separateMs": 2478.36825,
+      "sharedMs": 1614.3032080000003,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-0b4dc5546417/cascade",
+      "iteration": 0,
+      "separateMs": 2374.752375,
+      "sharedMs": 1495.3311249999997,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-96236f0715a2/cascade",
+      "iteration": 0,
+      "separateMs": 2326.200959,
+      "sharedMs": 1544.2578750000011,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-96236f0715a2/strong",
+      "iteration": 0,
+      "separateMs": 2394.4873339999995,
+      "sharedMs": 1479.9157919999998,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-de8f1a6212d1/strong",
+      "iteration": 0,
+      "separateMs": 2461.7008339999993,
+      "sharedMs": 1603.6494160000002,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-de8f1a6212d1/cascade",
+      "iteration": 0,
+      "separateMs": 2389.772499999999,
+      "sharedMs": 1615.3460830000004,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "compiler-negative-control",
+      "iteration": 0,
+      "separateMs": 2417.1693750000013,
+      "sharedMs": 1545.6930829999983,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": false
+    },
+    {
+      "id": "runtime-negative-control",
+      "iteration": 0,
+      "separateMs": 2409.693374999999,
+      "sharedMs": 1691.7952909999985,
+      "sameVerdict": true,
+      "testsPassed": false,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-0b4dc5546417/strong",
+      "iteration": 1,
+      "separateMs": 2446.560209000003,
+      "sharedMs": 1625.0461250000008,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-0b4dc5546417/cascade",
+      "iteration": 1,
+      "separateMs": 2377.9379999999946,
+      "sharedMs": 1538.2774580000041,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-96236f0715a2/cascade",
+      "iteration": 1,
+      "separateMs": 2341.8942499999976,
+      "sharedMs": 1432.5428329999995,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-96236f0715a2/strong",
+      "iteration": 1,
+      "separateMs": 2268.058917000002,
+      "sharedMs": 1606.471292000002,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-de8f1a6212d1/strong",
+      "iteration": 1,
+      "separateMs": 2408.1205000000045,
+      "sharedMs": 1720.8142919999955,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "history-de8f1a6212d1/cascade",
+      "iteration": 1,
+      "separateMs": 2466.5860840000023,
+      "sharedMs": 1567.9013750000013,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": true
+    },
+    {
+      "id": "compiler-negative-control",
+      "iteration": 1,
+      "separateMs": 2455.6287909999955,
+      "sharedMs": 1533.7484999999942,
+      "sameVerdict": true,
+      "testsPassed": true,
+      "compilerPassed": false
+    },
+    {
+      "id": "runtime-negative-control",
+      "iteration": 1,
+      "separateMs": 2378.040291999998,
+      "sharedMs": 1537.8793329999971,
+      "sameVerdict": true,
+      "testsPassed": false,
+      "compilerPassed": true
+    }
+  ],
+  "scope": "Six saved final artifacts plus compiler and runtime negative controls. Two paired trials, counterbalanced execution order, serial existing Docker images. Compare all semantic test fields and compiler verdict/diagnostics. Report measured verifier latency only, not end-to-end inference gains. No model calls, image builds or downloads."
+}
