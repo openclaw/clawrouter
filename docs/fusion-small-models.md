@@ -7,7 +7,9 @@ the mechanism before paying for another frontier-model comparison.
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
-It still requires disjoint confirmation and realistic latency measurement.
+The disjoint follow-up did not reproduce the cost advantage and exposed a
+malformed private fixture. Promotion still requires clean confirmation and
+realistic latency measurement.
 
 Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
 includes its tools, visible checks and sandbox cleanup. Grading time measures

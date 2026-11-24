@@ -6,6 +6,10 @@ once if requested. It passed all 12 tasks for 33.7% less model cost than the
 strong direct control. This is exploratory evidence, not a production-qualified
 gain or an official LiveCodeBench score. Production Fusion is unchanged.
 
+A disjoint confirmation did **not** reproduce the cost advantage: fusion cost
+2.4% more than strong direct. It also exposed an invalid upstream private input,
+so it cannot qualify the policy for promotion. See [the follow-up](#disjoint-confirmation).
+
 ## Results
 
 | Policy | Tasks passed | Model cost (USD) | Calls per task |
@@ -77,13 +81,58 @@ result records the source, protocol, qualification and terminal-audit hashes.
 The full local experiment sources and raw receipts are not published in this
 report, so those hashes are provenance anchors, not a standalone reproduction kit.
 
+## Disjoint confirmation
+
+A second fixed cohort used the next six medium and six hard tasks in the same
+identity-hash order, excluding every first-cohort task. The inference prompts,
+models, review policy and one-repair limit stayed unchanged. Before inference,
+the adapter excluded output contracts permitting arbitrary valid solutions and
+normalized case only where the problem explicitly allowed it. All 36 public
+and 192 selected private fixtures passed transport/assertion qualification.
+
+| Policy | Raw tasks passed | Model cost (USD) |
+| --- | ---: | ---: |
+| Luna direct | 8/12 | $0.019190 |
+| Sol 6.2 direct | 9/12 | $0.075106 |
+| Luna draft, Sol 6.2 review, optional Luna repair | 10/12 | $0.076897 |
+| Luna draft, Luna review, optional Luna repair | 9/12 | $0.032345 |
+
+All 52 paid calls are retained: 24 direct, 24 review and four repair, costing
+$0.165158 in total. Independent replay matched the grades and call ledger.
+Fusion lost none of strong direct's successes, but cost 2.4% more; it failed
+the predeclared quality-and-cost development screen. These are raw observed
+results, not a clean confirmation or a combined benchmark score.
+
+Post-run diagnosis found a private input for AtCoder `abc392_f` that violates
+the statement's `1 <= P_i <= i` insertion-position constraint. All four arms
+fail this case. It remains in the original result; no row was dropped and no
+score was recomputed to improve the result. The initial lookup control could
+pass this malformed fixture, which shows why transport/assertion qualification
+alone is insufficient. Semantic qualification for this cohort is now negative.
+A subsequent admission guard checks this known problem's size, token count and
+insertion ranges across all supplied fixtures before sampling. Its focused
+regressions pass; it is not a general validator for all dataset constraints.
+
+Another shared failure, AtCoder `abc390_d`, reproduced two `MemoryError`s for
+the small direct candidate under the unchanged sandbox limits. That result
+remains a failure. No extra memory, longer timeout or paid repair was introduced
+after viewing private results. Two weak candidates passed public checks but
+failed the full check, again showing the limits of public-only acceptance.
+
+The [structured result](fusion-livecodebench-study.json) retains the confirmation
+rows, costs and diagnostic status alongside the first study. Requested model
+ids are mutable, this remains adapted evaluation, and the new result does not
+establish a production latency or cost advantage.
+
 ## What to do next
 
 Keep this as a candidate for a caller-side coding workflow, not a new default
 routing policy. The current `clawrouter/fusion` adviser/synthesizer implementation
 is a different topology; these results do not measure it.
 
-Freeze a disjoint task cohort and repeat the unchanged policy before tuning it.
+Qualify fixture validity on a clean disjoint cohort before another paid run.
+The first disjoint attempt exposed a data defect; it must not be used as
+promotion evidence. Repeat the unchanged policy on qualified data before tuning it.
 Include the same direct and self-review controls, plus a separately declared
 public-test-gated cascade. Measure complete end-to-end execution latency and
 all charged calls. Use repeated trials to expose sampling variance, then test

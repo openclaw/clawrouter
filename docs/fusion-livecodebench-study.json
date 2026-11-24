@@ -450,5 +450,336 @@
         }
       }
     }
-  ]
+  ],
+  "confirmation": {
+    "date": "2026-11-24",
+    "claim": "cost advantage not confirmed; cohort has a known invalid input fixture",
+    "sourceCommit": "8df158b",
+    "cohortProtocolSha256": "415e41f0f56251bc2198fced320a2495dd78f1be3510bfa2a0e1e510875402c3",
+    "trialProtocolSha256": "115c5d523582fd5469be794d4b632f15cccced0349825dc11eee30a54ca2e74a",
+    "terminalAuditSha256": "912f83455398618965536ca6b4f2ca45849cc50910b5eeb145491b071401e663",
+    "arms": {
+      "weak": {
+        "passed": 8,
+        "costMicros": 19190
+      },
+      "strong": {
+        "passed": 9,
+        "costMicros": 75106
+      },
+      "fusion": {
+        "passed": 10,
+        "costMicros": 76897
+      },
+      "self-review": {
+        "passed": 9,
+        "costMicros": 32345
+      }
+    },
+    "lostStrongSuccesses": 0,
+    "developmentLead": false,
+    "qualifiedFusionGain": false,
+    "uniquePaidCalls": 52,
+    "uniquePaidCostMicros": 165158,
+    "publicTests": 36,
+    "privateTests": 192,
+    "semanticQualification": {
+      "qualified": false,
+      "invalidTask": "lcb-0efeb39688c9f7e6",
+      "identity": "atcoder:abc392_f",
+      "reason": "One private input violates the stated insertion-position constraint 1 <= P_i <= i; all four arms fail this case. Original rows remain included.",
+      "resourceFailureTask": "lcb-8c6655d5976c7227",
+      "resourceDiagnostic": "Weak direct reproduces two MemoryErrors under the unchanged sandbox memory limit. No limits or scores changed."
+    },
+    "tasks": [
+      {
+        "id": "lcb-be14234239be4091",
+        "identity": "atcoder:abc394_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 156
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 2554
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2020
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 325
+          }
+        }
+      },
+      {
+        "id": "lcb-bfac4b1c5fa9c9eb",
+        "identity": "atcoder:abc391_g",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 1025
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 4920
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 4206
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 1408
+          }
+        }
+      },
+      {
+        "id": "lcb-cd818803e439934b",
+        "identity": "atcoder:abc389_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 458
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 3824
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2006
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 662
+          }
+        }
+      },
+      {
+        "id": "lcb-93def410927273a3",
+        "identity": "atcoder:arc194_b",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 4054
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 4926
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 8114
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 6188
+          }
+        }
+      },
+      {
+        "id": "lcb-266fe38d19f1513e",
+        "identity": "atcoder:abc398_b",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 130
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 1972
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 1718
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 236
+          }
+        }
+      },
+      {
+        "id": "lcb-af077693d2fbd602",
+        "identity": "atcoder:arc192_b",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": true,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 4183
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 11264
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 17400
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 6320
+          }
+        }
+      },
+      {
+        "id": "lcb-2b1d4243ad68d535",
+        "identity": "atcoder:arc191_a",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 2047
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 6222
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 12240
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 4181
+          }
+        }
+      },
+      {
+        "id": "lcb-44f5c17dc47c4915",
+        "identity": "atcoder:abc399_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 341
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 5416
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 2503
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 516
+          }
+        }
+      },
+      {
+        "id": "lcb-8c6655d5976c7227",
+        "identity": "atcoder:abc390_d",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 1425
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 10238
+          },
+          "fusion": {
+            "passed": false,
+            "costMicros": 6561
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 2571
+          }
+        }
+      },
+      {
+        "id": "lcb-8dd19a6267cf5c17",
+        "identity": "atcoder:abc394_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": true,
+            "costMicros": 2029
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 7370
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 6688
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 2956
+          }
+        }
+      },
+      {
+        "id": "lcb-4e05613bca9ac884",
+        "identity": "atcoder:arc192_a",
+        "difficulty": "medium",
+        "caseInsensitiveOutput": true,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 2917
+          },
+          "strong": {
+            "passed": true,
+            "costMicros": 10706
+          },
+          "fusion": {
+            "passed": true,
+            "costMicros": 11030
+          },
+          "self-review": {
+            "passed": true,
+            "costMicros": 6267
+          }
+        }
+      },
+      {
+        "id": "lcb-0efeb39688c9f7e6",
+        "identity": "atcoder:abc392_f",
+        "difficulty": "hard",
+        "caseInsensitiveOutput": false,
+        "outcomes": {
+          "weak": {
+            "passed": false,
+            "costMicros": 425
+          },
+          "strong": {
+            "passed": false,
+            "costMicros": 5694
+          },
+          "fusion": {
+            "passed": false,
+            "costMicros": 2411
+          },
+          "self-review": {
+            "passed": false,
+            "costMicros": 715
+          }
+        }
+      }
+    ]
+  }
 }
