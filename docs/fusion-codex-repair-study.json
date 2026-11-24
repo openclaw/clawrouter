@@ -343,5 +343,77 @@
     "Previously unexercised refers to this experiment history, not model pretraining exclusion.",
     "Reference-derived public tests simulate a supplied task contract. One held-out test provides limited protection against overfitting.",
     "No production traffic, deployment, or default enablement."
-  ]
+  ],
+  "publicFeedbackProbe": {
+    "scope": "Outcome-informed feasibility probe on the two rejected cheap drafts from the paired experiment. No new strong controls; it is not a paired savings comparison.",
+    "sourceCommit": "a6aee6dfa60c41fb3476b5001cc1f56140a89b3a",
+    "protocolSha256": "d24f9b8eede1cd82ce6da4159fb652b80cca4de1fda16903c6236c3d3817a6be",
+    "resultSha256": "5dba5951a9a8474db4736493ff5e533482bf513dd5a72f667efb13e8833f26d5",
+    "terminalAuditSha256": "b6cdc6f0ec8658787b6b9b2bdc1facb4953877490d7e209b087489528629fbe0",
+    "method": "One additional medium-Luna call per rejected draft. Original baseline and public tests, rejected candidate and actual public-test feedback only. Complete edit lists target the original baseline. Both calls finish before grading. Hidden tests and strong answers are excluded.",
+    "costMicros": 6738,
+    "rows": [
+      {
+        "id": "history-b658997ad0f8/repeat-0",
+        "decoded": true,
+        "publicPassed": false,
+        "passed": false,
+        "costMicros": 3484,
+        "normalizedMicros": 2991,
+        "publicTests": {
+          "valid": true,
+          "tests": 11,
+          "failures": 4,
+          "skipped": 0
+        },
+        "fullTests": {
+          "valid": true,
+          "tests": 12,
+          "failures": 5,
+          "skipped": 0
+        }
+      },
+      {
+        "id": "history-b658997ad0f8/repeat-1",
+        "decoded": false,
+        "publicPassed": false,
+        "passed": false,
+        "costMicros": 3254,
+        "normalizedMicros": 2761,
+        "publicTests": null,
+        "fullTests": null
+      }
+    ],
+    "calls": [
+      {
+        "id": "history-b658997ad0f8/repeat-0/small-public-repair",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 3484,
+        "normalizedMicros": 2991,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 19706,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 2039
+        },
+        "disposition": "complete"
+      },
+      {
+        "id": "history-b658997ad0f8/repeat-1/small-public-repair",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 3254,
+        "normalizedMicros": 2761,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 19709,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 1579
+        },
+        "disposition": "complete"
+      }
+    ],
+    "conclusion": "Neither repair passed. One decoded repair regressed to four public failures and five full failures; the other returned an edit whose search did not match exactly once. Both model responses completed without truncation. Reject an unconditional small-model retry as the recovery policy; keep the prior strong fallback."
+  }
 }
