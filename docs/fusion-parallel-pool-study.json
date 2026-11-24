@@ -1,0 +1,367 @@
+{
+  "schemaVersion": 1,
+  "study": "Live eager three-candidate pool on upload ownership repair",
+  "scope": "One previously exposed historical task, three paired repetitions. Development comparison only. No unseen-task, collaboration-synergy or production gain claim.",
+  "task": {
+    "id": "history-7fdb64c885ce",
+    "baseCommit": "6cd3c1c1c31bac9445588e6270e0608244d5225b",
+    "referenceCommit": "7fdb64c885ced889b4c737e414f043ae0fb5114f",
+    "sourcePaths": [
+      "worker/minimax-music-cover-upload.ts"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "a4f02c9e89f3a40401473b4149580579f3dbde32",
+    "poolImplementationCommit": "416ccc44bec6889c977179c32d2e31d0457124c8",
+    "protocolSha256": "5af899b1f64a061a0e865ee927f6d2326762fe0a5ff4cc29588826b7b090b0af",
+    "resultSha256": "4ddbee23757c5c0094d50b8f1bb8038abdf926fc68611fc917eec99b142bc6ec",
+    "terminalAuditSha256": "1b317a7244828a31eb48868d79b2beedb03ade52575607b6f8052da1cd0e8b6d",
+    "parentProtocolSha256": "b883b01c4ffe4ea92e0d32956b35e96d0bfb6f8d52700db9e1988c2b0357e7a2",
+    "parentResultSha256": "b147b678e928b20a6a996cfc1ac78d69288550f27d5bb7f68366ecba1e94a765",
+    "parentTerminalAuditSha256": "fb82cd027cacc3b43041cd61316baff788752af525790596ca1f25ce8f90c7f4"
+  },
+  "method": {
+    "strong": "One low-reasoning Terra generation per trial; 8192 output-token cap. No retry.",
+    "pool": "Three independent medium-reasoning Luna generations per trial; 4096 output-token cap each. Identical public input, concurrent requests, no shared drafts or retries.",
+    "selection": "Wait for all generations, then verify candidates in index order and select the first public pass. Charge all three candidates even when later ones are unused.",
+    "asymmetry": "Three cheap generations versus one strong generation. Call counts differ deliberately; the comparison charges every call and does not claim matched attempt ceilings.",
+    "controls": "Identical baseline, context, public tests and exact-lock runtime. Alternate arm order across trials. Original regression remains final-only and is graded after all model calls. Every accepted candidate must compile.",
+    "elapsed": "Measured per-arm sequential wall time includes generation, decoding, child usage audit and public verification. The separately executed full grading and final replay audit are excluded from both arms.",
+    "cost": "Integer microUSD estimates from recorded provider usage and frozen tariffs, not invoices. Cache-neutral normalization prices all input at the base rate. Actual runs retain their observed cache effects.",
+    "limits": "The task and three-candidate strategy were selected using prior development evidence. Three trials on one task do not give task-clustered confidence. Candidate agreement is not independence. Public checks were regression-informed. Raw private artifacts are retained by hash; this report is not a standalone reproduction bundle."
+  },
+  "verification": {
+    "publicTests": 13,
+    "fullTests": 14,
+    "compilerRequired": true,
+    "allParallelOverlapsVerified": true,
+    "overlaps": [
+      {
+        "id": "history-7fdb64c885ce/repeat-0",
+        "threeRequestsOverlap": true
+      },
+      {
+        "id": "history-7fdb64c885ce/repeat-1",
+        "threeRequestsOverlap": true
+      },
+      {
+        "id": "history-7fdb64c885ce/repeat-2",
+        "threeRequestsOverlap": true
+      }
+    ]
+  },
+  "records": [
+    {
+      "id": "history-7fdb64c885ce/repeat-0",
+      "strategy": "strong",
+      "publicPassed": true,
+      "selectedIndex": null,
+      "steps": [
+        {
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 1699,
+      "elapsedMs": 10345.891749999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 15955
+    },
+    {
+      "id": "history-7fdb64c885ce/repeat-0",
+      "strategy": "pool",
+      "publicPassed": true,
+      "selectedIndex": 0,
+      "steps": [
+        {
+          "index": 0,
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 2423,
+      "elapsedMs": 13958.622792,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 6475
+    },
+    {
+      "id": "history-7fdb64c885ce/repeat-1",
+      "strategy": "pool",
+      "publicPassed": true,
+      "selectedIndex": 0,
+      "steps": [
+        {
+          "index": 0,
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 3293,
+      "elapsedMs": 18716.433415999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 7345
+    },
+    {
+      "id": "history-7fdb64c885ce/repeat-1",
+      "strategy": "strong",
+      "publicPassed": true,
+      "selectedIndex": null,
+      "steps": [
+        {
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 1439,
+      "elapsedMs": 7937.734457999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 15695
+    },
+    {
+      "id": "history-7fdb64c885ce/repeat-2",
+      "strategy": "strong",
+      "publicPassed": true,
+      "selectedIndex": null,
+      "steps": [
+        {
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 2359,
+      "elapsedMs": 9642.676500000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 16615
+    },
+    {
+      "id": "history-7fdb64c885ce/repeat-2",
+      "strategy": "pool",
+      "publicPassed": true,
+      "selectedIndex": 0,
+      "steps": [
+        {
+          "index": 0,
+          "runtimePassed": true,
+          "compilerPassed": true
+        }
+      ],
+      "costMicros": 2014,
+      "elapsedMs": 13618.001875000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 14,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "passed": true,
+      "normalizedMicros": 6066
+    }
+  ],
+  "calls": [
+    {
+      "key": "0-strong",
+      "costMicros": 1699,
+      "normalizedMicros": 15955
+    },
+    {
+      "key": "0-pool-1",
+      "costMicros": 740,
+      "normalizedMicros": 2091
+    },
+    {
+      "key": "0-pool-2",
+      "costMicros": 826,
+      "normalizedMicros": 2177
+    },
+    {
+      "key": "0-pool-0",
+      "costMicros": 857,
+      "normalizedMicros": 2207
+    },
+    {
+      "key": "1-pool-2",
+      "costMicros": 981,
+      "normalizedMicros": 2332
+    },
+    {
+      "key": "1-pool-0",
+      "costMicros": 1059,
+      "normalizedMicros": 2409
+    },
+    {
+      "key": "1-pool-1",
+      "costMicros": 1253,
+      "normalizedMicros": 2604
+    },
+    {
+      "key": "1-strong",
+      "costMicros": 1439,
+      "normalizedMicros": 15695
+    },
+    {
+      "key": "2-strong",
+      "costMicros": 2359,
+      "normalizedMicros": 16615
+    },
+    {
+      "key": "2-pool-0",
+      "costMicros": 419,
+      "normalizedMicros": 1770
+    },
+    {
+      "key": "2-pool-1",
+      "costMicros": 728,
+      "normalizedMicros": 2078
+    },
+    {
+      "key": "2-pool-2",
+      "costMicros": 867,
+      "normalizedMicros": 2218
+    }
+  ],
+  "totals": {
+    "strong": {
+      "costMicros": 5497,
+      "normalizedMicros": 48265,
+      "elapsedMs": 27926.302708,
+      "fullPasses": 3
+    },
+    "pool": {
+      "costMicros": 7730,
+      "normalizedMicros": 19886,
+      "elapsedMs": 46293.058082999996,
+      "fullPasses": 3
+    }
+  },
+  "poolToStrongRatios": {
+    "costMicros": 1.4062215754047662,
+    "normalizedMicros": 0.4120169895369315,
+    "elapsedMs": 1.6576866106138177
+  },
+  "accounting": {
+    "calls": 12,
+    "newCostMicros": 13227,
+    "cumulativeCostMicros": 312469314,
+    "remainingMicros": 87530686,
+    "campaignCapMicros": 400000000,
+    "maximumReservedMicros": 441450
+  },
+  "decision": {
+    "qualityMatched": true,
+    "bothCostMeasuresPass": false,
+    "latencyPass": false,
+    "qualifiedProductionGain": false,
+    "reason": "Both arms pass all three full suites. The pool is 58.80% cheaper on cache-neutral normalization, but 40.62% more expensive on recorded cache-sensitive cost estimates and 65.77% slower. Candidate zero wins in every trial; the extra two candidates add no demonstrated quality benefit.",
+    "action": "Reject eager three-candidate fan-out as a default. Keep the executor opt-in. Any staged or early-verification alternative requires a new frozen live comparison; do not infer its latency from this run.",
+    "productionGate": "30 unseen real tasks with three trials each, task-clustered uncertainty and unchanged quality/cost/latency controls remain required.",
+    "deployment": "None. No routing default or production configuration changed."
+  }
+}

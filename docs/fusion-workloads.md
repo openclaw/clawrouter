@@ -285,3 +285,24 @@ include the public root certificates bundled with Node for workerd startup. The
 container still has no network, host mounts, elevated capabilities or writable
 dependency tree. Run the native fixture smoke check with `FUSION_NATIVE_IMAGE`
 set to the immutable qualified image ID.
+
+
+### Public verification before compilation
+
+Caller-side workflows can use `verifyPublicCandidate` from
+`scripts/fusion-public-verification.mjs` to run public tests before compiling.
+The caller supplies its isolated sandbox, test runner, compiler and qualified
+expected test count. Only a valid, passing run with exactly that count and no
+skips reaches the compiler. A rejected test run returns `compiler.passed: false`
+and `compiler.skipped: true`; this means unexecuted, not a compiler failure.
+Every accepted candidate still requires successful compilation. The helper
+closes the sandbox after either path and propagates checker and cleanup errors.
+
+Pass the helper's qualified `runtimePassed` and `compiler.passed` to the
+caller-side verified workflow as `runtimePassed` and `compilerPassed`,
+respectively. Do not use the raw `tests.passed` flag; it omits count, validity and
+skip checks. Keep the original full
+acceptance suite after the workflow. This helper is opt-in and changes no
+production routing defaults. Its cached-artifact measurement is in
+[`fusion-public-verification-study.json`](fusion-public-verification-study.json);
+those local verifier timings do not establish end-to-end model latency savings.
