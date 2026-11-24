@@ -9,9 +9,32 @@ export function affectsOpenClawContract(path) {
     || path === "packages/provider-plugin-contract/tsconfig.json"
     || path === "packages/provider-plugin-contract/copy-manifest-schema.mjs"
     || path.startsWith("providers/")
+    || path.startsWith("scripts/provider-validation/")
     || /^test\/openclaw-[^/]*\.test\.mjs$/.test(path)
     || /^test\/fixtures\/openclaw-[^/]*-contract\.test\.ts$/.test(path)
     || ["test/helpers/openclaw-consumer.mjs", "test/helpers/workerd.mjs", "test/helpers/catalog-diagnostic-harness.mjs",
+      "test/helpers/cloudflare-response-clones.ts",
+      "wrangler.toml",
+      "scripts/provider-compiler.mjs",
+      "scripts/provider-auth.mjs",
+      "scripts/provider-catalogs.mjs",
+      "scripts/provider-endpoints.mjs",
+      "scripts/provider-lifecycles.mjs",
+      "scripts/provider-models.mjs",
+      "scripts/provider-offers.mjs",
+      "scripts/provider-pricing.mjs",
+      "scripts/provider-products.mjs",
+      "scripts/provider-quota.mjs",
+      "test/helpers/fixture-cleanup.mjs",
+      "test/helpers/openclaw-catalog-variant.mjs",
+      "test/helpers/openclaw-google-text.mjs",
+      "test/helpers/qianfan-memory.mjs",
+      "test/helpers/openclaw-baseten-guard-observer.mjs",
+      "test/helpers/openclaw-pixverse-guard-observer.mjs",
+      "test/helpers/openclaw-vydra-guard-observer.mjs",
+      "test/helpers/openclaw-private-execution-observer.mjs",
+      "test/helpers/openclaw-qwen-callsite-observer.mjs",
+      "test/helpers/openclaw-runner-reporter.mjs",
       ".github/workflows/openclaw-contract.yml", "scripts/openclaw-contract-changes.mjs",
       "test/openclaw-contract-changes.test.mjs", "pnpm-lock.yaml", "pnpm-workspace.yaml", "test/helpers/worker-outcome-fixture.mjs"].includes(path)
     || /(^|\/)package\.json$/.test(path)
