@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 1,
+  "study": "Capability declaration repair with a verified cheap-first policy",
+  "scope": "One previously model-unexercised historical repair, three paired repetitions. Same provider-plugin subsystem as the YAML study, but a different source and bug. One task cluster; no generalization or production claim.",
+  "task": {
+    "id": "history-960b2b622bf9",
+    "baseCommit": "5e8c1501607011f66ae02f3a48c7eee9c344d4c9",
+    "referenceCommit": "960b2b622bf99bd6bf2ef0de01af41808443b9a6",
+    "sourcePaths": [
+      "scripts/validate-provider-conformance.mjs"
+    ],
+    "testPaths": [
+      "test/provider-conformance-validation.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "e2a90b2249366cd7cb1793b91e11033f5c16a857",
+    "protocolSha256": "45af186e1cb21240a0b8d6d0e5d4a2427d0f5f6e9b77c4b7ee11ec997a4458ed",
+    "resultSha256": "b9002431a58625500035d9ae21604b6638c32dff13dd2600b1ddaf46b2732ff5",
+    "terminalAuditSha256": "72bd8b709d79e4119c022f98b0e8ee71ec6ff87f558a740be77b03a2d1f776ff",
+    "qualificationProtocolSha256": "f407e0d1d2469f8193ce81716da6893e0d2434cdbae7b3fb9bc9b263ff52ed31",
+    "qualificationResultSha256": "9ead0c5423bd1941f660b9e25a5b5e4025105e9b761ed4eb6b9a4bab3b4f0dfa"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Alternating arm order, matched two-attempt ceilings, same original source and public tests. A failed draft requires fresh strong fallback. All calls finish before full grading. Every edit applies to the original baseline.",
+    "context": "Both arms receive the original editable module, baseline provider template, descriptor, example fixture and plugin contract. Original stateful regression is excluded from requests.",
+    "qualification": "The cached task was previously excluded because its stateful regression cannot be split safely. Both suites preserve all baseline tests. A new public HEAD-before-POST reproduction is appended to both suites; the full suite also retains the complete original regression, including order reversal and an alternate method. The reproduction was authored after reading that regression; it is not independently authored evidence.",
+    "runtime": "Existing immutable exact-lock runtime; original repository tests plus Worker compilation. No downloads or additional compute allocation.",
+    "cost": "Integer microUSD estimates from recorded usage and frozen tariffs. Cache-neutral normalization prices all input at the base rate. These are estimates, not provider invoices.",
+    "elapsed": "Per-arm wall-clock time includes generation and public verification.",
+    "gates": "Full correctness with zero false accepts and at least 20% savings on both cost measures. Development lead additionally requires a successful fallback rescue and elapsed ratio <=1.2. Thresholds are unchanged.",
+    "reproducibility": "Hashes identify retained private protocols and raw proof. This report is an audited observation, not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 8,
+      "failures": 0,
+      "skipped": 0
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 8,
+      "failures": 2,
+      "skipped": 0
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 7,
+      "failures": 1,
+      "skipped": 0
+    }
+  },
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 10474,
+      "elapsedMs": 30085.754332999997
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 1273,
+      "elapsedMs": 19042.276707999998
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 0,
+    "escalations": 0,
+    "costRatio": 0.12153904907389727,
+    "elapsedRatio": 0.6329333310786627,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 10474,
+        "normalizedMicros": 19356
+      },
+      "cascade": {
+        "costMicros": 1273,
+        "normalizedMicros": 2107
+      },
+      "costRatio": 0.12153904907389727,
+      "normalizedCostRatio": 0.10885513535854516,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "rows": [
+    {
+      "id": "history-960b2b622bf9/repeat-0",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 7798,
+      "normalizedMicros": 6452,
+      "elapsedMs": 10505.298583,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-960b2b622bf9/repeat-0",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 856,
+      "normalizedMicros": 722,
+      "elapsedMs": 6495.0679169999985,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-960b2b622bf9/repeat-1",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 217,
+      "normalizedMicros": 701,
+      "elapsedMs": 6299.690500000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-960b2b622bf9/repeat-1",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1338,
+      "normalizedMicros": 6452,
+      "elapsedMs": 9397.610250000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-960b2b622bf9/repeat-2",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1338,
+      "normalizedMicros": 6452,
+      "elapsedMs": 10182.845499999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-960b2b622bf9/repeat-2",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 200,
+      "normalizedMicros": 684,
+      "elapsedMs": 6247.518291,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 8,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    }
+  ],
+  "calls": [
+    {
+      "stage": "case-0/strong/control",
+      "protocolSha256": "a6b0327761f8a12e2fcc7149548766e6e79ce12a69b080f4b47b391c8cf22401",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7798,
+      "normalizedMicros": 6452,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 5384,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 213
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-0/cascade/draft",
+      "protocolSha256": "ed40290ff832c5fa54e208ab5e8c4dff4962c98f1a933f9cfa76177b3fbdb079",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 856,
+      "normalizedMicros": 722,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 5384,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 365
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/cascade/draft",
+      "protocolSha256": "1cd4c4d0c61dab8e609e649d4a68a19b3eec807c4d947d22179d53402f9e2ecb",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 217,
+      "normalizedMicros": 701,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 5384,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 324
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/strong/control",
+      "protocolSha256": "db5593a857b9f5b1b51984f2755123cd99f0958c8390279b5be69e0c7eed78cb",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 1338,
+      "normalizedMicros": 6452,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 5384,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 213
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/strong/control",
+      "protocolSha256": "fb2df5334712a292d73d488b88bf5ec6b902f7560ebf3c94228780e31e35598e",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 1338,
+      "normalizedMicros": 6452,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 5384,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 213
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/cascade/draft",
+      "protocolSha256": "84eaaa107c78fe7bba40c5e5f65c12c3c6f3bd18f03447cc38d6cbf2e5d3d86d",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 200,
+      "normalizedMicros": 684,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 5384,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 290
+      },
+      "disposition": "complete"
+    }
+  ],
+  "conclusion": "Both arms passed 3/3 full evaluations. All three small-model drafts passed directly. Normalized cost fell 89.1% and elapsed time fell 36.7%. This is a task-level cost-and-latency gain for verified cheap-first execution. No fallback was exercised, so the complete development gate remains false. It demonstrates useful small-model execution, not a gain from multiple models collaborating on an answer.",
+  "limitations": [
+    "Three repetitions are one task cluster, not three independent tasks or the required 30-task confirmation.",
+    "Previously unexercised refers to recorded experiment history, not model pretraining exclusion.",
+    "The public reproduction was constructed after inspecting historical regression semantics. Final-only examples do not make this independently authored validation.",
+    "No fallback robustness evidence from this run; no production traffic, deployment or default enablement."
+  ]
+}
