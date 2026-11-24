@@ -11,7 +11,7 @@ The fixed cohort contains six medium functional tasks and four hard stdin
 tasks from cached LiveCodeBench data. All ten had appeared in earlier research.
 This is a development replication, not an independent confirmation cohort.
 Task order uses a fixed identity hash; direct-first and cascade-first ordering
-alternate. Each arm receives the same task and public examples, with medium
+alternate. Each arm receives the same task and public examples, with low
 reasoning effort and an 8,192-token output limit.
 
 Terra direct makes one call. The cascade calls Luna, runs public checks, and
