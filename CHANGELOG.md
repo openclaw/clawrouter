@@ -1,5 +1,7 @@
 # Changelog
 
+- Record a 16-pair verifier benchmark with unchanged verdicts and lower measured sandbox overhead; keep it separate from model-quality claims.
+
 - Report the harder repository cascade failure and a baseline-test fixture correction, retaining the failed quality, cost and latency results.
 
 - Report fresh-fallback timing limits and a qualified cheap-execution gain on two real repository repairs, without claiming collaboration or production efficacy.

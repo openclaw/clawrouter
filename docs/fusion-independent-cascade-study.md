@@ -391,6 +391,22 @@ used no additional model calls and is not an improved end-to-end result.
 The two earlier cleanup successes do not establish hard-task capability.
 Public acceptance coverage remains an unresolved limit on this cascade.
 
+## Verification overhead
+
+A separate [model-free paired benchmark](fusion-shared-verifier-study.json)
+compared separate runtime-test and TypeScript sandboxes with one shared,
+protected sandbox that performs both checks serially. The source and runtime
+pins, test protection, compiler options and cleanup requirements stayed fixed.
+Six saved final answers and two deliberate failure controls ran twice each,
+with the execution order reversed between trials.
+
+All 16 pairs produced identical test grades and compiler verdicts/diagnostics.
+The controls retained runtime rejection and compiler-only rejection. Aggregate
+verification time fell from 38.395 seconds to 25.153 seconds, a 34.49% reduction.
+This is a local verifier measurement, not an end-to-end model result. It does
+not establish lower inference cost, fix false acceptance or qualify fusion for
+production. No model calls were used for this benchmark.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
