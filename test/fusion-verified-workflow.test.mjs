@@ -12,6 +12,50 @@ function fixture(verdicts) {
     verify: async ({ stage }) => verdicts[stage] ?? good,
     onStep: step => { receipts.push(step); } };
 }
+test('cascade accepts a verified draft with only two configured models', async () => {
+  const f = fixture({});
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', models: { draft: models.draft, repair: models.repair } });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 7);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft']);
+});
+test('cascade starts a fresh verified fallback and accounts for both attempts', async () => {
+  const f = fixture({ draft: runtimeError });
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade' });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 14);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'strong-fallback']);
+  assert.equal(f.requests[1].model, models.repair);
+  assert.equal(f.requests[1].draft, null); assert.equal(f.requests[1].feedback, null);
+  assert.deepEqual(f.receipts.map(x => x.runtimePassed), [false, true]);
+});
+test('cascade stops after a failed fallback without calling specialist models', async () => {
+  const f = fixture({ draft: typeError, 'strong-fallback': runtimeError });
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', models: {
+    ...models, runtimeRepair: 'provider-d/runtime', admissionRepair: 'provider-e/admission',
+  } });
+  assert.equal(r.passed, false); assert.equal(r.costMicros, 14);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'strong-fallback']);
+});
+test('cascade treats a declared unusable draft as a failed attempt', async () => {
+  const f = fixture({}), invoke = f.invoke;
+  f.invoke = async request => request.stage === 'draft'
+    ? (f.requests.push(request), { artifact: null, costMicros: 5 }) : invoke(request);
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade' });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 12); assert.equal(f.requests.length, 2);
+});
+test('cascade never interprets adapter errors or cancellation as permission to spend again', async () => {
+  for (const origin of ['invoke', 'verify']) {
+    const f = fixture({}), calls = [];
+    const invoke = f.invoke;
+    f.invoke = async request => { calls.push(request.stage); if (origin === 'invoke') throw Error('adapter_failed'); return invoke(request); };
+    if (origin === 'verify') f.verify = async () => { throw Error('adapter_failed'); };
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade' }), /adapter_failed/);
+    assert.deepEqual(calls, ['draft']);
+  }
+  const controller = new AbortController(), f = fixture({ draft: runtimeError });
+  f.onStep = () => { controller.abort(Error('stop_after_draft')); };
+  await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', signal: controller.signal }), /stop_after_draft/);
+  assert.equal(f.requests.length, 1);
+});
 test('passing draft returns without calling another provider or exposing content in step receipts', async () => {
   const f = fixture({}); const r = await runVerifiedWorkflow(f);
   assert.equal(r.passed, true); assert.equal(r.costMicros, 7); assert.equal(f.requests.length, 1);

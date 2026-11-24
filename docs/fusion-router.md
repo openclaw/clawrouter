@@ -372,6 +372,33 @@ fails, the strong model starts again from the original task and can make one
 final repair. The maximum is six model calls. Set `strategy: 'strong'` for a
 two-call control using only the repair model.
 
+Set `strategy: 'cascade'` for a verified draft followed by at most one fresh
+fallback. This mode requires only `models.draft` and `models.repair`. It keeps
+a draft only when both verification checks pass. Otherwise it calls the repair
+model with the original task context supplied by your adapter, with `draft`
+and `feedback` set to `null`, then verifies that answer. It does not call the
+compiler or specialist models. Both attempts count toward cost and elapsed
+time, including a draft explicitly returned as `artifact: null`.
+
+```js
+const result = await runVerifiedWorkflow({
+  strategy: 'cascade',
+  models: { draft: 'provider/cheap-model', repair: 'provider/fallback-model' },
+  invoke,
+  verify,
+  signal,
+});
+if (!result.passed) {
+  // Handle the failed verification; no further model call is automatic.
+}
+```
+
+The verifier defines what this cascade can safely accept. Public examples alone
+can miss incorrect answers. Supply checks appropriate to your task and isolate
+execution of generated code. Adapter errors, malformed receipts, deadlines and
+cancellation stop the workflow rather than triggering fallback. This caller-side
+mode does not enable a Worker routing policy or establish a model-quality gain.
+
 Optionally set `models.runtimeRepair` to a specialist model identifier. When
 the original draft fails runtime checks but passes compilation, the workflow
 calls that model once with the saved draft and verification feedback, using

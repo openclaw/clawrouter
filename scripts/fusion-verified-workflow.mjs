@@ -24,9 +24,11 @@ async function bounded(signal, operation) {
  */
 export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () => {}, strategy = 'fusion',
   deadlineMs = 900000, signal: callerSignal }) {
-  if (!['fusion', 'strong'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
+  const requiredModels = strategy === 'cascade' ? ['draft', 'repair'] : ['draft', 'repair', 'compiler'];
+  if (!['fusion', 'strong', 'cascade'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
-    || !models || ['draft', 'repair', 'compiler'].some(k => !validModel(models[k]))
+    || !models || requiredModels.some(k => !validModel(models[k]))
+    || (models.compiler !== undefined && !validModel(models.compiler))
     || (models.runtimeRepair !== undefined && !validModel(models.runtimeRepair))
     || (models.admissionRepair !== undefined && !validModel(models.admissionRepair))) {
     throw new Error('invalid_verified_workflow');
@@ -35,7 +37,7 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
   const started = performance.now(), steps = []; let totalCostMicros = 0;
   async function attempt(stage, model, previous = null) {
-    if (steps.length >= (strategy === 'strong' ? 2 : 6)) throw new Error('verified_workflow_call_limit');
+    if (steps.length >= (strategy === 'fusion' ? 6 : 2)) throw new Error('verified_workflow_call_limit');
     const before = performance.now();
     const generated = await bounded(signal, () => invoke({ stage, model, signal,
       draft: previous ? structuredClone(previous.artifact) : null,
@@ -60,6 +62,10 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   }
   const finish = result => ({ passed: isPassed(result), artifact: result.artifact, verification: result.verification,
     steps, costMicros: totalCostMicros, elapsedMs: performance.now() - started });
+  if (strategy === 'cascade') {
+    const first = await attempt('draft', models.draft);
+    return finish(isPassed(first) ? first : await attempt('strong-fallback', models.repair));
+  }
   if (strategy === 'strong') {
     const first = await attempt('strong-initial', models.repair);
     return finish(isPassed(first) ? first : await attempt('strong-repair', models.repair, first));
