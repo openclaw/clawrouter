@@ -4,6 +4,11 @@ Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
 Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
+12-task development lead for strong review followed by small-model repair:
+12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
+It still requires disjoint confirmation and realistic latency measurement.
+
 Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
 includes its tools, visible checks and sandbox cleanup. Grading time measures
 the independent final acceptance suite, including its cleanup, and is `null`

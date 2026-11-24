@@ -1,5 +1,7 @@
 # Changelog
 
+- Record a 12-task small-model fusion development lead, matched controls, complete model costs and qualification limits.
+
 - Expose trusted structured edit-rejection details for custom fusion benchmark runners without weakening atomic matching.
 - Report failed Access fusion and verifier diagnostics, including the absent-field fixture correction and limits of public-test acceptance.
 

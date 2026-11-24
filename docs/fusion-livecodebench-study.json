@@ -1,0 +1,454 @@
+{
+  "version": 1,
+  "study": "adapted-livecodebench-always-review-20261124",
+  "claim": "development lead; not qualified for production",
+  "dataset": {
+    "repository": "livecodebench/code_generation_lite",
+    "revision": "0fe84c3912ea0c4d4a78037083943e8f0c4dd505",
+    "file": "test6.jsonl",
+    "sha256": "bb4c364f71921c4495a6ad15abe1a927350b720009f4933e2e71f8af0f6fd1f5"
+  },
+  "provenance": {
+    "sourceCommit": "de00f36",
+    "protocolSha256": "9cf3528b000fab39d6f017a9ce28e2a902af4fc11eb9a03b099b2ea7545f65a7",
+    "cohortProtocolSha256": "7d4b46ed1c27eebbc3da541706b754b51d2abc4e460f4c61ca3faea15ecd9ce9",
+    "qualificationSha256": "32d5c8d775c6a6cf8342bc6ac06ab9faec7211bf7e1d6b0a1b480ff1f44286d4",
+    "terminalAuditSha256": "e6c41731ff2b95feecbd88adeae67ca945e7cbaa2ec11c8c28aaf3ac8ba6248b"
+  },
+  "models": {
+    "weak": "openai/gpt-6-luna",
+    "strong": "openai/gpt-6.2-sol"
+  },
+  "arms": {
+    "weak": {
+      "passed": 9,
+      "costMicros": 16683
+    },
+    "strong": {
+      "passed": 12,
+      "costMicros": 111332
+    },
+    "fusion": {
+      "passed": 12,
+      "costMicros": 73766
+    },
+    "self-review": {
+      "passed": 11,
+      "costMicros": 28784
+    }
+  },
+  "lostStrongSuccesses": 0,
+  "uniquePaidCalls": 54,
+  "uniquePaidCostMicros": 197199,
+  "qualifiedFusionGain": false,
+  "tasks": [
+    {
+      "id": "lcb-9be0cdac3e28c828",
+      "identity": "atcoder:arc194_a",
+      "title": "Operations on a Stack",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 1418,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3870,
+          "codeSha256": "fca9a4614a53e0f6f5490a3eef4ab4bd6bd5a3cebcb10d537bd5b550e83eb58c",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3836,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 2221,
+          "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-d987bef216593ea6",
+      "identity": "atcoder:abc393_d",
+      "title": "Swap to Gather",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 160,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 2582,
+          "codeSha256": "e953a04d3c9c35b2692390ca9c85f59f655b8152e21cedb46ed1dce0330e41d7",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 1862,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 321,
+          "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-ff13dcbfb071427d",
+      "identity": "atcoder:abc396_d",
+      "title": "Minimum XOR Path",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 312,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 5404,
+          "codeSha256": "2186cbb63c59935521e6f962184a9658bd5556d19c44588607dedcbbaa4da8f1",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3901,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 606,
+          "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-36176784f8231f05",
+      "identity": "atcoder:abc396_g",
+      "title": "Flip Row or Col",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 740,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 6164,
+          "codeSha256": "0926f6f4f8a748aee54feb0075823065531fec962bb1b0eebfc18b8718178d95",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3686,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1145,
+          "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-c40a21d2958f6f90",
+      "identity": "atcoder:abc390_c",
+      "title": "Paint to make a rectangle",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 287,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3886,
+          "codeSha256": "1dfabbb71a647f05a224b6d4b04137b8ea0d04056e435d4d83ddb94157252af3",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3191,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 513,
+          "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-4e4d0ee0e18e3660",
+      "identity": "atcoder:abc398_f",
+      "title": "ABCBA",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 408,
+          "codeSha256": "39733c6ebdd1cd3ac118ed7ab7c29b10da1df0fd516de6084728ef73cec03263",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3058,
+          "codeSha256": "3dce64e013320e0d453e3db5976ae5f0dffc982bbfdf2bd57e682f58b88d6716",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 3399,
+          "codeSha256": "c5250b6f20d27b609f9e65886138c943274d373c54b823ba6c7827fb4b245312",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1083,
+          "codeSha256": "b99d12ee2d91de111bdc8357ef574adf85681c0d7bc8bde2b623fc14da97c362",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-489d6e728f3a722e",
+      "identity": "atcoder:abc398_c",
+      "title": "Uniqueness",
+      "difficulty": "medium",
+      "publicTests": 2,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 146,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 2608,
+          "codeSha256": "e8ce0b0c9e53cbd0ccb9f2bcedd534e8a21257eeee49ae54a0519dd707e0b557",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 1768,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 256,
+          "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-6e051497b7d453bc",
+      "identity": "atcoder:abc397_g",
+      "title": "Maximize Distance",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 2516,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 11692,
+          "codeSha256": "4a6c8d5c585f27bb58f83ab4c24d3ea0c4f49bb38ff2e8d69a6f7a39bf3658d8",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 7082,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 3394,
+          "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-d17a99075d24ff22",
+      "identity": "atcoder:abc400_d",
+      "title": "Takahashi the Wall Breaker",
+      "difficulty": "medium",
+      "publicTests": 4,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 2559,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 13849,
+          "codeSha256": "01df63843cf0741e6a3c01a110cb4e5893e8d8553a51b5b7f48de2499d270a7a",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 9710,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 3880,
+          "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-e78d0fe16bacac32",
+      "identity": "atcoder:abc394_g",
+      "title": "Dense Buildings",
+      "difficulty": "hard",
+      "publicTests": 1,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": true,
+          "costMicros": 3537,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 18831,
+          "codeSha256": "752785fbb247bf4cffd3b7e0a7f2028f4706a10413e06017cf1cb6542b280e35",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 11983,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 4608,
+          "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-1f80f87ae830fdf3",
+      "identity": "atcoder:abc387_c",
+      "title": "Snake Numbers",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 424,
+          "codeSha256": "cc8a4e4f7b3fdede81bfb7e1a4ff112ebae2ea0af352d624e623f8a11abe74a0",
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 3126,
+          "codeSha256": "bbb37f420947b9763daa5efae4282b7eab2955f734967fc69c8f3409b497be8a",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 4031,
+          "codeSha256": "456e41e501190b496e5c934abb3b9d574b7ff978bd82a875941286eaf9374297",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": true,
+          "costMicros": 1130,
+          "codeSha256": "fd6367a5db9f05e875cd1957b18827cdfbfef68875c0c37fa03bd6c700ee53ec",
+          "publicFallback": false
+        }
+      }
+    },
+    {
+      "id": "lcb-d7b6df0e06b28efc",
+      "identity": "atcoder:arc196_c",
+      "title": "Strongly Connected",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16,
+      "outcomes": {
+        "weak": {
+          "passed": false,
+          "costMicros": 4176,
+          "codeSha256": null,
+          "publicFallback": false
+        },
+        "strong": {
+          "passed": true,
+          "costMicros": 36262,
+          "codeSha256": "942fb8dc54660fd5c4d1f821f8952420cacdde3e6dd0722085e803e40df449c1",
+          "publicFallback": false
+        },
+        "fusion": {
+          "passed": true,
+          "costMicros": 19317,
+          "codeSha256": "f3ea9253d2fd6ca4438aff0c824c5873af49a394a49d7435c0d1be936b8a75ac",
+          "publicFallback": false
+        },
+        "self-review": {
+          "passed": false,
+          "costMicros": 9627,
+          "codeSha256": null,
+          "publicFallback": false
+        }
+      }
+    }
+  ]
+}
