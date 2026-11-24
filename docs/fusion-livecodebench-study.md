@@ -30,8 +30,9 @@ losing a strong-control success. One weak draft and its self-review repair were
 truncated; both were charged and counted as failures. None of the weak drafts
 that passed public tests failed the private tests in this sample. The study
 does not establish that reviewing public passes is necessary or that this
-policy beats a public-test-gated cascade. Such cascades had false accepts in
-other workloads, so that comparison needs a separate prospective evaluation.
+policy beats a public-test-gated cascade. The retrospective
+[fallback comparison](#fallback-policy-replay) below tests this using the saved
+responses; a prospective comparison is still needed.
 
 The experiment made 54 unique paid calls: 24 direct, 24 review and six repair.
 Their combined cost was $0.197199. Policy totals each include the small draft;
@@ -39,6 +40,49 @@ the experiment reused that draft across the two review arms and billed it only
 once. Consequently, summing policy totals would double-count shared calls.
 Per-task scores, costs and candidate hashes are in the
 [structured result](fusion-livecodebench-study.json).
+
+## Fallback policy replay
+
+The public result now includes each candidate's public-test verdict, copied
+from its hash-verified terminal audit. Run the standalone replay without
+credentials, model calls, datasets or dependencies:
+
+```sh
+node scripts/fusion-fallback-replay.mjs
+node --test test/fusion-fallback-replay.test.mjs
+```
+
+The replay selects using only the public verdict and scores that selection
+against the saved full grade. Every attempted candidate is charged, including
+failed and truncated responses. Fusion already includes the weak seed, review
+and any repair, so fallback adds only the strong direct cost. The output binds
+the input JSON bytes with SHA256 and checks row totals against the published
+arm totals. An input hash identifies the supplied file; it is not independent
+attestation of its contents.
+
+On the input-validated 11-task cohort:
+
+| Retrospective policy | Tasks passed | Model cost (USD) | Change from strong direct |
+| --- | ---: | ---: | ---: |
+| Strong direct | 11/11 | $0.107324 | — |
+| Weak draft, strong fallback on public failure | 10/11 | $0.060767 | 43.4% less |
+| Fusion, strong fallback on public failure | 11/11 | $0.138083 | 28.7% more |
+
+The first fallback misses the same public-passing wrong answer that defeated
+the predeclared gate. The second recovers the truncated repair, but loses the
+cost advantage. In the initial development cohort, public-gated weak fallback
+also reaches 12/12 at $0.059129, below always-review's $0.073766. The original
+development result therefore does not demonstrate that review adds value over
+this simpler baseline. Cohorts remain separate; the confirmation cohort's
+known invalid input remains in its reported rows and qualification warning.
+
+A separate hidden-label diagnostic escalates exactly when the saved weak
+candidate is wrong. It reaches 11/11 at $0.067567 on the input-validated cohort,
+but requires the hidden answer and is **not a deployable policy**. This leaves
+room for a useful error detector in principle, without providing one. It is not
+a measured routing gain, a latency estimate or a reason to ship the current
+gate. All replays reuse saved responses after observing the results; new
+inference can behave differently. Production Fusion is unchanged.
 
 ## Fixed protocol
 

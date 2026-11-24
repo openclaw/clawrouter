@@ -172,6 +172,8 @@
 
 ## Unreleased
 
+- Add a credential-free Fusion fallback replay that charges failed attempts and exposes public-test false accepts separately from hidden-label diagnostics.
+
 - Validate `access_programs` on unified Responses and reject unsupported selections before dispatch to other providers or Fusion Chat.
 
 - Clarify the existing Copilot catalog normalization of reported reasoning-effort tags, including unknown tags and missing, null, or empty observations.
