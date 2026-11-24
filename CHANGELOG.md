@@ -1,6 +1,8 @@
 # Changelog
 
 - Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+- Record the failed matched-planner fusion trial, including the cheap-only planner control and complete accounting.
+
 - Document two failed fusion construction trials and the limits of public-test acceptance and contract review.
 
 - Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
