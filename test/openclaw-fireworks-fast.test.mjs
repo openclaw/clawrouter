@@ -36,7 +36,7 @@ const marker = "/* OWNED_LIFETIME_IMPLEMENTATION */";
 assert.equal(fixtureText.split(marker).length, 2);
 const assembledFixture = fixtureText.replace(marker, observerSource);
 
-const workerOutcomePins = {"proxy.ts": "f02c58fd7ece776a532d4a63eacc18346aaa71696056ad601e2557663a668289", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const workerOutcomePins = {"proxy.ts": "e7996f77dd28d60d6636597da4aaa85bc1f9e0578c8601585ffef7553971337f", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
 const { bundleWorkerOutcome: bundleFireworksOutcome } = createWorkerOutcomeFixture(workerOutcomePins);
 
 

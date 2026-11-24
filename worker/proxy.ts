@@ -73,6 +73,7 @@ import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
+import { normalizeUnifiedAccessPrograms } from "./access-programs.ts";
 import { concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection } from "./proxy-selection";
 import { nativeMatch, nativeModelEndpoint, nativeParams } from "./native-route";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
@@ -363,6 +364,7 @@ async function proxyUnifiedOpenAi(request: Request, env: Env, context: Execution
   if (modelId === FUSION_MODEL_ID) {
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
     if (admission.expanded) return expandedTooLarge();
+    normalizeUnifiedAccessPrograms(body, false);
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
   if (!isSelectionFailure(earlySelection)) return admission.expanded && !mediaEnvelope(earlySelection.endpoint) ? expandedTooLarge() : proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
