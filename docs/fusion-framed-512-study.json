@@ -289,7 +289,8 @@
     "Both escalated drafts spent their entire 512-token allowance on reasoning and emitted no usable code.",
     "Four oversized source fixtures excluded by the original transport bounds; all task identities retained.",
     "Costs exclude engineering, hardware and operations; live time excludes final private grading.",
-    "Quality and cost screen passed, but the unchanged latency gate failed; no production or independent-task claim."
+    "Quality and cost screen passed, but the unchanged latency gate failed; no production or independent-task claim.",
+    "The shared stdin system prompt incorrectly requested a single integer answer for all tasks, conflicting with list and Yes/No output requirements. Correct labels were graded, but this prompt defect limits interpretation."
   ],
   "fallbackMode": "repair"
 }

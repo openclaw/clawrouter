@@ -290,7 +290,8 @@
     "Four oversized source-private fixtures were excluded prospectively; all task identities remain.",
     "Costs exclude engineering, hardware and operations; live elapsed includes acceptance diagnosis and excludes final private grading.",
     "Quality and cost screen passed, but latency failed; production gain remains unqualified.",
-    "Both escalations followed truncated unusable drafts. Their repair prompts contained no candidate code or concrete counterexample; this run does not demonstrate live counterexample-assisted repair."
+    "Both escalations followed truncated unusable drafts. Their repair prompts contained no candidate code or concrete counterexample; this run does not demonstrate live counterexample-assisted repair.",
+    "The shared stdin system prompt incorrectly requested a single integer answer for all tasks, conflicting with list and Yes/No output requirements. Correct labels were graded, but this prompt defect limits interpretation."
   ],
   "fallbackMode": "repair"
 }

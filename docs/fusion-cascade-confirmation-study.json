@@ -273,6 +273,7 @@
     "One retained Switch Seats private input contains 60 subcases; test counts are fixture counts.",
     "Bounded independent references checked where tractable; other source labels retain dataset trust.",
     "Cost excludes engineering, hardware and operations; elapsed excludes final private grading.",
-    "Quality and latency gates failed; production gain is unqualified."
+    "Quality and latency gates failed; production gain is unqualified.",
+    "The shared stdin system prompt incorrectly requested a single integer answer for all tasks, conflicting with list and Yes/No output requirements. Correct labels were graded, but this prompt defect limits interpretation."
   ]
 }

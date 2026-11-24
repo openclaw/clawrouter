@@ -103,6 +103,16 @@ an automatic retry. A strong fallback must still pass the same task checks.
 The value 768 is workload-specific evidence, not a production default for all
 programming tasks.
 
+## AtCoder prompt limitation
+
+A later adapter audit found that all AtCoder runs below inherited a system
+instruction asking for a single integer answer. That conflicts with the
+required list outputs for Bib and Coming of Age, and the `Yes`/`No` output for
+Twice Subsequence. The verifiers used the correct task outputs, and the saved
+metrics remain intact, but the contradictory prompt limits interpretation.
+These runs do not establish performance under a correct output contract.
+The effect of this defect on individual successes and failures is unknown.
+
 ## Fresh-task confirmation failed
 
 The 768-token draft policy was then frozen unchanged on six exact-output
