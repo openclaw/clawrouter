@@ -1,4 +1,8 @@
-# Verified cascade cost saving and bounded-draft follow-up
+# Verified cascade gains and failed fresh-task confirmation
+
+A tuned seven-task run met the development gate, but confirmation on six new
+task identities lost one direct-model success and failed latency. This policy
+is not qualified for production. The individual results follow.
 
 The first seven-task live comparison passed all tasks with both Terra direct and a
 Luna-first verified cascade. The cascade used 72.88% less model cost and made
@@ -98,10 +102,45 @@ an automatic retry. A strong fallback must still pass the same task checks.
 The value 768 is workload-specific evidence, not a production default for all
 programming tasks.
 
+## Fresh-task confirmation failed
+
+The 768-token draft policy was then frozen unchanged on six exact-output
+AtCoder medium tasks whose identities were absent from cached result files.
+No prompt or cap was tuned on these tasks. The tasks cover permutation lookup,
+seat swaps, repeated subsequences, cycle removal, pair counting and sequential
+transfers. The seventh fresh medium task required floating-point tolerance and
+was excluded by the declared exact-output contract before any model calls.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra direct | 6/6 | $0.013049 | 43.96 s |
+| Capped Luna → conditional Terra | 5/6 | $0.007066 | 55.62 s |
+
+The cascade lost one direct success and took 26.54% longer, despite 45.85%
+lower model cost. Both quality and latency gates failed. It made two fallbacks:
+one rescued the transfer problem; the seat-swap fallback failed acceptance.
+There were no false acceptances. The seat-swap answer counted overlapping
+adjacent windows, while the passing direct answer required disjoint windows.
+
+All six identities remained in the result. The verifier used 15 original
+public examples, 16 generated acceptance cases and 16 disjoint generated
+holdouts per task. Full grading added up to 16 hash-selected source-private
+fixtures per task. One seat-swap input contains 60 subcases. Four oversized
+source fixtures were excluded prospectively by the unchanged transport bounds;
+that limits coverage. The large seat-swap fixture was retained. Before model
+calls, all 216 raw input contracts were checked and 157 tractable cases matched
+bounded independent references. Positive and negative sandbox controls passed.
+
+The 14 dispatched calls cost $0.020115. An offline replay reproduced the full
+grades and costs. The [confirmation evidence](fusion-cascade-confirmation-study.json)
+retains the failed outcome. It does not erase the earlier tuned gain, but it
+rejects generalizing that gain to this new cohort. A possible next experiment
+is a bounded repair using acceptance feedback; that policy has not been shown
+to improve these results.
+
 ## Limits
 
-This is one sample per arm on seven medium tasks from one provider's model
-pair. It does not establish heterogeneous-provider fusion, a general learned
+Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
 router, performance on hard tasks or population-level reliability. The
 task-specific verifiers also require engineering effort. Hardware, engineering
 and operational costs are excluded from the model-cost figures.

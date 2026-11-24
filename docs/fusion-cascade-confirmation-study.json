@@ -1,0 +1,278 @@
+{
+  "schemaVersion": 1,
+  "study": "atcoder-cap-confirm-live-v1",
+  "status": "audited",
+  "sourceSha": "8fc9bbec8d07c9dce10092cc40fe1c01d7d0593a",
+  "protocolSha256": "cf07691fd869c9be3b1dfbef80cd2295739e4d136417ebced80f37166023ef0a",
+  "resultSha256": "1b8707106c30900eb3117c5e125f41acbdf5c55ceb5ef9cba7f3eabb38973e51",
+  "auditSha256": "92e1d24a98c282045fba87ef1a382fe735e0df0b6f9784285d079ebce8dfb7f1",
+  "priorAuditSha256": "6b67c4906adf6dc46c1441ae088d0251680d340afa8fa322b18b8bd9209aa946",
+  "draftMaxOutputTokens": 768,
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 14,
+  "totalCostMicros": 20115,
+  "summary": {
+    "strong": {
+      "passed": 6,
+      "costMicros": 13049,
+      "elapsedMs": 43957.22499999999
+    },
+    "cascade": {
+      "passed": 5,
+      "costMicros": 7066,
+      "elapsedMs": 55622.28554100002
+    },
+    "falseAccepts": 0,
+    "strongLosses": 1,
+    "rescues": 1,
+    "escalations": 2,
+    "costRatio": 0.5414974327534677,
+    "elapsedRatio": 1.2653729970670358,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1404,
+      "elapsedMs": 5552.756291000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 173,
+      "elapsedMs": 3839.130875,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": true,
+      "costMicros": 3296,
+      "elapsedMs": 17383.390416000002,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 34,
+        "failures": 16,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 3764,
+      "elapsedMs": 11424.888749999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1943,
+      "elapsedMs": 7071.155542,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 251,
+      "elapsedMs": 5379.260958999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 200,
+      "elapsedMs": 4693.472750000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1791,
+      "elapsedMs": 5541.742582999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1690,
+      "elapsedMs": 5882.052875000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 208,
+      "elapsedMs": 4772.587500000009,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 2938,
+      "elapsedMs": 19554.443041000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 2457,
+      "elapsedMs": 8484.628958999994,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "Six cache-new exact-output AtCoder medium identities; one sample per arm.",
+    "Same fixed 768-token draft cap; no prompt or policy tuning on the confirmation tasks.",
+    "Cache novelty does not establish training independence or general population reliability.",
+    "Four oversized source-private fixtures excluded prospectively by original transport limits; all task identities retained.",
+    "One retained Switch Seats private input contains 60 subcases; test counts are fixture counts.",
+    "Bounded independent references checked where tractable; other source labels retain dataset trust.",
+    "Cost excludes engineering, hardware and operations; elapsed excludes final private grading.",
+    "Quality and latency gates failed; production gain is unqualified."
+  ]
+}

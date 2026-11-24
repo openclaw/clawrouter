@@ -2,7 +2,7 @@
 
 - Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.
 
-- Report a seven-task verified cascade and capped-draft follow-up: matched accuracy, lower model cost, the original latency failure and a passing development gate, with production limits retained.
+- Report verified cascade studies: a tuned cost-saving development gain followed by a failed fresh-task quality and latency confirmation.
 
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
