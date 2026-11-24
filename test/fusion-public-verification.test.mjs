@@ -48,6 +48,47 @@ test('invalid expected counts fail before opening a sandbox', async () => {
   }
 });
 
+test('a failed or malformed precheck skips expensive checks and closes the sandbox', async () => {
+  for (const preliminary of [null, undefined, {}, { passed: false }, { passed: 1 }]) {
+    const f = fixture();
+    const result = await verifyPublicCandidate({ ...f.options, precheck: async opened => {
+      assert.equal(opened.runtime, 'pinned'); f.calls.push('precheck'); return preliminary;
+    } });
+    assert.deepEqual(f.calls, ['open', 'precheck', 'close']);
+    assert.equal(result.precheck, preliminary);
+    assert.equal(result.runtimePassed, false);
+    assert.equal(result.tests.valid, false);
+    assert.equal(result.tests.reason, 'precheck_failed');
+    assert.deepEqual(result.compiler, { passed: false, skipped: true, reason: 'precheck_failed' });
+  }
+});
+
+test('a successful precheck never replaces full public tests or compilation', async () => {
+  for (const [tests, compiler] of [[passed, { passed: true }], [passed, { passed: false }],
+    [{ ...passed, tests: 2 }, { passed: true }]]) {
+    const f = fixture(tests, compiler), preliminary = { passed: true, marker: 'smoke' };
+    const result = await verifyPublicCandidate({ ...f.options,
+      precheck: async () => { f.calls.push('precheck'); return preliminary; } });
+    assert.deepEqual(f.calls, ['open', 'precheck', 'test', ...(tests.tests === 3 ? ['compile'] : []), 'close']);
+    assert.equal(result.precheck, preliminary);
+    assert.equal(result.tests, tests);
+    assert.equal(result.runtimePassed, tests.tests === 3);
+    assert.equal(result.compiler.passed, tests.tests === 3 && compiler.passed);
+  }
+});
+
+test('precheck errors close the owned sandbox and invalid callbacks never open one', async () => {
+  const f = fixture();
+  await assert.rejects(verifyPublicCandidate({ ...f.options,
+    precheck: async () => { throw Error('precheck broke'); } }), /precheck broke/);
+  assert.deepEqual(f.calls, ['open', 'close']);
+  for (const precheck of [null, true, {}, 'callback']) {
+    const invalid = fixture();
+    await assert.rejects(verifyPublicCandidate({ ...invalid.options, precheck }), /invalid_precheck/);
+    assert.deepEqual(invalid.calls, []);
+  }
+});
+
 test('the actual cascade falls back after runtime rejection and compiles the accepted fallback', async () => {
   const { runVerifiedWorkflow } = await import('../scripts/fusion-verified-workflow.mjs');
   const calls = [];
