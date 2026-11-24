@@ -17,6 +17,8 @@
 
 - Honor cancellation for fusion sandbox commands, retain failed-creation cleanup identities, and use cached images without implicit pulls.
 
+- Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+
 - Run OpenClaw consumer qualification for standalone native fixture helper, provider compiler, validation and Worker runtime configuration changes.
 
 - Discard malformed UTF-8 fusion adviser responses instead of silently altering their text.
