@@ -1,5 +1,7 @@
 # Changelog
 
+- Record two audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
+
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
 
 - Document supplied-candidate fusion review with separate corrective models and final executable checks.
