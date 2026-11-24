@@ -162,6 +162,13 @@ export function analyzePairRun(run, options) {
       candidateSolvedMinusExpected: selected.solved - expectedSolved };
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
+  const controlJointOutcomes = Object.fromEntries(['bothPassed', 'cheapOnly', 'strongOnly', 'bothFailed']
+    .map(key => [key, { candidatePassed: 0, candidateFailed: 0 }]));
+  for (const { rows } of cases.values()) {
+    const cheapPassed = rows.get('cheap').score === 1, strongPassed = rows.get('strong').score === 1;
+    const key = cheapPassed ? (strongPassed ? 'bothPassed' : 'cheapOnly') : (strongPassed ? 'strongOnly' : 'bothFailed');
+    controlJointOutcomes[key][rows.get(candidate).score === 1 ? 'candidatePassed' : 'candidateFailed']++;
+  }
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha, armOffset: run.armOffset ?? 0,
     openAiApi: run.openAiApi ?? 'chat-completions', actionSchemaProfile: run.actionSchemaProfile ?? 'legacy', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
@@ -174,6 +181,7 @@ export function analyzePairRun(run, options) {
       : cheap.solved >= selected.solved && versusCheap.wins === 0
         && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     controlOracleSolved: oracleSolved, controlComplementarity: oracleSolved - Math.max(cheap.solved, strong.solved),
+    controlJointOutcomes,
     matchedCostRandomMixture: mixture,
     observedCostSavingWithoutStrongRegressions: versusStrong.losses === 0 && selected.costMicros < strong.costMicros,
     observedQualityGainOverBestFixed: selected.solved > Math.max(cheap.solved, strong.solved),
@@ -212,6 +220,9 @@ export function analyzePairRepeats(runs, options) {
   }
   const candidate = reports[0].candidate;
   const candidateModelUse = modelUse(runs, candidate);
+  const controlJointOutcomes = Object.fromEntries(Object.keys(reports[0].controlJointOutcomes).map(key => [key,
+    Object.fromEntries(['candidatePassed', 'candidateFailed'].map(outcome => [outcome,
+      sum(reports.map(report => report.controlJointOutcomes[key][outcome]))]))]));
   const totals = runs[0].strategies.map(strategy => {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
@@ -240,7 +251,7 @@ export function analyzePairRepeats(runs, options) {
   return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
     openAiApi: runs[0].openAiApi ?? 'chat-completions', actionSchemaProfile: runs[0].actionSchemaProfile ?? 'legacy', sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
-    inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
+    inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse, controlJointOutcomes,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
     cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
       && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],

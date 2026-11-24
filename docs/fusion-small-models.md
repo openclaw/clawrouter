@@ -1059,6 +1059,19 @@ cost and time. Missing or invalid time leaves latency and dominance unknown.
 Actual call identities distinguish mixed attempts and rescues from single-model
 resampling; neither savings nor a passing public check establishes a fusion gain.
 
+`controlJointOutcomes` separates cases where both controls passed, only cheap
+passed, only strong passed, or both failed. Each group counts candidate passes
+and failures. This exposes candidate rescues beyond the observed control oracle
+and losses on cases at least one control solved. Repeat reports sum attempts;
+they do not turn repeated cases into independent tasks.
+
+This follows two useful research distinctions: [COMED](https://arxiv.org/abs/2609.26913)
+measures collaboration rescues against harms, while the [co-failure study](https://arxiv.org/abs/2606.27288)
+bounds selection among existing answers by their shared failures. A candidate
+pass when both controls fail is an observed rescue, not proof that collaboration
+caused it; a matched single-model retry can also succeed. These descriptive
+counts do not change the pilot gate or establish statistical significance.
+
 New paired-call receipts include `usageBreakdown`: disjoint uncached input,
 cache-read input, ordinary cache-write input, one-hour cache-write input, and
 output token counts. Use each model pin's `usagePrice` tariff for these buckets;
