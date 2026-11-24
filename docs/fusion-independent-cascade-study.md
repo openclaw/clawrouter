@@ -285,6 +285,24 @@ This remains one sample on exposed tasks. Different model generations prevent
 attributing the entire change between runs to the added checks. No production
 or repository-work qualification follows from the result.
 
+## Cheap repair diagnostic
+
+Before adding another workflow stage, a six-call diagnostic compared a fresh
+Luna answer with one Luna repair for each of the three complete drafts rejected
+by the scale pilot. Both arms used no reasoning and a 1,024-token output cap.
+Repair also received the rejected code and public acceptance feedback. The
+fourth rejected draft was truncated, so it supplied no executable repair seed.
+
+Fresh answers passed 2/3; repairs passed 0/3. Fresh cost $0.000746, repair
+$0.000794. All six outputs were complete. Full grading and an offline audit
+confirmed the result; [the evidence](fusion-cheap-repair-probe.json) retains
+every selected case. The total six-call cost was $0.001540.
+
+This does not support adding a cheap repair stage. It also does not establish
+that repair is generally harmful: the cases were already exposed failures,
+there was one sample per arm, and this was not an executed cascade. The two
+fresh successes do not isolate an effect from the larger output cap.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
