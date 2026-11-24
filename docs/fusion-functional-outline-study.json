@@ -1,0 +1,701 @@
+{
+  "version": 1,
+  "study": "functional-algorithm-outline-development-20261124",
+  "dataset": {
+    "repository": "livecodebench/code_generation_lite",
+    "revision": "0fe84c3912ea0c4d4a78037083943e8f0c4dd505",
+    "file": "test6.jsonl",
+    "sha256": "bb4c364f71921c4495a6ad15abe1a927350b720009f4933e2e71f8af0f6fd1f5"
+  },
+  "sourceCommit": "9b4ff8ba46445e166f87c845e6b3e2d5d72b73c9",
+  "protocolSha256": "d195b02e7abc7071c68a04d02233ca3f5b32da9166bfae31ab004e3b69158e12",
+  "cohortProtocolSha256": "5946a4034d478a1cfc6b8982f49e35d4bfa9d50a1431c2f2a2dc02b23e72447a",
+  "qualificationSha256": "58260a197d1ed4584432f1c2bcc0201b61968deb18b1ba83c4c571d8ef6ef489",
+  "terminalAuditSha256": "670396ac8f6cc25a73138b85ed1bcdcbc90667308344ea8ed1326d5c99c3d463",
+  "reasoningEffort": "low",
+  "outlineMaxOutputTokens": 1536,
+  "solutionMaxOutputTokens": 8192,
+  "arms": {
+    "weak": {
+      "passed": 5,
+      "costMicros": 2998
+    },
+    "medium": {
+      "passed": 6,
+      "costMicros": 22605
+    },
+    "weak-planned": {
+      "passed": 5,
+      "costMicros": 5541
+    },
+    "fusion": {
+      "passed": 5,
+      "costMicros": 24502
+    }
+  },
+  "plannerCosts": {
+    "openai/gpt-6-luna": {
+      "calls": 6,
+      "costMicros": 2727,
+      "outputTokens": 4475
+    },
+    "openai/gpt-6.1-terra": {
+      "calls": 6,
+      "costMicros": 20864,
+      "outputTokens": 3199
+    }
+  },
+  "validOutlines": 12,
+  "uniquePaidCalls": 36,
+  "uniquePaidCostMicros": 55646,
+  "lostMediumSuccesses": 1,
+  "developmentLead": false,
+  "qualifiedFusionGain": false,
+  "referenceAudit": {
+    "rawCases": 257,
+    "exactReferenceCases": 199,
+    "optimalCostOnlyCases": 42,
+    "scope": "All raw inputs and output structure checked. Exact references counted separately from caption optimal-cost checks, which do not verify lexicographic tie-breaking. Other outputs retain dataset trust."
+  },
+  "tasks": [
+    {
+      "id": "lcb-5625e351e689a086",
+      "identity": "leetcode:3721",
+      "difficulty": "medium",
+      "returnType": [
+        "list",
+        "int"
+      ],
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-59a3c2fca5d5f675",
+      "identity": "leetcode:3748",
+      "difficulty": "medium",
+      "returnType": [
+        "list",
+        [
+          "list",
+          "int"
+        ]
+      ],
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-b5de9bd8b6f234fd",
+      "identity": "leetcode:3771",
+      "difficulty": "medium",
+      "returnType": "bool",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-e77611177422c35e",
+      "identity": "leetcode:3801",
+      "difficulty": "hard",
+      "returnType": "int",
+      "publicTests": 2,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-ff344a5e8818b6e5",
+      "identity": "leetcode:3701",
+      "difficulty": "hard",
+      "returnType": "str",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-90dbc132ce85c5c5",
+      "identity": "leetcode:3783",
+      "difficulty": "hard",
+      "returnType": [
+        "list",
+        "int"
+      ],
+      "publicTests": 3,
+      "privateTests": 15
+    }
+  ],
+  "stageEvidence": {
+    "initial": {
+      "protocolSha256": "22de1cc35ad2a0d800e237390e402fc39af1f5a641b37fb27c979fbd794cc3a7",
+      "journalSha256": "18afe43198ed091c81e0f65813e6e4fa47af6e86d94b32f2a3cd352c142578fd",
+      "stateSha256": "354252cf96f999fc882412c0102b499f11ff007942f0478bf116bc496084568f"
+    },
+    "implementation": {
+      "protocolSha256": "bb6eab359c63804723319753f027e42b3f31bd2ad51be7a81aed6d2bc8dafbb5",
+      "journalSha256": "0f2a8b52b18591a7af2b23ba9134915c8274dbab162138488e41456cbc149519",
+      "stateSha256": "1ebac17e9a00b67654685c477920c0aae6e99b6c571647ad0eafc78be8c18b19"
+    }
+  },
+  "scope": "Six previously exposed typed functional tasks, development-only role decomposition. Low-effort fresh Luna/Terra direct controls and low-effort Luna/Terra algorithm outlines (1536 output tokens); each outline is implemented by low-effort Luna (8192). Identical original problem/runtime context; no candidate repair, verifier feedback, retry or hidden tests in model requests. Invalid outlines become null guidance and all costs remain charged. All36calls finish before grading. Strict solve interface, no normalization. Requires both Terra and fusion6/6, fusion strictly better than direct Luna and matched Luna-plan/Luna-code, and >=20% savings versus fresh Terra direct. No production, independent confirmation or latency claim.",
+  "rows": [
+    {
+      "id": "lcb-5625e351e689a086",
+      "arm": "weak",
+      "costMicros": 452,
+      "codeSha256": "6136d33ad08f895b6a90c90f9891251e50f93c5600ba30fce68a7fa8003134ce",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-5625e351e689a086",
+      "arm": "medium",
+      "costMicros": 2556,
+      "codeSha256": "4416048012d7feb14bcaa2cd2a29d0c95034c371909fb5c80e2ec5291bd572e6",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-5625e351e689a086",
+      "arm": "weak-planned",
+      "costMicros": 815,
+      "codeSha256": "62c7ab21d8000ed8ee9bcad09b842998b8e3ac60957284133fceb1bbcd5696f1",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-5625e351e689a086",
+      "arm": "fusion",
+      "costMicros": 2850,
+      "codeSha256": "1442408680ceccfc9fd977ac50ab7599bfcd222ed143434e9b5e7ecf257072a5",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-59a3c2fca5d5f675",
+      "arm": "weak",
+      "costMicros": 245,
+      "codeSha256": "ea4c0469fc6966efd5523e7232008c83efe8f8ceae930bcaf332a2370b889141",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-59a3c2fca5d5f675",
+      "arm": "medium",
+      "costMicros": 1397,
+      "codeSha256": "0d12d09102ac644254dec7ba9a319660582dd66d0573114e1df56392c62a01b4",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-59a3c2fca5d5f675",
+      "arm": "weak-planned",
+      "costMicros": 439,
+      "codeSha256": "a60f1e353dddfdf2ece82f61b0f89c7cdce821f411b238122b207f331d91faa8",
+      "public": {
+        "valid": true,
+        "passed": false,
+        "tests": 3,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 19,
+        "failures": 15,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": false,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-59a3c2fca5d5f675",
+      "arm": "fusion",
+      "costMicros": 1916,
+      "codeSha256": "2190e1a3f4eebd53dc98e8ef5a02e22fbe9791cd3244ef6f9ca40e3299944e80",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-b5de9bd8b6f234fd",
+      "arm": "weak",
+      "costMicros": 321,
+      "codeSha256": "67edffeff8cdbf5960bd48cc15d5fcaba465e6c44cdd46a5fd75a5feba66b020",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b5de9bd8b6f234fd",
+      "arm": "medium",
+      "costMicros": 2257,
+      "codeSha256": "0773512e43d0a38916467a1fab87770997d223b37f365248f8f3fe1c14d7e2c3",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b5de9bd8b6f234fd",
+      "arm": "weak-planned",
+      "costMicros": 700,
+      "codeSha256": "82fe152e178f0f63a6938948e9f34ba80e4c32c85f52e64debdeaa1be1943a50",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-b5de9bd8b6f234fd",
+      "arm": "fusion",
+      "costMicros": 2522,
+      "codeSha256": "24d9b9dc9091c0c6eb0efe630dd96862241ec98c5a310ab5e07de6d26bcdb2d7",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-e77611177422c35e",
+      "arm": "weak",
+      "costMicros": 556,
+      "codeSha256": "acc86a46214ceafe2d8ef037be24bcdccd001c1e0720ce75691e18f1d8cea83d",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e77611177422c35e",
+      "arm": "medium",
+      "costMicros": 6963,
+      "codeSha256": "5a61fc0ea7adc0537c9a8833849c28fa1f59e9fa43ee6a691021d4239366f12f",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e77611177422c35e",
+      "arm": "weak-planned",
+      "costMicros": 1147,
+      "codeSha256": "c95a7e48d9545cb84c604fcef7c734aaf1ceafaf441a0fd0222bad8ee33302b5",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-e77611177422c35e",
+      "arm": "fusion",
+      "costMicros": 7940,
+      "codeSha256": "f7c3ad4a3161cdafaec50b77f349eaec7cfaf1f4273c7f9bde37f87392a739ae",
+      "public": {
+        "valid": true,
+        "passed": false,
+        "tests": 2,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 18,
+        "failures": 16,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": false,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-ff344a5e8818b6e5",
+      "arm": "weak",
+      "costMicros": 912,
+      "codeSha256": "0cec0f1af1376d1920aef53ba8cec673960d8bdf1ed37ae7e1ca2403fe093835",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 19,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": false
+    },
+    {
+      "id": "lcb-ff344a5e8818b6e5",
+      "arm": "medium",
+      "costMicros": 6649,
+      "codeSha256": "bbc1e26434303e4c78e2e1de84da004b4fd276b246bff7a4805e80c389e3bb0a",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-ff344a5e8818b6e5",
+      "arm": "weak-planned",
+      "costMicros": 1454,
+      "codeSha256": "01e2e1467e08b34c16d008246c3e40b158cf0bdb44b30e78a329c94470302cf7",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-ff344a5e8818b6e5",
+      "arm": "fusion",
+      "costMicros": 6167,
+      "codeSha256": "0d97d0f06b2320aca48b9ce33feada393c3fd947fe6a5c2a1c2adaecbd0f5aae",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-90dbc132ce85c5c5",
+      "arm": "weak",
+      "costMicros": 512,
+      "codeSha256": "df0e92ee11c9ac051b7a6df561b313d553fecee713bd060d16215794b0d9a9ca",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-90dbc132ce85c5c5",
+      "arm": "medium",
+      "costMicros": 2783,
+      "codeSha256": "d9a440ea721dad07da37beefe78dbcd79702ba559653f2d8e809f002c73a5556",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-90dbc132ce85c5c5",
+      "arm": "weak-planned",
+      "costMicros": 986,
+      "codeSha256": "4bd56073d3459cb9c2b9cffa1b917d74c29e3bf7db44409ebe77bb28f9715955",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    },
+    {
+      "id": "lcb-90dbc132ce85c5c5",
+      "arm": "fusion",
+      "costMicros": 3107,
+      "codeSha256": "ec4191e99bf4138a5e4fa0c1a332763b1c11f8775dd51f48851b617570f2e75b",
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "validOutline": true
+    }
+  ]
+}
