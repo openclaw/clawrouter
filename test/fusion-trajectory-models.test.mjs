@@ -305,3 +305,54 @@ test('a supplied candidate makes only the metered reviewer call before acceptanc
   assert.deepEqual(calls, ['review-model']); assert.equal(result.stats.modelCalls, 1);
   assert.equal(result.content, 'restored candidate');
 });
+
+test('a supplied candidate uses separate diagnosis and repair roles before its final check', async () => {
+  for (const finalPassed of [true, false]) {
+    const calls = [], checkpoints = [];
+    let revision = 'candidate', checks = 0;
+    const run = runFinalReviewedModelTrajectory({
+      task: 'Repair the supplied candidate.', runId: 'diagnosis-repair',
+      draftModel: 'small-model', reviewModel: 'review-model', repairModel: 'small-model',
+      reviewCanReplace: false, reviewAfterCorrection: true,
+      initialFinalAnswer: 'Candidate ready for review.',
+      maxModelCalls: 3, maxToolCalls: 2, finalCheckTool: 'check',
+      reviewSnapshot: () => ({ revision }),
+      onCheckpoint: ({ history }) => checkpoints.push(history.length),
+      tools: [
+        { name: 'write', effect: 'write',
+          parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+          validate: args => Object.keys(args).length === 0,
+          execute: async () => { revision = 'repaired'; return { revision }; } },
+        { name: 'check', effect: 'read',
+          parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+          validate: args => Object.keys(args).length === 0,
+          execute: async () => { checks++; return { passed: finalPassed }; } },
+      ],
+      invoke: async (_id, model, body) => {
+        calls.push(model);
+        const request = JSON.parse(body.messages[1].content);
+        if (model === 'review-model') {
+          assert.deepEqual(body.response_format.json_schema.schema.properties.replacement, { type: 'null' });
+          assert.equal(request.snapshot.revision, revision);
+          assert.equal(request.segment[0].action.content, 'Candidate ready for review.');
+          if (revision === 'candidate') return response({ accepted: 0, reason: 'Repair the candidate.', replacement: null });
+          assert.deepEqual(checkpoints, [1]);
+          return response({ accepted: 1, reason: '', replacement: null });
+        }
+        assert.equal(model, 'small-model');
+        assert.equal(request.reason, 'Repair the candidate.');
+        assert.deepEqual(request.history, []);
+        return response({ action: { type: 'tool', name: 'write', arguments: {} } });
+      },
+    });
+    if (finalPassed) {
+      const result = await run;
+      assert.equal(result.content, 'Candidate ready for review.');
+      assert.deepEqual(result.stats, { modelCalls: 3, toolCalls: 2, reviews: 2, repairs: 1, rejectedSteps: 1 });
+    } else await assert.rejects(run, /trajectory_model_limit/);
+    assert.deepEqual(calls, ['review-model', 'small-model', 'review-model']);
+    assert.deepEqual(checkpoints, [1, 2]);
+    assert.equal(checks, 1);
+    assert.equal(revision, 'repaired');
+  }
+});

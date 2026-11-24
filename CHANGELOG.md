@@ -1,5 +1,7 @@
 # Changelog
 
+- Document supplied-candidate fusion review with separate corrective models and final executable checks.
+
 - Honor cancellation for fusion sandbox commands, retain failed-creation cleanup identities, and use cached images without implicit pulls.
 
 - Discard malformed UTF-8 fusion adviser responses instead of silently altering their text.

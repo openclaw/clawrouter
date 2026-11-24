@@ -262,6 +262,65 @@ model, routing policy, or production deployment. A model comparison must freeze
 its models, prompts, effort, call limits and acceptance rules, and include all
 attempts in cost and latency totals.
 
+## Review a supplied candidate with separate model roles
+
+Use `runFinalReviewedModelTrajectory` when a candidate already exists in the
+caller's isolated workspace. A review model can diagnose problems while a
+separate, smaller model owns corrections. This is an opt-in caller workflow;
+it does not change the Worker chat model or routing defaults.
+
+```js
+import { runFinalReviewedModelTrajectory } from './scripts/fusion-trajectory-models.mjs';
+
+export function reviewCandidate({ task, tools, invoke, readSnapshot, checkpoint, signal }) {
+  return runFinalReviewedModelTrajectory({
+    task,
+    tools, // Include a read-only `check` tool returning { passed: boolean }.
+    invoke,
+    runId: 'candidate-review',
+    draftModel: 'provider/small-model',
+    reviewModel: 'provider/review-model',
+    repairModel: 'provider/small-model',
+    reviewCanReplace: false,
+    reviewAfterCorrection: true,
+    initialFinalAnswer: 'The supplied candidate is ready for review.',
+    reviewSnapshot: readSnapshot,
+    onCheckpoint: checkpoint,
+    finalCheckTool: 'check',
+    maxModelCalls: 8,
+    maxToolCalls: 8,
+    maxContextBytes: 131_072,
+    deadlineMs: 120_000,
+    signal,
+  });
+}
+```
+
+Install the candidate before calling this function. `readSnapshot` must return
+a plain JSON object containing the current task-relevant source and evidence.
+It must read the corrected workspace on each review. Do not include held-out
+grading results in the snapshot or model input.
+
+The first call reviews the supplied candidate without generating another draft.
+`reviewCanReplace: false` prevents the reviewer from supplying a replacement
+action. On rejection, the repair model receives the reason and committed
+history. After a corrective write and its checkpoint, `reviewAfterCorrection`
+sends the current snapshot back to the reviewer. Reviewer acceptance still
+requires the caller's `check` tool to pass. A failed check can continue only
+within the remaining shared limits; it cannot return a successful completion.
+
+`invoke(runId, model, body, signal)` must reserve each request's conservative
+cost before dispatch, record every attempt's cost, and honor cancellation.
+The workspace, tools, snapshots, checkpoints, and final check belong to the
+caller. Tool effects can occur before final acceptance, so keep them isolated
+from production state. Callback and provider errors stop execution without
+an automatic retry.
+
+Measure this role split against a matched single-model repair. Include the
+original candidate, diagnosis, failed attempts, correction, and re-review in
+cost and latency totals. Smaller corrective models are a configuration option,
+not a guarantee of equivalent quality or lower total cost.
+
 ## Caller-side verified repair
 
 `scripts/fusion-verified-workflow.mjs` exports `runVerifiedWorkflow`. Use it in
