@@ -148,6 +148,8 @@
 
 ## Unreleased
 
+- Validate `access_programs` on unified Responses and reject unsupported selections before dispatch to other providers or Fusion Chat.
+
 - Clarify the existing Copilot catalog normalization of reported reasoning-effort tags, including unknown tags and missing, null, or empty observations.
 
 - Add an opt-in supporting-source selector for fusion benchmarks, with hashed omissions and conservative handling of unresolved imports; benchmark and Worker defaults are unchanged.
