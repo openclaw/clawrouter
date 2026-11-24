@@ -1,5 +1,7 @@
 # Changelog
 
+- Record the failed fusion cost confirmation and malformed upstream fixture without dropping failed rows or changing production behavior.
+
 - Record a 12-task small-model fusion development lead, matched controls, complete model costs and qualification limits.
 
 - Expose trusted structured edit-rejection details for custom fusion benchmark runners without weakening atomic matching.
