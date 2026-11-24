@@ -1,6 +1,6 @@
-# Verified cascade saves model cost but misses the latency gate
+# Verified cascade cost saving and bounded-draft follow-up
 
-A seven-task live comparison passed all tasks with both Terra direct and a
+The first seven-task live comparison passed all tasks with both Terra direct and a
 Luna-first verified cascade. The cascade used 72.88% less model cost and made
 one successful fallback, but took 25.43% longer in aggregate. It passed the
 frozen quality-and-cost screen and failed the frozen latency gate. This is a
@@ -62,6 +62,41 @@ The failed pizza draft alone used 1,739 output tokens and 15.97 seconds of
 API time before a 2.82-second fallback. The other six drafts used 271–386
 output tokens. This motivates a separately frozen draft-cap experiment;
 it does not change this run's recorded outcome.
+
+## Capped-draft follow-up
+
+A separately frozen tuning run lowered only the cheap draft's output cap from
+8,192 to 768 tokens. It used all seven of the same now-exposed tasks, fresh
+model generations, unchanged strong and fallback settings, and the same
+verifiers and full-grading cases. The cap was chosen after inspecting the first
+run: successful drafts used 271–386 tokens, while the failed draft used 1,739.
+This is post-hoc policy tuning, not independent confirmation.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra direct | 7/7 | $0.012401 | 44.44 s |
+| Capped Luna → conditional Terra | 7/7 | $0.003102 | 43.97 s |
+
+Both arms again passed all 351 full-grading cases, with zero false acceptances
+or lost direct successes and one actual rescue. The cascade's model cost was
+74.99% lower. Its elapsed ratio was 0.9895, meeting the unchanged 1.2 limit.
+It therefore passed the frozen development gate. The 1.05% timing difference
+is too small and too lightly sampled to establish a robust speedup.
+
+The pizza draft hit its 768-token limit. The adapter rejected the incomplete
+response, counted its $0.000456 charge, and requested a fresh fallback. The
+other six drafts passed without fallback. The run used 15 calls costing
+$0.015503. An offline replay reproduced every grade and cost. The
+[capped-run evidence](fusion-capped-cascade-study.json) retains this result
+separately from the original latency failure.
+
+For this type of caller-side workflow, an output cap belongs in the provider
+adapter. Reserve its full possible charge before dispatch. A provider response
+that ends at the cap must become an explicit unusable artifact with its billed
+cost; never accept partial code as successful or turn a transport failure into
+an automatic retry. A strong fallback must still pass the same task checks.
+The value 768 is workload-specific evidence, not a production default for all
+programming tasks.
 
 ## Limits
 
