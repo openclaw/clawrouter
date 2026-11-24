@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 1,
+  "study": "independent-invariant-live-v1",
+  "status": "audited",
+  "sourceSha": "7b2a8cc7e5ae864474c0e5c379ce4bf8081f5058",
+  "protocolSha256": "71a32e01a26ebf757dd7625e3c771766990a26b677ea5433cae214369075551b",
+  "resultSha256": "66face7a45b294c3fa9c8c7598526567212be8b09c14b358b658ce98bb2526e3",
+  "auditSha256": "1b90f8c279d789000d3862a7f58283f14559ab393893cac0bc4f299feeac484d",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 15,
+  "totalCostMicros": 16851,
+  "summary": {
+    "strong": {
+      "passed": 7,
+      "costMicros": 13256,
+      "elapsedMs": 43754.89658400002
+    },
+    "cascade": {
+      "passed": 7,
+      "costMicros": 3595,
+      "elapsedMs": 54881.805083
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.2711979480989741,
+    "elapsedRatio": 1.2543008752777807,
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-7395ead52d148e8d",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1245,
+      "elapsedMs": 5330.3475,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-7395ead52d148e8d",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 2187,
+      "elapsedMs": 24458.03525,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-a0038ec569f24dfe",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 204,
+      "elapsedMs": 4750.181207999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-a0038ec569f24dfe",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1719,
+      "elapsedMs": 5461.052000000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17231e04b4831528",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 3033,
+      "elapsedMs": 9277.448417,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17231e04b4831528",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 286,
+      "elapsedMs": 5610.817000000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-078ae138c145c6e7",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 202,
+      "elapsedMs": 5033.309540999995,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-078ae138c145c6e7",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1646,
+      "elapsedMs": 6241.049209000004,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-fe6af78bafde0cba",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1676,
+      "elapsedMs": 5285.1989170000015,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-fe6af78bafde0cba",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 245,
+      "elapsedMs": 5045.089584000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-5b84392b7c8e4508",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 250,
+      "elapsedMs": 5150.211624999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-5b84392b7c8e4508",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1963,
+      "elapsedMs": 5997.025332999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-76863a0fc551e182",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1974,
+      "elapsedMs": 6162.775208000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-76863a0fc551e182",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 221,
+      "elapsedMs": 4834.160875000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "Seven medium tasks newly absent from cached result JSON/JSONL before this run; not training independence.",
+    "One sample per arm; same-provider model pair; no population-level confidence claim.",
+    "Task-specific generated verifiers were built before inference; large source-private labels retain dataset trust.",
+    "Batched acceptance and holdout checks differ from earlier fully isolated per-case experiments.",
+    "Local engineering, hardware and operational costs are excluded from model cost.",
+    "Live elapsed includes admission, generation, decoding, acceptance verification and persistence; excludes final private grading.",
+    "Original 1.2x latency gate failed; production gain is unqualified."
+  ]
+}
