@@ -1,5 +1,7 @@
 # Changelog
 
+- Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
+
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
 
 - Add caller-side multi-file Fusion artifacts with exact source-path coverage, bounded content, and test-file exclusions.
