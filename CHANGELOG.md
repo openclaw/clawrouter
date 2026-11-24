@@ -4,6 +4,8 @@
 
 - Report verified cascade studies: a tuned cost-saving development gain, a failed fresh-task confirmation, and quality recovery with feedback repair that still fails latency.
 
+- Allow an opt-in two-call cascade repair to pass the rejected artifact and verifier feedback to its fallback, preserving the fresh-fallback default.
+
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
 - Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.

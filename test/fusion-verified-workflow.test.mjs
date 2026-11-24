@@ -42,6 +42,50 @@ test('cascade treats a declared unusable draft as a failed attempt', async () =>
   const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade' });
   assert.equal(r.passed, true); assert.equal(r.costMicros, 12); assert.equal(f.requests.length, 2);
 });
+test('cascade repair passes cloned rejected artifacts and verifier feedback to one fallback', async () => {
+  const feedback = { ...runtimeError, counterexample: { input: [1, 2, 1], expected: 0 } };
+  const f = fixture({ draft: feedback, 'strong-fallback': runtimeError });
+  const invoke = f.invoke;
+  f.invoke = async request => {
+    if (request.stage === 'strong-fallback') {
+      assert.deepEqual(request.draft, { name: 'draft' });
+      assert.deepEqual(request.feedback, feedback);
+      request.draft.name = 'modified'; request.feedback.counterexample.input.push(4);
+    }
+    return invoke(request);
+  };
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackMode: 'repair' });
+  assert.equal(r.passed, false); assert.equal(r.costMicros, 14);
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'strong-fallback']);
+  assert.deepEqual(feedback.counterexample.input, [1, 2, 1]);
+});
+test('cascade repair handles missing drafts and stops on adapter errors', async () => {
+  const f = fixture({});
+  f.invoke = async request => {
+    f.requests.push(request);
+    if (request.stage === 'draft') return { artifact: null, feedback: 'output limit', costMicros: 3 };
+    assert.equal(request.draft, null);
+    assert.deepEqual(request.feedback, { runtimePassed: false, compilerPassed: false, feedback: 'output limit' });
+    return { artifact: { name: request.stage }, costMicros: 7 };
+  };
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackMode: 'repair' });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 10); assert.equal(f.requests.length, 2);
+  const bad = fixture({});
+  bad.verify = async () => { throw Error('verifier_unavailable'); };
+  await assert.rejects(runVerifiedWorkflow({ ...bad, strategy: 'cascade', fallbackMode: 'repair' }), /verifier_unavailable/);
+  assert.equal(bad.requests.length, 1);
+});
+test('fallback mode validation precedes calls and repair does not force a passing draft to escalate', async () => {
+  for (const fallbackMode of [null, '', 'unknown', 1]) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackMode }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+  await assert.rejects(runVerifiedWorkflow({ ...fixture({}), strategy: 'fusion', fallbackMode: 'repair' }), /invalid_verified_workflow/);
+  const f = fixture({});
+  await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackMode: 'repair' });
+  assert.equal(f.requests.length, 1);
+});
 test('cascade never interprets adapter errors or cancellation as permission to spend again', async () => {
   for (const origin of ['invoke', 'verify']) {
     const f = fixture({}), calls = [];
