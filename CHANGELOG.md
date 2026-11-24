@@ -1,5 +1,7 @@
 # Changelog
 
+- Report matched algorithm-outline fusion controls: planning cost nearly as much as a direct solution and did not improve accuracy.
+
 - Record the diverse-output fusion follow-up: revision matched direct controls but cost more, with strict and adapted scores reported separately.
 
 - Report a matched-control functional fusion pilot: Terra direct matched fusion for less, and the only rescued Luna failure was an entrypoint mismatch.
