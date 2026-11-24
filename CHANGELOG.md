@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
+
 - Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.
 
 - Add a replayable hard-task behavioral-majority control: six successes at 30.92% lower accounted cost than Terra, with exposure, pair-control and production limits.
