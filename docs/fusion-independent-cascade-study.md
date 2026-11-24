@@ -173,6 +173,33 @@ proof that feedback caused the difference between stochastic generations. The
 [repair evidence](fusion-feedback-repair-study.json) preserves this result
 alongside the earlier fresh-answer failure.
 
+## Smaller draft cap with single-pass verification
+
+A further frozen tuning run capped the cheap draft at 512 tokens and used one
+framed acceptance execution to obtain both a verdict and any counterexample.
+All six exposed tasks remained. Strong calls, final grading and the original
+quality, cost, rescue and latency gates were unchanged. Both comparison arms
+used the same acceptance verifier. Separate offline checks matched decisions
+and first counterexamples for 36 saved answers and controls.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra direct | 6/6 | $0.012339 | 41.36 s |
+| 512-token Luna → conditional Terra | 6/6 | $0.007779 | 53.87 s |
+
+Both arms passed all 288 grading fixtures. There were two rescues, no false
+acceptances and no lost direct successes. The 14 calls cost $0.020118.
+Model cost was 36.96% lower, but elapsed time was 30.24% higher. The development
+gate still failed. An offline replay reproduced the outcomes and accounting;
+[the 512-token evidence](fusion-framed-512-study.json) retains the result.
+
+Both failed drafts consumed all 512 tokens as reasoning tokens and produced
+no usable code. Reducing the cap shortened the wasted attempts, but did not
+remove the sequential-call penalty. This motivates a separate effort-setting
+test; it does not justify loosening the latency gate or claim a benefit from
+concrete counterexample feedback. Changes in model-generation timing between
+runs cannot be attributed solely to the verifier or cap from these samples.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
