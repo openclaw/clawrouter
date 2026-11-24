@@ -1,6 +1,7 @@
 # Low-cost Fusion research and screening
 
-Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
+Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
+Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
 Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
@@ -280,10 +281,19 @@ not establish correctness or a Fusion performance gain.
 | [RLCascadeRouter, August 2026 preprint](https://arxiv.org/abs/2608.15817) | Optimizes stop/model decisions directly instead of assuming a better quality predictor always makes a better router. | Score the downstream routing decision, not just confidence calibration. RL is a later experiment after enough trajectories exist. |
 | [LLMRouter, August 2026 preprint](https://arxiv.org/abs/2608.06867) | Separates context/model encoders, scoring, decision rules and learning signals in a unified evaluation framework. | Keep these parts replaceable. An embedding classifier should not require rewriting execution or accounting. |
 | [GitHub Copilot Fusion](https://docs.github.com/en/copilot/concepts/models/copilot-fusion) | Uses Single, Cascade and Critique, accounting for cache boundaries and model availability. | Avoid routine multi-model calls on easy tasks. Preserve cache locality when measuring cost. |
+| [Planner-as-Router, September 2026](https://arxiv.org/abs/2609.32917) | Assigns model tiers while planning task dependencies. On 54 enterprise tasks, reports 44% lower cost than all-frontier routing with a 2.9-point accuracy loss; several accuracy differences remain within its confidence interval. | Compare plan-time assignment with fixed workers and a frontier model only at terminal nodes. Count planning cost and lost successful tasks; the reported saving is not lossless. |
+| [Cost-Aware Protocol Routing, August 2026 preprint](https://arxiv.org/abs/2608.14927) | Across reasoning tasks, a post-answer probe predicts baseline failures better than it predicts which collaboration protocol will help. Held-out routing leaves substantial gaps from retrospective oracle selection. | Separate failure detection from protocol selection. A reliable difficulty score does not establish that critique, planning or another model call is worth its cost. |
 
 These are results from different datasets, model pools, graders and budgets.
 Their headline improvements are not expected ClawRouter gains. Preprints have
 less validation than a reproduced, held-out result in this workload.
+
+The next routing experiment should freeze both decisions: when to ask for help,
+and which role receives which model. Compare those decisions separately against
+a fixed small worker, a fixed strong worker and the same repair loop without
+cross-model advice. Keep tasks, public checks and total budgets matched. Report
+lost strong-model successes and added correct answers alongside spend. This is
+a proposed experiment, not a qualified routing policy or a production change.
 
 ## Spend gates
 

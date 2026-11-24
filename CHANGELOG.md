@@ -1,5 +1,7 @@
 # Changelog
 
+- Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
+
 - Document supplied-candidate fusion review with separate corrective models and final executable checks.
 
 - Honor cancellation for fusion sandbox commands, retain failed-creation cleanup identities, and use cached images without implicit pulls.
