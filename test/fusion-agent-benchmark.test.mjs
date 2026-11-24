@@ -1133,3 +1133,18 @@ test('agent creates and submits a declared new module in a real sandbox', {
   assert.deepEqual(result.files, [{ path, content }]);
   assert.deepEqual(result.actions.map(action => action.action), ['edit', 'finish']);
 });
+
+
+test('edit failure details are executor-owned immutable copies', async () => {
+  const { editFailureDetail } = await import('../scripts/fusion-agent-benchmark.mjs');
+  const task = { editPaths: ['worker/a.ts'] }, files = [{ path: 'worker/a.ts', content: 'value' }];
+  let error;
+  try { replaceEdits(task, files, [{ path: 'worker/a.ts', search: 'missing', replace: 'new' }]); } catch (caught) { error = caught; }
+  const detail = editFailureDetail(error);
+  assert.deepEqual(detail, { ordinal: 1, path: 'worker/a.ts', reason: 'no match' });
+  assert.equal(Object.isFrozen(detail), true);
+  assert.notEqual(editFailureDetail(error), detail);
+  const forged = Object.assign(new Error('search_must_match_once'), { ordinal: 7, path: 'private', reason: 'forged' });
+  assert.equal(editFailureDetail(forged), undefined);
+  assert.equal(files[0].content, 'value');
+});

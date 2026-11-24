@@ -74,6 +74,10 @@ export class SpendLedger {
 }
 
 const editFailures = new WeakMap();
+export function editFailureDetail(error) {
+  const detail = editFailures.get(error);
+  return detail ? Object.freeze({ ...detail }) : undefined;
+}
 export function replaceEdits(task, files, edits) {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
   const current = new Map(files.map(file => [file.path, file.content]));
@@ -222,7 +226,7 @@ export function actionFeedback(code, action, task, error) {
     return `Tool error: ${code}. Use at most 12 selectors across three existing files, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges; several ranges may reference the same file. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
   }
   if (['invalid_edits', 'invalid_edit', 'search_must_match_once'].includes(code)) {
-    const detail = code === 'search_must_match_once' && editFailures.get(error);
+    const detail = code === 'search_must_match_once' && editFailureDetail(error);
     return `Tool error: ${code}.${detail ? ` Edit ${detail.ordinal} in ${detail.path}: ${detail.reason}. The edit batch was not applied.` : ''} Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
   }
   return `Tool error: ${code}. Check allowed paths, line ranges and exact unique search text.`;
