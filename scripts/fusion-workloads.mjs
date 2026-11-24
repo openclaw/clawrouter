@@ -85,13 +85,18 @@ export async function loadTasks(path = new URL('../benchmarks/fusion/workloads.j
 }
 
 /** Bounded subprocess output; never prints a provider response or inherits credentials. */
-export function command(program, args, { cwd, input, timeout = 120000, maxBytes = 4 * 1024 * 1024, allowFailure = false } = {}) {
+export function command(program, args, { cwd, input, timeout = 120000, maxBytes = 4 * 1024 * 1024, allowFailure = false, signal } = {}) {
   return new Promise((resolveResult, reject) => {
+    signal?.throwIfAborted();
     const env = { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
       DOCKER_HOST: process.env.DOCKER_HOST, DOCKER_CONTEXT: process.env.DOCKER_CONTEXT };
     const child = spawn(program, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
     const chunks = [], errors = []; let size = 0, failure;
     const timer = setTimeout(() => { failure = new Error('command_timeout'); child.kill('SIGKILL'); }, timeout);
+    const abort = () => { failure = signal.reason instanceof Error ? signal.reason : new DOMException('Command aborted', 'AbortError'); child.kill('SIGKILL'); };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    const retire = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); };
     const collect = target => chunk => {
       size += chunk.length;
       if (size > maxBytes) { failure = new Error('command_output_limit'); child.kill('SIGKILL'); }
@@ -99,9 +104,9 @@ export function command(program, args, { cwd, input, timeout = 120000, maxBytes 
     };
     child.stdout.on('data', collect(chunks)); child.stderr.on('data', collect(errors));
     child.stdin.on('error', () => {});
-    child.on('error', error => { clearTimeout(timer); reject(error); });
+    child.on('error', error => { retire(); reject(error); });
     child.on('close', code => {
-      clearTimeout(timer);
+      retire();
       if (failure) return reject(failure);
       if (code !== 0 && !allowFailure) {
         const error = new Error('command_failed');
@@ -118,7 +123,7 @@ async function git(repo, args) { return (await command('git', args, { cwd: repo,
 
 export function sandboxArgs(image) {
   if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error('immutable_image_required');
-  return ['create', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
+  return ['create', '--pull=never', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges',
     '--user=1000:1000', '--memory=2g', '--cpus=2', '--pids-limit=128',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000',
     '--tmpfs=/work:rw,nosuid,nodev,size=1024m,uid=1000,gid=1000', '--workdir=/work', image,
@@ -126,16 +131,42 @@ export function sandboxArgs(image) {
 }
 
 // No bind mounts, Docker socket, secrets, network, or caller-selected shell command.
-export async function sandbox(image, run = command) {
-  const id = (await run('docker', sandboxArgs(image))).stdout.toString().trim();
-  if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('invalid_container_id');
+export async function sandbox(image, run = command, options = {}) {
+  const cleanup = options.cleanupRun ?? run;
+  const args = sandboxArgs(image, options);
+  const name = options.cleanupRun ? `fusion-sandbox-${randomUUID()}` : null;
+  if (name) args.splice(1, 0, '--name', name);
+  let id;
+  try {
+    id = (await run('docker', args)).stdout.toString().trim();
+    if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('invalid_container_id');
+  }
+  catch (error) {
+    if (name) {
+      try {
+        const result = await cleanup('docker', ['rm', '-f', name], { allowFailure: true });
+        const absent = result.code === 1 && result.stdout.toString().trim() === ''
+          && result.stderr.toString().trim() === `Error response from daemon: No such container: ${name}`;
+        if (result.code !== 0 && !absent) throw new Error('sandbox_cleanup_rejected');
+      }
+      catch { throw new Error(`sandbox_cleanup_failed:${name}`, { cause: error }); }
+    }
+    throw error;
+  }
+  const close = async () => {
+    try { return await cleanup('docker', ['rm', '-f', id]); }
+    catch (error) {
+      if (name) throw new Error(`sandbox_cleanup_failed:${name}`, { cause: error });
+      throw error;
+    }
+  };
   const exec = (args, options = {}) => run('docker', ['exec', '-i', id, ...args], options);
   const execUnprivileged = (args, options = {}) => run('docker', ['exec', '--user', '65534:65534', '-i', id, ...args], options);
   try {
     await run('docker', ['start', id]);
     await exec(['node', '-e', `const fs=require('node:fs'); for(let i=0;i<200;i++){if(fs.existsSync('/work/.ready'))process.exit(0);Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50)}process.exit(1)`]);
-    return { id, exec, execUnprivileged, close: () => run('docker', ['rm', '-f', id]) };
-  } catch (error) { await run('docker', ['rm', '-f', id]); throw error; }
+    return { id, exec, execUnprivileged, close };
+  } catch (error) { await close(); throw error; }
 }
 
 export function validateNewPaths(task) {
