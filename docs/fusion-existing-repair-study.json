@@ -1,0 +1,419 @@
+{
+  "schemaVersion": 1,
+  "study": "existing-cohort-live-v1",
+  "status": "audited",
+  "sourceSha": "bac242e7a68654bcc7997f6532bd40744567fc34",
+  "protocolSha256": "8d6cc2e29e2c0810c71467d736698cab7798bd846560874a7968239d14676210",
+  "resultSha256": "f7399a07db99f9991210d2046e7a42b1464e5f44a632f2e34e9924fcab62e9dd",
+  "auditSha256": "ea30b9f7f2152cb247a6cd9e3f565acad0a873928c2468e7125faf1b1483ecc6",
+  "qualificationProtocolSha256": "39efcd8b70e3b53d1e4a956b70c71cfba1ea6c44eb2d318bb480240463f0524a",
+  "qualificationResultSha256": "ad1defcc446cad4d7315b810cc64461a0c89e359ab92b0ee2037653b57b17a4d",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 12,
+  "totalCostMicros": 158499,
+  "cohort": [
+    {
+      "id": "history-481861424a42",
+      "sourcePath": "worker/managed-lifecycle-adapters.ts",
+      "qualified": true,
+      "heldOutGroups": 2,
+      "contractDocuments": [
+        {
+          "path": "docs/omni-registry-contract.md",
+          "sha256": "712f4ac6104f7522f85cabfecdb83c7e61f5735d7a09f74274d63c863888c665"
+        }
+      ],
+      "restoredGroups": 1
+    },
+    {
+      "id": "history-51f7465f9d56",
+      "sourcePath": "worker/minimax-device-admin.ts",
+      "qualified": true,
+      "heldOutGroups": 1,
+      "contractDocuments": [],
+      "restoredGroups": 1
+    },
+    {
+      "id": "history-aa4e7fdf1d79",
+      "sourcePath": "worker/provider-bedrock-embeddings.ts",
+      "qualified": true,
+      "heldOutGroups": 1,
+      "contractDocuments": [],
+      "restoredGroups": 0
+    },
+    {
+      "id": "history-de8f1a6212d1",
+      "sourcePath": "worker/deepgram-prerecorded.ts",
+      "qualified": true,
+      "heldOutGroups": 1,
+      "contractDocuments": [
+        {
+          "path": "docs/deepgram-prerecorded-contract.md",
+          "sha256": "d2a399a502567e5d79745cfa602d787e5ed6689ae38ee18806ae7e0cd639a18f"
+        }
+      ],
+      "restoredGroups": 1
+    },
+    {
+      "id": "history-f90917132267",
+      "sourcePath": "worker/authority-ack-response.ts",
+      "qualified": true,
+      "heldOutGroups": 1,
+      "contractDocuments": [],
+      "restoredGroups": 1
+    }
+  ],
+  "summary": {
+    "strong": {
+      "passed": 4,
+      "costMicros": 106776,
+      "elapsedMs": 114588.26841600002
+    },
+    "cascade": {
+      "passed": 4,
+      "costMicros": 51723,
+      "elapsedMs": 120585.487624
+    },
+    "falseAccepts": 1,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 2,
+    "costRatio": 0.4844066082265678,
+    "elapsedRatio": 1.0523371134837969,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "history-481861424a42",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 18165,
+      "elapsedMs": 8350.047792000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 13,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "6372d0b4ef7de70b2cb19c8e6a7dd2db30a72f2a2e12ed66d6ac63617c2a11d2",
+      "publicTests": 12
+    },
+    {
+      "id": "history-481861424a42",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1821,
+      "elapsedMs": 6212.808083,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 13,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "96a055acd7eee644715cacc21299635a95ce9b4e8db5d1c060bfc36e6afe9519",
+      "publicTests": 12
+    },
+    {
+      "id": "history-51f7465f9d56",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 28510,
+      "elapsedMs": 33569.568208,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 50,
+        "failures": 1,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "56934fdce8a716baa0cc1bde5df00f00b4a96c5e6acafd2f588e44b041f2fe10"
+          ],
+          "truncated": false
+        },
+        "exitCode": 1,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "a6ea7ad0901b9b19f624fb26ebbc6819a6aeba8c4919fa908db7965c2d9dfb42",
+      "publicTests": 54
+    },
+    {
+      "id": "history-51f7465f9d56",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 7525,
+      "elapsedMs": 19878.21070799999,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 50,
+        "failures": 1,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "56934fdce8a716baa0cc1bde5df00f00b4a96c5e6acafd2f588e44b041f2fe10"
+          ],
+          "truncated": false
+        },
+        "exitCode": 1,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "cb39ce93e50ddc9347da5d73c9671f6a5d812d359faac3ea022acce1013e3f13",
+      "publicTests": 54
+    },
+    {
+      "id": "history-aa4e7fdf1d79",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 28101,
+      "elapsedMs": 35594.144125000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 11,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "70fbc3251057a76e11214d30537e45e1eb96992f86613b7d40c779a8f8d77227",
+      "publicTests": 10
+    },
+    {
+      "id": "history-aa4e7fdf1d79",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2710,
+      "elapsedMs": 16532.766915999993,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 11,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "7eafbd757575facad7dd6366818cad717e04c49d2acdf9f6dc0c3d2eb938ea91",
+      "publicTests": 10
+    },
+    {
+      "id": "history-de8f1a6212d1",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1732,
+      "elapsedMs": 10221.095916999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 7,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "5c691015b65b612be74d72388ce78b319499e540038dd1684ebd221abf962e0e",
+      "publicTests": 7
+    },
+    {
+      "id": "history-de8f1a6212d1",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 17798,
+      "elapsedMs": 17652.699708,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 7,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "0334afdb93c681a1c1170934ea41485af21b89dc50c1b426acfcc853ed776a79",
+      "publicTests": 7
+    },
+    {
+      "id": "history-f90917132267",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 35187,
+      "elapsedMs": 33113.16608300002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 11,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "335414ff9c73cd04130f2eda7f3c7f842899de41a3d26052dd937e5b00e78d98",
+      "publicTests": 11
+    },
+    {
+      "id": "history-f90917132267",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 16950,
+      "elapsedMs": 54049.248500000016,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 11,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      },
+      "artifactSha256": "58a16943ee516680100bf9267721b6ba3e692ca9fb716ec627271741e8863d9c",
+      "publicTests": 11
+    }
+  ],
+  "inputCorrections": [
+    "Include changed task-revision contract documents as public input.",
+    "Preserve baseline regression tests, with an explicit stronger no-store helper composition.",
+    "Replace two obsolete non-registration assertions with their task-revision registration counterparts; retain the original full suite and distinct full-only groups."
+  ],
+  "limitations": [
+    "Five previously exposed tasks, one repetition per arm; this is development evidence, not independent confirmation.",
+    "Cases were selected by one existing nonempty editable source file from a fixed 17-task roster, without selecting on model outcomes.",
+    "Both workflows passed four of five tasks and missed caller cancellation response classification. The all-tasks quality gate and production qualification remain false.",
+    "Reported cost savings and elapsed-time ratio describe this sample only; no population confidence or deployed savings is established.",
+    "Elapsed time includes model calls and public/compiler verification; full final grading occurs after all model calls and is excluded from arm elapsed time."
+  ],
+  "deploymentStatus": "No deployment or default-policy activation."
+}
