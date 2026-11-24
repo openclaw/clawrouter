@@ -210,6 +210,32 @@ test; it does not justify loosening the latency gate or claim a benefit from
 concrete counterexample feedback. Changes in model-generation timing between
 runs cannot be attributed solely to the verifier or cap from these samples.
 
+## Lower draft reasoning setting
+
+The next frozen tuning run changed only the cheap draft's reasoning effort
+from `low` to `none`. It kept the 512-token cap, verifiers and strong settings.
+The known conflicting stdin prompt remained, so the result is diagnostic.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra direct | 5/6 | $0.012459 | 42.17 s |
+| Luna without reasoning → conditional Terra | 6/6 | $0.007889 | 44.91 s |
+
+The cascade passed all 288 grading fixtures, with no false acceptances or lost
+direct successes. Direct failed acceptance on seat swaps. The 14 calls cost
+$0.020348. The cascade used 36.68% less model cost and 6.52% more live time.
+The frozen development gate still evaluates false because it required both
+arms to pass all six tasks. Offline replay reproduced grades and accounting.
+[The evidence](fusion-none-reasoning-study.json) retains the failed control.
+
+There were two rescues. The seat-swap draft was still truncated; the transfer
+draft completed and the fallback received its public-example counterexample.
+This exercises the feedback path, but does not prove feedback caused a benefit.
+The control had one attempt while the cascade could make two. A corrected
+prompt and a matched strong-model self-repair control are required before a
+fairer workflow comparison. This exposed, single-sample result is not a
+production qualification.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
