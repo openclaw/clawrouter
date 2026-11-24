@@ -1,0 +1,454 @@
+{
+  "schemaVersion": 1,
+  "study": "live-cascade-mixed-v1",
+  "status": "audited",
+  "sourceSha": "68a5b8337a0404ed21a3390e73d6910ef5d0ecf2",
+  "protocolSha256": "00f1e07b14359f059024ec43f00cb318645d6081d01183461390d5c137e5da87",
+  "resultSha256": "79aacf0d5ff67ed39d7c32f5e9256d1a9dc136d957daa9a5934a4181e9da30aa",
+  "scope": "Live replication on ten previously exposed tasks: six medium functional and four hard stdin tasks. Fixed hash order; alternating strong/cascade arm order. Strong is one matched direct call. Cascade verifies draft then buys one fresh fallback only on public failure. Full labels stay unused until all arms finish. All per-call admission, API metadata, public verification and decoding time enters each arm. Freeze30-call maximum, account only dispatched calls including failures. Require10/10,zero falseaccepts,20%cost saving,one actual rescue and <=1.2x total elapsed for development lead. No independent-task or production claim.",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 21,
+  "totalCostMicros": 50398,
+  "summary": {
+    "strong": {
+      "passed": 9,
+      "costMicros": 37774,
+      "elapsedMs": 127285.24495700005
+    },
+    "cascade": {
+      "passed": 7,
+      "costMicros": 12624,
+      "elapsedMs": 124917.9015
+    },
+    "falseAccepts": 3,
+    "strongLosses": 3,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.3341981256949224,
+    "elapsedRatio": 0.9814012735113188,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-6f2b84646abe38b8",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 2469,
+      "elapsedMs": 9309.881416,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 18
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-6f2b84646abe38b8",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 312,
+      "elapsedMs": 7093.878708999999,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 18,
+        "failures": 6,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 18
+      },
+      "failureKinds": [
+        "assertion"
+      ]
+    },
+    {
+      "id": "lcb-2c7a44cd00cf1751",
+      "kind": "hard",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 9031,
+      "elapsedMs": 42954.257291,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-2c7a44cd00cf1751",
+      "kind": "hard",
+      "strategy": "strong",
+      "publicPassed": false,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 7738,
+      "elapsedMs": 20912.152625000002,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 19,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": [
+        "assertion"
+      ]
+    },
+    {
+      "id": "lcb-9aced0bc90ea4d19",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1168,
+      "elapsedMs": 5207.249000000011,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 18
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-9aced0bc90ea4d19",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 146,
+      "elapsedMs": 4578.236833999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 18
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-9c15f2e98f1e6391",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 200,
+      "elapsedMs": 5458.920875000011,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-9c15f2e98f1e6391",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1880,
+      "elapsedMs": 7299.8710830000055,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-fc2f49e062ce86b8",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1465,
+      "elapsedMs": 8511.492499999993,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-fc2f49e062ce86b8",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 302,
+      "elapsedMs": 8397.790083,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-467bddb0ab32c773",
+      "kind": "hard",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 724,
+      "elapsedMs": 14219.796583000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-467bddb0ab32c773",
+      "kind": "hard",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 7388,
+      "elapsedMs": 22550.19075000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-06e6dbf2d9b390bb",
+      "kind": "hard",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 3646,
+      "elapsedMs": 13422.154833000008,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-06e6dbf2d9b390bb",
+      "kind": "hard",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 554,
+      "elapsedMs": 12008.014958999993,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-9e95febec102f7e0",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 335,
+      "elapsedMs": 8416.044250000006,
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 19,
+        "failures": 3,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": [
+        "assertion"
+      ]
+    },
+    {
+      "id": "lcb-9e95febec102f7e0",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 2661,
+      "elapsedMs": 9459.161791999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 19
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-aaad12c7dfad6dfa",
+      "kind": "hard",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 7560,
+      "elapsedMs": 22395.036667000008,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-aaad12c7dfad6dfa",
+      "kind": "hard",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "costMicros": 791,
+      "elapsedMs": 15466.273874999984,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": [
+        "TimeoutError"
+      ]
+    },
+    {
+      "id": "lcb-4ac408fbc3371ff7",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 229,
+      "elapsedMs": 6324.688041000016,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    },
+    {
+      "id": "lcb-4ac408fbc3371ff7",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1799,
+      "elapsedMs": 8218.054291000008,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "isolatedCases": 20
+      },
+      "failureKinds": []
+    }
+  ],
+  "limitations": [
+    "Ten previously exposed tasks; one sample per arm.",
+    "Private tests grade completed workflows only; they never choose escalation.",
+    "Per-arm elapsed time includes admission, generation, decoding, public checks and persistence, but excludes final private grading.",
+    "Local compute, hardware, engineering and operational costs are excluded.",
+    "Two assertion failures and one runtime-limit failure among public-passing cascade answers remain failures."
+  ],
+  "auditSha256": "793ad9fb7a88b2b25f38a2d48c06f20d17300e632972f5164429b71b459976a8"
+}

@@ -1,5 +1,7 @@
 # Changelog
 
+- Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.
+
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
 - Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.
