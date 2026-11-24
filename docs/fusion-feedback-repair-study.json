@@ -72,7 +72,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 18
-      }
+      },
+      "draftOutputTokens": 210,
+      "draftDisposition": "complete",
+      "draftUsable": true
     },
     {
       "id": "lcb-34a980a7d516da5e",
@@ -91,7 +94,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 3
-      }
+      },
+      "draftOutputTokens": 768,
+      "draftDisposition": "truncated",
+      "draftUsable": false
     },
     {
       "id": "lcb-34a980a7d516da5e",
@@ -148,7 +154,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 18
-      }
+      },
+      "draftOutputTokens": 450,
+      "draftDisposition": "complete",
+      "draftUsable": true
     },
     {
       "id": "lcb-46b9c4156c9a64d8",
@@ -167,7 +176,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 18
-      }
+      },
+      "draftOutputTokens": 288,
+      "draftDisposition": "complete",
+      "draftUsable": true
     },
     {
       "id": "lcb-46b9c4156c9a64d8",
@@ -224,7 +236,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 18
-      }
+      },
+      "draftOutputTokens": 361,
+      "draftDisposition": "complete",
+      "draftUsable": true
     },
     {
       "id": "lcb-9a7df49b21a566b6",
@@ -243,7 +258,10 @@
         "errors": 0,
         "skipped": 0,
         "batches": 18
-      }
+      },
+      "draftOutputTokens": 768,
+      "draftDisposition": "truncated",
+      "draftUsable": false
     },
     {
       "id": "lcb-9a7df49b21a566b6",
@@ -271,7 +289,8 @@
     "The earlier fresh-answer confirmation failure remains valid; this is not an independent replication.",
     "Four oversized source-private fixtures were excluded prospectively; all task identities remain.",
     "Costs exclude engineering, hardware and operations; live elapsed includes acceptance diagnosis and excludes final private grading.",
-    "Quality and cost screen passed, but latency failed; production gain remains unqualified."
+    "Quality and cost screen passed, but latency failed; production gain remains unqualified.",
+    "Both escalations followed truncated unusable drafts. Their repair prompts contained no candidate code or concrete counterexample; this run does not demonstrate live counterexample-assisted repair."
   ],
   "fallbackMode": "repair"
 }

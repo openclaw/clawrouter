@@ -158,7 +158,14 @@ unchanged 1.2 limit. The development gate and production qualification remain
 false. All 14 calls cost $0.021293; offline replay reproduced the outcomes and
 accounting.
 
-The two repaired tasks took 20.61 s and 17.02 s, versus 9.44 s and 8.16 s for
+Both escalations followed drafts truncated at 768 output tokens. The adapter
+rejected them as unusable, so the fallback received null candidate code and
+rejection metadata, not a concrete counterexample. This result demonstrates
+quality recovery through a strong fallback; it does not demonstrate that a
+counterexample improved a live answer. The four usable drafts needed 210,
+450, 288 and 361 output tokens.
+
+The two fallback tasks took 20.61 s and 17.02 s, versus 9.44 s and 8.16 s for
 their direct controls. Sequential model generation dominates that difference;
 removing duplicate verification alone cannot establish a latency gain.
 This is post-hoc tuning on an exposed cohort, not independent confirmation or
