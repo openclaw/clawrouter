@@ -211,9 +211,61 @@ grades and accounting. [Outcomes and provenance](fusion-functional-edit-study.js
 retain the separate experiments without raw model text or private fixtures.
 No production policy, deployment or latency claim follows from these results.
 
+## Six hard tasks: behavioral agreement with fallback
+
+A separate development screen tested three independent low-effort Luna
+candidates per task. It selected the first candidate in a cluster of at least
+two that passed the public examples and produced identical outputs on 24
+fixed synthetic inputs. Without such a cluster, it used Terra. Probe inputs
+came from public constraints, with no expected answers or hidden test labels.
+All new calls finished before grading. Selections were fixed before full-test
+results were read.
+
+| Policy | Passed | Accounted model cost (USD) |
+| --- | ---: | ---: |
+| First Luna sample | 4/6 | $0.003974 |
+| Second Luna sample | 3/6 | $0.003836 |
+| Third Luna sample | 3/6 | $0.004238 |
+| Terra direct | 6/6 | $0.026880 |
+| First Luna, then Terra on public failure | 5/6 | $0.007251 |
+| Three-sample majority, then Terra | 6/6 | $0.018568 |
+
+The majority policy accepted four tasks and fell back on two. It matched
+Terra's score at 30.92% lower accounted model cost, including all three Luna
+calls and conditional Terra calls. It met the predeclared development gate:
+6/6, better than each cheap sample and the public-only cascade, and at least
+20% cheaper than Terra. A repeat audit reproduced all grades, selections and
+accounting. This is a development lead, not production qualification.
+
+Four tasks were new to the screen; two were exposed in earlier experiments.
+The six tasks contributed 110 selected full-test cases, including 14 public
+examples. All 254 original case contracts were checked. Independent bounded
+references checked 139 outputs; larger reference-unchecked outputs retain
+dataset trust. The 20 new calls cost $0.030941. Four reused baseline calls cost
+$0.007987, for $0.038928 across the 24 unique completions used by this study.
+These call totals are distinct from conditional policy costs.
+
+The separate framed transport preserves the existing CPU, memory and network
+limits while admitting larger fixtures. Public-signature normalization was
+frozen uniformly before inference. Synthetic agreement can preserve shared
+errors, and no claim is made that these tasks were absent from model training.
+No deployed latency measurement or production-path benchmark was performed.
+
+Cached posthoc ablations found that all three two-sample pair policies also
+scored 6/6, at $0.020815, $0.017949 and $0.024296 respectively. One pair was
+cheaper than the frozen three-sample policy. Those results did not choose or
+retune the frozen policy and do not establish which policy generalizes best.
+A fresh comparison must include two-sample and adaptive sampling controls.
+
+The [structured outcomes](fusion-behavior-majority-study.json) include public
+synthetic inputs, output fingerprints, decisions and costs. The published
+selector tests replay those decisions and totals. Raw model outputs and
+private test fixtures are excluded; evidence hashes alone are not a complete
+model-generation reproduction kit. Production defaults remain unchanged.
+
 ## Limits and next gate
 
-Eight tasks are a smoke test, not sufficient confirmation. The sample was new
+These small studies are smoke tests, not sufficient confirmation. The sample was new
 to this experiment, not demonstrated absent from model training. Results apply
 to this adapted functional Python evaluation, not an official LiveCodeBench
 score. Lookup controls qualify transport and assertions, not full algorithm

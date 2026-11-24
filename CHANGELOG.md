@@ -1,5 +1,7 @@
 # Changelog
 
+- Add a replayable hard-task behavioral-majority control: six successes at 30.92% lower accounted cost than Terra, with exposure, pair-control and production limits.
+
 - Report sparse fusion correction controls: exact Terra edits repaired a hard task, but a public-test fallback matched the score for less.
 
 - Report matched algorithm-outline fusion controls: planning cost nearly as much as a direct solution and did not improve accuracy.
