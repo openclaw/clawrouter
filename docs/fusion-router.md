@@ -399,6 +399,16 @@ execution of generated code. Adapter errors, malformed receipts, deadlines and
 cancellation stop the workflow rather than triggering fallback. This caller-side
 mode does not enable a Worker routing policy or establish a model-quality gain.
 
+For an informed fallback, set `fallbackMode: 'repair'` with `strategy: 'cascade'`.
+The second invocation receives a clone of the rejected artifact and its verifier
+receipt in `draft` and `feedback`. A missing artifact stays `null`. This mode still
+allows at most two calls, counts both costs, and verifies the fallback before
+acceptance. The default `fallbackMode: 'fresh'` sends neither artifact nor feedback.
+Only include feedback that the fallback is allowed to see. Keep evaluation-only
+held-out cases outside this receipt, and treat generated artifacts as untrusted
+data in the provider adapter. No quality or cost improvement is implied by this
+option; validate it on the intended workload.
+
 Optionally set `models.runtimeRepair` to a specialist model identifier. When
 the original draft fails runtime checks but passes compilation, the workflow
 calls that model once with the saved draft and verification feedback, using

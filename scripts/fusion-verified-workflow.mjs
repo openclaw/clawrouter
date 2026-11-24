@@ -23,9 +23,10 @@ async function bounded(signal, operation) {
  * the workflow; they never authorize another provider call or a model fallback.
  */
 export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () => {}, strategy = 'fusion',
-  deadlineMs = 900000, signal: callerSignal }) {
+  fallbackMode = 'fresh', deadlineMs = 900000, signal: callerSignal }) {
   const requiredModels = strategy === 'cascade' ? ['draft', 'repair'] : ['draft', 'repair', 'compiler'];
   if (!['fusion', 'strong', 'cascade'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
+    || !['fresh', 'repair'].includes(fallbackMode) || (fallbackMode === 'repair' && strategy !== 'cascade')
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
     || !models || requiredModels.some(k => !validModel(models[k]))
     || (models.compiler !== undefined && !validModel(models.compiler))
@@ -64,7 +65,8 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
     steps, costMicros: totalCostMicros, elapsedMs: performance.now() - started });
   if (strategy === 'cascade') {
     const first = await attempt('draft', models.draft);
-    return finish(isPassed(first) ? first : await attempt('strong-fallback', models.repair));
+    return finish(isPassed(first) ? first : await attempt('strong-fallback', models.repair,
+      fallbackMode === 'repair' ? first : null));
   }
   if (strategy === 'strong') {
     const first = await attempt('strong-initial', models.repair);
