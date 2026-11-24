@@ -252,6 +252,62 @@ test('qualification rejects empty/malformed reports and distinguishes broken tes
   assert.equal(testResult({ code: 0, stdout: Buffer.from('success'), stderr: Buffer.alloc(0) }).valid, false);
 });
 
+test('declared Node timeouts remain failures with opt-in complete-census accounting', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fusion-timeout-'));
+  try {
+    const path = join(directory, 'timeout.test.mjs');
+    await writeFile(path, `import test from 'node:test';
+test('preserved case', () => {});
+test('ordinary failure', () => { throw Error('expected fixture failure'); });
+test('stalled operation', { timeout: 20 }, async () => {
+  await new Promise(resolve => setTimeout(resolve, 100));
+});\n`);
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const child = spawnSync(process.execPath, ['--test-reporter=tap', '--test', path], { timeout: 5000, env });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 1);
+    const report = { code: child.status, stdout: child.stdout, stderr: child.stderr };
+    assert.equal(testResult(report).valid, false, 'default classification is unchanged');
+    const options = { countTestTimeoutsAsFailures: true };
+    const grade = testResult(report, options);
+    assert.equal(grade.valid, true);
+    assert.equal(grade.passed, false);
+    assert.equal(grade.tests, 3);
+    assert.equal(grade.failures, 2);
+    assert.equal(grade.testTimeoutFailures, 1);
+    assert.equal(grade.digest, testResult(report).digest);
+    assert.deepEqual(await check({ exec: async () => report }, ['test/timeout.test.mjs'], 1000, options),
+      { ...grade, feedback: Buffer.concat([child.stdout, child.stderr]).toString() });
+
+    const text = child.stdout.toString();
+    for (const mutated of [
+      text.replace('testTimeoutFailure', 'cancelledByParent'),
+      text.replace('testTimeoutFailure', 'unknownFailure'),
+      text.replace("  failureType: 'testTimeoutFailure'", "  error: 'testTimeoutFailure'"),
+      text.replace('# cancelled 1', '# cancelled 2'),
+      text.replace('# pass 1', '# pass 0'),
+      text.replace('not ok 3 -', 'not ok 4 -'),
+      text.replace('not ok 3 -', '    not ok 3 -'),
+      text.replace('# suites 0', '# suites 1'),
+      text.replace('# todo 0', '# todo 1'),
+      text + 'incomplete trailing output\n',
+    ]) {
+      assert.equal(testResult({ ...report, stdout: Buffer.from(mutated) }, options).valid, false);
+    }
+    for (const code of [0, 137, null]) {
+      const result = testResult({ ...report, code }, options);
+      assert.equal(result.valid, false);
+      assert.equal(result.passed, false);
+    }
+    assert.throws(() => testResult(report, { countTestTimeoutsAsFailures: 'yes' }), /invalid_test_timeout_accounting/);
+    await assert.rejects(check({ exec: async () => assert.fail('must reject before execution') }, ['test/timeout.test.mjs'],
+      1000, { countTestTimeoutsAsFailures: 'yes' }), /invalid_test_timeout_accounting/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('long test feedback preserves early nested failure diagnostics and final output', async () => {
   const failure = '    not ok 1 - early regression\r\n      ---\r\n      error: expected one settlement\r\n      stack: |\r\n        repair.test.mjs:12:3\r\n      ...\r\n';
   const output = failure + '    ok 2 - later passing test\r\n'.repeat(1000);

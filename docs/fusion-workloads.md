@@ -49,6 +49,14 @@ All three use the same container image and test commands. A test process that
 does not produce a complete, nonempty TAP summary does not qualify. A failed
 qualification must be repaired or excluded before model inference.
 
+Research callers can opt into `countTestTimeoutsAsFailures` in `check()` or
+`testResult()`. Node reports a test's declared timeout as a cancellation. This
+option counts it as a failure only when a complete flat TAP census accounts for
+every test and every cancellation has `testTimeoutFailure` diagnostics. The
+process must exit with code 1. Unresolved, parent, nested, and runner cancellation
+remain invalid. A timed-out candidate never passes. Freeze this option in a new
+experiment protocol; it does not reinterpret existing receipts.
+
 Containers run as an unprivileged user with CPU, memory and process limits, a
 read-only root, no network, no credentials and no host bind mounts. Each trial
 gets a fresh writable work directory. Final verification runs in another fresh
