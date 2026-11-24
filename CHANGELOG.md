@@ -18,6 +18,8 @@
 
 - Allow an opt-in two-call cascade repair to pass the rejected artifact and verifier feedback to its fallback, preserving the fresh-fallback default.
 
+- Add opt-in Fusion grading for declared Node test timeouts, counting fully accounted timeouts as failures while rejecting unresolved cancellation.
+
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
 - Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.
