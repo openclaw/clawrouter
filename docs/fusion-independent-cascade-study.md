@@ -303,6 +303,35 @@ that repair is generally harmful: the cases were already exposed failures,
 there was one sample per arm, and this was not an executed cascade. The two
 fresh successes do not isolate an effect from the larger output cap.
 
+## Larger draft and fresh fallback follow-ups
+
+Two final tuning comparisons kept the same six exposed tasks and public-scale
+checks, with a 1,024-token Luna draft and an 8,192-token Terra attempt. Every arm
+allowed at most two calls. Full grading and offline replay remained separate
+from public acceptance.
+
+| Policy | Strong passed | Cascade passed | Cost ratio | Live time ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Repair from rejected code and public feedback | 6/6 | 5/6 | 0.9204 | 1.4215 |
+| Independent fresh strong fallback | 6/6 | 6/6 | 0.5650 | 1.2098 |
+
+The [larger-draft repair run](fusion-scale-1024-study.json) lost one strong
+success and failed all promotion gates. Its 15 calls cost $0.024064. No public
+false acceptance occurred: the failed fallback was rejected by public checks.
+
+The [fresh-fallback run](fusion-fresh-fallback-study.json) passed all six tasks
+in both arms, with zero false accepts or lost strong successes and three
+successful escalations. Cascade model cost was $0.007249 versus $0.012831 for
+the strong baseline, a 43.50% reduction. Live arm time was 57.58 seconds versus
+47.60 seconds, a 20.98% increase. Its 15 calls cost $0.020080.
+
+The original latency limit is 1.2 times the baseline. The observed 1.2098 ratio
+fails that limit: this is a quality-matched cost result, not a development or
+production qualification. Do not round it into a pass. Stochastic differences
+between runs also prevent attributing the entire improvement to fresh fallback.
+These comparisons close tuning on these six tasks. The next qualification must
+use practical repository work and a separately frozen policy and task set.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
