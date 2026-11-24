@@ -59,3 +59,23 @@ test('the workflow charges a rejected partial draft and verifies all fallback fi
   assert.equal(result.passed, true); assert.equal(result.costMicros, 6);
   assert.equal(calls, 2); assert.equal(checks, 1); assert.deepEqual(result.artifact.files, files);
 });
+
+
+test('Node library source paths require explicit policy without weakening exclusions', () => {
+  for (const path of ['lib/client.js', 'lib/nested/client.mjs', 'lib/client.cjs']) {
+    assert.throws(() => fileArtifactSchema({ editPaths: [path] }), /invalid_replacement_path/);
+    const task = { sourcePathPolicy: 'node-library-v1', editPaths: [path] };
+    const files = [{ path, content: 'module.exports = {};' }];
+    assert.deepEqual(parseFileArtifact(task, { files }), { files });
+    assert.deepEqual(fileArtifactSchema(task).properties.files.items.properties.path.enum, [path]);
+  }
+  for (const sourcePathPolicy of ['unknown', '']) {
+    assert.throws(() => fileArtifactSchema({ sourcePathPolicy, editPaths: ['worker/a.ts'] }), /invalid_source_path_policy/);
+  }
+  for (const path of ['lib/../a.js', 'lib//a.js', 'lib/tests/a.js', 'lib/Test/a.js',
+    'lib/__tests__/a.js', 'lib/a.test.js', 'lib/a.SPEC.js', 'lib/a.json', 'lib/a.ts',
+    '/lib/a.js', 'src/a.js', 'lib\\a.js']) {
+    assert.throws(() => fileArtifactSchema({ sourcePathPolicy: 'node-library-v1', editPaths: [path] }), /invalid_replacement_path/);
+  }
+  assert.doesNotThrow(() => fileArtifactSchema({ sourcePathPolicy: 'worker-v1', editPaths: ['worker/a.ts'] }));
+});
