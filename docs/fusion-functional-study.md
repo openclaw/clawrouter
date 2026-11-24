@@ -263,6 +263,66 @@ selector tests replay those decisions and totals. Raw model outputs and
 private test fixtures are excluded; evidence hashes alone are not a complete
 model-generation reproduction kit. Production defaults remain unchanged.
 
+## Fresh confirmation: voting did not retain its cost advantage
+
+The next frozen screen used six tasks not used in earlier campaign cohorts:
+three remaining hard tasks and three supported medium signatures chosen by a
+fixed identity hash. One earlier-ranked medium task used unsupported floating
+point output and was recorded as excluded before inference. This is freshness
+to the experiment, not evidence about model training data.
+
+The primary policy first buys two Luna drafts. If both pass public examples and
+agree on all 24 fixed synthetic input fingerprints, it accepts the first. If
+they disagree, it buys a third draft, takes a qualifying majority, and otherwise
+falls back to Terra. All three fixed pairs and the always-three policy were
+predeclared controls. No policy receives private-test feedback.
+
+Initial grading gave the following results. All 24 model calls completed
+before any grading; their actual combined cost was $0.024605. Conditional
+policy costs charge every draft bought by that policy and its Terra fallback.
+They exclude local test execution and do not measure deployed latency.
+
+| Policy | Tasks passed | Conditional model cost |
+| --- | ---: | ---: |
+| First Luna draft | 5/6 | $0.003239 |
+| Second Luna draft | 5/6 | $0.002887 |
+| Third Luna draft | 4/6 | $0.003081 |
+| Terra direct | 6/6 | $0.015398 |
+| Public-example fallback | 6/6 | $0.008352 |
+| First + second agreement | 6/6 | $0.013496 |
+| First + third agreement | 6/6 | $0.013690 |
+| Second + third agreement | 6/6 | $0.013338 |
+| Always-three majority | 6/6 | $0.016577 |
+| Adaptive third (primary) | 6/6 | $0.015224 |
+
+Every confirmation gate failed. Adaptive sampling saved only 1.13% versus
+Terra and cost more than public-example fallback; it neither improved that
+baseline's accuracy nor met the required 20% reduction. The earlier hard-task
+development gain therefore did not generalize to this confirmation cohort.
+
+The independent replay changed the first draft for one hard task from a full
+pass to a closed worker pipe (`EOFError`). That reduced the first-draft score
+to 4/6 and public-example fallback to 5/6. Voting policies still scored 6/6,
+but every cost-and-quality gate remained false. A separate targeted replay of
+all six first-draft full tests matched the initial snapshot, so this is an
+unresolved runtime-stability issue, not grounds to choose the better score.
+Three fixed diagnostic repeats then failed after 11, 17 and 17 completed
+cases, with worker exit -9 and approximately 5.21, 5.00 and 5.00 CPU seconds.
+Those observations are consistent with the unchanged five-second cumulative
+worker CPU limit. They do not justify increasing the limit or replacing the
+failed replay. The grader now exposes failure stage, completed-case count,
+worker exit status and child CPU time without returning candidate stderr.
+The call accounting independently reconciled; grading did not. No policy is
+enabled in production.
+
+The [structured snapshot](fusion-fresh-confirmation-study.json) publishes
+public synthetic inputs, fingerprints, grades and policy costs. Tests replay
+selection and arithmetic from those observations; they do not independently
+reproduce model generation or hidden grading. The cohort checked 255 original
+case contracts, independently verified 166 bounded reference cases, and used
+111 selected full-test cases. Larger outputs retain dataset trust. Raw model
+code and private fixtures are excluded.
+
 ## Limits and next gate
 
 These small studies are smoke tests, not sufficient confirmation. The sample was new
