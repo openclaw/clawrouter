@@ -1,5 +1,6 @@
 # Changelog
 
+- Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
 - Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
 
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
