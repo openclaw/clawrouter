@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "study": "Draft reasoning effort on a real MIME parser repair",
-  "scope": "One exposed repository task, repeated three times per variant. Sequential development experiment; not three independent tasks, a randomized cross-effort trial, or production qualification.",
+  "study": "Draft reasoning effort and transfer on repository repairs",
+  "scope": "One MIME task repeated three times per effort variant, followed by five previously exposed real repairs tested once each at medium effort. Sequential development experiments, not independent confirmation or production qualification.",
   "task": {
     "id": "history-55df86fed814",
     "baseCommit": "8a9da4f83532727f530cdfec1256ceaa4b6e6113",
@@ -506,7 +506,177 @@
     "Medium accepted two of three drafts; all three final outputs passed, with no false acceptance or loss relative to its matched strong control.",
     "Medium met this development cost screen: 35.5% lower invoice-estimate cost and 47.0% lower cache-neutral cost. It was 48.1% slower, so it failed the predeclared development latency gate.",
     "Each variant has its own fresh strong controls. Sequential runs and a shared task do not support a causal cross-effort estimate or task-general confidence interval.",
-    "The cost result is a narrow lead for slower economy-mode repair. Preserve medium effort as a candidate, then test a frozen policy on independent real tasks before promotion.",
-    "No deployment or default change. The original 30 unseen tasks by three trials requirement remains unmet."
-  ]
+    "Medium effort remains a narrow candidate: the five-task follow-up below is negative overall, despite two direct validation-task successes.",
+    "No deployment or default change. The original 30 unseen tasks by three trials requirement remains unmet across these development studies."
+  ],
+  "transferFollowup": {
+    "scope": "Entire five-task development roster; no outcome-based exclusions. All tasks were already exposed before this follow-up.",
+    "sourceCommit": "d35dd0df1c019b88ed60e0223985399c1e272366",
+    "hashes": {
+      "protocol": "9c669f5babb78f8b7067c6538312b5170e1cf0c2c2a97a72ba747b2b9398c4d7",
+      "result": "4bf537e02e03509eb52e72a2c5ec5e026ab5bb610626842e742d5435cce21d24",
+      "terminal-audit": "c03177582bb472669233f6ad63a7993568bb784fc2f1293b33c371c0028e8299"
+    },
+    "method": "Same frozen public inputs and full tests as the prior five-task compact study, with exact-lock Worker runtime/compiler verification. Medium Luna draft, Terra-low strong, 4096/8192 output caps, fresh fallback, matched two-attempt ceilings. All generation precedes full grading. Costs follow the frozen tariff and rounding method above.",
+    "previousStudy": "fusion-compact-repair-study.json",
+    "rows": [
+      {
+        "id": "history-94575e6b2ab4",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 5438,
+        "normalizedMicros": 28618,
+        "elapsedMs": 14449.072917
+      },
+      {
+        "id": "history-94575e6b2ab4",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 11337,
+        "normalizedMicros": 33907,
+        "elapsedMs": 45887.208167
+      },
+      {
+        "id": "history-ff6b7f68a005",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 772,
+        "normalizedMicros": 686,
+        "elapsedMs": 8653.964833999999
+      },
+      {
+        "id": "history-ff6b7f68a005",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2904,
+        "normalizedMicros": 6135,
+        "elapsedMs": 14968.395875000002
+      },
+      {
+        "id": "history-836b2072a67b",
+        "strategy": "strong",
+        "passed": false,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 6693,
+        "normalizedMicros": 14289,
+        "elapsedMs": 27566.347332999998
+      },
+      {
+        "id": "history-836b2072a67b",
+        "strategy": "cascade",
+        "passed": false,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 9732,
+        "normalizedMicros": 17128,
+        "elapsedMs": 63944.01999999999
+      },
+      {
+        "id": "history-e74789a5404d",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 9080,
+        "normalizedMicros": 31894,
+        "elapsedMs": 29787.37383300002
+      },
+      {
+        "id": "history-e74789a5404d",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 4532,
+        "normalizedMicros": 27962,
+        "elapsedMs": 12105.156625000003
+      },
+      {
+        "id": "history-6933f3d98b7e",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 1545,
+        "normalizedMicros": 5466,
+        "elapsedMs": 11598.555082999985
+      },
+      {
+        "id": "history-6933f3d98b7e",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 690,
+        "normalizedMicros": 587,
+        "elapsedMs": 6199.619084000005
+      }
+    ],
+    "summary": {
+      "strong": {
+        "passed": 4,
+        "costMicros": 21112,
+        "elapsedMs": 80687.52783299999
+      },
+      "cascade": {
+        "passed": 4,
+        "costMicros": 31611,
+        "elapsedMs": 154472.185918
+      },
+      "falseAccepts": 1,
+      "strongLosses": 0,
+      "rescues": 2,
+      "escalations": 3,
+      "costRatio": 1.497300113679424,
+      "elapsedRatio": 1.9144493587374876,
+      "costComparison": {
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "strong": {
+          "costMicros": 21112,
+          "normalizedMicros": 82470
+        },
+        "cascade": {
+          "costMicros": 31611,
+          "normalizedMicros": 84202
+        },
+        "costRatio": 1.497300113679424,
+        "normalizedCostRatio": 1.021001576330787,
+        "invoiceCostScreen": false,
+        "normalizedCostScreen": false,
+        "costScreen": false
+      },
+      "qualityMatchedCostScreen": false,
+      "liveDevelopmentLead": false,
+      "qualifiedProductionGain": false
+    },
+    "newCalls": 13,
+    "newCostMicros": 52723,
+    "priorSpentMicros": 312100879,
+    "cumulativeSpentMicros": 312153602,
+    "interpretation": [
+      "Both arms pass four of five tasks. The readiness repair passes public verification but fails final grading in both arms; this remains a recorded false acceptance.",
+      "FAL activation and scalar validation pass directly with medium drafts. Native endpoint selection, readiness, and WebSocket accounting all require fallback.",
+      "The cascade costs 49.7% more by invoice estimate and 2.1% more after cache normalization, and takes 91.4% longer. It fails both cost screens and the latency gate.",
+      "The broader result does not support generic medium-effort cheap-first repair. Small validation-task successes and the MIME result remain candidates for future independent replication, not grounds to enable a routing policy."
+    ]
+  }
 }
