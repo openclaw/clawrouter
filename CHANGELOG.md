@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the harder repository cascade failure and a baseline-test fixture correction, retaining the failed quality, cost and latency results.
+
 - Report fresh-fallback timing limits and a qualified cheap-execution gain on two real repository repairs, without claiming collaboration or production efficacy.
 
 - Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.

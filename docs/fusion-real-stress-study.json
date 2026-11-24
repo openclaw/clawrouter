@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "study": "real-stress-fresh-live-v1",
+  "status": "audited",
+  "sourceSha": "aba4f0b1d669aceebd9fce8389e4e81c32ce7170",
+  "protocolSha256": "dbb08c6feec2ff488df0a194bee9777dd29ee7f3ec78396e35206e8a8dad9258",
+  "resultSha256": "85ec3df898627825b350602d5e029378aaa98a88ff840d7d822b6c6f4fc67dd0",
+  "auditSha256": "b1e70e7f4f6943ec3a937a2f5ac68a7663dbc7bd9cdaa9fe99501c0f52fdbe85",
+  "qualificationSha256": "8f5987c3bec1d5cbff01e7389b95e068fa55189e5463c01767bc43fda0fce8f2",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 8,
+  "totalCostMicros": 102064,
+  "summary": {
+    "strong": {
+      "passed": 2,
+      "costMicros": 45021,
+      "elapsedMs": 77336.685876
+    },
+    "cascade": {
+      "passed": 1,
+      "costMicros": 57043,
+      "elapsedMs": 101064.692418
+    },
+    "falseAccepts": 2,
+    "strongLosses": 1,
+    "rescues": 1,
+    "escalations": 2,
+    "costRatio": 1.2670309411163678,
+    "elapsedRatio": 1.3068143698327723,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "history-0b4dc5546417",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 14675,
+      "elapsedMs": 24707.091792,
+      "artifactSha256": "906b15c360ddbc476fe50387ccae7dc6cb0d11593ddb70a7d9abd0f9a1554b9f",
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-0b4dc5546417",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 11947,
+      "elapsedMs": 41769.19520900001,
+      "artifactSha256": "fc1aa0f14cac63f83774724bd727f81d38ecbef80e30b630dd51c5097decc7cb",
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-96236f0715a2",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 43526,
+      "elapsedMs": 47876.00241700001,
+      "artifactSha256": "6a411f8528c47ee234c4bcd844482787f9d9745beeec5869cb1871ca96a17fba",
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 7,
+        "failures": 1,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "a8d044c641d8cb264e2a97049f1323bc3b872faf5d55fe6883bd326d5dc1be8c"
+          ],
+          "truncated": false
+        },
+        "exitCode": 1,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-96236f0715a2",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 12919,
+      "elapsedMs": 31268.416125000003,
+      "artifactSha256": "2d6c82babed255416326c9a42bc831741e6d9c9010978781183ae7c34c39cb17",
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 7,
+        "failures": 1,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "a8d044c641d8cb264e2a97049f1323bc3b872faf5d55fe6883bd326d5dc1be8c"
+          ],
+          "truncated": false
+        },
+        "exitCode": 1,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-de8f1a6212d1",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 17427,
+      "elapsedMs": 21361.177958999993,
+      "artifactSha256": "3f1d612844a4995354b4e3b71a6d096048fb5bdfd2485e0d2157696429dbaa70",
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 7,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-de8f1a6212d1",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1570,
+      "elapsedMs": 11419.494791999983,
+      "artifactSha256": "108d64a36d0b3afb95fc24ee136b421ed7106e1df73e18b293e66c464cf1424f",
+      "full": {
+        "valid": true,
+        "passed": false,
+        "tests": 7,
+        "failures": 1,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [
+            "8394ac6eb6246e040394da1bbea817f391d812c0dcd346ed2bb39ff38a4ca2f2"
+          ],
+          "truncated": false
+        },
+        "exitCode": 1,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    }
+  ],
+  "scope": "All three strong-only tasks from the already observed 17-task matrix. Outcome-informed stress development. Preserve original public/full tests and API/dependency context; full grading starts after all model calls. Luna none/4096 draft and Terra low/8192 strong attempts; each arm has at most two calls, equal total arm budget/deadline. Strong retries and cascade fallbacks are fresh original requests without rejected code or feedback. Keep quality, 20% model-cost saving, actual rescue and 1.2 elapsed gates. Maximum12calls/2USDstage; no production or independent confirmation claim. Shared initial cheap outcomes are component evidence, not another independent trial.",
+  "baselineTestCorrection": {
+    "protocolSha256": "bf2def48708ee891a734a2f59034bd9fd0b8ac369bb6679ffe41a6cf646a83b7",
+    "resultSha256": "5ded928bac81853a4bcbf0709a1d2a747ed1b1c7dd8d3ec90d694c6c43afc8ac",
+    "noPaidCalls": true,
+    "changedTask": "history-de8f1a6212d1",
+    "restoredGroups": 1,
+    "publicTests": 7,
+    "referencePassed": true,
+    "brokenBaselinePassed": false,
+    "savedStrongPassed": true,
+    "savedCascadePassed": true,
+    "interpretation": "Restores an existing baseline test to public inputs but does not catch the newly introduced held-out restriction. No improved end-to-end claim."
+  }
+}

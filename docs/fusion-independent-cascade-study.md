@@ -359,6 +359,38 @@ and only that log text and its hash were excluded from comparison. A separate
 audit rebound every stage to its frozen request and accounted for all costs.
 The four model calls cost $0.035750. No production defaults changed.
 
+## Harder repository stress check
+
+The next [frozen development study](fusion-real-stress-study.json) selected all
+three tasks on which the prior 17-task matrix had a strong-only success. This
+is outcome-informed stress testing, not an independent sample. The tasks cover
+OpenRouter transcription, Bedrock embeddings and a Deepgram query-bound repair.
+The same public tests, declared API context, arm budget and deadline applied to
+both arms. Full tests ran only after all model calls finished.
+
+| Arm | Full suites passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional fresh retry | 2/3 | $0.045021 | 77.34 s |
+| Luna → conditional fresh Terra | 1/3 | $0.057043 | 101.06 s |
+
+Cascade cost 26.70% more and took 30.68% longer. Both escalations passed public
+checks, but only one passed the full suite. Two cascade answers were false
+accepts; one lost a strong-model success. The eight calls cost $0.102064.
+All promotion gates failed. Offline replay reproduced the grades, artifacts,
+accounting and recorded timing with no additional model calls. Raw TAP text
+and its digest were retained separately from stable grade fields.
+
+Inspection also found that the public Deepgram subset omitted an unchanged
+baseline test body. A subsequent fixture correction restored that existing
+coverage without exposing new held-out checks. The corrected public suite
+passed on the reference and both saved answers, and rejected the original
+broken source. It therefore improves fixture realism but does **not** repair
+the observed false acceptance: the missed restriction is new. This diagnostic
+used no additional model calls and is not an improved end-to-end result.
+
+The two earlier cleanup successes do not establish hard-task capability.
+Public acceptance coverage remains an unresolved limit on this cascade.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
