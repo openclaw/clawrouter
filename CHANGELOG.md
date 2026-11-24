@@ -1,6 +1,7 @@
 # Changelog
 
 - Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+- Report failed Access fusion and verifier diagnostics, including the absent-field fixture correction and limits of public-test acceptance.
 
 - Record an audited Node-only cheap-first cost win, with isolated runtime admission and no collaboration-gain claim.
 
