@@ -2,7 +2,8 @@
 
 A tuned seven-task run met the development gate, but confirmation on six new
 task identities lost one direct-model success and failed latency. This policy
-is not qualified for production. The individual results follow.
+is not qualified for production. A subsequent repair run recovered all six tasks,
+but still failed latency. The individual results follow.
 
 The first seven-task live comparison passed all tasks with both Terra direct and a
 Luna-first verified cascade. The cascade used 72.88% less model cost and made
@@ -134,9 +135,36 @@ bounded independent references. Positive and negative sandbox controls passed.
 The 14 dispatched calls cost $0.020115. An offline replay reproduced the full
 grades and costs. The [confirmation evidence](fusion-cascade-confirmation-study.json)
 retains the failed outcome. It does not erase the earlier tuned gain, but it
-rejects generalizing that gain to this new cohort. A possible next experiment
-is a bounded repair using acceptance feedback; that policy has not been shown
-to improve these results.
+rejects generalizing that gain to this new cohort.
+
+## Acceptance-feedback repair follow-up
+
+A separately frozen follow-up kept all six now-exposed AtCoder tasks and the
+same acceptance and full-grading cases. It changed the fallback to receive the
+rejected candidate and a counterexample from the public or generated acceptance
+cases. No held-out or source-private result entered the repair prompt. The
+workflow still allowed at most two model calls. Counterexample extraction ran
+in a separate isolated execution, and its time counted against the cascade.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra direct | 6/6 | $0.013209 | 42.22 s |
+| Capped Luna → feedback repair | 6/6 | $0.008084 | 57.63 s |
+
+Both arms passed all 288 full-grading fixtures. There were two rescues, zero
+false acceptances and zero lost direct successes. The quality-and-cost screen
+passed: model cost was 38.80% lower. The elapsed ratio was 1.3651, failing the
+unchanged 1.2 limit. The development gate and production qualification remain
+false. All 14 calls cost $0.021293; offline replay reproduced the outcomes and
+accounting.
+
+The two repaired tasks took 20.61 s and 17.02 s, versus 9.44 s and 8.16 s for
+their direct controls. Sequential model generation dominates that difference;
+removing duplicate verification alone cannot establish a latency gain.
+This is post-hoc tuning on an exposed cohort, not independent confirmation or
+proof that feedback caused the difference between stochastic generations. The
+[repair evidence](fusion-feedback-repair-study.json) preserves this result
+alongside the earlier fresh-answer failure.
 
 ## Limits
 
