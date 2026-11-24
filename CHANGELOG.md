@@ -1,5 +1,7 @@
 # Changelog
 
+- Record the failed fresh small-reviewer cascade replication, complete costs and the limits of its earlier Terra diagnostic.
+
 - Record the input-validated fusion follow-up: fixed review and public-gated policies lose strong-model successes and remain unqualified.
 
 - Record the failed fusion cost confirmation and malformed upstream fixture without dropping failed rows or changing production behavior.
