@@ -261,6 +261,30 @@ acceptance; a cheaper run with this failure is not a viable quality gain.
 The corrected prompt and stronger control were introduced together, so this
 pilot cannot isolate their individual effects.
 
+## Public scale acceptance
+
+The next pilot added constructive N=60,000 public-constraint checks for all
+six tasks. Small cases agree with independent references; the six efficient
+reference solutions pass in the existing sandbox. Replaying the previous
+answers exposed both the transfer simulation and an O(N×M) subsequence
+implementation. Source-private cases do not supply the scale fixtures.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional self-repair | 6/6 | $0.012606 | 46.26 s |
+| Luna → conditional Terra repair | 6/6 | $0.012643 | 67.31 s |
+
+Both arms passed full grading, with zero false acceptances and zero lost
+strong successes. The cascade escalated four times: three drafts were complete
+and one was truncated. Its model cost was 0.29% higher and live time was 45.50%
+higher. This restores quality in this sample but fails both economic and
+latency goals. The 16 calls cost $0.025249. Offline replay reproduced grades
+and accounting; [the evidence](fusion-public-scale-study.json) retains every arm.
+
+This remains one sample on exposed tasks. Different model generations prevent
+attributing the entire change between runs to the added checks. No production
+or repository-work qualification follows from the result.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
