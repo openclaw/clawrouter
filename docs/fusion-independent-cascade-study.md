@@ -236,6 +236,73 @@ prompt and a matched strong-model self-repair control are required before a
 fairer workflow comparison. This exposed, single-sample result is not a
 production qualification.
 
+## Corrected output contract and matched repair control
+
+A subsequent pilot corrected the output instruction and allowed the strong
+control the same opportunity to repair a rejected answer. Both arms could
+make at most two calls, stopped after acceptance, and used the same bounded
+feedback. The six task identities were already exposed.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional self-repair | 6/6 | $0.012446 | 50.92 s |
+| Luna → conditional Terra repair | 5/6 | $0.007379 | 46.37 s |
+
+The cascade used 40.71% less model cost and 8.93% less live time, but lost one
+strong-model success. All quality and promotion gates remain false. The 14
+calls cost $0.019825; offline replay reproduced grades and accounting.
+[The per-arm evidence](fusion-corrected-paired-study.json) retains every row.
+
+The transfer simulation passed small acceptance checks but exceeded the
+full grader's execution limit on a larger case. Source inspection found a
+quadratic loop. That invalid result remains a failure even though the other
+completed cases agreed. It motivates public-constraint scale checks before
+acceptance; a cheaper run with this failure is not a viable quality gain.
+The corrected prompt and stronger control were introduced together, so this
+pilot cannot isolate their individual effects.
+
+## Public scale acceptance
+
+The next pilot added constructive N=60,000 public-constraint checks for all
+six tasks. Small cases agree with independent references; the six efficient
+reference solutions pass in the existing sandbox. Replaying the previous
+answers exposed both the transfer simulation and an O(N×M) subsequence
+implementation. Source-private cases do not supply the scale fixtures.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional self-repair | 6/6 | $0.012606 | 46.26 s |
+| Luna → conditional Terra repair | 6/6 | $0.012643 | 67.31 s |
+
+Both arms passed full grading, with zero false acceptances and zero lost
+strong successes. The cascade escalated four times: three drafts were complete
+and one was truncated. Its model cost was 0.29% higher and live time was 45.50%
+higher. This restores quality in this sample but fails both economic and
+latency goals. The 16 calls cost $0.025249. Offline replay reproduced grades
+and accounting; [the evidence](fusion-public-scale-study.json) retains every arm.
+
+This remains one sample on exposed tasks. Different model generations prevent
+attributing the entire change between runs to the added checks. No production
+or repository-work qualification follows from the result.
+
+## Cheap repair diagnostic
+
+Before adding another workflow stage, a six-call diagnostic compared a fresh
+Luna answer with one Luna repair for each of the three complete drafts rejected
+by the scale pilot. Both arms used no reasoning and a 1,024-token output cap.
+Repair also received the rejected code and public acceptance feedback. The
+fourth rejected draft was truncated, so it supplied no executable repair seed.
+
+Fresh answers passed 2/3; repairs passed 0/3. Fresh cost $0.000746, repair
+$0.000794. All six outputs were complete. Full grading and an offline audit
+confirmed the result; [the evidence](fusion-cheap-repair-probe.json) retains
+every selected case. The total six-call cost was $0.001540.
+
+This does not support adding a cheap repair stage. It also does not establish
+that repair is generally harmful: the cases were already exposed failures,
+there was one sample per arm, and this was not an executed cascade. The two
+fresh successes do not isolate an effect from the larger output cap.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
