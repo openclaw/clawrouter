@@ -277,12 +277,38 @@ export function testResult(result) {
     digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
-function testFeedback(result) {
-  const text = Buffer.concat([result.stdout, result.stderr]).toString();
+function normalizeTapTimings(text) {
+  const lines = text.split('\n');
+  let diagnosticIndent = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, '');
+    if (diagnosticIndent !== null) {
+      if (line === diagnosticIndent + '...') diagnosticIndent = null;
+      continue;
+    }
+    const result = /^( *)(?:not )?ok [1-9][0-9]* - /.exec(line);
+    if (!result) continue;
+    const indent = result[1] + '  ';
+    if (lines[i + 1]?.replace(/\r$/, '') !== indent + '---') continue;
+    diagnosticIndent = indent;
+    const duration = lines[i + 2];
+    if (duration?.startsWith(indent + 'duration_ms: ')) {
+      lines[i + 2] = duration.replace(/^( *duration_ms: )[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?(\r?)$/i, '$1<elapsed>$2');
+    }
+  }
+  // Console diagnostics can also start with "# duration_ms". Only the final
+  // complete reporter summary owns a duration outside a result's YAML block.
+  return lines.join('\n').replace(/(^# tests [0-9]+\r?\n# suites [0-9]+\r?\n# pass [0-9]+\r?\n# fail [0-9]+\r?\n# cancelled [0-9]+\r?\n# skipped [0-9]+\r?\n# todo [0-9]+\r?\n# duration_ms )[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?((?:\r?\n)*)(?![\s\S])/mi, '$1<elapsed>$2');
+}
+
+function testFeedback(result, normalizeTimings) {
+  const normalize = text => normalizeTimings ? normalizeTapTimings(text) : text;
+  const stdout = normalize(result.stdout.toString());
+  const text = normalizeTimings ? stdout + normalize(result.stderr.toString()) : Buffer.concat([result.stdout, result.stderr]).toString();
   if (text.length <= 12000) return text;
   const diagnostics = [];
   let failureDepth = -1;
-  for (const line of result.stdout.toString().split('\n')) {
+  for (const line of stdout.split('\n')) {
     const failure = /^( *)not ok [1-9][0-9]* - /.exec(line);
     if (failure) failureDepth = failure[1].length;
     else if (line.trim() && line.search(/\S/) <= failureDepth) failureDepth = -1;
@@ -309,8 +335,9 @@ function tapTestName(name) {
   return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix } = {}) {
+export async function check(box, paths, timeout = 120000, { testNamePrefix, normalizeFeedbackTimings = false } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
+  if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
@@ -319,7 +346,7 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix } = {
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
     'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
   const metrics = testResult(result);
-  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result) };
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
   // Node can report the test file itself as passing when no name matched.
   const encodedPrefix = tapTestName(testNamePrefix);
   const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
@@ -340,7 +367,8 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix } = {
     return matched;
   });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
-    feedback: matchedTestPrefix ? testFeedback(result) : ('No test matched the required name prefix.\n' + testFeedback(result)).slice(0, 12000) };
+    feedback: matchedTestPrefix ? testFeedback(result, normalizeFeedbackTimings)
+      : ('No test matched the required name prefix.\n' + testFeedback(result, normalizeFeedbackTimings)).slice(0, 12000) };
 }
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */

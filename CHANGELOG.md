@@ -1,5 +1,7 @@
 # Changelog
 
+- Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+
 - Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
 
 - Document supplied-candidate fusion review with separate corrective models and final executable checks.

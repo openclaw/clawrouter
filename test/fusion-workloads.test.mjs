@@ -281,6 +281,50 @@ test('test feedback keeps small reports unchanged and bounds oversized failures'
   assert.match(bounded.feedback, /# fail 1/);
 });
 
+test('timing-normalized feedback clips identical diagnostics at identical boundaries', async () => {
+  const output = duration => Buffer.from(Array.from({ length: 30 }, (_, i) =>
+    `not ok ${i + 1} - regression ${i}\n  ---\n  duration_ms: ${duration}\n  error: '${'x'.repeat(500)}'\n  ...\n`).join('')
+    + `# tests 30\n# suites 0\n# pass 0\n# fail 30\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms ${duration}\n`);
+  const short = { code: 1, stdout: output('1'), stderr: Buffer.alloc(0) };
+  const long = { ...short, stdout: output('123456.789') };
+  const run = (report, options) => check({ exec: async () => report }, ['worker/test/repair.test.mjs'], 120000, options);
+  assert.notEqual((await run(short)).feedback, (await run(long)).feedback);
+  const first = await run(short, { normalizeFeedbackTimings: true });
+  const second = await run(long, { normalizeFeedbackTimings: true });
+  assert.equal(first.feedback, second.feedback);
+  assert.match(first.feedback, /duration_ms: <elapsed>/);
+  assert.match(first.feedback, /# duration_ms <elapsed>/);
+  assert.equal(first.feedback.length, 12000);
+  assert.equal(first.tests, 30); assert.equal(first.failures, 30);
+  assert.equal(first.digest, testResult(short).digest);
+  assert.equal(second.digest, testResult(long).digest);
+  assert.notEqual(first.digest, second.digest);
+});
+
+test('feedback timing normalization is opt-in and validates before execution', async () => {
+  const text = '# Subtest: example\nok 1 - example\n  ---\n  duration_ms: 1.2e-3\n  ...\n# diagnostic duration_ms: 42\n' + tap(1, 0).toString();
+  const box = { exec: async () => ({ code: 0, stdout: Buffer.from(text), stderr: Buffer.alloc(0) }) };
+  assert.equal((await check(box, ['test.mjs'])).feedback, text);
+  const normalized = await check(box, ['test.mjs'], 120000, { normalizeFeedbackTimings: true, testNamePrefix: 'example' });
+  assert.equal(normalized.matchedTestPrefix, true);
+  assert.match(normalized.feedback, /duration_ms: <elapsed>/);
+  assert.match(normalized.feedback, /# diagnostic duration_ms: 42/);
+  await assert.rejects(check({ exec: () => { throw Error('must not execute'); } }, ['test.mjs'], 120000,
+    { normalizeFeedbackTimings: 'yes' }), /invalid_feedback_timing_option/);
+});
+
+test('timing-shaped assertion values and console diagnostics remain evidence', async () => {
+  const text = 'not ok 1 - example\n  ---\n  duration_ms: 12\n  error: |-\n'
+    + '    ok 1 - expected transcript\n      ---\n      duration_ms: 42\n      ...\n  ...\n'
+    + '# duration_ms 42\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n# cancelled 0\n# skipped 0\n# todo 0\n# duration_ms 123\n';
+  const result = await check({ exec: async () => ({ code: 1, stdout: Buffer.from(text), stderr: Buffer.alloc(0) }) },
+    ['test.mjs'], 120000, { normalizeFeedbackTimings: true });
+  assert.match(result.feedback, /  duration_ms: <elapsed>/);
+  assert.match(result.feedback, /      duration_ms: 42/);
+  assert.match(result.feedback, /# duration_ms 42/);
+  assert.ok(result.feedback.endsWith('# duration_ms <elapsed>\n'));
+});
+
 test('real Node TAP keeps the first failure after hundreds of passing tests', async () => {
   const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
   const child = spawnSync(process.execPath, ['--test-reporter=tap', '--input-type=module', '-e',
