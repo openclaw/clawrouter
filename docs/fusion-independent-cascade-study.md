@@ -303,6 +303,62 @@ that repair is generally harmful: the cases were already exposed failures,
 there was one sample per arm, and this was not an executed cascade. The two
 fresh successes do not isolate an effect from the larger output cap.
 
+## Larger draft and fresh fallback follow-ups
+
+Two final tuning comparisons kept the same six exposed tasks and public-scale
+checks, with a 1,024-token Luna draft and an 8,192-token Terra attempt. Every arm
+allowed at most two calls. Full grading and offline replay remained separate
+from public acceptance.
+
+| Policy | Strong passed | Cascade passed | Cost ratio | Live time ratio |
+| --- | ---: | ---: | ---: | ---: |
+| Repair from rejected code and public feedback | 6/6 | 5/6 | 0.9204 | 1.4215 |
+| Independent fresh strong fallback | 6/6 | 6/6 | 0.5650 | 1.2098 |
+
+The [larger-draft repair run](fusion-scale-1024-study.json) lost one strong
+success and failed all promotion gates. Its 15 calls cost $0.024064. No public
+false acceptance occurred: the failed fallback was rejected by public checks.
+
+The [fresh-fallback run](fusion-fresh-fallback-study.json) passed all six tasks
+in both arms, with zero false accepts or lost strong successes and three
+successful escalations. Cascade model cost was $0.007249 versus $0.012831 for
+the strong baseline, a 43.50% reduction. Live arm time was 57.58 seconds versus
+47.60 seconds, a 20.98% increase. Its 15 calls cost $0.020080.
+
+The original latency limit is 1.2 times the baseline. The observed 1.2098 ratio
+fails that limit: this is a quality-matched cost result, not a development or
+production qualification. Do not round it into a pass. Stochastic differences
+between runs also prevent attributing the entire improvement to fresh fallback.
+These comparisons close tuning on these six tasks. The next qualification must
+use practical repository work and a separately frozen policy and task set.
+
+## Real repository repair development check
+
+The next comparison used two actual repository fixes: returning DuckDuckGo
+read errors promptly and returning a MiniMax authorization failure while
+cleanup is pending. Inputs contained the original source and tests plus an
+explicit public reproducer. The original fix suites remained separate from
+model inputs. Broken and corrected source were qualified before model calls;
+both source versions compiled.
+
+| Arm | Full suites passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional fresh retry | 2/2 | $0.032523 | 55.26 s |
+| Luna → conditional fresh Terra | 2/2 | $0.003227 | 31.17 s |
+
+Both cheap drafts passed public checks and the full suites without fallback.
+There were zero false accepts or lost strong successes. Model cost fell 90.08%
+and live time fell 43.59%, but this is a cheap-execution result: no collaboration
+was needed and the actual-rescue gate remains false. These are two
+operator-exposed development tasks, not independent confirmation.
+
+[The per-arm evidence](fusion-real-repair-study.json) retains all four outcomes.
+Offline replay matched grades, test counts, failure identities, artifacts and
+accounting. Raw TAP logs varied with test timings; both raw runs were retained,
+and only that log text and its hash were excluded from comparison. A separate
+audit rebound every stage to its frozen request and accounted for all costs.
+The four model calls cost $0.035750. No production defaults changed.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
