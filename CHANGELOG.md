@@ -1,5 +1,7 @@
 # Changelog
 
+- Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
+
 - Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
 
 - Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
