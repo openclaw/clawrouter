@@ -54,25 +54,29 @@
           "passed": true,
           "costMicros": 1418,
           "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 3870,
           "codeSha256": "fca9a4614a53e0f6f5490a3eef4ab4bd6bd5a3cebcb10d537bd5b550e83eb58c",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 3836,
           "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 2221,
           "codeSha256": "7a6dbd1debd066992bbae79502906d881291daa80e0ad2b09134296fe23aff67",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -88,25 +92,29 @@
           "passed": true,
           "costMicros": 160,
           "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 2582,
           "codeSha256": "e953a04d3c9c35b2692390ca9c85f59f655b8152e21cedb46ed1dce0330e41d7",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 1862,
           "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 321,
           "codeSha256": "5489f1142d9e8a79dba0ded6e27741d753207e6d106df506a67ae946f61fc766",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -122,25 +130,29 @@
           "passed": true,
           "costMicros": 312,
           "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 5404,
           "codeSha256": "2186cbb63c59935521e6f962184a9658bd5556d19c44588607dedcbbaa4da8f1",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 3901,
           "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 606,
           "codeSha256": "46b6189bef59df71b33fe45dc7b33f205783a03d742fe83d0686e0d6f0c6ac54",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -156,25 +168,29 @@
           "passed": true,
           "costMicros": 740,
           "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 6164,
           "codeSha256": "0926f6f4f8a748aee54feb0075823065531fec962bb1b0eebfc18b8718178d95",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 3686,
           "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 1145,
           "codeSha256": "b57270ef459f8c6a80ce791b857d3e5b6afcb28824184265cba6ed8963cbcbbd",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -190,25 +206,29 @@
           "passed": true,
           "costMicros": 287,
           "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 3886,
           "codeSha256": "1dfabbb71a647f05a224b6d4b04137b8ea0d04056e435d4d83ddb94157252af3",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 3191,
           "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 513,
           "codeSha256": "73dbd633819dc560f40fb19ae203c775e2c19d25e1f91030ae4da81c42097341",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -224,25 +244,29 @@
           "passed": false,
           "costMicros": 408,
           "codeSha256": "39733c6ebdd1cd3ac118ed7ab7c29b10da1df0fd516de6084728ef73cec03263",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": false
         },
         "strong": {
           "passed": true,
           "costMicros": 3058,
           "codeSha256": "3dce64e013320e0d453e3db5976ae5f0dffc982bbfdf2bd57e682f58b88d6716",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 3399,
           "codeSha256": "c5250b6f20d27b609f9e65886138c943274d373c54b823ba6c7827fb4b245312",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 1083,
           "codeSha256": "b99d12ee2d91de111bdc8357ef574adf85681c0d7bc8bde2b623fc14da97c362",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -258,25 +282,29 @@
           "passed": true,
           "costMicros": 146,
           "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 2608,
           "codeSha256": "e8ce0b0c9e53cbd0ccb9f2bcedd534e8a21257eeee49ae54a0519dd707e0b557",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 1768,
           "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 256,
           "codeSha256": "d96c3c4ea1a8b87b8c074669237eac52b7676de626aff318d2f32cfbd8e5042c",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -292,25 +320,29 @@
           "passed": true,
           "costMicros": 2516,
           "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 11692,
           "codeSha256": "4a6c8d5c585f27bb58f83ab4c24d3ea0c4f49bb38ff2e8d69a6f7a39bf3658d8",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 7082,
           "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 3394,
           "codeSha256": "97d8b1cc17d2830c1b062f4482233f021fe55188159dca3bbed30897a3343ecf",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -326,25 +358,29 @@
           "passed": true,
           "costMicros": 2559,
           "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 13849,
           "codeSha256": "01df63843cf0741e6a3c01a110cb4e5893e8d8553a51b5b7f48de2499d270a7a",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 9710,
           "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 3880,
           "codeSha256": "95acfa49d0b6423ca59e642c6b4e25f4bebd8789e6d962c7504f31694e451af2",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -360,25 +396,29 @@
           "passed": true,
           "costMicros": 3537,
           "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "strong": {
           "passed": true,
           "costMicros": 18831,
           "codeSha256": "752785fbb247bf4cffd3b7e0a7f2028f4706a10413e06017cf1cb6542b280e35",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 11983,
           "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 4608,
           "codeSha256": "0befc446b0d0124089a5cb8b10a54551c415760a612302d04d8de99912fd2fea",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -394,25 +434,29 @@
           "passed": false,
           "costMicros": 424,
           "codeSha256": "cc8a4e4f7b3fdede81bfb7e1a4ff112ebae2ea0af352d624e623f8a11abe74a0",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": false
         },
         "strong": {
           "passed": true,
           "costMicros": 3126,
           "codeSha256": "bbb37f420947b9763daa5efae4282b7eab2955f734967fc69c8f3409b497be8a",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 4031,
           "codeSha256": "456e41e501190b496e5c934abb3b9d574b7ff978bd82a875941286eaf9374297",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": true,
           "costMicros": 1130,
           "codeSha256": "fd6367a5db9f05e875cd1957b18827cdfbfef68875c0c37fa03bd6c700ee53ec",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         }
       }
     },
@@ -428,25 +472,29 @@
           "passed": false,
           "costMicros": 4176,
           "codeSha256": null,
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": false
         },
         "strong": {
           "passed": true,
           "costMicros": 36262,
           "codeSha256": "942fb8dc54660fd5c4d1f821f8952420cacdde3e6dd0722085e803e40df449c1",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "fusion": {
           "passed": true,
           "costMicros": 19317,
           "codeSha256": "f3ea9253d2fd6ca4438aff0c824c5873af49a394a49d7435c0d1be936b8a75ac",
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": true
         },
         "self-review": {
           "passed": false,
           "costMicros": 9627,
           "codeSha256": null,
-          "publicFallback": false
+          "publicFallback": false,
+          "publicPassed": false
         }
       }
     }
@@ -500,19 +548,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 156
+            "costMicros": 156,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 2554
+            "costMicros": 2554,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 2020
+            "costMicros": 2020,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 325
+            "costMicros": 325,
+            "publicPassed": true
           }
         }
       },
@@ -524,19 +576,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 1025
+            "costMicros": 1025,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 4920
+            "costMicros": 4920,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 4206
+            "costMicros": 4206,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 1408
+            "costMicros": 1408,
+            "publicPassed": true
           }
         }
       },
@@ -548,19 +604,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 458
+            "costMicros": 458,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 3824
+            "costMicros": 3824,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 2006
+            "costMicros": 2006,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 662
+            "costMicros": 662,
+            "publicPassed": true
           }
         }
       },
@@ -572,19 +632,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 4054
+            "costMicros": 4054,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 4926
+            "costMicros": 4926,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 8114
+            "costMicros": 8114,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 6188
+            "costMicros": 6188,
+            "publicPassed": true
           }
         }
       },
@@ -596,19 +660,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 130
+            "costMicros": 130,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 1972
+            "costMicros": 1972,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 1718
+            "costMicros": 1718,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 236
+            "costMicros": 236,
+            "publicPassed": true
           }
         }
       },
@@ -620,19 +688,23 @@
         "outcomes": {
           "weak": {
             "passed": false,
-            "costMicros": 4183
+            "costMicros": 4183,
+            "publicPassed": false
           },
           "strong": {
             "passed": true,
-            "costMicros": 11264
+            "costMicros": 11264,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 17400
+            "costMicros": 17400,
+            "publicPassed": true
           },
           "self-review": {
             "passed": false,
-            "costMicros": 6320
+            "costMicros": 6320,
+            "publicPassed": false
           }
         }
       },
@@ -644,19 +716,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 2047
+            "costMicros": 2047,
+            "publicPassed": true
           },
           "strong": {
             "passed": false,
-            "costMicros": 6222
+            "costMicros": 6222,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 12240
+            "costMicros": 12240,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 4181
+            "costMicros": 4181,
+            "publicPassed": true
           }
         }
       },
@@ -668,19 +744,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 341
+            "costMicros": 341,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 5416
+            "costMicros": 5416,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 2503
+            "costMicros": 2503,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 516
+            "costMicros": 516,
+            "publicPassed": true
           }
         }
       },
@@ -692,19 +772,23 @@
         "outcomes": {
           "weak": {
             "passed": false,
-            "costMicros": 1425
+            "costMicros": 1425,
+            "publicPassed": true
           },
           "strong": {
             "passed": false,
-            "costMicros": 10238
+            "costMicros": 10238,
+            "publicPassed": true
           },
           "fusion": {
             "passed": false,
-            "costMicros": 6561
+            "costMicros": 6561,
+            "publicPassed": true
           },
           "self-review": {
             "passed": false,
-            "costMicros": 2571
+            "costMicros": 2571,
+            "publicPassed": true
           }
         }
       },
@@ -716,19 +800,23 @@
         "outcomes": {
           "weak": {
             "passed": true,
-            "costMicros": 2029
+            "costMicros": 2029,
+            "publicPassed": true
           },
           "strong": {
             "passed": true,
-            "costMicros": 7370
+            "costMicros": 7370,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 6688
+            "costMicros": 6688,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 2956
+            "costMicros": 2956,
+            "publicPassed": true
           }
         }
       },
@@ -740,19 +828,23 @@
         "outcomes": {
           "weak": {
             "passed": false,
-            "costMicros": 2917
+            "costMicros": 2917,
+            "publicPassed": false
           },
           "strong": {
             "passed": true,
-            "costMicros": 10706
+            "costMicros": 10706,
+            "publicPassed": true
           },
           "fusion": {
             "passed": true,
-            "costMicros": 11030
+            "costMicros": 11030,
+            "publicPassed": true
           },
           "self-review": {
             "passed": true,
-            "costMicros": 6267
+            "costMicros": 6267,
+            "publicPassed": true
           }
         }
       },
@@ -764,19 +856,23 @@
         "outcomes": {
           "weak": {
             "passed": false,
-            "costMicros": 425
+            "costMicros": 425,
+            "publicPassed": true
           },
           "strong": {
             "passed": false,
-            "costMicros": 5694
+            "costMicros": 5694,
+            "publicPassed": true
           },
           "fusion": {
             "passed": false,
-            "costMicros": 2411
+            "costMicros": 2411,
+            "publicPassed": true
           },
           "self-review": {
             "passed": false,
-            "costMicros": 715
+            "costMicros": 715,
+            "publicPassed": true
           }
         }
       }
