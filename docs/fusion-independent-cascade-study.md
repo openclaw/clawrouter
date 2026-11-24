@@ -332,6 +332,33 @@ between runs also prevent attributing the entire improvement to fresh fallback.
 These comparisons close tuning on these six tasks. The next qualification must
 use practical repository work and a separately frozen policy and task set.
 
+## Real repository repair development check
+
+The next comparison used two actual repository fixes: returning DuckDuckGo
+read errors promptly and returning a MiniMax authorization failure while
+cleanup is pending. Inputs contained the original source and tests plus an
+explicit public reproducer. The original fix suites remained separate from
+model inputs. Broken and corrected source were qualified before model calls;
+both source versions compiled.
+
+| Arm | Full suites passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional fresh retry | 2/2 | $0.032523 | 55.26 s |
+| Luna → conditional fresh Terra | 2/2 | $0.003227 | 31.17 s |
+
+Both cheap drafts passed public checks and the full suites without fallback.
+There were zero false accepts or lost strong successes. Model cost fell 90.08%
+and live time fell 43.59%, but this is a cheap-execution result: no collaboration
+was needed and the actual-rescue gate remains false. These are two
+operator-exposed development tasks, not independent confirmation.
+
+[The per-arm evidence](fusion-real-repair-study.json) retains all four outcomes.
+Offline replay matched grades, test counts, failure identities, artifacts and
+accounting. Raw TAP logs varied with test timings; both raw runs were retained,
+and only that log text and its hash were excluded from comparison. A separate
+audit rebound every stage to its frozen request and accounted for all costs.
+The four model calls cost $0.035750. No production defaults changed.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned

@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "study": "real-cancel-fresh-live-v1",
+  "status": "audited",
+  "sourceSha": "f59de17abd2f26bc26dee045e956b3df1bbe0ca4",
+  "protocolSha256": "100dc127c8483f47ec8aa67b2fe86dc7b3616e7c08df12df5b751848c0ac57af",
+  "resultSha256": "2eff475ae8eb9185c0cdb4c65e5968a79bf70541a99f7a53d77132aa0283805d",
+  "auditSha256": "6d8300afd619e05a8102ecb214f5120106d54dbc9cd2041a8763fcd461e7d2c5",
+  "qualificationSha256": "4888ffd0303358deca85985a24258131d1fe9742f62ec3fb57326e158b13b23a",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 4,
+  "totalCostMicros": 35750,
+  "summary": {
+    "strong": {
+      "passed": 2,
+      "costMicros": 32523,
+      "elapsedMs": 55263.26349999999
+    },
+    "cascade": {
+      "passed": 2,
+      "costMicros": 3227,
+      "elapsedMs": 31172.121748999998
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 0,
+    "escalations": 0,
+    "costRatio": 0.09922208898318113,
+    "elapsedRatio": 0.564065887078855,
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "real-duckduckgo-cleanup",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 16615,
+      "elapsedMs": 32811.073082999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 16,
+        "failures": 0,
+        "skipped": 0,
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "real-duckduckgo-cleanup",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1635,
+      "elapsedMs": 18215.417916,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 16,
+        "failures": 0,
+        "skipped": 0,
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "real-minimax-cleanup",
+      "kind": "repository",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1592,
+      "elapsedMs": 12956.703833,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 52,
+        "failures": 0,
+        "skipped": 0,
+        "exitCode": 0
+      }
+    },
+    {
+      "id": "real-minimax-cleanup",
+      "kind": "repository",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 15908,
+      "elapsedMs": 22452.19041699999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 52,
+        "failures": 0,
+        "skipped": 0,
+        "exitCode": 0
+      }
+    }
+  ],
+  "auditComparison": {
+    "ignoredFields": [
+      "records[*].full.digest",
+      "records[*].full.feedback"
+    ],
+    "replayEvidenceSha256": "622226f0c4f98defbd7fecd286a5d9fa9f76aad866f24a7c6865dfb446428063",
+    "explanation": "Raw TAP logs include variable test timings. Both raw runs are retained; all other fields match. Every stage was bound to the frozen request and reaudited, artifacts were decoded from responses, and all stage costs were reconciled."
+  },
+  "limitations": [
+    "Two operator-exposed development tasks, one sample per arm. No independent confirmation or production claim.",
+    "Neither cheap draft needed fallback. This supports cheap execution on these repairs, not an observed collaboration benefit; the actual-rescue gate remains false.",
+    "A named, fully accounted timeout establishes only the MiniMax broken-baseline failure. Public baseline failure, strict reference success and both compilers are required. Candidate acceptance does not allow timeouts.",
+    "Costs and timings exclude engineering, hardware and operating costs."
+  ]
+}

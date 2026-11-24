@@ -1,5 +1,7 @@
 # Changelog
 
+- Report fresh-fallback timing limits and a qualified cheap-execution gain on two real repository repairs, without claiming collaboration or production efficacy.
+
 - Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.
 
 - Report verified cascade studies: a tuned cost-saving development gain, a failed fresh-task confirmation, and quality recovery with feedback repair that still fails latency.
