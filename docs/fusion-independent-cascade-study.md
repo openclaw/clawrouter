@@ -236,6 +236,31 @@ prompt and a matched strong-model self-repair control are required before a
 fairer workflow comparison. This exposed, single-sample result is not a
 production qualification.
 
+## Corrected output contract and matched repair control
+
+A subsequent pilot corrected the output instruction and allowed the strong
+control the same opportunity to repair a rejected answer. Both arms could
+make at most two calls, stopped after acceptance, and used the same bounded
+feedback. The six task identities were already exposed.
+
+| Arm | Passed | Model cost (USD) | Aggregate live time |
+| --- | ---: | ---: | ---: |
+| Terra, with conditional self-repair | 6/6 | $0.012446 | 50.92 s |
+| Luna → conditional Terra repair | 5/6 | $0.007379 | 46.37 s |
+
+The cascade used 40.71% less model cost and 8.93% less live time, but lost one
+strong-model success. All quality and promotion gates remain false. The 14
+calls cost $0.019825; offline replay reproduced grades and accounting.
+[The per-arm evidence](fusion-corrected-paired-study.json) retains every row.
+
+The transfer simulation passed small acceptance checks but exceeded the
+full grader's execution limit on a larger case. Source inspection found a
+quadratic loop. That invalid result remains a failure even though the other
+completed cases agreed. It motivates public-constraint scale checks before
+acceptance; a cheaper run with this failure is not a viable quality gain.
+The corrected prompt and stronger control were introduced together, so this
+pilot cannot isolate their individual effects.
+
 ## Limits
 
 Each study uses one sample per arm from one provider's model pair. It does not establish heterogeneous-provider fusion, a general learned
