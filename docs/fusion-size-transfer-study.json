@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "study": "Transfer of fixed size routing policies to five paired repository repairs",
+  "scope": "Retrospective transfer diagnostic of fixed historical size rules on five already-exposed tasks, three trials per task. Earlier router training used different models and policies. Full audited pipeline costs and latencies are selected; this is not a prospective router run. Whole-task omission is sensitivity, not statistical confidence. No fitting, new requests, or changed production gates.",
+  "provenance": {
+    "analysisSourceCommit": "7e3c231",
+    "analysisResultSha256": "ec22a7170a1d16cbc8747c7ba426992391dc20d41dde1ddbe79df527b65d9b74",
+    "cohorts": [
+      {
+        "name": "fresh-codex-medium-paired-v1",
+        "protocolSha256": "ab71c6c5b84479094695149e729900dc964c03b102241a8b7aab50b1bf57f542",
+        "resultSha256": "7e5b4ba7fe12f78590fd7c431300101229bdb22a18a84936875f8a2dc3a37561",
+        "terminalAuditSha256": "0b391d15817b9ec9aa535234b8b57e4604b4f1567f9aebfc10ec75985821da72"
+      },
+      {
+        "name": "fresh-yaml-medium-paired-v1",
+        "protocolSha256": "68a11bf346fc011abf0ebc017c272f1bb2ee32cf347d418a719b795a8da71bfb",
+        "resultSha256": "280159b00ea2d125a7a255babf37bbbeb6dd2fa1e45bb9c20a937684c1244fd4",
+        "terminalAuditSha256": "4efecf60ccb19d607aad9d4d7616612d63a61d81c96e912f51d794d6ad37c66d"
+      },
+      {
+        "name": "fresh-conformance-medium-paired-v1",
+        "protocolSha256": "45af186e1cb21240a0b8d6d0e5d4a2427d0f5f6e9b77c4b7ee11ec997a4458ed",
+        "resultSha256": "b9002431a58625500035d9ae21604b6638c32dff13dd2600b1ddaf46b2732ff5",
+        "terminalAuditSha256": "72bd8b709d79e4119c022f98b0e8ee71ec6ff87f558a740be77b03a2d1f776ff"
+      },
+      {
+        "name": "fresh-revocation-medium-paired-v1",
+        "protocolSha256": "a683858bc589620c0247b19c33392d938c54a15aa8edb4b264565b2ce3ad0be4",
+        "resultSha256": "1300a2c10ad090c5210812ff6f3f5a74738edca8348c2d381a21e9d661c8df4e",
+        "terminalAuditSha256": "2eea010dc5fe1ee296792ebba31c6d657bb892f765ea52c20cc2f7a23b7e5ee8"
+      },
+      {
+        "name": "fresh-upload-medium-paired-v1",
+        "protocolSha256": "b883b01c4ffe4ea92e0d32956b35e96d0bfb6f8d52700db9e1988c2b0357e7a2",
+        "resultSha256": "b147b678e928b20a6a996cfc1ac78d69288550f27d5bb7f68366ecba1e94a765",
+        "terminalAuditSha256": "fb82cd027cacc3b43041cd61316baff788752af525790596ca1f25ce8f90c7f4"
+      }
+    ],
+    "historicalPolicies": [
+      {
+        "name": "fusion-standardized-router-v1",
+        "protocolSha256": "961aaf09b03df1974f0c2c565d637837f5abcd1fed3067374582b0ef6209ed68",
+        "inputByteMaximum": 17648
+      },
+      {
+        "name": "fusion-input-size-router-v1",
+        "protocolSha256": "a304892147aace0961c3e546f735a841d10f3f051931ac4b352ef66ea7794635",
+        "inputByteMaximum": 62412
+      }
+    ]
+  },
+  "method": {
+    "models": "GPT-6 Luna medium draft; GPT-6.1 Terra low control and fresh fallback. Full pipelines use matched two-attempt ceilings.",
+    "units": "Five task clusters, three paired trials each. Task outcomes were already known to the operator. No threshold fitting or independent validation claim.",
+    "routing": "The 8192-byte rule uses the existing request envelope guard. Historical 17648- and 62412-byte rules select the cascade when JSON-encoded input bytes do not exceed the threshold. The earlier fitted thresholds came from different models and execution policies.",
+    "comparison": "Select the recorded entire strong or cascade pipeline per task, then sum observed cost and elapsed time. These are sequential request totals, not batch makespan. Replayed costs omit unmeasured routing overhead.",
+    "cost": "Integer microUSD estimates from recorded usage and frozen tariffs, not invoices. Cache-neutral normalization prices all input at base rate.",
+    "audit": "Pinned terminal audit must exactly reproduce the pinned result. All 12 planned requests per task have identical public inputs; all six final arm outcomes are retained. No new model calls or runtime checks.",
+    "limits": "Five selected, publicly reproduced repository bugs are not representative production traffic. Earlier exposed tasks, selection bias and differences from router training prevent efficacy or generalization claims. Private pinned evidence is retained; this JSON is not a standalone reproduction bundle."
+  },
+  "tasks": [
+    {
+      "id": "history-b658997ad0f8",
+      "cohort": "fresh-codex-medium-paired-v1",
+      "inputBytes": 57591
+    },
+    {
+      "id": "history-01cb15ee835f",
+      "cohort": "fresh-yaml-medium-paired-v1",
+      "inputBytes": 16592
+    },
+    {
+      "id": "history-960b2b622bf9",
+      "cohort": "fresh-conformance-medium-paired-v1",
+      "inputBytes": 22008
+    },
+    {
+      "id": "history-c9ca118038a7",
+      "cohort": "fresh-revocation-medium-paired-v1",
+      "inputBytes": 17157
+    },
+    {
+      "id": "history-7fdb64c885ce",
+      "cohort": "fresh-upload-medium-paired-v1",
+      "inputBytes": 59899
+    }
+  ],
+  "policies": {
+    "strong": {
+      "total": {
+        "tasks": 5,
+        "trials": 15,
+        "cascadeTasks": 0,
+        "passed": 15,
+        "baselinePassed": 15,
+        "lostBaselineSuccesses": 0,
+        "costMicros": 87863,
+        "baselineCostMicros": 87863,
+        "normalizedMicros": 159430,
+        "baselineNormalizedMicros": 159430,
+        "elapsedMs": 160475.02812200002,
+        "baselineElapsedMs": 160475.02812200002,
+        "normalizedCostRatio": 1,
+        "elapsedRatio": 1
+      },
+      "leaveOneTaskOut": {
+        "description": "Five fixed-policy replays, each omitting one complete task and all three trials. Sensitivity only; not confidence intervals.",
+        "normalizedCostRatioRange": [
+          1,
+          1
+        ],
+        "elapsedRatioRange": [
+          1,
+          1
+        ]
+      }
+    },
+    "cascade": {
+      "total": {
+        "tasks": 5,
+        "trials": 15,
+        "cascadeTasks": 5,
+        "passed": 15,
+        "baselinePassed": 15,
+        "lostBaselineSuccesses": 0,
+        "costMicros": 33882,
+        "baselineCostMicros": 87863,
+        "normalizedMicros": 100350,
+        "baselineNormalizedMicros": 159430,
+        "elapsedMs": 267728.56779000006,
+        "baselineElapsedMs": 160475.02812200002,
+        "normalizedCostRatio": 0.6294298438186038,
+        "elapsedRatio": 1.668350340381067
+      },
+      "leaveOneTaskOut": {
+        "description": "Five fixed-policy replays, each omitting one complete task and all three trials. Sensitivity only; not confidence intervals.",
+        "normalizedCostRatioRange": [
+          0.5260296946677847,
+          0.7013649927895256
+        ],
+        "elapsedRatioRange": [
+          1.48745121624913,
+          1.9072603432428947
+        ]
+      }
+    },
+    "short8192": {
+      "total": {
+        "tasks": 5,
+        "trials": 15,
+        "cascadeTasks": 0,
+        "passed": 15,
+        "baselinePassed": 15,
+        "lostBaselineSuccesses": 0,
+        "costMicros": 87863,
+        "baselineCostMicros": 87863,
+        "normalizedMicros": 159430,
+        "baselineNormalizedMicros": 159430,
+        "elapsedMs": 160475.02812200002,
+        "baselineElapsedMs": 160475.02812200002,
+        "normalizedCostRatio": 1,
+        "elapsedRatio": 1
+      },
+      "leaveOneTaskOut": {
+        "description": "Five fixed-policy replays, each omitting one complete task and all three trials. Sensitivity only; not confidence intervals.",
+        "normalizedCostRatioRange": [
+          1,
+          1
+        ],
+        "elapsedRatioRange": [
+          1,
+          1
+        ]
+      }
+    },
+    "historical17648": {
+      "total": {
+        "tasks": 5,
+        "trials": 15,
+        "cascadeTasks": 2,
+        "passed": 15,
+        "baselinePassed": 15,
+        "lostBaselineSuccesses": 0,
+        "costMicros": 75252,
+        "baselineCostMicros": 87863,
+        "normalizedMicros": 137865,
+        "baselineNormalizedMicros": 159430,
+        "elapsedMs": 185306.21112099997,
+        "baselineElapsedMs": 160475.02812200002,
+        "normalizedCostRatio": 0.8647368751176064,
+        "elapsedRatio": 1.154735495544654
+      },
+      "leaveOneTaskOut": {
+        "description": "Five fixed-policy replays, each omitting one complete task and all three trials. Sensitivity only; not confidence intervals.",
+        "normalizedCostRatioRange": [
+          0.7872539831302718,
+          0.940657445414094
+        ],
+        "elapsedRatioRange": [
+          0.9833982788917671,
+          1.2270249736237147
+        ]
+      }
+    },
+    "historical62412": {
+      "total": {
+        "tasks": 5,
+        "trials": 15,
+        "cascadeTasks": 5,
+        "passed": 15,
+        "baselinePassed": 15,
+        "lostBaselineSuccesses": 0,
+        "costMicros": 33882,
+        "baselineCostMicros": 87863,
+        "normalizedMicros": 100350,
+        "baselineNormalizedMicros": 159430,
+        "elapsedMs": 267728.56779000006,
+        "baselineElapsedMs": 160475.02812200002,
+        "normalizedCostRatio": 0.6294298438186038,
+        "elapsedRatio": 1.668350340381067
+      },
+      "leaveOneTaskOut": {
+        "description": "Five fixed-policy replays, each omitting one complete task and all three trials. Sensitivity only; not confidence intervals.",
+        "normalizedCostRatioRange": [
+          0.5260296946677847,
+          0.7013649927895256
+        ],
+        "elapsedRatioRange": [
+          1.48745121624913,
+          1.9072603432428947
+        ]
+      }
+    }
+  },
+  "decision": {
+    "promoteSizeRouter": false,
+    "qualifiedProductionGain": false,
+    "noPaidCalls": true,
+    "newSpendMicros": 0,
+    "reason": "The 8192-byte rule selects no cascade tasks. The 17648-byte rule saves 13.53% normalized cost but adds 15.47% elapsed time, failing the unchanged 20% cost gate. The 62412-byte rule selects every task, saving 37.06% but adding 66.84% elapsed time, failing the unchanged 1.2 latency ceiling. Do not fit another threshold to these five outcomes and call it validation.",
+    "nextExperiment": "A richer pre-generation selector needs a frozen rule and new task clusters. Until that earns a qualified win, retain explicit opt-in verified execution and direct-strong routing for general traffic.",
+    "productionGate": "At least 30 unseen real tasks with three trials per task, task-clustered uncertainty and unchanged quality, cost and latency controls.",
+    "deployment": "None. No routing defaults, runtime behavior or production configuration changed."
+  }
+}
