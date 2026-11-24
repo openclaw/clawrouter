@@ -290,6 +290,15 @@ and `compiler.skipped: true`; this means unexecuted, not a compiler failure.
 Every accepted candidate still requires successful compilation. The helper
 closes the sandbox after either path and propagates checker and cleanup errors.
 
+An optional `precheck(opened)` can run a cheap public smoke probe before the
+full test suite. The caller must bound its execution and use the same untrusted
+execution permissions as the full tests. Only `{ passed: true }` proceeds;
+failed or malformed results skip both later checks and cannot accept a candidate.
+A successful precheck still requires the complete public test count and compiler
+gate. Freeze the probe and its budget in the experiment protocol and keep the
+probe visible to every model arm. Early rejection timing is not evidence of
+end-to-end savings until a live comparison confirms it.
+
 Pass the helper's qualified `runtimePassed` and `compiler.passed` to the
 caller-side verified workflow as `runtimePassed` and `compilerPassed`,
 respectively. Do not use the raw `tests.passed` flag; it omits count, validity and
