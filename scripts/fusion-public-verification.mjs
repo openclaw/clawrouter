@@ -10,7 +10,7 @@ export async function verifyPublicCandidate({ open, test, compile, expectedTests
       && tests.skipped === 0 && tests.tests === expectedTests;
     const compiler = eligible ? await compile(opened.box)
       : { passed: false, skipped: true, reason: 'public_tests_failed' };
-    return { tests, compiler, runtime: opened.runtime, totalMs: performance.now() - start };
+    return { tests, runtimePassed: eligible, compiler, runtime: opened.runtime, totalMs: performance.now() - start };
   } finally {
     await opened.box.close();
   }

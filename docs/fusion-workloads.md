@@ -290,8 +290,10 @@ and `compiler.skipped: true`; this means unexecuted, not a compiler failure.
 Every accepted candidate still requires successful compilation. The helper
 closes the sandbox after either path and propagates checker and cleanup errors.
 
-Pass `tests.passed` and `compiler.passed` to the caller-side verified workflow
-as `runtimePassed` and `compilerPassed`, respectively. Keep the original full
+Pass the helper's qualified `runtimePassed` and `compiler.passed` to the
+caller-side verified workflow as `runtimePassed` and `compilerPassed`,
+respectively. Do not use the raw `tests.passed` flag; it omits count, validity and
+skip checks. Keep the original full
 acceptance suite after the workflow. This helper is opt-in and changes no
 production routing defaults. Its cached-artifact measurement is in
 [`fusion-public-verification-study.json`](fusion-public-verification-study.json);
