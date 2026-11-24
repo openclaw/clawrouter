@@ -119,3 +119,7 @@ Per-task scores, costs, selected candidates and provenance hashes are in the
 [structured result](fusion-reviewer-study.json). Raw prompts, completions and
 private fixtures are not included. Hashes identify retained source and audit
 receipts; they are not a standalone reproduction kit or independent attestation.
+
+A subsequent [functional collaboration pilot](fusion-functional-study.md) adds
+a matched Terra-direct and Terra-self-revision control. Fusion matched the
+strong model, but did not beat the cheaper direct control.

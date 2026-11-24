@@ -1,5 +1,7 @@
 # Changelog
 
+- Report a matched-control functional fusion pilot: Terra direct matched fusion for less, and the only rescued Luna failure was an entrypoint mismatch.
+
 - Record the failed fresh small-reviewer cascade replication, complete costs and the limits of its earlier Terra diagnostic.
 
 - Record the input-validated fusion follow-up: fixed review and public-gated policies lose strong-model successes and remain unqualified.
