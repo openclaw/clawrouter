@@ -147,6 +147,70 @@ retain all rows and distinguish this low-effort screen from the earlier
 medium-effort revision experiments. The same reference-coverage limitations
 apply. No production policy, deployment or latency claim follows from it.
 
+## Sparse correction needs a public-fallback control
+
+A later screen used two hard tasks: `lexicographically-smallest-generated-string`
+and `count-substrings-divisible-by-last-digit`. They were excluded from the
+earlier cohorts. All 86 raw cases passed input and output-contract checks;
+bounded independent references verified 52 exact answers. The other 34 answers
+retain dataset trust. Six public and 32 private cases were selected before
+model calls. Positive lookup and negative controls passed for both tasks.
+
+The second task needed three fixture batches. Each batch kept the same 160 MiB
+candidate address space, five-second CPU budget and two-second RPC deadline.
+The 256 KiB outer payload and 128 KiB RPC message limits stayed intact. Batches
+restart the candidate, so this evaluation requires pure functions and does not
+measure a single-process workload or end-to-end latency. Larger cases that do
+not fit an individual RPC message remain excluded.
+
+Initial low-effort Luna and Terra calls used an 8,192-token output bound. Luna
+passed one task and Terra passed both. Luna's digit-substring answer used the
+wrong entrypoint. A separate diagnostic applied the existing public-signature
+adapter; it still failed five of 19 tests, including a public example. This was
+an algorithmic error as well as an interface failure.
+
+Two subsequent development experiments reused those exposed tasks and saved
+controls. Each applied the same entrypoint adapter to all arms, retained strict
+grades, and escalated only when the adapted Luna seed failed public tests.
+Every new model call finished before private grading.
+
+| Policy | Passed | Model cost (USD) |
+| --- | ---: | ---: |
+| Luna seed | 1/2 | $0.001532 |
+| Terra direct | 2/2 | $0.014157 |
+| Luna seed → Terra direct on public failure | 2/2 | $0.006134 |
+| Luna critique → Luna repair on public failure | 1/2 | $0.002689 |
+| Terra critique → Luna repair on public failure | 1/2 | $0.005222 |
+| Luna exact edits on public failure | 1/2 | $0.002037 |
+| Terra exact edits on public failure | 2/2 | $0.006229 |
+
+The critique experiment gave both critics the same problem, draft, public
+feedback and runtime limits, with a 512-token output cap. Luna exhausted that
+cap on reasoning and returned no critique; its repair therefore received null
+guidance, with the cost retained. Terra returned a concrete diagnosis, but
+Luna's rewrite introduced a new error and still failed the task.
+
+The exact-edit experiment removed the rewriting model. Editors returned up to
+four source replacements, applied in order only when each old string matched
+exactly once. Invalid or incomplete edits failed closed, with no retry. Both
+editors received the same prompt and low reasoning effort. Their output caps
+had equal maximum token cost: 7,680 Luna tokens or 768 Terra tokens, each worth
+$0.003840 at the frozen output rates. Both responses completed.
+
+Terra's edits repaired the algorithm. That workflow cost 56.00% less than Terra
+solving both tasks directly, but 1.55% more than the simpler public-test fallback
+for the same score. The predeclared gate required two successes, an improvement
+over the cheap editor, and at least 20% savings against that fallback. It failed
+the cost requirement. This is a demonstrated correction on an exposed task,
+not a qualified fusion advantage.
+
+The ten unique calls across the baseline and both interventions cost
+$0.025738. Policy rows include their cached seed costs; those shared seeds are
+charged only once in the unique-call total. Independent replays reproduced all
+grades and accounting. [Outcomes and provenance](fusion-functional-edit-study.json)
+retain the separate experiments without raw model text or private fixtures.
+No production policy, deployment or latency claim follows from these results.
+
 ## Limits and next gate
 
 Eight tasks are a smoke test, not sufficient confirmation. The sample was new
