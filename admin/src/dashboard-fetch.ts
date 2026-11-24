@@ -67,8 +67,9 @@ export async function playgroundRequest(
   const body = await response.arrayBuffer();
   const text = isTextualResponse(contentType) ? new TextDecoder().decode(body) : "";
   let raw = "";
-  if (response.status === 204 || body.byteLength === 0) raw = `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
-  if (contentType.includes("application/json") || contentType.includes("+json")) {
+  if (response.status === 204 || body.byteLength === 0) {
+    raw = `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
+  } else if (contentType.includes("application/json") || contentType.includes("+json")) {
     try {
       raw = JSON.stringify(JSON.parse(text), null, 2);
     } catch {
