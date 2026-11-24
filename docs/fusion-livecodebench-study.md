@@ -7,6 +7,8 @@ strong direct control. This is exploratory evidence, not a production-qualified
 gain or an official LiveCodeBench score. Production Fusion is unchanged.
 
 Subsequent cohorts did **not** establish a quality-preserving cost advantage.
+A [later cheap-reviewer study](fusion-reviewer-study.md) also failed fresh
+replication despite an exploratory Terra result.
 A disjoint confirmation did **not** reproduce the cost advantage: fusion cost
 2.4% more than strong direct. It also exposed an invalid upstream private input,
 so it cannot qualify the policy for promotion. See [the follow-up](#disjoint-confirmation).
