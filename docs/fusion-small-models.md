@@ -2248,3 +2248,57 @@ No routing default, runtime or deployment changes follow from these three result
 The next capability claim needs fresh tasks where a cheap draft actually fails
 and collaboration repairs it, with matched single-model repair controls and all
 calls charged. These passing drafts leave that question unanswered.
+
+
+## Construction-task false acceptance, 2026-11-24
+
+Two later construction tasks expose a limitation of the public-test gate.
+Every candidate below passed its public tests and compiler, but none passed
+all held-out tests. These are failed tasks, not additional cost wins.
+
+| Published contract | Full / public tests | Strong full passes / cost | Luna full passes / cost | Policy full passes / cost |
+| --- | ---: | ---: | ---: | ---: |
+| [Radius codecs](https://github.com/openclaw/clawrouter/pull/422) | 6 / 3 | 3 / $0.055061 | 3 / $0.002059 | 3 / $0.002059 |
+| [Ollama codecs](https://github.com/openclaw/clawrouter/pull/416) | 9 / 5 | 7 / $0.035266 | 6 / $0.002407 | 6 / $0.024170 |
+
+The Radius policy accepted the public-passing Luna draft without escalation.
+For the next, previously unexposed Ollama task, the protocol prospectively
+required a strong review of that draft against every published contract
+obligation. The reviewer could preserve it unchanged or supply a plan for
+incremental Luna edits. A public-test regression after the bounded correction
+would retain the original passing draft, while charging all attempted calls.
+The reviewer and implementer received no held-out results. This trial escalated
+and still failed three full tests: review increased policy model cost without
+improving the full-test pass count. Equal counts do not imply identical failures.
+Neither trial justifies enabling this policy by default.
+
+Both tasks came from the same bounded local-history search using cached exact
+dependency images. Each introduced one source module and one test module.
+Before inference, their explicit construction admission required complete
+reference suites, compiler success, and an exact missing-named-export error
+from each empty-module baseline. Separate probes verified the blank/reference
+source hashes and imported export types. The baseline could not execute the
+suite and is explicitly labeled incomplete; it is not a complete failing
+baseline. Every generated candidate still had to execute every full and public
+test with zero skips. Timeouts and unrelated loader failures remained rejected.
+
+The controls used the same strong and Luna models and identical public request
+bodies apart from model identity. Radius supplied 8,068-byte bodies and Ollama
+9,294-byte bodies. All model calls count; local validation compute is excluded.
+The policy reuses the Luna control call, so that call is included in policy cost
+but is not billed twice. Total new billed spend for both trials was $0.116556.
+The result is exploratory: there is no matched Luna-only review or equal-budget
+sampling control, so even an improved result would not isolate the value of
+cross-model collaboration.
+
+| Task | Protocol SHA-256 | Terminal audit SHA-256 |
+| --- | --- | --- |
+| Radius | `a9284997516a81a6c556cab0d6dc2ae6c48e0cb08163bb6938702b738f3ea004` | `dccb28fa13f25a04cfaf8fe5839370236ea9fa9c6832d87c8f1931551766a738` |
+| Ollama | `0d1ca1443d7bd8070e9581d46b66ace7c4ba7908b1d30ea219854603c2f14cdf` | `3301cbd34e20a72f14566c8256d1b5bcdaea1cbce095fd7f6e6633789c353d11` |
+
+The audits replayed public decisions, complete candidate grading and accounting
+without new inference. These hashes identify private receipts, not a bundled
+reproduction suite. Do not use these held-out failures to repair and rescore the
+same tasks as fresh evidence. The earlier three-task cost result remains valid
+for its stated sample; these construction failures prevent generalizing it to
+new-module correctness or claiming a demonstrated fusion capability gain.

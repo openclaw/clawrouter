@@ -1,5 +1,7 @@
 # Changelog
 
+- Document two failed fusion construction trials and the limits of public-test acceptance and contract review.
+
 - Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
 - Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
 
