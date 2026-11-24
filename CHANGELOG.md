@@ -204,6 +204,8 @@
 
 ## Unreleased
 
+- Add a fusion benchmark cost screen that requires both invoice and cache-neutral savings, with complete paired cost accounting.
+
 - Add a credential-free Fusion fallback replay that charges failed attempts and exposes public-test false accepts separately from hidden-label diagnostics.
 
 - Validate `access_programs` on unified Responses and reject unsupported selections before dispatch to other providers or Fusion Chat.
