@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in caller-side verified candidate pool with aggregate reservation, bounded fan-out and deterministic selection; keep production routing unchanged.
+
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
 
 - Add caller-side multi-file Fusion artifacts with exact source-path coverage, bounded content, and test-file exclusions.

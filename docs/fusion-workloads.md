@@ -277,3 +277,31 @@ include the public root certificates bundled with Node for workerd startup. The
 container still has no network, host mounts, elevated capabilities or writable
 dependency tree. Run the native fixture smoke check with `FUSION_NATIVE_IMAGE`
 set to the immutable qualified image ID.
+
+## Opt-in verified candidate pool
+
+`scripts/fusion-verified-pool.mjs` coordinates two or three independently generated
+candidates. It makes no provider calls itself and changes no routing defaults.
+Use `runVerifiedPool({ models, reserve, invoke, verify, deadlineMs, signal })`.
+
+The caller must durably reserve the entire pool in `reserve` before returning
+`{ costCapsMicros: [capForFirst, capForSecond, ...] }`. A rejected or malformed
+reservation prevents dispatch. Each `invoke({ model, index, signal })` must own
+its request, honor cancellation, persist actual usage and settle its own permit
+before returning `{ artifact, costMicros }`. Keep unknown charges reserved when
+a request fails or times out. The coordinator cannot prove remote cancellation
+or refund a reservation, and it must not be used as a replacement for that ledger.
+
+All generations run concurrently and finish before verification. The verifier
+receives a cloned artifact and returns boolean `runtimePassed` and
+`compilerPassed` fields. The first passing candidate in configured index order
+wins; completion speed and final-only grades do not choose it. The result
+includes every generation receipt and cost, including unused candidates. A null
+artifact fails without verification. If no candidate passes, the result has
+`passed: false` and no selected artifact.
+
+Provider, receipt or verifier errors stop the pool. There is no implicit retry
+or fallback. Aborting bounds the coordinator's wait; the caller still owns
+physical request cleanup and unresolved spend. This strategy is experimental.
+Its end-to-end latency and quality require a live, frozen comparison before any
+efficacy claim. Replaying sequential artifacts does not measure parallel speed.
