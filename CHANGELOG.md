@@ -4,6 +4,8 @@
 
 - Add opt-in caller-side Fusion repair feedback normalization for temporary loopback URL ports, preserving distinct ports and assertion paths.
 
+- Add opt-in caller-side Fusion repair context selection for the first complete test failure, excluding variable cancellation tails without changing verdicts.
+
 - Report the complete anchored-edit Fusion cohort, retaining matched strong-model outcomes and the failed workflow-time gate.
 
 - Report the complete first-failure Fusion cohort, with matched strong-model quality, lower model cost and a passed development time gate; production generalization remains unqualified.
