@@ -10,6 +10,8 @@
 
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
 
+- Report task-level lost baseline successes and a one-sided exact binary loss bound in Fusion evaluations.
+
 - Add caller-side multi-file Fusion artifacts with exact source-path coverage, bounded content, and test-file exclusions.
 
 - Record a 16-pair verifier benchmark with unchanged verdicts and lower measured sandbox overhead; keep it separate from model-quality claims.

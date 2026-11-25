@@ -88,3 +88,15 @@ Related primary sources:
 [Conductor](https://arxiv.org/abs/2512.04388),
 [inflation-aware routing](https://arxiv.org/abs/2608.13571), and
 [FusionEval](https://arxiv.org/abs/2610.30162).
+
+
+For binary scores, `binaryTaskLoss` also counts each task that loses a baseline
+success in **any** paired trial. Another trial's gain cannot cancel this event.
+`upper95` is the one-sided 95% Clopper-Pearson upper bound on that task-event rate;
+it is not a bound on net accuracy loss or on the conditional rate among baseline
+successes. Fractional scores produce `null`. Thirty tasks with zero observed
+losses still give an upper bound of about 9.5%; repeating those same tasks does
+not increase the independent sample size. The bound assumes independent tasks
+sampled from the target population and a fixed trial protocol. Correlated source
+families, selected tasks, or adaptive tuning invalidate that population claim.
+See [NIST's exact binomial limits](https://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/exacbici.htm).

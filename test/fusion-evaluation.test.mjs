@@ -139,3 +139,39 @@ test("unrepresentable latency ratios remain unknown instead of serializing Infin
   assert.equal(comparison.latencyRatio95, null);
   assert.ok(Number.isFinite(comparison.meanLatencyDeltaMs));
 });
+
+
+test("binary losses cannot cancel across repeated trials", () => {
+  const input = fixture();
+  input.records = input.records.slice(0, 2);
+  input.records.push(...input.records.map((row) => ({ ...row, trial: 2, score: 1 - row.score })));
+  const comparison = evaluateFusion(input, "single").comparisons[0];
+  assert.equal(comparison.losses, 0);
+  assert.equal(comparison.ties, 1);
+  assert.equal(comparison.binaryTaskLoss.cases, 1);
+  assert.equal(comparison.binaryTaskLoss.casesWithLostBaselineSuccess, 1);
+  assert.equal(comparison.binaryTaskLoss.upper95, 1);
+});
+
+test("zero observed losses still retain task-level uncertainty", () => {
+  const input = fixture();
+  input.records = Array.from({ length: 30 }, (_, i) => input.records.slice(0, 2).map((row) =>
+    ({ ...row, caseId: `case-${i}`, score: 1 }))).flat();
+  let loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  assert.ok(Math.abs(loss.upper95 - (1 - 0.05 ** (1 / 30))) < 1e-12);
+  assert.ok(loss.upper95 > 0.05);
+  input.records.push(...input.records.map((row) => ({ ...row, trial: 2 })));
+  loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  assert.equal(loss.cases, 30);
+  assert.ok(Math.abs(loss.upper95 - (1 - 0.05 ** (1 / 30))) < 1e-12);
+  input.records[1].score = 0;
+  loss = evaluateFusion(input, "single").comparisons[0].binaryTaskLoss;
+  // Independent inversion: P(X <= 1) = (1-p)^30 + 30p(1-p)^29.
+  assert.ok(Math.abs((1 - loss.upper95) ** 30 + 30 * loss.upper95 * (1 - loss.upper95) ** 29 - 0.05) < 1e-12);
+});
+
+test("fractional scores do not receive a binary loss bound", () => {
+  const input = fixture();
+  input.records[0].score = 0.5;
+  assert.equal(evaluateFusion(input, "single").comparisons[0].binaryTaskLoss, null);
+});
