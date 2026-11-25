@@ -31,8 +31,8 @@ The study reused the exact public controller from
 [the opt-in cheap-repair change](https://github.com/openclaw/clawrouter/pull/1324),
 the six pilot tasks, model request bodies, context, public verifier, full tests,
 admission decisions and model settings. Three tasks admit the cheap path and
-three bypass it. The cheap path allows two attempts, then up to two fresh strong
-attempts. Cheap-only and strong-only controls each allow two attempts. Models
+three bypass it. The cheap path allows two attempts, then a fresh strong attempt
+with one repair if needed. Cheap-only and strong-only controls each allow two attempts. Models
 are `openai/gpt-6-luna` and `openai/gpt-6.1-terra`.
 
 The master protocol was frozen before new inference. Repeat identifiers are
