@@ -1,4 +1,4 @@
-import "../../test/helpers/typescript-resolver.mjs";
+import "../../scripts/typescript-resolver.mjs";
 import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
@@ -8,7 +8,7 @@ import test from "node:test";
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (context.parentURL === pathToFileURL(new URL("../oauth.ts", import.meta.url).pathname).href) {
-      if (specifier === "./access" || specifier === "./authority" || specifier === "./providers" || specifier === "./grant-selection") {
+      if (specifier === "./access" || specifier === "./authority" || specifier === "./provider-catalog" || specifier === "./grant-selection") {
         return { shortCircuit: true, url: new URL("./oauth-token-fetch.mocks.mjs", import.meta.url).href };
       }
     }

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { anthropicPricing } = await import("../anthropic-pricing.ts");
 const { actualModelCost } = await import("../pricing.ts");

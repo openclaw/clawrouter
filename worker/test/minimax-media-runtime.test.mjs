@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { minimaxSpeechBinding } from "../../shared/native-media-binding.ts";
-import { snapshot } from "../providers.ts";
+import { snapshot } from "../provider-catalog.ts";
 import { sha256Hex } from "../utils.ts";
 import { putGrantCredentials, materializeGrantCredentials, inspectGrantCredentials, revokeGrantCredentials, secretlessGrant } from "../grant-credentials.ts";
 import { routingProjection } from "../grant-projection.ts";

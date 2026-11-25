@@ -13,7 +13,7 @@ test('workerd actual private DO path: complete ranks, equal-ID pages, retained e
   export {PolicyBindingIndexObject} from './worker/authority.ts';
   export class GrantCredentialObject {fetch(){return new Response('unused')}}
   import {readCompleteUsage,exportCompleteUsage} from './worker/usage-report.ts';
-  import {usageStub} from './worker/ledgers.ts';
+  import { usageStub } from './worker/usage-ledger-client.ts';
   import {authorityCall} from './worker/authority.ts';
   export class UsageLedgerObject extends Current {
    constructor(state){super(state);this.fixture=state;}

@@ -1134,8 +1134,7 @@
               "type": "object",
               "required": [
                 "protocol",
-                "retrieve",
-                "cancel"
+                "retrieve"
               ],
               "additionalProperties": false,
               "properties": {

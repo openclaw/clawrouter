@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { googleContinuationFixture } from "./google-continuation-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { googleSpeechModels, googleSpeechPreviewCutoff } = await import("../google-speech.ts");
 const { overrideHotCacheConfig, HOT_CACHE_DISABLED, clearHotCaches, pendingBackgroundWork } = await import("../hot-cache.ts");

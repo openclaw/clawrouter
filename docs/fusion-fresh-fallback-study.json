@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 1,
+  "study": "atcoder-fresh-1024-live-v1",
+  "status": "audited",
+  "sourceSha": "4bb8c91ce3eb0b9f7a10cbf5e1d611bdf501b16a",
+  "protocolSha256": "e16833f37cac102ad34381fbe1362d1814e19b662edab3540b44eaef651eb235",
+  "resultSha256": "775805a31a8376e40f64ea9a6216b0ebb7992daad78b0c96520fb8d3c8114275",
+  "auditSha256": "ce1558868da7947a421929576845341c4f6e0a18e81c49d11ec40c1716243eb8",
+  "priorAuditSha256": "d87b96aaf07bcce38231fa9dd9313f9e43344347675ac643a61f3748bf1523f6",
+  "scaleQualificationSha256": "dd24f27c30deb6b257275ce22a658688815972227cd9279e8c85ec0dda0c373f",
+  "scaleSize": 60000,
+  "draftMaxOutputTokens": 1024,
+  "fallbackMode": "fresh",
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 15,
+  "totalCostMicros": 20080,
+  "summary": {
+    "strong": {
+      "passed": 6,
+      "costMicros": 12831,
+      "elapsedMs": 47596.96625099999
+    },
+    "cascade": {
+      "passed": 6,
+      "costMicros": 7249,
+      "elapsedMs": 57580.888626000014
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 3,
+    "escalations": 3,
+    "costRatio": 0.5649598628322032,
+    "elapsedRatio": 1.2097596372497852,
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1246,
+      "elapsedMs": 6014.577416,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 1449,
+      "elapsedMs": 9151.009208,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 361,
+      "elapsedMs": 6980.423999999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 3396,
+      "elapsedMs": 11139.427584000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2055,
+      "elapsedMs": 7985.909250000004,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 2125,
+      "elapsedMs": 14612.250959000005,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 180,
+      "elapsedMs": 4916.260000000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1853,
+      "elapsedMs": 6585.034541999994,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1602,
+      "elapsedMs": 5903.502791999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 166,
+      "elapsedMs": 4360.192374999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 2968,
+      "elapsedMs": 17560.752084000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2679,
+      "elapsedMs": 9968.514666999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "Same six exposed tasks; one stochastic sample per arm. No independent or repository-work confirmation.",
+    "Both arms permit at most two calls and stop on accepted output. Every strong attempt has the same original problem body, without rejected code or verifier feedback.",
+    "The 1.2 latency threshold remains unchanged: the observed 1.20975964 ratio fails the development gate despite matching quality and lower cost.",
+    "Stochastic differences across runs prevent attributing all gains to fresh fallback. No further tuning on these six tasks is planned.",
+    "Model cost and live arm time exclude engineering, hardware and operational costs."
+  ]
+}

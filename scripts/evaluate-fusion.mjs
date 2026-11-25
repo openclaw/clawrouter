@@ -72,19 +72,32 @@ export function evaluateFusion(input, baseline, expectedSplit = 'test') {
   });
   const comparisons = [...strategies.keys()].filter((id) => id !== baseline).map((strategy) => {
     const differences = new Map();
+    const binaryLosses = new Map();
+    let binary = true;
     for (const pair of pairs.values()) {
       const row = pair.get(strategy), base = pair.get(baseline);
+      binary &&= [row.score, base.score].every((score) => score === 0 || score === 1);
+      binaryLosses.set(row.caseId, (binaryLosses.get(row.caseId) ?? false) || (base.score === 1 && row.score === 0));
       if (!differences.has(row.caseId)) differences.set(row.caseId, []);
-      differences.get(row.caseId).push(row.score - base.score);
+      differences.get(row.caseId).push({ score: row.score - base.score,
+        cost: row.costMicros, baseCost: base.costMicros,
+        latency: row.latencyMs, baseLatency: base.latencyMs });
     }
-    const deltas = [...differences.values()].map(mean);
+    const cases = [...differences.values()].map((trials) => Object.fromEntries(
+      ["score", "cost", "baseCost", "latency", "baseLatency"].map((key) => [key, mean(trials.map((trial) => trial[key]))])));
+    const deltas = cases.map((row) => row.score);
+    const average = (key) => mean(cases.map((row) => row[key]));
     return {
       strategy, baseline, cases: deltas.length, meanScoreDelta: mean(deltas),
       wins: deltas.filter((delta) => delta > 0).length,
       ties: deltas.filter((delta) => delta === 0).length,
       losses: deltas.filter((delta) => delta < 0).length,
-      // A single case cannot establish uncertainty; report unknown, never [delta, delta].
-      scoreDelta95: deltas.length < 2 ? null : bootstrapInterval(deltas),
+      meanCostDeltaMicros: average("cost") - average("baseCost"),
+      meanCostRatio: ratio(average("cost"), average("baseCost")),
+      meanLatencyDeltaMs: average("latency") - average("baseLatency"),
+      meanLatencyRatio: ratio(average("latency"), average("baseLatency")),
+      ...bootstrapIntervals(cases),
+      binaryTaskLoss: binary ? taskLossBound(binaryLosses) : null,
     };
   });
   return {
@@ -94,15 +107,57 @@ export function evaluateFusion(input, baseline, expectedSplit = 'test') {
   };
 }
 
-function bootstrapInterval(deltas) {
+// A task counts once if any paired trial loses a baseline success. Gains in
+// other trials cannot cancel it. The binomial model assumes independent tasks.
+function taskLossBound(losses) {
+  const cases = losses.size, count = [...losses.values()].filter(Boolean).length;
+  let low = 0, high = 1;
+  if (count < cases) {
+    // Invert P(Binomial(cases, p) <= count) = 0.05 in log space.
+    for (let step = 0; step < 60; step++) {
+      const p = (low + high) / 2;
+      let term = cases * Math.log1p(-p), sum = term;
+      for (let k = 1; k <= count; k++) {
+        term += Math.log(cases - k + 1) - Math.log(k) + Math.log(p) - Math.log1p(-p);
+        const max = Math.max(sum, term);
+        sum = max + Math.log1p(Math.exp(Math.min(sum, term) - max));
+      }
+      if (sum > Math.log(0.05)) low = p;
+      else high = p;
+    }
+  }
+  return { cases, casesWithLostBaselineSuccess: count, observedRate: count / cases,
+    upper95: high, method: "one-sided Clopper-Pearson; any paired trial loss per task" };
+}
+
+function ratio(value, baseline) {
+  const result = value / baseline;
+  return baseline === 0 || !Number.isFinite(result) ? null : result;
+}
+
+function bootstrapIntervals(cases) {
+  const samples = { scoreDelta95: [], costDelta95: [], costRatio95: [], latencyDelta95: [], latencyRatio95: [] };
+  // One case cannot establish uncertainty, including for an apparently fixed ratio.
+  if (cases.length < 2) return Object.fromEntries(Object.keys(samples).map((key) => [key, null]));
   let seed = 42;
   const random = () => { seed = (Math.imul(1664525, seed) + 1013904223) >>> 0; return seed / 4294967296; };
-  const samples = Array.from({ length: 2000 }, () => {
-    let total = 0;
-    for (let i = 0; i < deltas.length; i++) total += deltas[Math.floor(random() * deltas.length)];
-    return total / deltas.length;
-  });
-  return { low: percentile(samples, 0.025), high: percentile(samples, 0.975), method: "paired case bootstrap", samples: 2000, seed: 42 };
+  for (let sample = 0; sample < 2000; sample++) {
+    let score = 0, cost = 0, baseCost = 0, latency = 0, baseLatency = 0;
+    for (let i = 0; i < cases.length; i++) {
+      const row = cases[Math.floor(random() * cases.length)];
+      score += row.score; cost += row.cost; baseCost += row.baseCost;
+      latency += row.latency; baseLatency += row.baseLatency;
+    }
+    samples.scoreDelta95.push(score / cases.length);
+    samples.costDelta95.push((cost - baseCost) / cases.length);
+    samples.costRatio95.push(ratio(cost, baseCost));
+    samples.latencyDelta95.push((latency - baseLatency) / cases.length);
+    samples.latencyRatio95.push(ratio(latency, baseLatency));
+  }
+  return Object.fromEntries(Object.entries(samples).map(([key, values]) => [key,
+    // Never discard undefined draws and report a biased finite interval.
+    values.includes(null) ? null : { low: percentile(values, 0.025), high: percentile(values, 0.975),
+      method: "paired case bootstrap", samples: 2000, seed: 42 }]));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

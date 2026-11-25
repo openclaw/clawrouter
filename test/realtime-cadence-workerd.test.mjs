@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
-import { createRealtimeLedger } from '../scripts/worker-test-failure-reporter.mjs';
+import { createRealtimeLedger } from '../scripts/realtime-diagnostics.mjs';
 import { startBundledWorkerdFixture } from './helpers/workerd.mjs';
 import { createWsCloseObservation } from './helpers/ws-close-observation.mjs';
 const require = createRequire(import.meta.resolve('wrangler/package.json'));

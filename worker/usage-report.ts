@@ -1,9 +1,11 @@
+import { emptyUsageMetrics, usageMetricKeys, usageTokenFields } from "../shared/usage-report.ts";
 import type { PersonalUsageEvents, PersonalUsageReport, PersonalUsageEvent, UsageCostSummary, UsageGroupBy, UsageMetrics, UsageReportGroup } from "../shared/usage-report.ts";
-import { usageStub } from "./ledgers.ts";
+import { usageStub } from "./usage-ledger-client.ts";
 import type { Env } from "./types.ts";
-import { HttpError, normalizeEmail } from "./utils.ts";
+import { normalizeEmail } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { parseUsageReportRange } from "./usage-report-range.ts";
-import { emptyUsageMetrics, usageMetricKeys, type UsageAggregateRow, type UsageEventPosition, type UsageReportQuery, type UsageReportShard, type UsageReportMigrationOptions, type UsageReportMigrationEffect, type UsageReportHistory } from "./usage-report-store.ts";
+import type { UsageAggregateRow, UsageEventPosition, UsageReportQuery, UsageReportShard, UsageReportMigrationOptions, UsageReportMigrationEffect, UsageReportHistory } from "./usage-report-protocol.ts";
 
 const filterNames = ["model", "provider", "key", "status", "costClass", "lane"] as const;
 const classes = new Set(["calculated", "fixed", "estimated", "upper_bound", "partial", "unknown", "no_charge"]);
@@ -124,9 +126,9 @@ export async function migrateUsageReportShard(env: Env, policy: Policy, options:
 // tests prove mechanics, NOT authentication. Scope is resolved here, never input.
 import type { AccessSession } from './types.ts';
 import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, CompleteUsageGroup, UsageGroupIdentity, UsageCoverage } from '../shared/usage-report.ts';
-import type { UsageVisibilityCut } from './usage-report-visibility.ts';
-import { UsageVisibilityError } from './usage-report-visibility.ts';
-import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-store.ts';
+import type { UsageVisibilityCut } from './usage-report-protocol.ts';
+import { UsageVisibilityError } from './usage-report-protocol.ts';
+import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
 import { sha256Hex } from './utils.ts';
 interface VerifiedUsageCaller { session: AccessSession; actor: string; sessionBinding: string; audience: 'admin' | 'personal' }
 type UsageVerifier = () => Promise<VerifiedUsageCaller | null>;
@@ -363,7 +365,7 @@ function eventAdditives(event: CompleteUsageEvent): UsageAdditives {
   if(!['generation','utility'].includes(event.callKind)||typeof event.status!=='string'||!lanes.has(event.lane)||!classes.has(event.costClass))failComplete('unavailable','source');
   m.generationCalls=Number(event.callKind==='generation');m.utilityCalls=Number(event.callKind==='utility');
   m.successfulCalls=Number(event.status==='success');m.deniedCalls=Number(event.status==='denied');m.errorCalls=Number(event.status!=='success'&&event.status!=='denied');
-  for(const [field,present] of [['inputTokens','inputReportedCalls'],['outputTokens','outputReportedCalls'],['cachedInputTokens','cacheReadReportedCalls'],['cacheWriteInputTokens','cacheWriteReportedCalls'],['reasoningOutputTokens','reasoningReportedCalls']] as const){
+  for(const [field,present] of usageTokenFields){
     const v=event[field];if(v!==null){nonnegative(v);m[field]=v;m[present]=1;}
   }
   if(event.recordedChargeMicros!==null){nonnegative(event.recordedChargeMicros);result.recordedChargeMicros=event.recordedChargeMicros;result.chargeReportedCalls=1;}

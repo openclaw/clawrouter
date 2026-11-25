@@ -8,6 +8,7 @@ import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
 import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
 import { runProbeSelection } from '../scripts/fusion-probe-selection.mjs';
+import { validateLocalQualification } from '../scripts/fusion-local-repository.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -183,11 +184,19 @@ test('probe selection meters cheap proposals and author before a strong fallback
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('pair persists post-selection diagnostics after final grading without additional inference', async () => {
+for (const custom of [false, true]) test(`pair persists post-selection diagnostics with ${custom ? 'custom' : 'default'} acceptance`, async () => {
   const { root, options } = await fixture();
   let drafts = 0, requests = 0;
   const grades = [];
+  const grading = async (_task, _image, files) => {
+    grades.push({ source: files[0].content, requests });
+    return { valid: true, passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
+  };
   try {
+    if (custom) {
+      const q = JSON.parse(await readFile(options.qualificationPath));
+      await writeFile(options.qualificationPath, JSON.stringify({ ...q, acceptanceVerifier: 'probe-fixture' }));
+    }
     const state = await runPairBenchmark({ ...options, policy: 'probe-selection',
       config: { ...config, maxCalls: 4 },
       fetcher: async (url, request) => {
@@ -214,10 +223,14 @@ test('pair persists post-selection diagnostics after final grading without addit
         intact: async () => true,
         runProbe: async box => ({ passed: box.files[0].content === 'candidate 2', assertionFailed: true }),
       }),
-      grade: async (_task, _image, files) => {
-        grades.push({ source: files[0].content, requests });
-        return { valid: true, passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
-      },
+      ...(custom ? { acceptance: {
+        validate(tasks, qualification) {
+          const { acceptanceVerifier, ...standard } = qualification;
+          assert.equal(acceptanceVerifier, 'probe-fixture');
+          return validateLocalQualification(tasks, standard);
+        },
+        grade: grading,
+      } } : { grade: grading }),
     });
     const row = state.records[2];
     assert.equal(row.score, 1);
@@ -387,7 +400,39 @@ test('an uncertain native call retains prior actions without resuming or accepti
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const controlStrategy of ['cheap', 'strong']) test(`single ${controlStrategy} control reserves and runs only its selected arm`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, controlsOnly: true, controlStrategy,
+      config: { ...config, campaignBudgetMicros: config.priorCostMicros + config.trialBudgetMicros },
+      grade, fetcher: success,
+      contractAgent: async () => { assert.fail('candidate must not run'); },
+      agent: async (_task, _image, strategy, id, _settings, invoke) => {
+        seen.push(strategy);
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+    });
+    assert.deepEqual(seen, ['strong']);
+    assert.deepEqual(state.strategies, [controlStrategy]);
+    assert.equal(state.calls.length, 1);
+    assert.equal(state.calls[0].model, config[controlStrategy]);
+    assert.equal(state.controlStrategy, controlStrategy);
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).controlStrategy, controlStrategy);
+    assert.match(state.limitations.join(' '), /Only one fixed-model control/);
+    assert.throws(() => analyzePairRun(state), /incomplete_pair_run/);
+    await assert.rejects(runPairBenchmark({ ...options, controlsOnly: true, controlStrategy, armOffset: 1 }), /invalid_arm_offset/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
+  for (const controlStrategy of ['both', '', true, 1, {}, []]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly: true, controlStrategy }), /invalid_control_selection/);
+  }
+  for (const controlsOnly of [false, undefined]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly, controlStrategy: 'strong' }), /invalid_control_selection/);
+  }
   for (const controlsOnly of ['true', null, 1]) {
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);
   }
@@ -681,6 +726,36 @@ test('provider refusal settles known usage and stops before another model is cal
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const status of [200, 400]) test(`a safety notice outside the normalized answer stops all further calls (${status})`, async () => {
+  const { root, options } = await fixture();
+  try {
+    let calls = 0, returned = false;
+    await assert.rejects(runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        calls++;
+        return Response.json({ model: JSON.parse(request.body).model,
+          usage: { prompt_tokens: 20, completion_tokens: 1 },
+          choices: [{ finish_reason: 'stop', message: { content: '{"action":"submit"}' } }],
+          output: [{ channel: 'commentary', content: [{ text: 'Cybersecurity safety notice. private sentinel' }] }],
+        }, { status });
+      }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); returned = true;
+        await invoke(id, roles.strong, body, signal); return repaired();
+      } }), /pair_benchmark_incomplete/);
+    const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(calls, 1); assert.equal(returned, false); assert.equal(state.complete, false);
+    assert.equal(state.failure, status === 200 ? 'provider_refused' : 'unknown_cost');
+    if (status === 200) assert.equal(typeof state.calls[0].costMicros, 'number');
+    else {
+      assert.equal(state.calls[0].costMicros, null);
+      assert.equal(state.calls[0].errorHint, 'safety_notice');
+      assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
+    }
+    assert.ok(!JSON.stringify(state).includes('private sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('known-cost output truncation fails its trial without skipping the other controls', async () => {
   const { root, options } = await fixture();
   try {
@@ -720,6 +795,45 @@ test('cheap reasoning calibration is explicit, recorded and validated before inf
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+
+for (const actionSchemaProfile of ['legacy', 'compact']) {
+  test(`pair action schema is recorded and shared by all arms: ${actionSchemaProfile}`, async () => {
+    const { root, options } = await fixture();
+    const seen = [];
+    try {
+      const state = await runPairBenchmark({ ...options,
+        ...(actionSchemaProfile === 'compact' ? { actionSchemaProfile } : {}),
+        grade, fetcher: success,
+        agent: async (_task, _image, _strategy, _id, _settings, _invoke, _engine, agentOptions) => {
+          seen.push(agentOptions.actionSchemaProfile ?? 'legacy');
+          return repaired();
+        } });
+      assert.deepEqual(seen, Array(3).fill(actionSchemaProfile));
+      assert.equal(state.actionSchemaProfile, actionSchemaProfile);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+      assert.equal(saved.actionSchemaProfile, actionSchemaProfile);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test('unsupported pair action schemas fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    for (const setting of [
+      { actionSchemaProfile: 'unknown' },
+      { actionSchemaProfile: 'compact', executor: 'single-draft', controlsOnly: true },
+      { actionSchemaProfile: 'compact', policy: 'contract' },
+      { actionSchemaProfile: 'compact', policy: 'probe-selection' },
+      { actionSchemaProfile: 'compact', policy: 'draft-sampling' },
+    ]) {
+      await assert.rejects(runPairBenchmark({ ...options, ...setting,
+        preflight: async () => { preflights++; } }), /(?:invalid|unsupported)_action_schema_profile/);
+    }
+    assert.equal(preflights, 0);
+    assert.deepEqual((await readdir(root)).sort(), ['qualification.json', 'tasks.json']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test('source preload applies equally to every comparison arm and rejects invalid configuration', async () => {
   const { root, options } = await fixture();
@@ -1192,3 +1306,86 @@ for (const failure of ['truncated', 'invalid-usage', 'unpriced-tools', 'http']) 
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+for (const openAiApi of ['chat-completions', 'responses']) {
+  test(`policy prompt rejection stops ${openAiApi} pairs and retains its full reservation`, async t => {
+    const { root, options } = await fixture();
+    const notices = [];
+    t.mock.method(console, 'error', message => notices.push(message));
+    let calls = 0, grades = 0;
+    try {
+      await assert.rejects(runPairBenchmark({ ...options, openAiApi,
+        fetcher: async (url, request) => {
+          if (url.includes('/v1/models/')) return success(url, request);
+          calls++;
+          return Response.json({ error: { type: 'invalid_request_error', code: 'invalid_prompt',
+            message: 'Your prompt was flagged as potentially violating our usage policy. private sentinel' } }, { status: 400 });
+        },
+        agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+          await invoke(id, roles.cheap, body, signal);
+          await invoke(id, roles.strong, body, signal);
+          return repaired();
+        },
+        grade: async () => { grades++; return grade(); },
+      }), /pair_benchmark_incomplete/);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+      assert.equal(calls, 1);
+      assert.equal(grades, 0);
+      assert.equal(saved.complete, false);
+      assert.equal(saved.failure, 'unknown_cost');
+      assert.equal(saved.calls.length, 1);
+      assert.equal(saved.calls[0].costMicros, null);
+      assert.equal(saved.calls[0].httpStatus, 400);
+      assert.equal(saved.calls[0].providerCode, 'invalid_prompt');
+      assert.equal(saved.calls[0].errorHint, 'safety_notice');
+      assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls[0].reservationMicros);
+      assert.deepEqual(notices, ["Provider safety notice: This content can't be shown."]);
+      assert.doesNotMatch(JSON.stringify(saved), /private sentinel|flagged|usage policy/);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test('custom acceptance binds qualification and grading before inference', async () => {
+  const { root, options } = await fixture();
+  let validations = 0, grades = 0, agents = 0;
+  try {
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.acceptanceVerifier = 'fixture-v1';
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    await assert.rejects(runPairBenchmark({ ...options, fetcher: success }), /custom_acceptance_verifier_required/);
+    for (const acceptance of [{}, { validate() {} }, { grade() {} }]) {
+      await assert.rejects(runPairBenchmark({ ...options, acceptance }), /invalid_acceptance_adapter/);
+    }
+    const acceptance = {
+      validate(tasks, supplied) {
+        validations++;
+        assert.equal(supplied.acceptanceVerifier, 'fixture-v1');
+        assert.equal(tasks[0].id, supplied.receipts[0].taskId);
+        return [{ taskId: tasks[0].id, image: supplied.receipts[0].image, oracleTests: 3, oracleSkipped: 0 }];
+      },
+      async grade() { grades++; return grade(); },
+    };
+    await assert.rejects(runPairBenchmark({ ...options, acceptance, grade }), /invalid_acceptance_adapter/);
+    const state = await runPairBenchmark({ ...options, acceptance, controlsOnly: true, controlStrategy: 'cheap',
+      fetcher: success, agent: async () => { agents++; assert.equal(validations, 1); return repaired(); } });
+    assert.equal(state.complete, true); assert.equal(validations, 1);
+    assert.equal(agents, 1); assert.equal(grades, 1); assert.equal(state.records[0].score, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+for (const outcome of [undefined, 'turn_limit', 'deadline', 'budget', 'draft_rejected', 'submitted', 'draft_submitted']) {
+  test(`pair scoring and repair export require submission (${outcome})`, async () => {
+    const { root, options } = await fixture();
+    try {
+      const accepted = ['submitted', 'draft_submitted'].includes(outcome);
+      const state = await runPairBenchmark({ ...options, grade, fetcher: success, exportRepairs: true,
+        includeControls: false, policy: 'edit-handoff', agent: async () => ({ ...repaired(), outcome }) });
+      assert.equal(state.complete, true);
+      assert.equal(state.records[0].score, Number(accepted));
+      assert.equal(state.records[0].verdict.passed, true);
+      assert.equal(state.records[0].outcome, outcome);
+      assert.equal(Boolean(state.records[0].repairExport), accepted);
+      assert.equal((await readdir(options.out)).includes('pair-example.repair.json'), accepted);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}

@@ -6,11 +6,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot as compileCore } from "../scripts/provider-compiler.mjs";
 
 const paths = readdirSync("providers").filter(path => path.endsWith(".provider.yaml")).sort().map(path => `providers/${path}`);
 const manifests = paths.map(path => parse(readFileSync(path, "utf8")));
 
 test("imported compiler matches CLI stdout and output-file snapshots", t => {
+  assert.equal(compileProviderSnapshot, compileCore, "the original import path preserves the core export");
   const expected = compileProviderSnapshot(manifests);
   // The CLI sorts paths even when its caller supplies them in reverse.
   // Bound capture to this inventory plus diagnostics; pretty JSON exceeds Node's 1 MiB default.
@@ -26,6 +28,32 @@ test("imported compiler matches CLI stdout and output-file snapshots", t => {
   assert.equal(file.status, 0, file.stderr);
   assert.equal(file.stdout, "");
   assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), expected);
+});
+
+test("parsed-manifest compilation does not load package or YAML input handling", () => {
+  const core = new URL("../scripts/provider-compiler.mjs", import.meta.url).href;
+  const source = `
+    import { registerHooks } from "node:module";
+    import { readFileSync } from "node:fs";
+    registerHooks({ resolve(specifier, context, nextResolve) {
+      const resolved = nextResolve(specifier, context);
+      if (specifier === "yaml" || resolved.url.endsWith("/provider-manifest-inputs.mjs")
+        || resolved.url.endsWith("/provider-plugin-loader.ts")
+        || resolved.url.includes("/packages/provider-plugin-contract/")) {
+        throw new Error("parsed-manifest compiler loaded package input handling");
+      }
+      return resolved;
+    } });
+    const { compileProviderSnapshot } = await import(${JSON.stringify(core)});
+    process.stdout.write(JSON.stringify(compileProviderSnapshot(JSON.parse(readFileSync(0, "utf8")))));
+  `;
+  const expected = compileCore(manifests);
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    input: JSON.stringify(manifests), encoding: "utf8", maxBuffer: Buffer.byteLength(JSON.stringify(expected)) + 64 * 1024,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), expected);
 });
 
 test("model display names round-trip without changing model identity or execution metadata", () => {

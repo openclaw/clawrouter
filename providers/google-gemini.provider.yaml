@@ -398,6 +398,126 @@ models:
             maxOutputTokens: 65536
             input: [text, image, video, audio]
           stream_generate_content: *gemini38Facts
+    - id: google/gemini-4-neon
+      displayName: "Gemini 4 Neon"
+      upstream: gemini-4-neon
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-4-neon-tiers-2026-11-20
+      pricing:
+        effectiveAt: "2026-11-18"
+        checkedAt: "2026-11-20"
+        source: https://aistudio.google.com/docs/pricing#gemini-4-neon
+        inputMicrosPerMillion: 3000000
+        cachedInputMicrosPerMillion: 150000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 3000000
+            cachedInputMicrosPerMillion: 150000
+            outputMicrosPerMillion: 15000000
+          - id: flex
+            inputMicrosPerMillion: 1500000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 7500000
+          - id: priority
+            inputMicrosPerMillion: 5400000
+            cachedInputMicrosPerMillion: 270000
+            outputMicrosPerMillion: 27000000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini4NeonFacts
+            checkedAt: "2026-11-20"
+            sources: [https://aistudio.google.com/docs/models/gemini-4-neon, "https://aistudio.google.com/docs/long-decode?generate-content=true"]
+            contextWindow: 1048576
+            input: [text, image, video, audio]
+            maxOutputTokens: 65536
+          stream_generate_content: *gemini4NeonFacts
+    - id: google/gemini-4-carbon
+      displayName: "Gemini 4 Carbon"
+      upstream: gemini-4-carbon
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-4-carbon-published-upper-bound-2026-11-20
+      pricing:
+        effectiveAt: "2026-11-20"
+        checkedAt: "2026-11-20"
+        source: https://aistudio.google.com/docs/pricing#gemini-4-carbon
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 4000000
+        cachedInputMicrosPerMillion: 200000
+        outputMicrosPerMillion: 20000000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 200000
+            outputMicrosPerMillion: 20000000
+          - id: flex
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 100000
+            outputMicrosPerMillion: 10000000
+          - id: priority
+            inputMicrosPerMillion: 7200000
+            cachedInputMicrosPerMillion: 360000
+            outputMicrosPerMillion: 36000000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content:
+            checkedAt: "2026-11-20"
+            sources: &gemini4CarbonSources [https://aistudio.google.com/docs/models/gemini-4-carbon, "https://aistudio.google.com/docs/long-decode?generate-content=true"]
+            contextWindow: 1048576
+            input: [text, image, video, audio]
+            maxOutputTokens: 32768
+          stream_generate_content:
+            checkedAt: "2026-11-20"
+            sources: *gemini4CarbonSources
+            contextWindow: 1048576
+            input: [text, image, video, audio]
+            maxOutputTokens: 65536
+    - id: google/gemini-4-hydrogen
+      displayName: "Gemini 4 Hydrogen"
+      upstream: gemini-4-hydrogen
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-4-hydrogen-tiers-2026-11-20
+      pricing:
+        effectiveAt: "2026-11-12"
+        checkedAt: "2026-11-20"
+        source: https://aistudio.google.com/docs/pricing#gemini-4-hydrogen
+        inputMicrosPerMillion: 1500000
+        cachedInputMicrosPerMillion: 75000
+        outputMicrosPerMillion: 7500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1500000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 7500000
+          - id: flex
+            inputMicrosPerMillion: 750000
+            cachedInputMicrosPerMillion: 37500
+            outputMicrosPerMillion: 3750000
+          - id: priority
+            inputMicrosPerMillion: 2700000
+            cachedInputMicrosPerMillion: 135000
+            outputMicrosPerMillion: 13500000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini4HydrogenFacts
+            checkedAt: "2026-11-20"
+            sources: [https://aistudio.google.com/docs/models/gemini-4-hydrogen, "https://aistudio.google.com/docs/long-decode?generate-content=true"]
+            contextWindow: 1048576
+            input: [text, image, video, audio]
+            maxOutputTokens: 65536
+          stream_generate_content: *gemini4HydrogenFacts
     - id: google/gemini-embedding-001
       displayName: "Gemini Embedding 001"
       upstream: gemini-embedding-001

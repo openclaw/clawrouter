@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { manageCodex } from "../scripts/codex-connect.mjs";
-import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { nativeCodexClient } from "../scripts/native-codex-client.mjs";
 import { requireBaselineCommit } from "./helpers/personal-usage-baseline.mjs";
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";

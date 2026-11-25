@@ -1,19 +1,20 @@
+import type { UsageEventScope } from "./usage-ledger-client.ts";
 import { withUsageRetention, maintainUsageVisibility } from "./usage-report-visibility.ts";
 import { reportRetentionMs } from "./usage-report-range.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
+import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport } from "./usage-report-store.ts";
+import { type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-protocol.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
-import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
-import { errorResponse, HttpError, json, normalizeEmail, readJson } from "./utils.ts";
+import { mergePrincipalUsage, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
+import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
 import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
 import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
-export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 export interface UsageIngestReceipt {
   eventId: string;
   outcome: "stored" | "duplicate" | "expired_by_retention";
@@ -478,14 +479,6 @@ function compareSqlText(left: string | null, right: string | null): number {
 const grantUsageMetrics = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costMicros"] as const;
 function emptyGrantUsage(): GrantUsageTotals { return { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0 }; }
 
-export async function grantUsageSnapshot(env: Env, tenantId: string, policyId: string, days: number): Promise<GrantUsageSnapshot> {
-  const url = new URL("https://clawrouter.internal/grant-usage");
-  url.searchParams.set("policy_id", policyId); url.searchParams.set("days", String(days));
-  const response = await usageStub(env, tenantId, policyId).fetch(url);
-  if (!response.ok) throw new HttpError(response.status, "grant_usage_unavailable", response.status === 422 ? "choose a shorter usage range" : "grant usage is unavailable");
-  return response.json<GrantUsageSnapshot>();
-}
-
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
   for (const message of batch.messages) {
     try {
@@ -573,27 +566,6 @@ export async function ingestUsageNamespace(namespace: Env["USAGE_LEDGER"], event
   return { eventId: receipt.eventId, outcome: receipt.outcome };
 }
 
-export async function usageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  return usageSnapshots(env, [{ tenantId, policyId }], scope, limit);
-}
-
-export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  const shards = new Map(policies.map(policy => [usageShardName(policy.tenantId, policy.policyId), policy]));
-  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, scope, limit)));
-  return mergeUsageSnapshots(snapshots, limit);
-}
-
-async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit: number): Promise<UsageSnapshot> {
-  const url = new URL("https://clawrouter.internal/snapshot");
-  url.searchParams.set("policy_id", policyId);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("events", scope.kind);
-  if (scope.kind !== "admin") url.searchParams.set("event_owner", scope.id);
-  const response = await usageStub(env, tenantId, policyId).fetch(url);
-  if (!response.ok) throw new Error(`usage snapshot returned ${response.status}`);
-  return response.json<UsageSnapshot>();
-}
-
 export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, override = policy.budgetOverride, observeUncapped = false) {
   const at = Date.now();
   const [monthly, daily, weekly] = await Promise.all([
@@ -641,8 +613,6 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
     return { spentMicros: null, remainingMicros: null };
   }
 }
-
-export function usageStub(env: Env, tenantId: string, policyId: string): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName(usageShardName(tenantId, policyId))); }
 
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }

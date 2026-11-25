@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 1,
+  "study": "fresh-compact-repair-development-v1",
+  "status": "audited",
+  "scope": "Five real repository repairs, selected by model-free reference/broken-baseline qualification before model outcomes. One matched trial per task; development evidence, not independent confirmation.",
+  "selection": {
+    "initialQualificationAttempts": 21,
+    "supplementalQualificationAttempts": 4,
+    "qualifiedTasks": 5,
+    "amendedFixtureRechecks": 2,
+    "additionalQualifiedTasksFromRechecks": 0,
+    "randomTrafficSample": false
+  },
+  "protocol": {
+    "sha256": "f571d108c0809da422fd84ff759fc2b3281eba14676c6c9b597fe5dd689dc75a",
+    "resultSha256": "0712a09addea6c0b9238785c723976b61f48a15a27b3172443d8bfe0a7bc6287",
+    "auditSha256": "dbbe7b551d74850d65293e82e749be450a3d2044e46e4e6c0906e50e76a97765",
+    "artifact": "one to eight exact baseline search/replace edits; all resulting files graded",
+    "maxInputBytes": 200000,
+    "draftMaxOutputTokens": 4096,
+    "strongMaxOutputTokens": 8192,
+    "maxCalls": 20,
+    "actualCalls": 14,
+    "stageCapMicros": 2000000,
+    "actualCostMicros": 132403,
+    "maxArmAttempts": 2,
+    "maxArmMillis": 600000,
+    "modelPair": "OpenAI GPT-6 Luna none and GPT-6.1 Terra low",
+    "crossFamily": false
+  },
+  "controls": {
+    "samePublicInput": true,
+    "samePublicTestsAndCompiler": true,
+    "freshFallback": true,
+    "alternatingArmOrder": true,
+    "allSevenHeldOutGroupsExcludedFromRequests": true,
+    "fullTestsAndCompilerGradedAfterGeneration": true,
+    "completeArtifactsRequired": true,
+    "noNewDependenciesOrTestEdits": true
+  },
+  "summary": {
+    "strong": {
+      "passed": 4,
+      "costMicros": 66275,
+      "elapsedMs": 80769.98450000002
+    },
+    "cascade": {
+      "passed": 4,
+      "costMicros": 66128,
+      "elapsedMs": 127343.46137499998
+    },
+    "falseAccepts": 1,
+    "strongLosses": 0,
+    "rescues": 3,
+    "escalations": 4,
+    "costRatio": 0.9977819690682761,
+    "elapsedRatio": 1.57661861845473,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "normalizedCost": {
+    "definition": "All input tokens at the model base input rate and output tokens at its output rate; removes cache-read discounts and cache-write premiums. A counterfactual accounting view, not the actual invoice.",
+    "strongMicros": 83805,
+    "cascadeMicros": 88272,
+    "ratio": 1.053302308931448
+  },
+  "interpretation": [
+    "Reject unconditional cheap-first promotion: both arms pass four of five full grades; invoice costs are nearly equal, normalized cascade cost is higher, and elapsed time is worse.",
+    "Both arms miss the readiness-deadline task despite passing its public checks. One cascade false accept; no strong success was lost.",
+    "The scalar-validation case passes without fallback for about 90% lower model cost, including after cache normalization. This is one task and one trial, not a validated routing rule.",
+    "Do not infer cross-family fusion or a 30-task three-trial confirmation from this same-provider development experiment."
+  ],
+  "records": [
+    {
+      "id": "history-94575e6b2ab4",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 35523,
+      "elapsedMs": 16476.483333,
+      "escalated": false,
+      "normalizedMicros": 29423
+    },
+    {
+      "id": "history-94575e6b2ab4",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 8685,
+      "elapsedMs": 23098.770207999998,
+      "escalated": true,
+      "normalizedMicros": 31255
+    },
+    {
+      "id": "history-ff6b7f68a005",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 7824,
+      "elapsedMs": 21267.495750000002,
+      "escalated": true,
+      "normalizedMicros": 6888
+    },
+    {
+      "id": "history-ff6b7f68a005",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 3039,
+      "elapsedMs": 14715.730375000006,
+      "escalated": false,
+      "normalizedMicros": 6270
+    },
+    {
+      "id": "history-836b2072a67b",
+      "strategy": "strong",
+      "passed": false,
+      "publicPassed": true,
+      "costMicros": 16283,
+      "elapsedMs": 28011.041249999995,
+      "escalated": false,
+      "normalizedMicros": 14284
+    },
+    {
+      "id": "history-836b2072a67b",
+      "strategy": "cascade",
+      "passed": false,
+      "publicPassed": true,
+      "costMicros": 11131,
+      "elapsedMs": 57726.47666700001,
+      "escalated": true,
+      "normalizedMicros": 18527
+    },
+    {
+      "id": "history-e74789a5404d",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 37836,
+      "elapsedMs": 20083.441374999995,
+      "escalated": true,
+      "normalizedMicros": 31053
+    },
+    {
+      "id": "history-e74789a5404d",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 4932,
+      "elapsedMs": 14109.547500000015,
+      "escalated": false,
+      "normalizedMicros": 28362
+    },
+    {
+      "id": "history-6933f3d98b7e",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 6498,
+      "elapsedMs": 7457.182042,
+      "escalated": false,
+      "normalizedMicros": 5466
+    },
+    {
+      "id": "history-6933f3d98b7e",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "costMicros": 652,
+      "elapsedMs": 5167.277374999976,
+      "escalated": false,
+      "normalizedMicros": 549
+    }
+  ],
+  "calls": [
+    {
+      "id": "history-94575e6b2ab4/control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 35523,
+      "normalizedMicros": 29423,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24400,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1004
+      },
+      "disposition": "complete",
+      "strategy": "strong"
+    },
+    {
+      "id": "history-94575e6b2ab4/draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3112,
+      "normalizedMicros": 2502,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24400,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 122
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-94575e6b2ab4/fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5573,
+      "normalizedMicros": 28753,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 24400,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 870
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-ff6b7f68a005/draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 573,
+      "normalizedMicros": 488,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 3402,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 294
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-ff6b7f68a005/fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7251,
+      "normalizedMicros": 6400,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 3402,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 599
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-ff6b7f68a005/control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 3039,
+      "normalizedMicros": 6270,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 3402,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 573
+      },
+      "disposition": "complete",
+      "strategy": "strong"
+    },
+    {
+      "id": "history-836b2072a67b/control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 16283,
+      "normalizedMicros": 14284,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7996,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1257
+      },
+      "disposition": "complete",
+      "strategy": "strong"
+    },
+    {
+      "id": "history-836b2072a67b/draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3048,
+      "normalizedMicros": 2848,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 7996,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4096
+      },
+      "disposition": "truncated",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-836b2072a67b/fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 8083,
+      "normalizedMicros": 15679,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 7996,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1536
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-e74789a5404d/draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 3268,
+      "normalizedMicros": 2651,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24664,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 368
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-e74789a5404d/fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 34568,
+      "normalizedMicros": 28402,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 24664,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 747
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    },
+    {
+      "id": "history-e74789a5404d/control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 4932,
+      "normalizedMicros": 28362,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 24664,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 739
+      },
+      "disposition": "complete",
+      "strategy": "strong"
+    },
+    {
+      "id": "history-6933f3d98b7e/control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 6498,
+      "normalizedMicros": 5466,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4128,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 267
+      },
+      "disposition": "complete",
+      "strategy": "strong"
+    },
+    {
+      "id": "history-6933f3d98b7e/draft",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 652,
+      "normalizedMicros": 549,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4128,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 271
+      },
+      "disposition": "complete",
+      "strategy": "cascade"
+    }
+  ],
+  "deployment": {
+    "deployed": false,
+    "defaultChanged": false,
+    "productionQualified": false
+  },
+  "limitations": [
+    "Five tasks and one trial; task-level uncertainty is large.",
+    "Repository fixture qualification excludes many historical changes; this is not representative traffic.",
+    "Cache warming can affect actual arm costs; report normalized and actual costs separately.",
+    "Complete editable source and task-revision documents were supplied, but not every transitive dependency source.",
+    "No raw prompts, completions, private hostnames, or provider request identifiers are published."
+  ]
+}

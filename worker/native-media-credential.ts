@@ -3,7 +3,8 @@ import { minimaxMusicBinding, minimaxSpeechBinding, readNativeMediaBinding, type
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { GrantRequirement } from "./provider-auth.ts";
 import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // This product qualifies one actual API-key slot. Generic credential fallback
 // (accessToken or the first bundle value) cannot supply native media authority.

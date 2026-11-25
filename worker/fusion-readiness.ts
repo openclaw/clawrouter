@@ -9,7 +9,7 @@ import { estimateCost } from "./proxy-accounting.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, ProviderConnection } from "./types.ts";
 import { operationAffordability, type BudgetObservation, type OperationAffordability } from "./operation-budget";
 import { budgetLedgerAddress, budgetPrincipal } from "./budget-scope";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface FusionCatalogSelection {
   auth: AuthorizedIdentity;

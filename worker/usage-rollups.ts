@@ -1,4 +1,4 @@
-import type { UsageEventScope } from "./ledgers.ts";
+import type { UsageEventScope } from "./usage-ledger-client.ts";
 import { normalizeEmail } from "./utils.ts";
 
 interface RollupSql { exec(query: string, ...bindings: Array<string | number | null>): Iterable<Record<string, unknown>> }

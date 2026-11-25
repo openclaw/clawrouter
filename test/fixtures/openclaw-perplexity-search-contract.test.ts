@@ -86,6 +86,26 @@ function assertOriginalRejection(outcome: any, reason: unknown) {
   assert.strictEqual(outcome.error, reason);
 }
 
+function searchLimitEvidence(lifetime: any, bindings: any) {
+  const owners = bindings.bindings.filter((owner: any) => owner.id === "oversized" && owner.kind === "chat" && owner.claimed);
+  assert.equal(owners.length, 1);
+  const owner = owners[0], guards = lifetime.guards.filter((guard: any) => guard.owner === owner);
+  assert.equal(guards.length, 1); const acquisition = guards[0];
+  assert.equal(acquisition.acquired, true);
+  const readers = lifetime.readers.filter((row: any) => row.owner === owner && row.acquisition === acquisition);
+  assert.equal(readers.length, 1); const reader = readers[0];
+  assert.strictEqual(reader.body, acquisition.result.response.body); assert.strictEqual(reader.receivedBody, reader.body);
+  const reads = lifetime.operations.filter((op: any) => op.reader === reader && op.kind === "reader.read");
+  let readBytes = 0;
+  for (const op of reads) {
+    assert.strictEqual(op.owner, owner); assert.strictEqual(op.acquisition, acquisition); assert.strictEqual(op.receiver, reader.reader);
+    assert.ok(op.pending && typeof op.pending.then === "function"); assert.equal(op.state, "fulfilled");
+    if (op.value.done === false) { assert.ok(ArrayBuffer.isView(op.value.value)); readBytes += op.value.value.byteLength; }
+  }
+  assert.ok(Number.isSafeInteger(readBytes) && readBytes > 1024 * 1024, "original SDK reader crossed its pinned 1 MiB limit");
+  return { id: "oversized", limitBytes: 1024 * 1024, readBytes, readOperations: reads.length, readerCount: readers.length };
+}
+
 async function waitForOriginalRead(lifetime: any, owner: any) {
   for (let attempt = 0; attempt < 1500; attempt++) {
     const row = lifetime.readers.find((row: any) => row.owner === owner);
@@ -146,9 +166,14 @@ describe("registered Perplexity Search through Worker and SQLite", { concurrent:
   it("refuses an invocation retired after catalog completion", () => runCase("retired", async execute => {
     await expect(execute()).rejects.toThrow("retired synthetic Search invocation");
   }));
-  it.each(["malformed", "error", "invalid_request", "rate_limit", "oversized"])("preserves the controlled %s failure and original cleanup", id => runCase(id, async execute => {
-    expect((await execute()).details).toMatchObject({ kind: "error", provider: "clawrouter" });
-  }));
+  it.each(["malformed", "error", "invalid_request", "rate_limit", "oversized"])("preserves the controlled %s failure and original cleanup", async id => {
+    let limit;
+    await runCase(id, async (execute, lifetime, bindings) => {
+      expect((await execute()).details).toMatchObject({ kind: "error", provider: "clawrouter" });
+      if (id === "oversized") limit = searchLimitEvidence(lifetime, bindings);
+    });
+    if (limit) console.log("PERPLEXITY_SEARCH_LIMIT " + JSON.stringify(limit));
+  });
   it("pre-abort performs no catalog or search request", () => runCase("preabort", async execute => {
     const reason = new Error("synthetic Search caller canceled");
     await expect(execute({}, AbortSignal.abort(reason))).rejects.toBe(reason);

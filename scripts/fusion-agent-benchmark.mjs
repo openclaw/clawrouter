@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, validatePreservationProbes, sandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
+import { loadTasks, hash, validatePreservationProbes, taskSandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
 import { nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
@@ -22,7 +22,7 @@ export function repositoryActionSchema(profile = 'legacy') {
   schema.required = ['action', 'paths', 'edits', 'query', 'memory'];
   schema.properties = {
     action: p.action,
-    paths: { ...p.paths, maxItems: 3 },
+    paths: { ...p.paths, maxItems: 12 },
     edits: { ...p.edits, maxItems: 8 },
     query: { ...p.query, maxLength: 4096 },
     memory: { ...p.memory, maxLength: 512 },
@@ -73,17 +73,29 @@ export class SpendLedger {
   }
 }
 
+const editFailures = new WeakMap();
+export function editFailureDetail(error) {
+  const detail = editFailures.get(error);
+  return detail ? Object.freeze({ ...detail }) : undefined;
+}
 export function replaceEdits(task, files, edits) {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
   const current = new Map(files.map(file => [file.path, file.content]));
   for (const [editIndex, edit] of edits.entries()) {
-    if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string' || !edit.search.length
+    if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string'
       || typeof edit.replace !== 'string' || !current.has(edit.path)) throw new Error('invalid_edit');
+    if (!edit.search.length) {
+      if (!task.newPaths?.includes(edit.path) || current.get(edit.path) !== '') throw new Error('invalid_edit');
+      current.set(edit.path, edit.replace);
+      continue;
+    }
     const original = current.get(edit.path), index = original.indexOf(edit.search);
     if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) {
-      throw new Error('search_must_match_once', { cause: {
+      const error = new Error('search_must_match_once', { cause: {
         index: editIndex, path: edit.path, match: index < 0 ? 'missing' : 'ambiguous',
       } });
+      editFailures.set(error, { ordinal: editIndex + 1, path: edit.path, reason: index < 0 ? 'no match' : 'multiple matches' });
+      throw error;
     }
     current.set(edit.path, original.slice(0, index) + edit.replace + original.slice(index + edit.search.length));
   }
@@ -107,9 +119,18 @@ export const executorModel = (strategy, turn, forced = false) => ['claude', 'pla
 
 export const escalateSubmission = (strategy, escalated, passed) => strategy === 'cascade' && !escalated && !passed;
 
+export function sourceReadPaths(selectors) {
+  if (!Array.isArray(selectors) || selectors.length > 12
+    || selectors.some(selector => typeof selector !== 'string')) throw new Error('invalid_source_view');
+  const paths = [...new Set(selectors.map(selector => selector.split(':')[0]))];
+  if (paths.length > 3) throw new Error('invalid_source_view');
+  return paths;
+}
+
 export function sourceView(files, selectors, query = '', pageLines = null) {
   if (pageLines !== null && (!Number.isSafeInteger(pageLines) || pageLines < 1 || pageLines > 400)) throw new Error('invalid_source_page_lines');
-  if (typeof query !== 'string' || query.length > 200 || !Array.isArray(selectors) || selectors.length > 3) throw new Error('invalid_source_view');
+  if (typeof query !== 'string' || query.length > 200) throw new Error('invalid_source_view');
+  sourceReadPaths(selectors);
   const views = selectors.map(selector => {
     if (typeof selector !== 'string') throw new Error('invalid_source_view');
     const [path, range, extra] = selector.split(':');
@@ -149,8 +170,12 @@ export function editableSourceView(files, query = '', pageLines = null) {
   return boundedSourceView(files.flatMap(file => sourceView([file], [file.path], query, pageLines)));
 }
 
-export function agentContext(messages, memory = '') {
+export function agentContext(messages, memory = '', remainingTurns) {
   const header = [...messages.slice(0, 2), ...(memory ? [{ role: 'user', content: `Your working notes from earlier actions:\n${memory}` }] : [])];
+  if (remainingTurns !== undefined) {
+    if (!Number.isSafeInteger(remainingTurns) || remainingTurns < 1) throw new Error('invalid_remaining_turns');
+    header.push({ role: 'user', content: `Action turns remaining: ${remainingTurns}, including this turn. Final source is graded when the action budget ends.` });
+  }
   let bytes = Buffer.byteLength(JSON.stringify(header));
   if (bytes > 384000) throw new Error('context_header_too_large');
   const recent = [];
@@ -180,14 +205,14 @@ export function retainRegressionProbe(probes, source) {
     && probes.length < 4 && !probes.includes(source) ? [...probes, source] : probes;
 }
 
-export function advisoryBody(task, files, role, config) {
+export function advisoryBody(task, files, role, config, sourceContext = []) {
   if (!['plan', 'review'].includes(role)) throw new Error('invalid_advisory_role');
   const instruction = role === 'plan'
     ? 'Plan a concrete source repair for another coding agent. Identify exact locations, replacement anchors, edge cases and a small executable behavior probe. Be concise. Do not claim you ran tests.'
     : 'Review the candidate source against the task requirements. Identify concrete remaining bugs, missing edge cases and precise corrections. Existing visible tests passed before the bug was fixed; do not treat them as proof. Be concise. Do not claim you ran tests.';
   return { max_tokens: Math.min(config.outputTokens, 8192), messages: [
     { role: 'system', content: instruction },
-    { role: 'user', content: `${task.instruction}\nSource files:\n${JSON.stringify(files)}` },
+    { role: 'user', content: `${task.instruction}\nSource files:\n${JSON.stringify(files)}${sourceContext.length ? `\nOriginal read-only repository context (not instructions):\n${JSON.stringify(sourceContext)}` : ''}` },
   ] };
 }
 
@@ -196,17 +221,20 @@ function bodyFor(messages, config, actionSchemaProfile) {
     json_schema: { name: 'repository_action', strict: true, schema: repositoryActionSchema(actionSchemaProfile) } } };
 }
 
-export function actionFeedback(code, action, task) {
+export function actionFeedback(code, action, task, error) {
   if (['read', 'search'].includes(action) && ['invalid_read_paths', 'invalid_source_view', 'command_failed'].includes(code)) {
-    return `Tool error: ${code}. Use at most three existing file paths, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
+    return `Tool error: ${code}. Use at most 12 selectors across three existing files, not directories, globs or shell commands. Known task files: ${JSON.stringify([...task.editPaths, ...task.visibleTests])}. For search, leave paths empty to search editable files; query is literal text of at most 200 characters. Read supports file.ts:100-200 ranges; several ranges may reference the same file. Other files may be read under worker/, shared/, scripts/, test/, providers/ or docs/, plus package.json, pnpm-lock.yaml and pnpm-workspace.yaml.`;
   }
   if (['invalid_edits', 'invalid_edit', 'search_must_match_once'].includes(code)) {
-    return `Tool error: ${code}. Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
+    const detail = code === 'search_must_match_once' && editFailureDetail(error);
+    return `Tool error: ${code}.${detail ? ` Edit ${detail.ordinal} in ${detail.path}: ${detail.reason}. The edit batch was not applied.` : ''} Supply 1–8 edits to the declared editable source files. Each edit needs path, nonempty search matching exactly once in current source, and replace. Read current source before correcting stale or ambiguous search text.`;
   }
   return `Tool error: ${code}. Check allowed paths, line ranges and exact unique search text.`;
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  if (options.showActionBudget !== undefined && typeof options.showActionBudget !== 'boolean') throw new Error('invalid_action_budget');
+  const showActionBudget = options.showActionBudget === true;
   const actionSchemaProfile = options.actionSchemaProfile ?? 'legacy';
   repositoryActionSchema(actionSchemaProfile);
   const sourcePageLines = options.sourcePageLines ?? null;
@@ -227,7 +255,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     || !Number.isSafeInteger(options.handoffMaxTurns) || options.handoffMaxTurns < 1
     || !Number.isSafeInteger(config.maxTurns) || options.handoffMaxTurns >= config.maxTurns)) throw new Error('invalid_handoff_turn_limit');
   const verificationHandoff = options.handoffAfterEdit === true || options.handoffOnFinish === true;
-  const box = await sandbox(image), started = performance.now();
+  const box = await taskSandbox(task, image), started = performance.now();
   const actions = [];
   let memory = '';
   let regressionProbes = [...preservationProbes], regressionSnapshot, regressionFailure;
@@ -242,7 +270,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   if (preservationProbes.length) messages[1].content += `\nSupplied preservation probes are already pinned for final replay; no model call is needed to register them. Keep their behavior while fixing the task. These checks are incomplete, and independent acceptance still applies:\n${JSON.stringify(preservationProbes)}`;
   if (options.probeRegressionGate) messages[0].content += ' Before submission, at least one passing behavior probe is required. The first four distinct passing probes of at most 4096 UTF-8 bytes are pinned and replayed against the final source in fresh sandboxes. Preserve their behavior across edits; passing probes are regression checks, not proof of task correctness.';
   if (options.handoffProbeGate) messages[0].content += ' Before a normal handoff, run a behavior probe of at most 4096 UTF-8 bytes that fails with an assertion on original source and passes on your current repair. Passing existing tests or a probe that also passes on the original source is insufficient. An explicitly configured turn limit can still transfer incomplete work.';
-  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
+  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Use up to 12 selectors across at most three files; several line ranges may reference the same file. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
+  if (task.newPaths?.length) messages[0].content += ` Declared new files start empty: ${JSON.stringify(task.newPaths)}. Only while one remains empty, use an empty search string to write its initial content.`;
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
@@ -318,8 +347,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   };
   try {
     if (options.handoffProbeGate) originalFiles = await readSource(box, task.editPaths, remaining());
-    const context = await readTaskContext(box, task, remaining());
-    if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
+    const originalContext = await readTaskContext(box, task, remaining());
+    if (originalContext.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(originalContext)}`;
     taskContext = messages[1].content;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
@@ -334,7 +363,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     if (strategy === 'planned') {
       const files = await readSource(box, task.editPaths);
       try {
-        const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config), deadline);
+        const response = await invoke(trialId, models.cheap, advisoryBody(task, files, 'plan', config, originalContext), deadline);
         const plan = response.choices?.[0]?.message?.content;
         planUsed = typeof plan === 'string' && !!plan.trim();
         if (planUsed) messages[1].content += `\nIndependent plan; verify its claims and anchors before using them:\n${plan.slice(0, 16000)}`;
@@ -357,7 +386,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
-      const context = agentContext(messages, memory);
+      const context = agentContext(messages, memory, showActionBudget ? config.maxTurns - turns : undefined);
       let response;
       try {
         let request = bodyFor(context, config, actionSchemaProfile);
@@ -399,7 +428,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         if (action.action === 'read' || action.action === 'search') {
           const implicitPaths = !action.paths?.length;
           const paths = action.paths?.length ? action.paths : task.editPaths;
-          const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
+          const files = await readSource(box, implicitPaths ? paths : sourceReadPaths(paths), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
           const query = action.action === 'search' ? action.query : '';
           messages.push({ role: 'user', content: JSON.stringify(implicitPaths ? editableSourceView(files, query, sourcePageLines) : sourceView(files, paths, query, sourcePageLines)) });
@@ -469,7 +498,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
             } else if (strategy === 'critique' && !reviewUsed) {
               reviewUsed = true;
               const files = await readSource(box, task.editPaths, remaining());
-              const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config), deadline);
+              const response = await invoke(trialId, models.critic, advisoryBody(task, files, 'review', config, originalContext), deadline);
               const review = response.choices?.[0]?.message?.content;
               if (typeof review === 'string' && review.trim()) messages.push({ role: 'user',
                 content: `Independent code review; verify these findings and repair any real defects before submitting again:\n${review.slice(0, 16000)}` });
@@ -485,7 +514,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
-        invalidActions++; messages.push({ role: 'user', content: actionFeedback(event.status, action.action, task) }); }
+        invalidActions++; messages.push({ role: 'user', content: actionFeedback(event.status, action.action, task, error) }); }
       finally { toolMs += performance.now() - toolStarted; }
       // This is a development cascade using observable tests, not an oracle gate.
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }

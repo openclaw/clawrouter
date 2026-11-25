@@ -25,11 +25,14 @@ import { routingProjection } from "./grant-projection.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
 import { observeProviderGrantQuota } from "./provider-quota.ts";
-import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
-import { grantUsable, REFRESH_MARGIN_MS, validGrantSegment } from "./grant-selection.ts";
+import { observeGrantQuota, observeGrantQuotaProbe, quotaRuntime, validGrantQuotaSnapshot } from "./grant-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio } from "../shared/grant-quota.ts";
+import { grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibility.ts";
+import { validGrantSegment } from "./grant-routing.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, json, readJson, sha256Hex } from "./utils.ts";
+import { errorResponse, json, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -284,9 +287,8 @@ export class GrantCredentialObject implements DurableObject {
         let preparation = new HttpOperation(request.signal, 10_000);
         try {
           const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
-          const { prepareResponseControl, assertControlDeadline, assertResponseControlRetention, responseControlRetentionProtocol } = await import("./responses-control-dispatch.ts");
+          const { prepareResponseControl, assertControlDeadline, assertResponseControlRetention, responseControlRetentionProtocol, assertResponseControlDispatch } = await import("./responses-control-dispatch.ts");
           const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
-          const { assertManagedDispatch } = await import("./managed-dispatch.ts");
           assertControlDeadline(input);
           if (input.deadline !== undefined) {
             preparation.stop("complete");
@@ -310,7 +312,7 @@ export class GrantCredentialObject implements DurableObject {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }
           assertResponseControlRetention(this.env, input);
-          assertManagedDispatch(input.protocol, outbound);
+          assertResponseControlDispatch(input, outbound);
           // Start egress before releasing the serialized credential check, but
           // never make revocation wait for the remote response or stream.
           return { response: fetch(outbound, { signal: request.signal }) };

@@ -7,10 +7,10 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { nativeCodexClient } from "../scripts/native-codex-client.mjs";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 
-const { providerById } = await import("../worker/providers.ts");
+const { providerById } = await import("../worker/provider-catalog.ts");
 
 function nativeFixtureCatalog(provider, bundled) {
   const nativeBaseUrl = `/v1/native/${provider.id}`;

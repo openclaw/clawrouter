@@ -1,0 +1,315 @@
+{
+  "schemaVersion": 1,
+  "study": "independent-capped-live-v1",
+  "status": "audited",
+  "sourceSha": "df87bc215279ec6142d4b097b9913fc41c8e528e",
+  "protocolSha256": "e068ca8503c53b8133220dd471f7e05819b25b5c5564e75a2a26903387786471",
+  "resultSha256": "18e32d62bdcfcf036c462464506aedf1be8aad7fa86332300df8bd7ae2663038",
+  "auditSha256": "6b67c4906adf6dc46c1441ae088d0251680d340afa8fa322b18b8bd9209aa946",
+  "priorAuditSha256": "1b90f8c279d789000d3862a7f58283f14559ab393893cac0bc4f299feeac484d",
+  "draftMaxOutputTokens": 768,
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 15,
+  "totalCostMicros": 15503,
+  "summary": {
+    "strong": {
+      "passed": 7,
+      "costMicros": 12401,
+      "elapsedMs": 44439.997290000014
+    },
+    "cascade": {
+      "passed": 7,
+      "costMicros": 3102,
+      "elapsedMs": 43972.732168
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.25014111765180225,
+    "elapsedRatio": 0.9894854826621433,
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": true,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-7395ead52d148e8d",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1245,
+      "elapsedMs": 5436.071959,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-7395ead52d148e8d",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "costMicros": 1701,
+      "elapsedMs": 13271.403083,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-a0038ec569f24dfe",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 210,
+      "elapsedMs": 4480.722834,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-a0038ec569f24dfe",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1819,
+      "elapsedMs": 7249.492250000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17231e04b4831528",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 2133,
+      "elapsedMs": 6758.197166000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17231e04b4831528",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 290,
+      "elapsedMs": 5953.963750000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-078ae138c145c6e7",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 189,
+      "elapsedMs": 5006.976834000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-078ae138c145c6e7",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1591,
+      "elapsedMs": 6570.079166999996,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-fe6af78bafde0cba",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1681,
+      "elapsedMs": 5773.774166000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-fe6af78bafde0cba",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 260,
+      "elapsedMs": 5611.428458000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-5b84392b7c8e4508",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 224,
+      "elapsedMs": 4753.0285,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-5b84392b7c8e4508",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1963,
+      "elapsedMs": 6077.026291000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-76863a0fc551e182",
+      "kind": "medium",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 1969,
+      "elapsedMs": 6575.356291000004,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-76863a0fc551e182",
+      "kind": "medium",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "costMicros": 228,
+      "elapsedMs": 4895.208708999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "Post-hoc policy tuning on the same seven exposed medium tasks, not independent confirmation.",
+    "One fresh sample per arm; same-provider pair; no population-level confidence claim.",
+    "Only cheap draft output cap changed from 8192 to 768; strong and fallback caps remain 8192.",
+    "Incomplete drafts retain billed costs and trigger fresh fallback; no partial code is accepted.",
+    "The 1.05% timing difference is not evidence of a robust speedup.",
+    "Model costs exclude local hardware, engineering and operation.",
+    "Development gate passed; production gain remains unqualified."
+  ]
+}

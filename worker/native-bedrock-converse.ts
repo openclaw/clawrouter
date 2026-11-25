@@ -3,7 +3,8 @@ import { readNativeJson } from "./native-json.ts";
 import { nativeJsonResponse, nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import { bedrockConverseLimit, bedrockRecord, decodeBedrockConverseResponse, prepareBedrockConverseRequest } from "./provider-bedrock-converse.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Common dispatch supplies the original selected regional origin and calls this
 // before serialization/SigV4. It owns credentials, admission and lease lifetime.

@@ -3,6 +3,25 @@ import assert from 'node:assert/strict';
 import { sourceWindows, sourceDependencies, groundedEdits, runGroundedAgent } from '../scripts/fusion-grounded-agent.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
+test('grounded runner creates a declared module from its empty numbered source', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts', content = 'export const value = 7;';
+  const task = { instruction: 'Create the declared module.', editPaths: [path], newPaths: [path],
+    visibleTests: ['worker/test/accounting.test.mjs'] };
+  let calls = 0;
+  const result = await runGroundedAgent(task, process.env.FUSION_NATIVE_IMAGE, 'strong', 'new-module',
+    { maxTurns: 2, outputTokens: 256, deadlineMs: 120000 }, async () => ({
+      choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: calls++ ? 'finish' : 'edit', path, line: 1, endLine: 1,
+        replace: content, query: '', memory: 'Create and submit the module.',
+      }) } }],
+    }));
+  assert.equal(result.publicPassed, true);
+  assert.deepEqual(result.files, [{ path, content }]);
+  assert.equal(calls, 2);
+});
+
 test('source windows are bounded and explicit inspection reaches later lines', () => {
   const file = { path: 'worker/example.ts', content: Array.from({ length: 600 }, (_, n) => `const value${n} = ${n};`).join('\n') };
   const views = sourceWindows([file], 'Fix value520', { path: file.path, line: 521, query: '' }, 3000);

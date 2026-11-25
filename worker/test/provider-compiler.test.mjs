@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
   const files = readdirSync("providers").filter((file) => file.endsWith(".provider.yaml")).sort().map((file) => `providers/${file}`);
@@ -221,7 +221,7 @@ test("declared provider models retain distinct public and native upstream ids", 
 test("capabilities can share a non-literal endpoint without losing unified routes", () => {
   const snapshot = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   const gateway = snapshot.providers.find((provider) => provider.id === "cloudflare-ai-gateway");
-  assert.deepEqual(gateway.capabilities.map(({ id, endpoint }) => [id, endpoint]), [["llm.chat", "universal"], ["llm.responses", "universal"]]);
+  assert.deepEqual(gateway.capabilities.map(({ id, endpoint }) => [id, endpoint]), [["llm.messages", "messages"], ["llm.chat", "universal"], ["llm.responses", "universal"]]);
   assert.deepEqual(gateway.models[0].capabilities, ["llm.chat", "llm.responses"]);
 });
 

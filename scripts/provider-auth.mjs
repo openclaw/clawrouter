@@ -1,6 +1,17 @@
 // Auth declarations and cross-field checks after provider manifest schema validation.
 // Runtime credential resolution, refresh, and transport execution have separate owners.
 
+// Qualification for schema-validated declarations whose original caller binding
+// separately fix the provider origin and forbid routing or adapter overrides.
+export function hasOriginalBearerBinding(manifest) {
+  const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
+  return !(manifest.auth.schemes.length !== 1 || scheme.type !== "bearer" || scheme.header?.toLowerCase() !== "authorization"
+    || scheme.format !== "Bearer ${secret}" || scheme.secretKind !== "api_key" || scheme.required === false
+    || Object.keys(manifest.auth.grantTransports ?? {}).length || manifest.routing?.baseUrlParam || manifest.routing?.serviceParam
+    || Object.keys(adapter?.injectHeaders ?? {}).length || Object.keys(adapter?.injectQuery ?? {}).length
+    || adapter?.passthroughHeaders?.length || adapter?.requestTransforms?.renameFields?.length);
+}
+
 export function compileProviderAuth(manifest) {
   return {
     schemes: (manifest.auth.schemes ?? []).map(normalizeAuthScheme),

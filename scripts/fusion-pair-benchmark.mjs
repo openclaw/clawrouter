@@ -1,8 +1,8 @@
 import { readFile, mkdir, writeFile, rename, rm, open, link } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runAgent, SpendLedger, toolErrorCode, finishReason, agentFailureTrace } from './fusion-agent-benchmark.mjs';
-import { nativeModels, validateOpenAiApi, nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
+import { runAgent, repositoryActionSchema, SpendLedger, toolErrorCode, finishReason, agentFailureTrace } from './fusion-agent-benchmark.mjs';
+import { nativeModels, validateOpenAiApi, nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, nativeErrorMetadata, hasNativeSafetyNotice, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
@@ -75,14 +75,22 @@ async function exportAcceptedRepair(out, task, files, sourceSha, qualificationDi
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, preflight = nativePins }) {
+  openAiApi = 'chat-completions', armOffset = 0, cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', actionSchemaProfile = 'legacy', preloadSource = false, sourcePageLines = null, policy = 'architect', includeControls = true, controlsOnly = false, controlStrategy = null, exportRepairs = false, handoffEvidence = false, probeRegressionGate = false, handoffProbeGate = false, handoffMaxTurns = null, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, acceptance = null, preflight = nativePins }) {
+  if (acceptance !== null && (typeof acceptance?.validate !== 'function' || typeof acceptance?.grade !== 'function' || grade !== verify)) throw new Error('invalid_acceptance_adapter');
+  const effectiveGrade = acceptance?.grade ?? grade;
   validateOpenAiApi(openAiApi);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !controlsOnly && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
+  repositoryActionSchema(actionSchemaProfile);
+  if (actionSchemaProfile !== 'legacy' && (executor !== 'interactive'
+    || contractPolicies.includes(policy) || ['probe-selection', 'draft-sampling'].includes(policy))) {
+    throw new Error('unsupported_action_schema_profile');
+  }
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls)
+    || (controlStrategy !== null && (!controlsOnly || !['cheap', 'strong'].includes(controlStrategy)))
     || (!includeControls && policy !== 'edit-handoff' && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (typeof exportRepairs !== 'boolean' || (exportRepairs && (includeControls || policy !== 'edit-handoff'))) {
     throw new Error('invalid_repair_export');
@@ -101,7 +109,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (!controlsOnly && policy === 'probe-selection' && config.maxCalls < 4) throw new Error('probe_selection_requires_four_calls');
   if (!controlsOnly && policy === 'draft-sampling' && config.maxCalls < 3) throw new Error('sampling_requires_three_calls');
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
-  const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
+  const trialStrategies = controlsOnly ? (controlStrategy === null ? ['cheap', 'strong'] : [controlStrategy])
+    : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
   if (!Number.isSafeInteger(armOffset) || armOffset < 0 || armOffset >= trialStrategies.length) throw new Error('invalid_arm_offset');
   const tasks = await loadTasks(taskManifest);
   if (tasks.some(task => task.preservationProbes !== undefined) && !probeRegressionGate) throw new Error('preservation_requires_regression_gate');
@@ -111,13 +120,14 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (!Number.isSafeInteger(cheapMaxCalls) || cheapMaxCalls < 1 || cheapMaxCalls > 59) throw new Error('invalid_cheap_call_allowance');
   if (typeof preloadSource !== 'boolean') throw new Error('invalid_source_preload');
   const rawQualification = await readFile(qualificationPath);
-  const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
+  const receipts = (acceptance?.validate ?? validateLocalQualification)(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
-  const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly,
-    openAiApi, cheapReasoning, cheapMaxCalls, executor, preloadSource, sourcePageLines, exportRepairs, handoffEvidence, probeRegressionGate, handoffProbeGate, handoffMaxTurns, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
+  const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly, controlStrategy,
+    openAiApi, cheapReasoning, cheapMaxCalls, executor, actionSchemaProfile, preloadSource, sourcePageLines, exportRepairs, handoffEvidence, probeRegressionGate, handoffProbeGate, handoffMaxTurns, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, armOffset, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
+      ...(controlStrategy !== null ? ['Only one fixed-model control ran; this report alone cannot establish comparative quality, cost or latency.'] : []),
       ...(!includeControls ? ['No fixed-model controls ran; this report cannot establish comparative quality, cost or latency.'] : []),
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
       'Published tariffs applied to reported usage; unknown charges retain their full reservation.'] };
@@ -144,16 +154,18 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     attempt.promptDigest = hash(JSON.stringify(body.messages));
     // The attempt exists before dispatch; all transport/parse failures leave it reserved.
     await save();
-    let normalized;
+    let normalized, safetyNotice = false;
     try {
       const response = await fetcher(request.url, { method: 'POST', headers: request.headers,
         body: requestBody, signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
       Object.assign(attempt, nativeResponseMetadata(model, response));
       const raw = await response.json();
+      safetyNotice = hasNativeSafetyNotice(raw);
+      if (safetyNotice) console.error("Provider safety notice: This content can't be shown.");
       if (!response.ok) {
         Object.assign(attempt, nativeErrorMetadata(raw));
-        if (attempt.errorHint === 'safety_notice') console.error("Provider safety notice: This content can't be shown.");
+        if (!safetyNotice && attempt.errorHint === 'safety_notice') console.error("Provider safety notice: This content can't be shown.");
         throw new Error('unknown_cost');
       }
       normalized = nativeResult(model, raw, openAiApi);
@@ -170,10 +182,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       await save();
       throw new Error('unknown_cost');
     }
-    if (/this content can[’']t be shown|safety refusal/i.test(normalized.result.choices?.[0]?.message?.content ?? '')) {
-      console.error("Provider safety notice: This content can't be shown.");
-      throw new Error('provider_refused');
-    }
+    if (safetyNotice) throw new Error('provider_refused');
     requireCompleteResponse(normalized.result);
     return normalized.result;
   };
@@ -206,24 +215,25 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
                 { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
               : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
                 receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
-                { preloadSource, ...(sourcePageLines === null ? {} : { sourcePageLines }), ...(probeRegressionGate ? { probeRegressionGate: true } : {}), ...(handoffEvidence && execution.strategy === 'handoff' ? { handoffEvidence: true } : {}), ...(strategy === 'completion-handoff' ? { handoffOnFinish: true }
+                { preloadSource, ...(actionSchemaProfile === 'legacy' ? {} : { actionSchemaProfile }), ...(sourcePageLines === null ? {} : { sourcePageLines }), ...(probeRegressionGate ? { probeRegressionGate: true } : {}), ...(handoffEvidence && execution.strategy === 'handoff' ? { handoffEvidence: true } : {}), ...(strategy === 'completion-handoff' ? { handoffOnFinish: true }
                   : strategy === 'edit-handoff' || matchedStrong ? { handoffAfterEdit: true,
                     ...(handoffProbeGate ? { handoffProbeGate: true } : {}), ...(handoffMaxTurns === null ? {} : { handoffMaxTurns }) } : {}) });
           } finally { agentElapsedMs = Math.round(performance.now() - agentStarted); }
           let verdict;
           const gradingStarted = performance.now();
-          try { verdict = await grade(task, receipt.image, result.files, repo); }
+          try { verdict = await effectiveGrade(task, receipt.image, result.files, repo); }
           finally { gradingElapsedMs = Math.round(performance.now() - gradingStarted); }
           const { files, ...trace } = result;
           if (verdict.valid !== true) {
             Object.assign(row, { ...trace, verdict, score: 0 });
             throw new Error('incomplete_test_run');
           }
-          Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
+          Object.assign(row, { ...trace, verdict, score: Number(['submitted', 'draft_submitted'].includes(result.outcome)
+            && verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
           if (strategy === 'probe-selection') {
             const diagnosticStart = performance.now();
-            row.probeDiagnostics = await diagnoseProbeSelection(result, task, receipt.image, repo, receipt, { grade });
+            row.probeDiagnostics = await diagnoseProbeSelection(result, task, receipt.image, repo, receipt, { grade: effectiveGrade });
             diagnosticMs = performance.now() - diagnosticStart;
           }
           if (exportRepairs && row.score === 1) {
@@ -262,7 +272,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ openAiApi: process.env.FUSION_OPENAI_API ?? 'chat-completions', repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, armOffset: Number(process.env.FUSION_PAIR_ARM_OFFSET ?? 0), policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', sourcePageLines: process.env.FUSION_SOURCE_PAGE_LINES === undefined ? null : Number(process.env.FUSION_SOURCE_PAGE_LINES), includeControls: process.env.FUSION_PAIR_CONTROLS !== '0', controlsOnly: process.env.FUSION_PAIR_CONTROLS_ONLY === '1', exportRepairs: process.env.FUSION_EXPORT_REPAIRS === '1', handoffMaxTurns: process.env.FUSION_HANDOFF_MAX_TURNS === undefined ? null : Number(process.env.FUSION_HANDOFF_MAX_TURNS), handoffEvidence: process.env.FUSION_HANDOFF_EVIDENCE === '1', probeRegressionGate: process.env.FUSION_PROBE_REGRESSION_GATE === '1', handoffProbeGate: process.env.FUSION_HANDOFF_PROBE_GATE === '1' }).catch(() => {
+  runPairBenchmark({ openAiApi: process.env.FUSION_OPENAI_API ?? 'chat-completions', repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, armOffset: Number(process.env.FUSION_PAIR_ARM_OFFSET ?? 0), policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', actionSchemaProfile: process.env.FUSION_PAIR_ACTION_SCHEMA_PROFILE ?? 'legacy', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', sourcePageLines: process.env.FUSION_SOURCE_PAGE_LINES === undefined ? null : Number(process.env.FUSION_SOURCE_PAGE_LINES), includeControls: process.env.FUSION_PAIR_CONTROLS !== '0', controlsOnly: process.env.FUSION_PAIR_CONTROLS_ONLY === '1', exportRepairs: process.env.FUSION_EXPORT_REPAIRS === '1', handoffMaxTurns: process.env.FUSION_HANDOFF_MAX_TURNS === undefined ? null : Number(process.env.FUSION_HANDOFF_MAX_TURNS), handoffEvidence: process.env.FUSION_HANDOFF_EVIDENCE === '1', probeRegressionGate: process.env.FUSION_PROBE_REGRESSION_GATE === '1', handoffProbeGate: process.env.FUSION_HANDOFF_PROBE_GATE === '1' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }

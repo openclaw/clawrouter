@@ -14,7 +14,8 @@ import { adminApi } from "./admin";
 import {
   avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
 } from "./discovery";
-import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
+import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject } from "./ledgers";
+import { usageSnapshot, usageSnapshots } from "./usage-ledger-client";
 import { GrantCredentialObject } from "./grant-credentials";
 import { budgetPrincipal } from "./budget-scope.ts";
 import { dashboardSecurityHeaders } from "./dashboard-security";
@@ -25,7 +26,7 @@ import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
 import { poolSubmissionApi } from "./pool-submissions.ts";
 import { privateCodex, privatePath } from "./private-codex";
-import { routeCatalog, snapshot } from "./providers";
+import { routeCatalog, snapshot } from "./provider-catalog";
 import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";

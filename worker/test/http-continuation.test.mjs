@@ -8,7 +8,8 @@ import { setImmediate } from "node:timers/promises";
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
-import { HttpError, sha256Hex } from "../utils.ts";
+import { sha256Hex } from "../utils.ts";
+import { HttpError } from "../http-error.ts";
 import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
@@ -276,7 +277,7 @@ for (const phase of ["selection", "body_cancel"]) {
 
 test("the request deadline during alternate selection prevents another dispatch", async t => {
   const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
   const setTimer = globalThis.setTimeout;
   let deadline, selections = 0, canceled = false;
@@ -576,7 +577,7 @@ for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(
 });
 
 async function endpointDeadline(t) {
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
   const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout;
   let timer;

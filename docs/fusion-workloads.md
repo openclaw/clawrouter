@@ -15,6 +15,21 @@ The first corpus covers catalog protocol validation, native model identity,
 streaming response ownership, and Copilot catalog/request identity. Only the
 declared source files are writable. Source dependencies remain readable.
 
+Tasks that add modules may list up to 12 `newPaths`, each also present in
+`editPaths`. The pinned parent must not contain them. Each disposable trial
+creates empty files under existing, non-symlink source directories; the source
+image remains unchanged. An agent may use an empty search string only for the
+first write to an empty declared new file. Qualification, candidate replay and
+final verification use the same initialization.
+
+When regression tests need updated helper modules, declare up to 12
+`oracleSupportPaths` under `worker/test/` or `test/`. These must be `.mjs` helpers,
+not `.test.mjs` files. Full acceptance copies them from the pinned oracle into
+each isolated baseline or repaired verifier. They are not agent-editable,
+provided source context, or part of visible qualification. Initial source
+images remain at the pinned parent. This separates test setup changes from
+the source changes the model must produce.
+
 ## Qualification
 
 Use a Node 24.22.1 slim image pinned by its pulled manifest digest:
@@ -33,6 +48,14 @@ into the checkout. Each task must satisfy all three checks:
 All three use the same container image and test commands. A test process that
 does not produce a complete, nonempty TAP summary does not qualify. A failed
 qualification must be repaired or excluded before model inference.
+
+Research callers can opt into `countTestTimeoutsAsFailures` in `check()` or
+`testResult()`. Node reports a test's declared timeout as a cancellation. This
+option counts it as a failure only when a complete flat TAP census accounts for
+every test and every cancellation has `testTimeoutFailure` diagnostics. The
+process must exit with code 1. Unresolved, parent, nested, and runner cancellation
+remain invalid. A timed-out candidate never passes. Freeze this option in a new
+experiment protocol; it does not reinterpret existing receipts.
 
 Containers run as an unprivileged user with CPU, memory and process limits, a
 read-only root, no network, no credentials and no host bind mounts. Each trial
@@ -262,3 +285,33 @@ include the public root certificates bundled with Node for workerd startup. The
 container still has no network, host mounts, elevated capabilities or writable
 dependency tree. Run the native fixture smoke check with `FUSION_NATIVE_IMAGE`
 set to the immutable qualified image ID.
+
+
+### Public verification before compilation
+
+Caller-side workflows can use `verifyPublicCandidate` from
+`scripts/fusion-public-verification.mjs` to run public tests before compiling.
+The caller supplies its isolated sandbox, test runner, compiler and qualified
+expected test count. Only a valid, passing run with exactly that count and no
+skips reaches the compiler. A rejected test run returns `compiler.passed: false`
+and `compiler.skipped: true`; this means unexecuted, not a compiler failure.
+Every accepted candidate still requires successful compilation. The helper
+closes the sandbox after either path and propagates checker and cleanup errors.
+
+An optional `precheck(opened)` can run a cheap public smoke probe before the
+full test suite. The caller must bound its execution and use the same untrusted
+execution permissions as the full tests. Only `{ passed: true }` proceeds;
+failed or malformed results skip both later checks and cannot accept a candidate.
+A successful precheck still requires the complete public test count and compiler
+gate. Freeze the probe and its budget in the experiment protocol and keep the
+probe visible to every model arm. Early rejection timing is not evidence of
+end-to-end savings until a live comparison confirms it.
+
+Pass the helper's qualified `runtimePassed` and `compiler.passed` to the
+caller-side verified workflow as `runtimePassed` and `compilerPassed`,
+respectively. Do not use the raw `tests.passed` flag; it omits count, validity and
+skip checks. Keep the original full
+acceptance suite after the workflow. This helper is opt-in and changes no
+production routing defaults. Its cached-artifact measurement is in
+[`fusion-public-verification-study.json`](fusion-public-verification-study.json);
+those local verifier timings do not establish end-to-end model latency savings.

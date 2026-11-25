@@ -1,7 +1,22 @@
 # Low-cost Fusion research and screening
 
-Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
+Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
+Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
+
+The [frozen three-arm repository confirmation](fusion-final-confirmation-study.md)
+retains 30 tasks, three trials and all 270 outcomes. Cheap-first saved 23.0% in
+model charges but passed 81/90 versus strong-only's 85/90; cheap-only passed
+70/90. It failed quality preservation. The report includes both predeclared
+admission strata and source-clustered uncertainty; no default is promoted.
+
+The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
+12-task development lead for strong review followed by small-model repair:
+12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
+The disjoint follow-up did not reproduce the cost advantage and exposed a
+malformed private fixture. A subsequent input-validated cohort lost strong-model
+successes under both always-review and public-gated review. These fixed policies
+are not promotion candidates; future policy changes need fresh confirmation.
 
 Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
 includes its tools, visible checks and sandbox cleanup. Grading time measures
@@ -44,6 +59,229 @@ grading attempt remain failures; a supplied incomplete grade invalidates the run
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
 
+## Bounded caller-side tool trajectories
+
+`scripts/fusion-trajectory.mjs` exports `runTrajectory`,
+`runSingleTrajectory` and `runFinalReviewedTrajectory` for callers that need multiple tool steps. This is an
+opt-in utility; it does not register a Worker route or select models by itself.
+The caller provides model callbacks and a trusted tool registry. It also owns
+provider credentials, spending reservations and reconciliation, and tool isolation.
+
+Each tool has a unique `name`, an `effect` of `read` or `write`, a synchronous
+`validate(arguments)` callback and an asynchronous `execute(arguments, signal)`
+callback. Only tools with no external mutation may be declared `read`.
+Actions and observations must contain plain JSON values; `undefined` is invalid.
+Tool output is untrusted data, not permission to change the task or tool policy.
+
+The model callbacks receive a copied `{ task, history, segment }` and an abort
+signal. Return `{ type: "tool", name, arguments }` for a tool step or
+`{ type: "final", content }` for completion. In `runTrajectory`, `verify` returns
+`{ accepted, reason, replacement }`: `accepted` is the length of the valid prefix
+of the proposed segment, and `replacement` is one corrective action or `null`.
+Full acceptance requires a null replacement. Rejection requires a nonempty reason.
+If no usable replacement is supplied, `repair` receives only committed history
+and the reason. Rejected observations do not reach subsequent model callbacks.
+
+Read actions execute before review so the verifier can inspect their observations.
+Writes and final answers wait for review. A read-only segment is reviewed after
+`chunkSize` steps. `runSingleTrajectory` uses the same action validation, limits
+and registry but invokes only `draft`, with no semantic reviewer. This provides
+a matched execution control, not a guarantee of equivalent answer quality.
+
+All three functions return `{ content, history, stats }`. Set `maxModelCalls`,
+`maxToolCalls`, `maxContextBytes` and `deadlineMs` before execution. Every model
+callback and tool execution consumes its corresponding limit, including an
+optional final check. Set `finalCheckTool` to a registered tool that accepts `{}`
+and returns an observation with boolean `passed`. A failed final check enters
+history and continues the trajectory; only a passing check permits completion.
+
+For deterministic follow-up tools, `runSingleTrajectory` and
+`runFinalReviewedTrajectory` accept a synchronous
+`nextAction({ task, history, segment })` callback. Return a registered tool action
+to execute it before the next model call, or `null`/`undefined` to ask the model.
+For example, a caller can run tests after an edit without asking a model to
+select that already-known step. The callback receives copied history, and every
+scheduled action uses the normal validation, tool limit, deadline and history.
+It cannot return a final answer or be used with reviewed `runTrajectory`.
+An always-scheduling callback exhausts `maxToolCalls`; it does not run forever.
+
+All three controllers also accept `onCheckpoint(snapshot, signal)`. The optional
+callback receives a copied `{ task, history, stats }` after a nonempty committed
+step or segment, including scheduled tools and final checks. It never receives
+rejected observations or a held write before review and execution. The controller
+awaits the callback within the existing deadline; persistence failures stop the
+run without retrying the tool or callback. The model adapters forward this option.
+
+Use checkpoints to retain confirmed work if a later call reaches a limit. A
+checkpoint does not certify completion or authorize replay. A later interrupted
+tool can still have an unknown external outcome; reconcile that operation before
+resuming. The caller owns checkpoint storage and redaction. Existing callers that
+omit the callback retain their execution and result format; this optional utility
+introduces no persistent-state migration or Worker deployment change.
+
+The controller propagates callback errors and does not retry a failed or timed-out
+operation. Callbacks must honor their abort signal. A callback that ignores
+cancellation may continue after the controller rejects, so the caller must
+reconcile its outcome before another write or paid request. Returned history can
+contain sensitive tool data; callers must choose storage and redaction explicitly.
+
+This execution contract does not establish a fusion quality, cost or latency gain.
+Keep independent final grading and fixed-model controls in any comparison.
+
+### Completion review
+
+`runFinalReviewedTrajectory` executes each validated tool action immediately and
+reviews only a proposed final answer. Use it only with caller-owned disposable
+state: rejected completion does not roll back earlier writes. Keep external
+publication or deployment outside the trajectory, after independent acceptance.
+
+The verifier receives the committed history and one held final step. Acceptance
+requires `accepted: 1` and `replacement: null`. A rejected final answer may produce
+a corrective tool action or a separate repair call. Replacement and repaired
+final answers pass through review again; they cannot bypass it. Model calls,
+tools, checkpoints, cancellation and `finalCheckTool` retain their existing limits.
+
+Set `initialFinalAnswer` to a nonempty string to start by reviewing an existing
+candidate without a new draft callback. This option applies only to completion
+review, including its model adapter. The caller must restore the candidate's
+working state and supply its evidence through tools or `reviewSnapshot`.
+The answer remains held for review and final checks; rejection follows the
+normal correction flow. Scheduled tools still run before review. This does not
+restore history or certify a checkpoint. Include the original draft's cost and
+time when comparing complete workflows.
+
+Set `reviewAfterCorrection: true` to review the held final answer again after a
+corrective write, without another draft call. The controller awaits the write
+and its checkpoint before running scheduled checks and requesting the next
+review. Read-only corrections still return to drafting. The option applies only
+to completion review, defaults to `false`, and retains every call, tool and
+final-check limit. A failed or cancelled checkpoint stops the run without
+retrying the write or requesting another review.
+
+An optional synchronous `reviewSnapshot({ task, history })` callback supplies a
+plain JSON snapshot for the verifier. Its request becomes `{ task, segment,
+snapshot }`; draft and repair callbacks still receive history. The controller
+copies and bounds the snapshot and preserves its own task and held segment.
+The caller must include enough evidence to review the current result. A snapshot
+or passing public check does not establish full correctness.
+
+## Connecting models to a trajectory
+
+### Supplying current source
+
+`scripts/fusion-trajectory-workspace.mjs` exports
+`workspaceModelView(request, workspace)` for callers that own an editable source
+workspace. Apply it inside the adapter's `invoke` callback before metering and
+sending the request:
+
+```js
+const request = JSON.parse(body.messages[1].content);
+const view = workspaceModelView(request, {
+  revision,
+  files: currentFiles,
+  context: publicContext,
+  publicCheck: checkedRevision === revision ? lastCheck : null,
+});
+const projected = {
+  ...body,
+  messages: [body.messages[0], {
+    ...body.messages[1], content: JSON.stringify(view),
+  }],
+};
+return invokeMetered(runId, model, projected, signal);
+```
+
+Supply a nonnegative integer revision, current `files`, read-only `context`, and
+either a current `{ passed, feedback }` check or `null`. Each file has a unique
+`path` and string `content`. The caller must update the revision and invalidate
+the check after every edit. Meter and enforce request-size limits on the final
+payload sent to the provider.
+
+The helper copies its inputs. It replaces successful `edit_source` and
+`edit_sources` arguments with affected paths only when every path is present in
+the current workspace. Failed edits and edits to unavailable paths remain intact.
+Identical `run_tests` feedback can reference `workspace.publicCheck.feedback`;
+other observations remain unchanged. Returned controller history and checkpoints
+retain their original arguments and feedback.
+
+To keep starting behavior visible during repair, callers can include immutable
+starting-source copies under distinct paths in `context`. Keep those paths out
+of the tools' editable allowlist. This helper performs no filesystem operations
+and does not enforce tool permissions or certify that source and checks are
+current. Supplying context does not establish correctness or a cost reduction;
+retain independent acceptance checks.
+
+### Choosing the model
+
+`scripts/fusion-trajectory-models.mjs` connects the controller to a caller-supplied
+`invoke(runId, model, body, signal)` function. It exports four entry points:
+
+- `runModelTrajectory`: a draft model, reviewer and corrective actions.
+- `runSingleModelTrajectory`: one fixed model, without semantic review.
+- `runFinalReviewedModelTrajectory`: execute tool actions and review completion;
+  an optional `selectModel` chooses the draft model from the configured pair.
+  Verification uses `reviewModel`; corrective calls default to the same model.
+- `runAdaptiveModelTrajectory`: a synchronous `selectModel(request)` callback
+  selects either `draftModel` or `reviewModel` for each action. It sees a copied
+  task and committed history; an unconfigured selection stops the run.
+
+Set `repairModel` to assign corrective calls to a separate model. Set
+`reviewCanReplace: false` to restrict the reviewer to a verdict and reason;
+its schema requires a null replacement, and the adapter rejects replacement
+actions locally before execution. For example, a stronger draft and repair
+model can use a smaller critic. Draft selection still uses only `draftModel`
+and `reviewModel`. All three roles use the same metered callback and shared
+execution limits. The defaults preserve existing behavior. This configuration
+does not establish a quality or cost gain; compare it with direct execution
+and keep independent acceptance checks.
+
+For executable-check feedback, `scripts/fusion-check-routing.mjs` exports
+`createCheckDrivenSelector({ draftModel, repairModel, checkTool, repairSteps })`.
+Pass its result as `selectModel` and configure the adapter's `reviewModel` to
+match `repairModel`. It starts with the draft model. A boolean `passed: false`
+from the named check tool selects the repair model for four subsequent steps
+by default. Consecutive failed checks extend that window by two steps, up to
+eight; a passing check immediately returns to the draft model. Other tools,
+missing results and non-boolean values do not affect selection.
+
+The selector makes no model calls and owns no mutable state. It derives its
+choice from committed history, so the controller's existing limits still apply.
+Use a caller-owned executable check, such as supplied tests and a compiler.
+This is routing feedback, not completion evidence: configure `finalCheckTool`
+separately and keep independent acceptance checks. A weak check can miss defects;
+the helper does not establish a general quality or cost advantage. Existing
+callers and default routing remain unchanged.
+
+Supply `task`, `runId`, `tools`, `invoke` and the controller limits. Reviewed and
+adaptive runs require both model identifiers. Single-model runs use `model`.
+Each tool also supplies `parameters`, a strict JSON Schema object in which every
+property is required and `additionalProperties` is false. Use explicit nullable
+fields when needed. The adapter rejects optional properties, unsupported schema
+composition, and excessive schema depth or node count before calling a model.
+Tool argument validation still runs after the model responds.
+
+The request body uses OpenAI-compatible `messages`, `max_tokens` and a strict
+`response_format` JSON Schema. The callback must return a normalized completion
+with `choices[0].message.content` containing JSON and a completed stop reason.
+The adapter rejects refusals, truncation, unknown stops and malformed JSON; it
+never retries or switches models after a transport error. For Responses or
+other native provider APIs, the caller must translate requests and normalize
+responses. Model identifiers remain opaque to the adapter.
+
+`draftOutputTokens` bounds every action response, including corrective actions;
+`reviewOutputTokens` bounds reviewer verdicts. Both default to bounded values
+and accept 64–8192 tokens. The controller's call, tool, context and deadline
+limits apply to all three entry points. The caller still owns input admission,
+monetary reservations, usage settlement, credentials, tool isolation and
+reconciliation after cancellation. `runId` is only a correlation value passed to
+that callback; no prompt, completion or usage logging is added.
+
+For adaptive runs, public tool observations can drive the selection callback.
+This is a mechanism, not a built-in quality classifier: declare the policy before
+evaluation, use a final check when available, and compare against both fixed
+models on independently graded tasks. Model choices and tool checks alone do
+not establish correctness or a Fusion performance gain.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
@@ -57,10 +295,19 @@ including checks after an edit or a review submission.
 | [RLCascadeRouter, August 2026 preprint](https://arxiv.org/abs/2608.15817) | Optimizes stop/model decisions directly instead of assuming a better quality predictor always makes a better router. | Score the downstream routing decision, not just confidence calibration. RL is a later experiment after enough trajectories exist. |
 | [LLMRouter, August 2026 preprint](https://arxiv.org/abs/2608.06867) | Separates context/model encoders, scoring, decision rules and learning signals in a unified evaluation framework. | Keep these parts replaceable. An embedding classifier should not require rewriting execution or accounting. |
 | [GitHub Copilot Fusion](https://docs.github.com/en/copilot/concepts/models/copilot-fusion) | Uses Single, Cascade and Critique, accounting for cache boundaries and model availability. | Avoid routine multi-model calls on easy tasks. Preserve cache locality when measuring cost. |
+| [Planner-as-Router, September 2026](https://arxiv.org/abs/2609.32917) | Assigns model tiers while planning task dependencies. On 54 enterprise tasks, reports 44% lower cost than all-frontier routing with a 2.9-point accuracy loss; several accuracy differences remain within its confidence interval. | Compare plan-time assignment with fixed workers and a frontier model only at terminal nodes. Count planning cost and lost successful tasks; the reported saving is not lossless. |
+| [Cost-Aware Protocol Routing, August 2026 preprint](https://arxiv.org/abs/2608.14927) | Across reasoning tasks, a post-answer probe predicts baseline failures better than it predicts which collaboration protocol will help. Held-out routing leaves substantial gaps from retrospective oracle selection. | Separate failure detection from protocol selection. A reliable difficulty score does not establish that critique, planning or another model call is worth its cost. |
 
 These are results from different datasets, model pools, graders and budgets.
 Their headline improvements are not expected ClawRouter gains. Preprints have
 less validation than a reproduced, held-out result in this workload.
+
+The next routing experiment should freeze both decisions: when to ask for help,
+and which role receives which model. Compare those decisions separately against
+a fixed small worker, a fixed strong worker and the same repair loop without
+cross-model advice. Keep tasks, public checks and total budgets matched. Report
+lost strong-model successes and added correct answers alongside spend. This is
+a proposed experiment, not a qualified routing policy or a production change.
 
 ## Spend gates
 
@@ -501,6 +748,12 @@ JavaScript check body. A passing probe, import failure or
 syntax error does not qualify. Each probe executes in a fresh disposable
 sandbox; its writes cannot change the repair workspace.
 
+Low-level callers can use `probe(box, source, timeout, { filterLoaderAssertions: true })`
+to classify wrapped Node loader and parser diagnostics as invalid probes rather
+than behavioral assertions. The option defaults to `false`. This conservative
+output heuristic preserves assertion expectations that merely mention an error
+code; it does not authenticate generated tests or establish complete coverage.
+
 Once a reproduction fails with an assertion on the original source, freeze it
 and allow repairs. Rerun it on each candidate in another disposable sandbox.
 Submit automatically only when the reproduction and visible tests pass. Hidden
@@ -771,6 +1024,17 @@ them in configuration files.
 node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
 ```
 
+For interactive pair runs, set `FUSION_PAIR_ACTION_SCHEMA_PROFILE=compact`
+to use the existing bounded action schema. It limits each response to eight
+edits and twelve path selectors, and puts the action before working notes.
+The setting applies to both fixed-model controls and the fusion arm and is
+recorded in `pair.json`. Repeat analysis rejects mixed schema profiles; old
+receipts without the field retain their legacy meaning. The default remains
+`legacy`. Single-draft, contract,
+probe-selection and draft-sampling executors reject `compact` because they
+use separate action contracts. Freeze this setting before comparing runs;
+changing it does not establish a quality improvement.
+
 The configuration must contain every field below. Set `priorCostMicros` to the
 campaign's accumulated spend and unresolved reservations before starting.
 
@@ -808,6 +1072,19 @@ latency ratio, and whether cheap dominates the candidate on observed quality,
 cost and time. Missing or invalid time leaves latency and dominance unknown.
 Actual call identities distinguish mixed attempts and rescues from single-model
 resampling; neither savings nor a passing public check establishes a fusion gain.
+
+`controlJointOutcomes` separates cases where both controls passed, only cheap
+passed, only strong passed, or both failed. Each group counts candidate passes
+and failures. This exposes candidate rescues beyond the observed control oracle
+and losses on cases at least one control solved. Repeat reports sum attempts;
+they do not turn repeated cases into independent tasks.
+
+This follows two useful research distinctions: [COMED](https://arxiv.org/abs/2609.26913)
+measures collaboration rescues against harms, while the [co-failure study](https://arxiv.org/abs/2606.27288)
+bounds selection among existing answers by their shared failures. A candidate
+pass when both controls fail is an observed rescue, not proof that collaboration
+caused it; a matched single-model retry can also succeed. These descriptive
+counts do not change the pilot gate or establish statistical significance.
 
 New paired-call receipts include `usageBreakdown`: disjoint uncached input,
 cache-read input, ordinary cache-write input, one-hour cache-write input, and
@@ -877,6 +1154,18 @@ no model-quality gain has been measured for paging.
 
 
 ### Optional native Responses transport
+
+The native benchmark registry also accepts `openai/gpt-6.2-sol` and
+`openai/gpt-6.2-astra` as explicit model choices. Existing defaults stay unchanged.
+Their Standard short-context tariffs were checked on 21 November 2026:
+Sol costs $2 input / $10 output per million tokens; Astra costs $8 / $40.
+Cached input and cache writes use their separate published rates, with
+cache-write prices included in conservative reservations. The existing
+200,000-input-token ceiling rejects long-context pricing that is not qualified.
+See the [Sol model card](https://developers.openai.com/api/docs/models/gpt-6.2-sol)
+and [Astra model card](https://developers.openai.com/api/docs/models/gpt-6.2-astra).
+Selecting these models enables benchmarking; it does not establish a fusion gain.
+
 
 Set `FUSION_OPENAI_API=responses` for the native pair benchmark to send OpenAI
 calls through `/v1/responses`. The default remains `chat-completions`; Anthropic
@@ -1872,3 +2161,345 @@ Reasoner used identical prompts; the pair reused the matching full-context
 Reader and question-only Reasoner prompts. These hashes identify private local
 receipts, not a bundled reproduction suite. No runtime, deployment or default
 policy changed.
+
+### Optional action-budget feedback
+
+Custom runners calling `runAgent` can pass `{ showActionBudget: true }` in the
+options argument. Each worker request then includes the remaining action turns,
+including the current turn. This counts worker action turns, not every planner
+or panel API call. The default is off, and enforcement limits do not change.
+
+Record this option in the experiment protocol and use the same value for every
+comparison arm. Budget disclosure is an experimental prompt intervention, not
+a demonstrated quality improvement. Keep the static task and system prompt
+unchanged when comparing it with the default.
+
+
+### Named fixture probes
+
+Callers can use `check(box, paths, timeout, { testNamePrefix })` to run top-level tests
+whose names start with a literal prefix. For example, `{ testNamePrefix: "fusion probe: " }` selects appended probe tests while preserving the original
+fixture imports and hooks. Regex metacharacters in the prefix are escaped.
+
+A passing test-file wrapper without a matching named test does not pass this
+check. The result includes `matchedTestPrefix` when selection is requested.
+`checkAcceptance` accepts the same options as its fifth argument and retains
+its protected-file checks. Default calls continue to run all tests.
+
+For replayable feedback, callers can also set `normalizeFeedbackTimings: true`.
+This replaces TAP test durations and the final duration summary with `<elapsed>`
+before the 12,000-character feedback limit is applied. Normalizing after clipping
+cannot recover characters displaced by longer timing values. The default
+preserves timing text. Raw output digests, test counts and verdicts remain
+unchanged; the option does not normalize other variable diagnostics or repair
+previously clipped receipts.
+
+Name selection checks execution evidence. It does not establish assertion
+quality or complete requirement coverage, and it is not a substitute for the
+independent full acceptance suite. TAP output is generated by the tested code
+and is not an adversarial attestation.
+
+## Three fresh cheap-first checks, 2026-11-24
+
+A checked cheap-first policy passed three newly selected repository tasks at lower
+model cost than direct strong controls. All three tasks were solved by the cheap
+model alone. These observations support skipping unnecessary planning on these
+tasks; they do not establish complementary model capability or a production
+quality guarantee.
+
+The controls used `openai/gpt-6.2-sol` and `openai/gpt-6-luna` with identical
+public requests except for model identity. The policy checked the Luna result
+first. A passing public suite and compiler stopped inference. A failing draft
+would have gone to a strong planner, then Luna implementation and at most one
+Luna correction, preserving the checked draft and its public failures. None of
+the tasks exercised that escalation branch. Every model call would count toward the
+policy cost; full acceptance ran after inference ended.
+
+| Task and published contract | Full / public tests | Strong cost | Cheap-first cost | Strong / cheap model seconds |
+| --- | ---: | ---: | ---: | ---: |
+| [Reject oversized adviser proposals](https://github.com/openclaw/clawrouter/pull/1101) | 35 / 31 | $0.022976 | $0.001197 | 2.935 / 3.224 |
+| [Expose music and image integration seams](https://github.com/openclaw/clawrouter/pull/821) | 45 / 43 | $0.058536 | $0.003147 | 16.720 / 11.775 |
+| [Canonicalize Bedrock query signing](https://github.com/openclaw/clawrouter/pull/152) | 12 / 10 | $0.036966 | $0.001904 | 4.538 / 4.881 |
+
+Strong, Luna and the policy each passed every full and public test, the compiler,
+and zero-skip checks. The policy reused the accepted Luna candidate; it did not
+make another paid call. Across these three tasks, billed model cost was $0.006248
+versus $0.118478, a **94.73% reduction**. The first and third tasks' cheap calls
+were slower.
+Model seconds exclude checks and orchestration, so this is not an end-to-end
+latency comparison. Costs include billed cache writes; none of the tasks used
+cache reads. They exclude local validation compute.
+
+Selection used changed-file metadata, prior exposure records, a 32 KB source
+limit and already cached dependency images. Test partitions and published
+behavior contracts were frozen before model calls. The first task was the only
+eligible case in a 200-commit scan across eight cached dependency locks; the
+second was the only eligible case in the next 400 commits. The third came from
+the remaining 359 older commits, using an additional cached dependency lock.
+Its four literal table cases were split by a fixed hash: two stayed public and
+two were held out, with the shared test body unchanged. The original baseline
+executed all 12 full and 10 public tests, failing three and two respectively;
+the reference passed both suites and the compiler. Many other cases
+were excluded for prior exposure or failed qualification, size, changed-surface
+coverage or unavailable matching runtimes. This convenience sample does not
+represent the repository or a random task distribution. An immediately prior
+Copilot repair remained incorrect for every arm; its best full result was
+42/43. Keep that negative result separate rather than replacing it with these
+successful tasks.
+
+The music/image baseline initially ran only 28 full tests because a declared
+new export blocked one file from loading. Standard admission rejected it. An
+explicit amendment verified the exact missing-export diagnostic, complete
+counts in the other file, per-file totals matching the aggregate, all 40
+pre-change tests passing, and both functions absent before and present after
+with matching module hashes. Candidate acceptance still required all 45 full
+and 43 public tests. No truncated baseline counted as a complete candidate.
+
+All three terminal audits replayed requests, selected files, public feedback,
+compiler outcomes, full grades and cost accounting without new model calls.
+The protocol and audit SHA-256 values identify private research receipts, not
+an independently reproducible bundled dataset:
+
+| Task | Protocol SHA-256 | Terminal audit SHA-256 |
+| --- | --- | --- |
+| Adviser proposals | `26bcdabd600c7549ab49888c2d4384e42a180bcd3ca8532ce7810cdad712ac55` | `6b63453ac8ebddb6629fa88ea5221ae92c50d0809101b61a17c037b7231058e6` |
+| Music/image seams | `59f34b6f837754f0955deda3d1d455204976b04b5f18e78249224b52ee4cbad2` | `33e35cc0098b68c7ce7f3ef04f8b1df20c2909c2a8f94116c0599b395ec7538a` |
+| Bedrock query signing | `1b39d98800a3e99bbc5de75b3578aca403c7bcedbece42d8ba62ecf691cb06d8` | `9c49dc44e9e2282da1045c8a0fc7db8428d70e1243bdeb9dc985931597b301d0` |
+
+No routing default, runtime or deployment changes follow from these three results.
+The next capability claim needs fresh tasks where a cheap draft actually fails
+and collaboration repairs it, with matched single-model repair controls and all
+calls charged. These passing drafts leave that question unanswered.
+
+
+## Construction-task false acceptance, 2026-11-24
+
+Two later construction tasks expose a limitation of the public-test gate.
+Every candidate below passed its public tests and compiler, but none passed
+all held-out tests. These are failed tasks, not additional cost wins.
+
+| Published contract | Full / public tests | Strong full passes / cost | Luna full passes / cost | Policy full passes / cost |
+| --- | ---: | ---: | ---: | ---: |
+| [Radius codecs](https://github.com/openclaw/clawrouter/pull/422) | 6 / 3 | 3 / $0.055061 | 3 / $0.002059 | 3 / $0.002059 |
+| [Ollama codecs](https://github.com/openclaw/clawrouter/pull/416) | 9 / 5 | 7 / $0.035266 | 6 / $0.002407 | 6 / $0.024170 |
+
+The Radius policy accepted the public-passing Luna draft without escalation.
+For the next, previously unexposed Ollama task, the protocol prospectively
+required a strong review of that draft against every published contract
+obligation. The reviewer could preserve it unchanged or supply a plan for
+incremental Luna edits. A public-test regression after the bounded correction
+would retain the original passing draft, while charging all attempted calls.
+The reviewer and implementer received no held-out results. This trial escalated
+and still failed three full tests: review increased policy model cost without
+improving the full-test pass count. Equal counts do not imply identical failures.
+Neither trial justifies enabling this policy by default.
+
+Both tasks came from the same bounded local-history search using cached exact
+dependency images. Each introduced one source module and one test module.
+Before inference, their explicit construction admission required complete
+reference suites, compiler success, and an exact missing-named-export error
+from each empty-module baseline. Separate probes verified the blank/reference
+source hashes and imported export types. The baseline could not execute the
+suite and is explicitly labeled incomplete; it is not a complete failing
+baseline. Every generated candidate still had to execute every full and public
+test with zero skips. Timeouts and unrelated loader failures remained rejected.
+
+The controls used the same strong and Luna models and identical public request
+bodies apart from model identity. Radius supplied 8,068-byte bodies and Ollama
+9,294-byte bodies. All model calls count; local validation compute is excluded.
+The policy reuses the Luna control call, so that call is included in policy cost
+but is not billed twice. Total new billed spend for both trials was $0.116556.
+The result is exploratory: there is no matched Luna-only review or equal-budget
+sampling control, so even an improved result would not isolate the value of
+cross-model collaboration.
+
+| Task | Protocol SHA-256 | Terminal audit SHA-256 |
+| --- | --- | --- |
+| Radius | `a9284997516a81a6c556cab0d6dc2ae6c48e0cb08163bb6938702b738f3ea004` | `dccb28fa13f25a04cfaf8fe5839370236ea9fa9c6832d87c8f1931551766a738` |
+| Ollama | `0d1ca1443d7bd8070e9581d46b66ace7c4ba7908b1d30ea219854603c2f14cdf` | `3301cbd34e20a72f14566c8256d1b5bcdaea1cbce095fd7f6e6633789c353d11` |
+
+The audits replayed public decisions, complete candidate grading and accounting
+without new inference. These hashes identify private receipts, not a bundled
+reproduction suite. Do not use these held-out failures to repair and rescore the
+same tasks as fresh evidence. The earlier three-task cost result remains valid
+for its stated sample; these construction failures prevent generalizing it to
+new-module correctness or claiming a demonstrated fusion capability gain.
+
+
+### Structured edit rejection details
+
+Custom benchmark runners can call `editFailureDetail(error)` after `replaceEdits`
+rejects a search that does not match exactly once. The helper returns a frozen
+copy containing the one-based edit ordinal within the submitted batch, the
+editable file path, and either `no match` or `multiple matches`. It returns
+`undefined` for other errors, including errors with forged detail properties.
+The original batch remains unapplied; this helper does not loosen matching or
+include source snippets, replacement text, or raw exception messages.
+
+## Matched planner control, 2026-11-24
+
+A subsequent [managed-prediction state task](https://github.com/openclaw/clawrouter/pull/404)
+compared strong and cheap planners from the same Luna draft. Neither policy nor
+either direct model passed acceptance. This is a negative result, not a fusion
+capability gain or cost-saving success.
+
+| Arm | Full tests passed | Public tests passed | Compiler | Model cost |
+| --- | ---: | ---: | --- | ---: |
+| Direct strong | 1/9 | 1/6 | Pass | $0.117991 |
+| Direct Luna | 0/9 | 0/6 | Fail | $0.004717 |
+| Strong planner, Luna implementation | 1/9 | 1/6 | Fail | $0.098575 |
+| Luna planner, Luna implementation | 0/9 | 0/6 | Pass | $0.017599 |
+
+Both planner branches started from the identical original Luna candidate and
+public feedback. Their planner request bodies differed only in model identity;
+each could supply a plan, receive one Luna implementation and take at most one
+Luna correction. Both used all three calls. Neither branch received the other's
+plan or edits. All inference completed before any full-suite grading. This
+controls the additional planning opportunity, not equal dollars, random seeds
+or repeated samples. A one-test difference on one failed task cannot establish
+complementarity.
+
+The six-module task came from the existing fixed local-history discovery order.
+Its complete reference passed all nine full and six public tests and the
+compiler. Its complete baseline failed eight full and five public tests. One
+new module was explicitly declared; the normal complete-baseline admission
+passed without a construction exception. The dependency image was already
+cached. No runtime download or live provider integration was involved.
+
+All candidate suites completed with zero skips. Policy costs include the shared
+initial Luna draft; it was billed once across the experiment. Total new model
+spend was $0.229448. The terminal audit replayed requests, decisions, complete
+grades and accounting without new inference. Protocol SHA-256:
+`85bdee644677e7c160d249826b80741cf3c6a57d94ad724910c6196085eef7ce`;
+audit SHA-256:
+`8d5c410079a6c58514bc58c623d1fd5f9b5dd1dc24f93a7371666d8a52f29253`.
+These identify private receipts, not a bundled independent reproduction suite.
+
+Public failures included continuation/recovery interface misuse and type
+narrowing errors. These motivate testing bounded context from unchanged
+imported modules; they do not prove missing context caused the result. Any
+subsequent diagnostic on this exposed task must be reported separately from
+fresh-task evidence. No routing default or deployment changed.
+
+## Access repair and verifier diagnostics, 2026-11-24
+
+A historical [Access application-selection repair](https://github.com/openclaw/clawrouter/pull/174)
+produced no accepted solution. Strong and small planners improved public-test
+results from the same Luna draft, but neither passed the complete suite.
+
+| Arm | Full tests passed | Public tests passed | Model cost |
+| --- | ---: | ---: | ---: |
+| Direct strong | 13/16 | 9/9 | $0.052994 |
+| Direct Luna | 9/16 | 7/9 | $0.003318 |
+| Strong planner, Luna implementation | 13/16 | 9/9 | $0.040859 |
+| Luna planner, Luna implementation | 13/16 | 9/9 | $0.007258 |
+
+Every suite completed with zero skips; Node syntax checks passed. The reference
+passed 16/16 full and 9/9 public tests. Policy costs include the shared initial
+draft, which was billed once. Total new spend was $0.097793. Equal final pass
+counts do not establish identical failed tests or successful collaboration.
+
+A separate, explicitly exposed diagnostic asked strong and small models to
+generate declarative mock scenarios. They received the same original source,
+public tests and contract, without the reference implementation, candidate
+draft or held-out tests. Trusted code owned the assertions. Each entire batch
+had to pass the reference and reject the same public-passing Luna candidate
+before it could guide one small-model repair.
+
+Both models generated nine cases. The strong batch passed 15/18 reference tests
+and 18/18 candidate tests; the small batch passed 16/18 reference tests and
+17/18 candidate tests. Both batches were rejected, so neither triggered a
+repair call. Generation cost $0.052747. A later model-free analysis retained
+every individually reference-valid case before checking the candidate. All
+six retained strong cases and all seven retained small cases passed on the
+candidate too. Filtering therefore found no useful discriminator.
+
+This exposed a fixture and wording defect: the initial generator treated an
+empty array as an absent field. Cloudflare documents that provided
+`destinations` supersede `self_hosted_domains`; `domain` remains a separate
+field. The corrected fixture format uses `null` to omit an optional array and
+preserves `[]` as explicitly present. It also names `self_hosted_domains` in
+the contract instead of the ambiguous phrase “legacy domain.” A real CLI
+reference smoke passed all 11 tests, including the distinct absent/empty cases.
+See the [Cloudflare application contract](https://developers.cloudflare.com/api/typescript/resources/zero_trust/subresources/access/subresources/applications/methods/get/).
+
+The corrected diagnostic produced reference-valid, discriminating batches from
+both models. Each batch then guided one Luna repair from the same saved
+candidate. Both repairs passed their expanded public suites and syntax checks,
+but neither passed full acceptance.
+
+| Verifier | Generated cases | Reference tests passed | Starting candidate tests passed | Repaired full tests passed | Incremental model cost |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Strong | 12 | 21/21 | 18/21 | 14/16 | $0.058491 |
+| Luna | 7 | 16/16 | 14/16 | 14/16 | $0.004750 |
+
+Incremental costs include generation and repair, excluding the already-paid
+saved candidate. All suites completed without skips. The new total was
+$0.063241. Moving from 13/16 to 14/16 is an incomplete repair, not a successful
+fusion result. The strong verifier did not produce a better final pass count.
+The original failed results remain closed. A clarification-only control was
+frozen before these full results existed. It gave each direct model the same
+saved candidate and clarified contract, with the original public tests and no
+generated probes. Direct strong and direct Luna each remained at 13/16 full
+tests while passing all nine public tests and syntax checks. Their incremental
+costs were $0.028901 and $0.001600, respectively.
+
+Clarification alone therefore did not reproduce the one-test improvement in
+this run. The verifier paths also had an additional model call, so the result
+does not isolate test feedback from an extra repair opportunity. Every arm
+still failed acceptance, and this exposed task cannot qualify a deployment or
+generalized capability gain.
+
+| Experiment | Protocol SHA-256 | Terminal audit SHA-256 |
+| --- | --- | --- |
+| Access repair | `e82469b8ad511eada707ff1d2e1954387f6c5cace54baa97fb35c34a89a31771` | `db69842acfadf154cf092a6372c64f44a15419604a86695f04833a4ddb0097f5` |
+| Initial verifier diagnostic | `4288605099edff9825ca0e3c923eb03e64a72c10e930d3a4771e5366a9250e49` | `b23c1f66ce89d015fe8a29db77470530974225ddf318facb7010c0b7ba4ed443` |
+| Corrected verifier diagnostic | `0304c9bee41b50c2eb7a69d961f3514fc42b895d00bc21591f34ccd14dd121ad` | `8f3378c2aa45a35d9b3be298f44ee8a1acef3b533127411e855157acc09cbb0f` |
+| Clarification-only control | `689aeb2eb1fef5776ed5343ad2e1ca939b37167a2da5d07ac66453b033bc40b5` | `55be5f78cb91d236a52fe2cb66b8c06df6d7b111390fe396f43eadb1d9ba40ea` |
+
+These identify private receipts, not an independently reproducible bundled
+benchmark. No production routing, model selection or deployment changed.
+
+## Node-only cheap-first check, 2026-11-24
+
+A subsequent [Cloudflare KV provisioning repair](https://github.com/openclaw/clawrouter/pull/219)
+passed all 32 final tests with both GPT-6.2 Sol and GPT-6 Luna. The checked
+cheap-first policy retained the Luna draft and used **94.88% less model cost**
+than the direct strong control on this task. No planner or correction ran, so
+this is another cheap-sufficient result, not a collaboration capability gain.
+
+| Arm | Full tests passed | Public tests passed | Node syntax | Model cost | Model seconds |
+| --- | ---: | ---: | --- | ---: | ---: |
+| Direct GPT-6.2 Sol | 32/32 | 31/31 | Pass | $0.031546 | 9.527 |
+| Checked GPT-6 Luna | 32/32 | 31/31 | Pass | $0.001616 | 7.927 |
+
+The task was selected from a fixed local-history discovery order after excluding
+prior model-request exposure and unsuitable runtime candidates. The reference
+passed all 32 full and 31 public tests. The unchanged baseline executed the same
+counts, failing 22 full and 21 public tests. All suites had zero skips. One new
+test group was held out by the existing deterministic hash split before model
+calls; unchanged groups and two changed groups remained public.
+
+This used the existing cached Node 24.22.1 image with its entire source/dependency
+seed masked. Only two original script modules and one original JSON configuration
+file were copied in. The sandbox had no external network or host mounts, and
+candidate execution could not modify the protected tests. The original fixtures
+mocked child-process commands and Cloudflare fetches; no cloud resource was
+created. Node syntax checks do not constitute TypeScript type checking.
+
+Direct controls received identical public request bodies except model identity.
+The policy reused the Luna call, charged once across the experiment. Total new
+model spend was **$0.033162**. Model seconds exclude local verification and are
+not end-to-end latency. The planned strong/Luna planner comparison did not run
+because the cheap draft passed its public gate; duplicate policy result rows
+are not additional independent trials.
+
+The terminal audit replayed all requests, public decisions, full grades and
+accounting without new inference. Protocol SHA-256:
+`7d9569ab7a8f793a3dedcdcf76acb23903c718dd9486b1bba8ba3ed4a18d7c39`;
+audit SHA-256:
+`21c05d50b291cdf5706ad85569b25d3173ea4e7979ea7d8df2b73f87be2d281b`.
+These identify private receipts, not a bundled independent reproduction suite.
+This single convenience-sampled historical task does not establish statistical
+reliability, independence from model training, production savings or a routing
+default. It also did not exercise the new invalid-edit preservation behavior.

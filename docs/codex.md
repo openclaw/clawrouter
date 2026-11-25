@@ -94,6 +94,12 @@ the router registers their routing and pricing. This is remote **metadata**
 discovery; it does not bypass routing policies or grant upstream Daybreak access.
 It does not resolve an upstream `access_program_not_enabled` inference rejection.
 
+Daybreak Blue is a per-request access program for eligible OpenAI models. Native
+OpenAI Responses forwards a client's `access_programs` selection to OpenAI, which
+checks entitlement on the API key's project. Give policies that should use Blue
+a policy-scoped OpenAI API-key grant from a Daybreak-enabled project. Keep access
+to that grant scoped to those policies.
+
 The cache is private to one Worker isolate, caller, authorization context, selected
 credential revision and client version. Freshness is at most 10 seconds. Transient
 upstream errors may use a previously validated response for at most 60 seconds

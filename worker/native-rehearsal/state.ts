@@ -1,6 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {readJson,sha256Hex} from '../utils.ts';
-import {budgetStatus,providerBudgetStatus,usageSnapshots} from '../ledgers.ts';
+import { budgetStatus, providerBudgetStatus } from '../ledgers.ts';
+import { usageSnapshots } from '../usage-ledger-client.ts';
 import {putGrantCredentials} from '../grant-credentials.ts';
 import {lifecycleCall} from '../large-http/lifecycle-client.ts';
 import {rehearsalConfig,caseId,upstreamKey,type RehearsalEnv} from './contract.ts';

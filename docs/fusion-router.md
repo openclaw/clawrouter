@@ -203,6 +203,417 @@ execute client tools or repository regression checks. Executable repair policies
 in the benchmark require a caller-side agent and are not deployed by selecting
 `clawrouter/fusion`.
 
+## Body-budget development workload
+
+`benchmarks/fusion/body-budget-workloads.json` provides one pinned method-addition
+workload for caller-side coding evaluations. Only `worker/body-budget.ts` is
+editable. The original ten tests cover atomic transfers, competing leases,
+invalid charges, successor ownership, repeated release, and legacy behavior.
+
+The test file is supplied to the initial candidate and reused for acceptance.
+This is development data with no hidden-test claim. The base must fail the
+supplied tests and the reference must pass them; a passing reference alone does
+not qualify the workload. Model results depend on the chosen caller and policy.
+Declared public test files can be new or replace existing files. Their parent
+directory must already exist in the base; linked files and parents are rejected.
+Installation changes only the disposable sandbox, not the source image.
+
+To qualify it without model calls, set `FUSION_NODE_IMAGE` to a pinned
+`node@sha256:...` image and run:
+
+```sh
+node scripts/qualify-fusion-workloads.mjs "$FUSION_NODE_IMAGE" \
+  /tmp/body-budget-qualification.json benchmarks/fusion/body-budget-workloads.json
+```
+
+Qualification builds the task's frozen dependencies. Reuse an existing qualified
+runtime during local research when downloads or new builds are constrained.
+
+## Verified regression development workload
+
+`benchmarks/fusion/verified-regression-workloads.json` pins four historical
+regressions for caller-side coding evaluations:
+
+| Task | Original tests | Editable source |
+| --- | ---: | --- |
+| Native music MIME fields | 9 | `worker/fal-music.ts` |
+| Manifest route discovery | 20 | `worker/discovery.ts` |
+| Missing managed native ID | 12 + 3 preservation tests | `worker/managed-predictions.ts`, `worker/proxy.ts` |
+| Cancellation acknowledgement | 21 | `worker/background-store.ts`, `worker/managed-lifecycle-types.ts`, `worker/managed-predictions.ts`, `worker/response-controls.ts` |
+
+Each task supplies the original test files from its pinned reference revision.
+The managed-ID file retains those bytes and appends one preservation test with
+two subtests. Its 34 requests check status codes, error codes, upstream calls,
+and budget calls across declared and undeclared lifecycles. These guards catch
+fixes that pass the original examples but change other request behavior.
+
+All supplied tests are visible before generation and reused for acceptance;
+the manifest's `hiddenTests` field does not imply independent hidden tests.
+Acceptance retains appended public guards when the supplied file starts with
+the exact oracle test bytes. Other public replacements do not override oracle
+tests.
+Only the listed source files are editable. Qualification must confirm that the
+base fails and the reference passes the complete supplied suite.
+
+Use the same model-free qualification command as above, with
+`benchmarks/fusion/verified-regression-workloads.json` as the manifest. This
+separate development cohort does not replace existing workloads or qualify a
+model, routing policy, or production deployment. A model comparison must freeze
+its models, prompts, effort, call limits and acceptance rules, and include all
+attempts in cost and latency totals.
+
+## Review a supplied candidate with separate model roles
+
+Use `runFinalReviewedModelTrajectory` when a candidate already exists in the
+caller's isolated workspace. A review model can diagnose problems while a
+separate, smaller model owns corrections. This is an opt-in caller workflow;
+it does not change the Worker chat model or routing defaults.
+
+```js
+import { runFinalReviewedModelTrajectory } from './scripts/fusion-trajectory-models.mjs';
+
+export function reviewCandidate({ task, tools, invoke, readSnapshot, checkpoint, signal }) {
+  return runFinalReviewedModelTrajectory({
+    task,
+    tools, // Include a read-only `check` tool returning { passed: boolean }.
+    invoke,
+    runId: 'candidate-review',
+    draftModel: 'provider/small-model',
+    reviewModel: 'provider/review-model',
+    repairModel: 'provider/small-model',
+    reviewCanReplace: false,
+    reviewAfterCorrection: true,
+    initialFinalAnswer: 'The supplied candidate is ready for review.',
+    reviewSnapshot: readSnapshot,
+    onCheckpoint: checkpoint,
+    finalCheckTool: 'check',
+    maxModelCalls: 8,
+    maxToolCalls: 8,
+    maxContextBytes: 131_072,
+    deadlineMs: 120_000,
+    signal,
+  });
+}
+```
+
+Install the candidate before calling this function. `readSnapshot` must return
+a plain JSON object containing the current task-relevant source and evidence.
+It must read the corrected workspace on each review. Do not include held-out
+grading results in the snapshot or model input.
+
+The first call reviews the supplied candidate without generating another draft.
+`reviewCanReplace: false` prevents the reviewer from supplying a replacement
+action. On rejection, the repair model receives the reason and committed
+history. After a corrective write and its checkpoint, `reviewAfterCorrection`
+sends the current snapshot back to the reviewer. Reviewer acceptance still
+requires the caller's `check` tool to pass. A failed check can continue only
+within the remaining shared limits; it cannot return a successful completion.
+
+`invoke(runId, model, body, signal)` must reserve each request's conservative
+cost before dispatch, record every attempt's cost, and honor cancellation.
+The workspace, tools, snapshots, checkpoints, and final check belong to the
+caller. Tool effects can occur before final acceptance, so keep them isolated
+from production state. Callback and provider errors stop execution without
+an automatic retry.
+
+Measure this role split against a matched single-model repair. Include the
+original candidate, diagnosis, failed attempts, correction, and re-review in
+cost and latency totals. Smaller corrective models are a configuration option,
+not a guarantee of equivalent quality or lower total cost.
+
+## Caller-side verified repair
+
+`scripts/fusion-verified-workflow.mjs` exports `runVerifiedWorkflow`. Use it in
+a caller that can generate repair artifacts and verify them in an isolated
+environment. It is separate from the Worker chat model described above.
+
+```js
+import { runVerifiedWorkflow } from './scripts/fusion-verified-workflow.mjs';
+
+export function repairTask({ invoke, verify, signal }) {
+  return runVerifiedWorkflow({
+    models: {
+      draft: 'provider/draft-model',
+      repair: 'provider/strong-model',
+      compiler: 'provider/small-model',
+    },
+    invoke,
+    verify,
+    signal,
+    deadlineMs: 900_000,
+  });
+}
+```
+
+The caller supplies two adapters:
+
+- `invoke({ stage, model, draft, feedback, signal })` reserves a conservative
+  budget before dispatch and returns `{ artifact, costMicros }`, with optional
+  `feedback` describing an unusable draft. Use `null`
+  for an unusable artifact. Report the full attempt cost, including failed
+  attempts. Model identifiers are passed through to this adapter.
+- `verify({ artifact, stage, model, signal })` returns boolean `runtimePassed`
+  and `compilerPassed` fields, plus optional `feedback` for the next repair.
+  Both checks must pass before the workflow accepts an artifact. The caller
+  defines and isolates these checks; the module does not execute code itself.
+
+Artifacts and feedback must support `structuredClone`. Each adapter receives a
+copy so a failed repair cannot mutate the saved draft. Both adapters must honor
+the abort signal and clean up their own resources. A callback error, invalid
+receipt, or cancellation stops execution without trying another model. Work
+already dispatched can still incur charges after cancellation; its adapter
+must settle those charges even if the workflow has stopped waiting.
+
+The workflow keeps a passing draft. A draft that passes runtime checks but
+fails compilation gets one compiler-model repair. Otherwise, or if that repair
+fails, the strong model repairs the saved original draft. A strong repair with
+only compiler failures also gets one compiler-model pass. If this sequence
+fails, the strong model starts again from the original task and can make one
+final repair. The maximum is six model calls. Set `strategy: 'strong'` for a
+two-call control using only the repair model.
+
+Set `strategy: 'cascade'` for a verified draft followed by at most one fresh
+fallback. This mode requires only `models.draft` and `models.repair`. It keeps
+a draft only when both verification checks pass. Otherwise it calls the repair
+model with the original task context supplied by your adapter, with `draft`
+and `feedback` set to `null`, then verifies that answer. It does not call the
+compiler or specialist models. Both attempts count toward cost and elapsed
+time, including a draft explicitly returned as `artifact: null`.
+
+```js
+const result = await runVerifiedWorkflow({
+  strategy: 'cascade',
+  models: { draft: 'provider/cheap-model', repair: 'provider/fallback-model' },
+  invoke,
+  verify,
+  signal,
+});
+if (!result.passed) {
+  // Handle the failed verification; no further model call is automatic.
+}
+```
+
+The verifier defines what this cascade can safely accept. Public examples alone
+can miss incorrect answers. Supply checks appropriate to your task and isolate
+execution of generated code. Adapter errors, malformed receipts, deadlines and
+cancellation stop the workflow rather than triggering fallback. This caller-side
+mode does not enable a Worker routing policy or establish a model-quality gain.
+
+For selector repairs, include preservation checks for inputs that must remain
+unselected. Build these checks from the baseline contract before generating a
+candidate, and run them for both strong controls and cheap drafts. Keep the
+original tests and check that the reference implementation passes the complete
+suite without skips. A dependency graph alone does not establish that every
+unreachable path should be excluded; qualify that invariant for the task.
+
+The [selector preservation study](fusion-selector-preservation-study.json)
+records a concrete failure: three cheap drafts passed the public tests but
+selected an unrelated provider operation. Five baseline-derived negative checks
+rejected all three saved drafts and retained all three correct strong answers.
+With the checks visible in a separate retest, both strategies passed all three
+repetitions. The cascade cost 53.7% less after cache normalization but took
+81.1% longer. This exposed-task result improved the verifier and met the cost
+screen; it failed the latency gate and does not establish a general model gain. A
+follow-up with lower draft reasoning lost one correct strong answer because it
+omitted required helpers while passing all negative checks. Include positive
+dependency coverage as well; passing exclusion checks alone is insufficient.
+
+For an informed fallback, set `fallbackMode: 'repair'` with `strategy: 'cascade'`.
+The second invocation receives a clone of the rejected artifact and its verifier
+receipt in `draft` and `feedback`. A missing artifact stays `null`. This mode still
+allows at most two calls by default, counts both costs, and verifies the fallback before
+acceptance. The default `fallbackMode: 'fresh'` sends neither artifact nor feedback.
+Only include feedback that the fallback is allowed to see. Keep evaluation-only
+held-out cases outside this receipt, and treat generated artifacts as untrusted
+data in the provider adapter. No quality or cost improvement is implied by this
+option; validate it on the intended workload.
+
+Set `fallbackAttempts: 2` with `strategy: 'cascade'` to allow one repair of a
+failed strong fallback. The maximum then becomes three calls: cheap draft,
+strong fallback, and `strong-fallback-repair`. The third call receives the
+failed strong artifact and its verification feedback, regardless of whether
+the first fallback used fresh or repair mode. It runs only when the fallback
+fails at least one verification check; acceptance at either earlier stage stops the
+workflow. A missing artifact remains `null` and retains its adapter feedback.
+
+The default `fallbackAttempts: 1` keeps the two-call limit. Only values 1 and 2
+are accepted; other strategies cannot request a second fallback attempt.
+Reserve for all three possible calls when enabling the option. Each attempted
+call is charged and verified, and adapter errors, invalid receipts, cancellation
+or deadline expiry stop execution. This option changes no Worker defaults and
+does not establish a quality or cost gain.
+
+Optionally set `models.runtimeRepair` to a specialist model identifier. When
+the original draft fails runtime checks but passes compilation, the workflow
+calls that model once with the saved draft and verification feedback, using
+the `draft-runtime` stage. Both checks must pass to accept its repair. If they
+do not, the strong model receives the original draft and feedback, not the
+failed specialist output. The specialist is skipped for compiler failures,
+unusable drafts, and the strong control. Omitting it preserves the default
+sequence. The maximum remains six calls; failed specialist attempts count
+toward total cost and elapsed time.
+
+Optionally set `models.admissionRepair` for a draft that has no usable artifact.
+The `draft-admission` stage receives `draft: null` and the original admission
+feedback. The adapter can use that feedback or make a fresh attempt against the
+original task. Both verification checks must pass. A failed attempt leaves the
+original feedback intact for strong-model fallback. This option is skipped for
+usable drafts and the strong control. It adds at most one attempt and preserves
+the six-call bound; its cost and elapsed time are included in the result.
+
+The result includes `passed`, the final `artifact` and `verification`, all
+attempt costs, and elapsed time including callbacks. Optional `onStep` receives
+only stage, model, cost, check verdicts, and timing; it receives no artifact or
+feedback content. The default deadline is 15 minutes and the maximum is 30.
+This opt-in workflow does not establish quality, cost, or latency gains for a
+model configuration; measure those against a matched control on your tasks.
+
+### Constrain region edit targets
+
+For adapters that request region replacements as structured output,
+`scripts/fusion-region-schema.mjs` exports `createRegionEditSchema(files)`.
+Supply the current inventory's file paths and region IDs:
+
+```js
+import { createRegionEditSchema } from './scripts/fusion-region-schema.mjs';
+
+const schema = createRegionEditSchema([
+  { path: 'src/handler.ts', ids: ['r0', 'r1'] },
+  { path: 'src/client.ts', ids: ['r0', 'r2'] },
+]);
+```
+
+Use the returned schema in your adapter's strict structured-output request.
+It describes `{ edits: [{ path, id, code }] }`, with one to 24 replacements.
+Each replacement's ID is bound to its file; shared local IDs are allowed.
+The adapter must support nested `anyOf` for multiple files. A single-file
+schema uses direct enums without `anyOf`.
+
+The helper rejects empty or duplicate targets and limits the inventory to
+64 files, 1,000 total enum values, and 100,000 target characters. File paths
+count as enum values. ID enums above 250 values allow at most 15,000 ID
+characters per file. Oversized inputs fail rather than dropping constraints.
+Keep the inventory tied to the current source and validate returned edits
+against it, including duplicate replacements, before applying them. The
+schema does not verify replacement code, prevent stale-source edits, or
+replace runtime and compiler checks. This helper makes no model calls and
+does not change Worker routing.
+
+### Include files referenced by tests
+
+A visible test can still depend on data the model cannot see. For example,
+it can load a JSON fixture and build a selection from a provider manifest.
+`scripts/fusion-test-context.mjs` exports `collectTestContext` to find direct,
+literal references and collect their source as read-only context:
+
+```js
+import { collectTestContext } from './scripts/fusion-test-context.mjs';
+
+const context = collectTestContext({
+  tests: [{ path: 'test/handler.test.mjs', content: testSource }],
+  editPaths: ['src/handler.ts'],
+  parse: parseModule,
+  readSource: path => readAtRevision(baseRevision, path),
+});
+// Add context.files to the model's read-only source context.
+// Inspect context.omitted before deciding whether the request has enough context.
+```
+
+Supply a Babel- or ESTree-style parser and a bounded source reader for the
+original repository revision. The reader returns a string or `null` for an
+unavailable file; errors propagate. The collector has no filesystem access
+and does not execute test or dependency code. It excludes the supplied tests
+and editable paths before calling the reader.
+
+Supported references are relative static imports, literal dynamic imports,
+re-exports, and `readFile` or `readFileSync` calls imported from `node:fs` or
+`node:fs/promises` (including aliases and namespace imports). File reads must
+use `new URL('relative-path', import.meta.url)`. Package imports, computed
+paths, binary files and paths outside the repository are not collected.
+It does not follow dependencies recursively or resolve extensionless imports.
+
+The defaults allow 16 collected files and 128 KiB of source. Oversized,
+excluded, unavailable, unsupported and file-limit omissions are reported;
+source is never truncated. At most 32 tests, 256 distinct references and
+250,000 AST objects are accepted. The result always has `complete: false`:
+literal references cannot establish a complete dependency graph. Retain
+normal edit validation, input budgets and full test/compiler verification.
+
+### Select optional supporting source
+
+Callers can opt into `selectSourceContext` from the same module after collecting
+supporting source. It retains direct imports and re-exports of editable files,
+declaration files and named fragments, non-code resources, and test helpers. It reports other
+whole-file omissions with content hashes. Editable source and acceptance tests
+remain separate inputs and are never removed by this function.
+
+```js
+import { selectSourceContext } from './scripts/fusion-test-context.mjs';
+
+const selected = selectSourceContext({
+  sources: editableFiles,
+  context: supportingFiles,
+  parse: parseModule,
+});
+// Inspect selected.omitted, then explicitly use selected.files in the request.
+```
+
+This is an experimental prompt policy, not a complete dependency resolver.
+Unresolved dynamic imports and package or alias imports preserve all supplied
+context. Extension and directory-index variants are retained conservatively.
+The function does not read files, invoke models, or change benchmark defaults.
+Keep full test and compiler gates; a smaller request does not prove equal quality.
+
+Inputs are bounded to 32 editable files, 256 context entries, 256 KiB per file,
+4 MiB of combined content, and 250,000 AST objects. `bytes` and `originalBytes`
+count UTF-8 supporting content, excluding request formatting. The result always
+has `complete: false`; inspect omissions before using it.
+
+### Scoped compiler repair context
+
+For TypeScript drafts that pass runtime checks but fail compilation,
+`scripts/fusion-compiler-context.mjs` builds a small data payload from located
+compiler errors and the current source. Supply any required type declarations
+as explicit read-only `referenceFiles`.
+
+```js
+import {
+  createCompilerRepairContext,
+  applyCompilerRepairs,
+} from './scripts/fusion-compiler-context.mjs';
+
+const context = createCompilerRepairContext({
+  files: draft.files,
+  diagnostics: compiler.diagnostics,
+  referenceFiles: typeDeclarations,
+});
+// The caller's model adapter returns [{ path, content }] replacements.
+const files = applyCompilerRepairs({ context, files: draft.files, replacements });
+```
+
+The immutable payload contains only diagnosed editable files, diagnostics and
+explicit references. It excludes unrelated source files. Paths must be relative
+`.ts` paths; relative Windows separators are normalized. Unlocated errors,
+unknown paths, invalid line positions and oversized inputs are rejected. The
+limits are 64 source files, 256 KiB per file, 1 MiB total source, 32 reference
+files with 48 KiB total, 12 KiB of diagnostics, and eight diagnosed files.
+
+The merge rejects edits outside the diagnosed files and rejects a repair if
+those files changed after the context was created. It preserves all unrelated
+source. The caller must reserve model costs, apply its cancellation policy, and
+run the complete original runtime suite and compiler on the merged artifact.
+The helper does not validate generated code or establish model quality, cost,
+or latency gains.
+
+For small corrections, `applyCompilerTextEdits({ context, files, edits })`
+accepts `{ path, oldText, newText }` entries. Each nonempty `oldText` must occur
+exactly once in its diagnosed file. All entries match the original saved source;
+edits cannot overlap. Unchanged bytes, including line endings, are preserved.
+An empty `newText` deletes the matched text. A missing or ambiguous match,
+stale source, or invalid entry rejects the entire batch without changing inputs.
+The limits are 32 edits, 16 KiB per text field and 64 KiB of text per batch.
+The same full-suite and compiler verification requirements apply.
+
 ## Fixed-choice voting experiments
 
 `scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls

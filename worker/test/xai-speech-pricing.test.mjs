@@ -6,7 +6,7 @@ const { requestPricingGap, estimateModelCost, actualModelCost } = await import("
 const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { prepareXaiSpeech, readXaiSpeech, xaiSpeechFormats } = await import("../xai-speech.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/xai/speech.json", import.meta.url), "utf8"));
 const pricing = providerById("xai").models.find(model => model.upstream === "grok-4.3").pricing;

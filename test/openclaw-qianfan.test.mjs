@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { types as nodeTypes } from "node:util";
 import { readFileSync } from "node:fs";
-import { createRequire, stripTypeScriptTypes } from "node:module";
+import { stripTypeScriptTypes } from "node:module";
+import { createWorkerOutcomeFixture } from "./helpers/worker-outcome-fixture.mjs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,11 @@ const sdkText = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.
 const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd = sdkText.indexOf("// END ORIGINAL LIFETIME OBSERVERS");
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
+// The test bundle alone observes the original handler boundary. Exact source
+// pins and single anchors prevent an overlay from silently following new code.
+const workerOutcomePins = {"proxy.ts": "e7996f77dd28d60d6636597da4aaa85bc1f9e0578c8601585ffef7553971337f", "proxy-response.ts": "da7664084749cff3c5bb9f9d6b82053e6d04438fc7fdcca1dd9d3025e175e8f3", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
+const { workerOutcomeOverlay, bundleWorkerOutcome: bundleQianfanOutcome } = createWorkerOutcomeFixture(workerOutcomePins);
+
 registerQianfanMemoryTests({ source, sourceHead, observerCode, bundleOutcome: bundleQianfanOutcome });
 const { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createWorkerOutcomeWitness, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
 // Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
@@ -1083,56 +1089,6 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
   finally { diagnostics.finish(); }
 });
 
-// The test bundle alone observes the original handler boundary. Exact source
-// pins and single anchors prevent an overlay from silently following new code.
-const workerOutcomePins = {"proxy.ts": "b1a8d68993b406b5660ebff0cd3b94e6d11cd0dccbafb7a22d50ec5bec2d483f", "proxy-response.ts": "b938ae532df851af62d90c5cb0e8dfa68fb88ed2a15e75f384ff3ca336fb1227", "http-operation.ts": "b530ed9b485191e2752d91a6f6384456f1ab551c97fef08d44919f507b221683"};
-function workerOutcomeOverlay(text, name = "proxy-response.ts") {
-  assert.equal(createHash("sha256").update(text).digest("hex"), workerOutcomePins[name]);
-  const edit = (before, after, count = 1) => { assert.equal(text.split(before).length, count + 1, before); text = text.replaceAll(before, after); };
-  if (name === "proxy.ts") {
-    // Thread the already-held operation to the original source owner; the
-    // forwarded/normalized reader is deliberately NOT used as its identity.
-    edit('function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {',
-      'function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, operation: HttpOperation): Response {');
-    edit('ownOrdinaryResponse(response, completion)', 'ownOrdinaryResponse(response, completion, operation)', 2);
-    edit('    const reader = response.body!.getReader(), input = inputRetirement(reader);',
-      '    const reader = response.body!.getReader(), input = inputRetirement(reader);\n    qianfanOutcome.current.bind(operation, response, reader);');
-    edit('              const next = await input.read(() => reader.read());',
-      '              qianfanOutcome.current.readStart(operation, reader);\n              const next = await input.read(() => reader.read());\n              qianfanOutcome.current.readDone(operation, reader);');
-    edit('            } catch (error) {\n              if (!stopped)',
-      '            } catch (error) {\n              qianfanOutcome.current.failure(operation, reader, error);\n              if (!stopped)');
-  } else {
-    assert.equal(name, "proxy-response.ts");
-    // Embeddings bypass the ordinary Chat completion wrapper. Their original
-    // fetched reader belongs directly to observeUsage, not to a forwarded body.
-    edit('  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);',
-      '  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);\n  if (responseFormat === "openai.embeddings") qianfanOutcome.current.bind(operation, response, reader);');
-    edit('        const next = await input.read(() => reader.read());',
-      '        if (responseFormat === "openai.embeddings") qianfanOutcome.current.readStart(operation, reader);\n        const next = await input.read(() => reader.read());\n        if (responseFormat === "openai.embeddings") qianfanOutcome.current.readDone(operation, reader);');
-    edit('      } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }',
-      '      } catch (error) { if (responseFormat === "openai.embeddings") qianfanOutcome.current.failure(operation, reader, error); if (!finished) { finish("failed", error); controller.error(error); } }');
-    edit('    resolve({ ...inspection, delivery,', '    qianfanOutcome.current.inspection(operation, inspection, delivery);\n    resolve({ ...inspection, delivery,');
-    edit('    cancel(reason) { return finish("canceled", reason); },',
-      '    cancel(reason) { const prior = qianfanOutcome.current.downstreamStart(operation, reason); try { return finish("canceled", reason); } finally { qianfanOutcome.current.downstreamEnd(operation, prior); } },');
-  }
-  return 'import { qianfanOutcome } from "qianfan-outcome-witness";\n' + text;
-}
-async function bundleQianfanOutcome(contents) {
-  const require = createRequire(import.meta.resolve("wrangler/package.json")), { build } = require("esbuild");
-  const bundle = await build({ stdin: { contents, resolveDir: process.cwd(), sourcefile: "qianfan-fixture.ts", loader: "ts" },
-    write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent",
-    plugins: [{ name: "qianfan-first-outcome", setup(build) {
-      build.onResolve({ filter: /^qianfan-outcome-witness$/ }, () => ({ path: "witness", namespace: "qianfan" }));
-      build.onLoad({ filter: /.*/, namespace: "qianfan" }, () => ({ contents: "export const qianfanOutcome = { current: undefined };", loader: "js" }));
-      build.onLoad({ filter: /[/\\]worker[/\\](?:proxy|proxy-response|http-operation)\.ts$/ }, args => {
-        const name = args.path.split(/[/\\]/).at(-1), source = readFileSync(args.path, "utf8");
-        assert.equal(createHash("sha256").update(source).digest("hex"), workerOutcomePins[name]);
-        return { contents: name !== "http-operation.ts" ? workerOutcomeOverlay(source, name) : source, loader: "ts" };
-      });
-    } }],
-  });
-  return bundle.outputFiles[0].text;
-}
 async function startQianfanWorkerd(temporary) {
   const { startBundledWorkerdFixture } = await import("./helpers/workerd.mjs");
   return startBundledWorkerdFixture(temporary, await bundleQianfanOutcome(routerFixture()), upstreamFixture());

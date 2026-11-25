@@ -1,12 +1,14 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
-import { envValue, HttpError, safeEqual, sha256Hex } from "./utils.ts";
+import { envValue, safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // This is a fresh check of an already selected credential, never a new pool
 // selection, refresh or environment fallback. Delivery repeats the same check.

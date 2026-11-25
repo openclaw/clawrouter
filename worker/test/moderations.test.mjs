@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture as authorityFixture } from "./http-continuation-fixture.mjs";
 import { putGrantCredentials } from "../grant-credentials.ts";
-import { providerById, routeCatalog } from "../providers.ts";
+import { providerById, routeCatalog } from "../provider-catalog.ts";
 const { default: worker } = await import("../index.ts");
 
 const routes = ["/v1/moderations", "/v1/native/openai/v1/moderations", "/v1/proxy/openai/moderations"];

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
+import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, hasNativeSafetyNotice, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
 
 const body = { messages: [{ role: 'system', content: 'format instruction' }, { role: 'user', content: 'task' }], max_tokens: 4096, response_format: { type: 'json_object' } };
 const env = { OPENAI_API_KEY: 'synthetic-openai', ANTHROPIC_API_KEY: 'synthetic-anthropic' };
@@ -55,10 +55,10 @@ test('native preflight checks all identities without inference or mixed credenti
     calls.push({ url, headers: options.headers });
     return Response.json({ id: url.split('/').at(-1) });
   });
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
   assert.ok(calls.every(c => c.url.includes('/v1/models/')));
   assert.equal(calls[0].headers['x-api-key'], undefined);
-  assert.equal(calls[2].headers.authorization, undefined);
+  assert.equal(calls.find(call => new URL(call.url).hostname === 'api.anthropic.com').headers.authorization, undefined);
   assert.equal(pins['openai/gpt-6-luna'].costSource, 'published-tariff-estimate');
   assert.equal(pins['anthropic/claude-sonnet-5.5'].price.input, 4 / 1e6);
   await assert.rejects(nativePins(env, async () => new Response(null, { status: 401 })), /preflight_http_401/);
@@ -88,11 +88,35 @@ test('HTTP error diagnostics retain only finite labels, never echoed content', (
     ['output_config.format schema unsupported', 'structured_output'],
     ['thinking must be supported', 'thinking_parameters'],
     ['This content cannot be displayed: This content can’t be shown', 'safety_notice'],
+    ['Cybersecurity safety notice', 'safety_notice'],
     ['Workspace spend limit exceeded', 'spend_limit'],
     ['Assistant prefill unsupported', 'message_format'],
     ['max_tokens exceeds maximum', 'token_limit'],
     ['service_tier unsupported', 'service_tier'],
   ]) assert.equal(nativeErrorMetadata({ error: { message } }).errorHint, hint);
+});
+
+test('safety notices include discarded response fields without retaining their text', () => {
+  for (const text of ["This content can't be shown", 'This content can’t be shown', 'CYBERSECURITY SAFETY NOTICE', 'Safety refusal']) {
+    const body = { output: [{ channel: 'commentary', content: [{ text }] }], choices: [{ message: { content: 'ordinary answer' } }] };
+    assert.equal(hasNativeSafetyNotice(body), true);
+    assert.equal(nativeErrorMetadata(body).errorHint, 'safety_notice');
+    assert.ok(!JSON.stringify(nativeErrorMetadata(body)).includes(text));
+  }
+  assert.equal(hasNativeSafetyNotice({ output: [{ content: [{ text: 'ordinary answer' }] }] }), false);
+  assert.equal(hasNativeSafetyNotice(null), false);
+});
+
+test('policy prompt rejections use finite safety metadata without retaining echoed text', () => {
+  const error = { type: 'invalid_request_error', code: 'invalid_prompt',
+    message: 'Your prompt was flagged as potentially violating our usage policy. private sentinel' };
+  assert.deepEqual(nativeErrorMetadata({ error }), {
+    errorType: 'invalid_request_error', providerCode: 'invalid_prompt',
+    providerParam: 'unknown', errorHint: 'safety_notice',
+  });
+  for (const changed of [
+    { code: 'invalid_value' }, { type: 'api_error' }, { message: 'Invalid prompt shape. private sentinel' },
+  ]) assert.equal(nativeErrorMetadata({ error: { ...error, ...changed } }).errorHint, 'unknown');
 });
 
 test('selected-model preflight requires only the selected providers', async () => {
@@ -249,4 +273,30 @@ for (const [name, mutate] of [
   assert.equal(responseDisposition(normalized.result), 'unknown_stop');
   assert.equal(normalized.result.choices[0].message.content, '');
   assert.equal(normalized.costMicros, 6670);
+});
+
+for (const [upstream, costMicros, reserveInput] of [
+  ['gpt-6.2-sol', 6670, 2.5 / 1e6],
+  ['gpt-6.2-astra', 26680, 10 / 1e6],
+]) test(`${upstream} keeps native identity, published tariff and conservative reservations`, async () => {
+  const model = `openai/${upstream}`, calls = [];
+  const pins = await nativePins({ OPENAI_API_KEY: env.OPENAI_API_KEY }, async url => {
+    calls.push(url); return Response.json({ id: upstream });
+  }, [model]);
+  assert.deepEqual(calls, [`https://api.openai.com/v1/models/${upstream}`]);
+  assert.equal(pins[model].canonicalSlug, upstream);
+  assert.equal(pins[model].checkedAt, '2026-11-21');
+  assert.equal(pins[model].price.input, reserveInput);
+  for (const api of ['responses', 'chat-completions']) {
+    const request = nativeRequest(model, body, env, api);
+    assert.equal(request.body.model, upstream);
+    assert.equal(request.body.store, false);
+    assert.equal(request.body.service_tier, 'default');
+    assert.equal(api === 'responses' ? request.body.reasoning.effort : request.body.reasoning_effort, 'medium');
+  }
+  const raw = { ...responsesFixture(), model: upstream };
+  assert.equal(nativeResult(model, raw, 'responses').costMicros, costMicros);
+  assert.throws(() => nativeResult(model, { ...raw, model: 'different-model' }, 'responses'), /identity_missing/);
+  assert.throws(() => nativeResult(model, { ...raw, service_tier: 'priority' }, 'responses'), /tier_unqualified/);
+  assert.throws(() => nativeResult(model, { ...raw, usage: { ...raw.usage, input_tokens: 200001, total_tokens: 200501 } }, 'responses'), /usage_invalid/);
 });

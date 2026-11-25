@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const identifier = value => typeof value === 'string' && /^[a-z][a-z0-9-]{1,63}$/.test(value);
 const money = value => Number.isSafeInteger(value) && value >= 0;
+const submitted = row => ['submitted', 'draft_submitted'].includes(row.outcome);
 const digest = (value, length) => typeof value === 'string' && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
 const sum = values => {
   const value = values.reduce((total, next) => total + next, 0);
@@ -23,10 +24,10 @@ function failureSignals(rows, receipts) {
   const failed = rows.filter(row => row.score === 0);
   return {
     visiblePassFailures: failed.filter(row => row.publicPassed === true).length,
-    falseAccepts: failed.filter(row => row.outcome === 'submitted' && row.publicPassed === true).length,
+    falseAccepts: failed.filter(row => submitted(row) && row.publicPassed === true).length,
     acceptancePassesWithoutSubmission: failed.filter(row => {
       const receipt = receipts.find(receipt => receipt.taskId === row.taskId);
-      return typeof row.outcome === 'string' && row.outcome !== 'submitted'
+      return typeof row.outcome === 'string' && !submitted(row)
         && row.verdict?.passed === true && row.verdict.tests === receipt.oracleTests
         && row.verdict.skipped === receipt.oracleSkipped;
     }).length,
@@ -36,15 +37,21 @@ function failureSignals(rows, receipts) {
 
 function modelUse(runs, candidate) {
   const result = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
-    noCallAttempts: 0, mixedWinsOverCheap: 0 };
+    noCallAttempts: 0, mixedWinsOverCheap: 0, successfulCheapUse: 0,
+    successfulStrongUse: 0, winsOverCheapUsingStrong: 0 };
   for (const run of runs) {
     for (const row of run.records.filter(row => row.strategy === candidate)) {
       const used = new Set(run.calls.filter(call => call.trialId === `${row.taskId}:${candidate}`).map(call => call.model));
+      const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
+      if (row.score === 1) {
+        result.successfulCheapUse += Number(used.has(run.config.cheap));
+        result.successfulStrongUse += Number(used.has(run.config.strong));
+        result.winsOverCheapUsingStrong += Number(used.has(run.config.strong) && cheapRow.score === 0);
+      }
       if (!used.size) result.noCallAttempts++;
       else if (used.size === 1) result[used.has(run.config.cheap) ? 'cheapOnlyAttempts' : 'strongOnlyAttempts']++;
       else {
         result.mixedAttempts++;
-        const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
         if (row.score > cheapRow.score) result.mixedWinsOverCheap++;
       }
     }
@@ -71,6 +78,12 @@ export function analyzePairRun(run, options) {
     || (run.handoffProbeGate !== undefined && (typeof run.handoffProbeGate !== 'boolean'
       || (run.handoffProbeGate && (run.probeRegressionGate !== true || !['edit-handoff', 'matched-handoff'].includes(run.policy)))))
     || (run.handoffEvidence !== undefined && typeof run.handoffEvidence !== 'boolean')) throw new Error('invalid_pair_run');
+  const actionSchemaProfile = run.actionSchemaProfile === undefined ? 'legacy' : run.actionSchemaProfile;
+  if (!['legacy', 'compact'].includes(actionSchemaProfile)
+    || (actionSchemaProfile === 'compact' && (run.executor !== 'interactive'
+      || !['architect', 'edit-handoff', 'completion-handoff', 'matched-handoff', 'scope'].includes(run.policy)))) {
+    throw new Error('invalid_pair_run');
+  }
   if (run.sourcePageLines != null && (!Number.isSafeInteger(run.sourcePageLines) || run.sourcePageLines < 1 || run.sourcePageLines > 400
     || run.executor !== 'interactive' || !['edit-handoff', 'completion-handoff', 'matched-handoff'].includes(run.policy))) throw new Error('invalid_pair_run');
   if (run.armOffset !== undefined && (!Number.isSafeInteger(run.armOffset) || run.armOffset < 0
@@ -108,7 +121,7 @@ export function analyzePairRun(run, options) {
     if ((row.status === 'complete' || row.verdict !== undefined) && row.verdict?.valid !== true) {
       throw new Error('incomplete_pair_grade');
     }
-    if (row.score === 1 && ((run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
+    if (row.score === 1 && (!submitted(row) || (run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
       || row.verdict.tests !== entry.receipt.oracleTests || row.verdict.skipped !== entry.receipt.oracleSkipped)) {
       throw new Error('unverified_pair_score');
     }
@@ -149,8 +162,15 @@ export function analyzePairRun(run, options) {
       candidateSolvedMinusExpected: selected.solved - expectedSolved };
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
+  const controlJointOutcomes = Object.fromEntries(['bothPassed', 'cheapOnly', 'strongOnly', 'bothFailed']
+    .map(key => [key, { candidatePassed: 0, candidateFailed: 0 }]));
+  for (const { rows } of cases.values()) {
+    const cheapPassed = rows.get('cheap').score === 1, strongPassed = rows.get('strong').score === 1;
+    const key = cheapPassed ? (strongPassed ? 'bothPassed' : 'cheapOnly') : (strongPassed ? 'strongOnly' : 'bothFailed');
+    controlJointOutcomes[key][rows.get(candidate).score === 1 ? 'candidatePassed' : 'candidateFailed']++;
+  }
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha, armOffset: run.armOffset ?? 0,
-    openAiApi: run.openAiApi ?? 'chat-completions', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+    openAiApi: run.openAiApi ?? 'chat-completions', actionSchemaProfile: run.actionSchemaProfile ?? 'legacy', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
     cases: cases.size, candidate, latencyMetric, totals, comparisons: [versusCheap, versusStrong],
@@ -161,6 +181,7 @@ export function analyzePairRun(run, options) {
       : cheap.solved >= selected.solved && versusCheap.wins === 0
         && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     controlOracleSolved: oracleSolved, controlComplementarity: oracleSolved - Math.max(cheap.solved, strong.solved),
+    controlJointOutcomes,
     matchedCostRandomMixture: mixture,
     observedCostSavingWithoutStrongRegressions: versusStrong.losses === 0 && selected.costMicros < strong.costMicros,
     observedQualityGainOverBestFixed: selected.solved > Math.max(cheap.solved, strong.solved),
@@ -188,7 +209,7 @@ export function analyzePairRepeats(runs, options) {
       qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
       executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
       preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
-      openAiApi: run.openAiApi ?? 'chat-completions', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+      openAiApi: run.openAiApi ?? 'chat-completions', actionSchemaProfile: run.actionSchemaProfile ?? 'legacy', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
       strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
   };
   const expected = protocol(runs[0]);
@@ -199,6 +220,9 @@ export function analyzePairRepeats(runs, options) {
   }
   const candidate = reports[0].candidate;
   const candidateModelUse = modelUse(runs, candidate);
+  const controlJointOutcomes = Object.fromEntries(Object.keys(reports[0].controlJointOutcomes).map(key => [key,
+    Object.fromEntries(['candidatePassed', 'candidateFailed'].map(outcome => [outcome,
+      sum(reports.map(report => report.controlJointOutcomes[key][outcome]))]))]));
   const totals = runs[0].strategies.map(strategy => {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
@@ -221,16 +245,19 @@ export function analyzePairRepeats(runs, options) {
     noStrongRegressions: comparisons[1].losses === 0,
     enoughCostSaving: saving !== null && BigInt(selected.costMicros) * 5n <= BigInt(strong.costMicros) * 4n,
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
-    rescuedBeyondCheap: comparisons[0].wins > 0 };
+    rescuedBeyondCheap: comparisons[0].wins > 0,
+    usesBothModelsOnSuccesses: candidateModelUse.successfulCheapUse > 0 && candidateModelUse.successfulStrongUse > 0,
+    rescuedUsingStrong: candidateModelUse.winsOverCheapUsingStrong > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
-    openAiApi: runs[0].openAiApi ?? 'chat-completions', sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
+    openAiApi: runs[0].openAiApi ?? 'chat-completions', actionSchemaProfile: runs[0].actionSchemaProfile ?? 'legacy', sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
-    inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
+    inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse, controlJointOutcomes,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
     cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
       && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     pilotScreen: { ...screen, passed: screen.enoughSolved && screen.noStrongRegressions
-      && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap },
+      && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap
+      && screen.usesBothModelsOnSuccesses && screen.rescuedUsingStrong },
     spentOrReservedMicros: runs.at(-1).spentOrReservedMicros,
     limitations: ['Repeated attempts are not independent tasks or evidence of statistical significance.',
       'The fixed pilot screen is exploratory; passing it is not production approval.',

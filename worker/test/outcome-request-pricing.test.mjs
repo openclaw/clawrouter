@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { estimateModelCost, requestPricingGap, requestOutcomeReserve, requestOutcomeCost } = await import("../pricing.ts");
 const original = parse(readFileSync(new URL("../../providers/xai.provider.yaml", import.meta.url), "utf8"));
 const tariff = {

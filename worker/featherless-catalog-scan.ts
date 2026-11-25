@@ -2,7 +2,7 @@ import { featherlessCatalogRequest, filterFeatherlessModels, type FeatherlessMod
 import type { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const PAGE_BYTES = 2 * 1024 * 1024;
 const WIRE_BYTES = 8 * 1024 * 1024;

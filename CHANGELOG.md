@@ -2,9 +2,195 @@
 
 - Explain static provider product and transport incompatibility with typed diagnostic codes. Preserve boolean compatibility decisions and keep credential, policy, quota, and budget admission with the host.
 
+- Report the frozen 30-task, three-arm Fusion confirmation, retaining all failures, costs, admission strata and source-clustered uncertainty.
+
+- Allow an opt-in third caller-side Fusion attempt to repair a rejected strong fallback, retaining verification, cancellation and complete cost accounting.
+
+- Report complete predeclared Fusion strata alongside the full cohort, preserving paired trials, failures and source-clustered uncertainty.
+
+- Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.
+
+- Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
+
+- Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
+
+- Add optional lossless rejected-candidate prompt context that avoids repeating unchanged source.
+
+- Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
+
+- Add optional nested test prompt compaction that preserves suite wrappers, hooks, and ambiguous registrations.
+
+- Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
+
+- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
+
+- Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
+
+- Add offline Fusion uncertainty intervals that resample related tasks together by source or domain.
+
+- Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
+
+- Report task-level lost baseline successes and a one-sided exact binary loss bound in Fusion evaluations.
+
+- Add caller-side multi-file Fusion artifacts with exact source-path coverage, bounded content, and test-file exclusions.
+
+- Record a 16-pair verifier benchmark with unchanged verdicts and lower measured sandbox overhead; keep it separate from model-quality claims.
+
+- Report the harder repository cascade failure and a baseline-test fixture correction, retaining the failed quality, cost and latency results.
+
+- Report fresh-fallback timing limits and a qualified cheap-execution gain on two real repository repairs, without claiming collaboration or production efficacy.
+
+- Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.
+
+- Report verified cascade studies: a tuned cost-saving development gain, a failed fresh-task confirmation, and quality recovery with feedback repair that still fails latency.
+
+- Allow an opt-in two-call cascade repair to pass the rejected artifact and verifier feedback to its fallback, preserving the fresh-fallback default.
+
+- Add opt-in Fusion grading for declared Node test timeouts, counting fully accounted timeouts as failures while rejecting unresolved cancellation.
+
+- Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
+
+- Report the failed fresh fusion confirmation with replayable adaptive/pair controls, bounded worker-exit diagnostics and an explicit grading-stability limitation.
+
+- Record corrected-control and scale-check fusion results, including a failed cheap-model repair comparison.
+
+- Add a replayable hard-task behavioral-majority control: six successes at 30.92% lower accounted cost than Terra, with exposure, pair-control and production limits.
+
+- Report sparse fusion correction controls: exact Terra edits repaired a hard task, but a public-test fallback matched the score for less.
+
+- Report matched algorithm-outline fusion controls: planning cost nearly as much as a direct solution and did not improve accuracy.
+
+- Record the diverse-output fusion follow-up: revision matched direct controls but cost more, with strict and adapted scores reported separately.
+
+- Report a matched-control functional fusion pilot: Terra direct matched fusion for less, and the only rescued Luna failure was an entrypoint mismatch.
+
+- Record the failed fresh small-reviewer cascade replication, complete costs and the limits of its earlier Terra diagnostic.
+
+- Record the input-validated fusion follow-up: fixed review and public-gated policies lose strong-model successes and remain unqualified.
+
+- Record the failed fusion cost confirmation and malformed upstream fixture without dropping failed rows or changing production behavior.
+
+- Record a 12-task small-model fusion development lead, matched controls, complete model costs and qualification limits.
+
+- Expose trusted structured edit-rejection details for custom fusion benchmark runners without weakening atomic matching.
+- Report failed Access fusion and verifier diagnostics, including the absent-field fixture correction and limits of public-test acceptance.
+
+- Record an audited Node-only cheap-first cost win, with isolated runtime admission and no collaboration-gain claim.
+
+- Record the failed matched-planner fusion trial, including the cheap-only planner control and complete accounting.
+
+- Document two failed fusion construction trials and the limits of public-test acceptance and contract review.
+
+- Record three audited cheap-first research cost wins, their qualification evidence and limits; no collaboration or deployment gain claimed.
+- Report paired fusion outcomes by joint control success, exposing shared failures, candidate rescues and lost control successes.
+
+- Refresh fusion routing research with plan-time model assignment and protocol-selection evaluation limits.
+
+- Document supplied-candidate fusion review with separate corrective models and final executable checks.
+
+- Honor cancellation for fusion sandbox commands, retain failed-creation cleanup identities, and use cached images without implicit pulls.
+
+- Add opt-in timing normalization before fusion test-feedback clipping, retaining raw evidence digests and verdicts.
+
+- Run OpenClaw consumer qualification for standalone native fixture helper, provider compiler, validation and Worker runtime configuration changes.
+
+- Discard malformed UTF-8 fusion adviser responses instead of silently altering their text.
+
+- Return DuckDuckGo HTML admission and read errors without waiting for stream cancellation.
+
+- Add Cloudflare AI Gateway native Anthropic Messages for the frozen Sonnet 4.6 identity using gateway authentication and stored BYOK/Unified Billing. Preserve Universal requests and leave account-dependent charges unpriced.
+
+- Return MiniMax device authorization failures without waiting for rejected-response body cleanup.
+
+- Allow completion review to start from a caller-supplied candidate without another draft call, preserving correction and final-check guards.
+
+- Allow a separate corrective model and verdict-only reviewer in caller-side fusion trajectories.
+
+- Add opt-in review after corrective trajectory writes, preserving checkpoint ordering and existing execution limits.
+
+- Bound trajectory review schemas to the current segment length so acceptance cannot refer to earlier committed steps.
+
+- Add opt-in completion review for caller-side trajectories, with bounded snapshots and mandatory review of repaired final answers.
+
+- Add an opt-in source workspace projection for trajectory model requests, preserving canonical tool history and failed-edit evidence.
+
+- Add an opt-in check-driven model selector that starts small and bounds stronger-model repair after failed executable checks.
+
+- Let bounded fusion trajectory callers checkpoint committed work without accepting rejected steps or replaying interrupted operations.
+
+- Preserve failure diagnostics when a matching named fusion test runs and fails.
+
+- Allow fusion workload checks to select a literal test-name prefix and reject runs with no matching test.
+
+- Recognize terminal-colored loader diagnostics when fusion probe callers opt into filtering, while preserving raw feedback.
+
+- Let fusion probe callers opt into filtering wrapped Node loader and parser failures from behavioral assertion failures, preserving existing interpretation by default.
+
+- Allow caller-side single trajectories to schedule validated follow-up tools without a model call, preserving tool limits, cancellation and final checks.
+
+- Add a caller-supplied model adapter for bounded trajectories, with strict action schemas, fixed-model controls and feedback-driven selection from a configured pair.
+
+- Add an opt-in caller-side tool trajectory controller with bounded model/tool calls, reviewed writes, cancellation and optional final checks.
+
+- Retain append-only public regression guards during final fusion workload acceptance without replacing oracle test bytes.
+
+- Install declared new public fusion workload test files in disposable sandboxes while preserving file and parent path guards.
+
+- Allow caller-side fusion workflows to retry an unusable draft with an optional specialist before strong-model fallback, preserving verification, costs and the six-call bound.
+
+- Allow caller-side fusion workflows to try an optional runtime repair specialist before stronger-model fallback, preserving the original draft and six-call bound.
+
+- Allow compiler repair callers to apply bounded exact-text edits, preserving unedited bytes and rejecting ambiguous, overlapping or stale changes.
+
+- Add caller-side compiler repair context that limits model input to diagnosed files and preserves unrelated source when applying repairs.
+
+- Add an opt-in caller-side verified repair workflow with bounded model calls, compiler-only handoffs, cancellation, and complete attempt costs.
+
+- Report paired cost and latency uncertainty in Fusion evaluations, preserving failed-run costs, equal case weighting, and undefined ratios.
+
+- Preserve qualified Voyage embedding usage when response JSON inspection is enabled, including rejection and MIME guards.
+
+- Protect final fusion acceptance tests and helper modules from candidate writes, and reject changed test bytes after grading.
+
+- Preserve early failing-test diagnostics in bounded fusion benchmark feedback when later passing tests produce long output. Mark omitted output and retain final diagnostics.
+
+- Require successful participation from both models and a strong-model rescue before a repeated fusion benchmark passes its pilot screen.
+- Stop paired fusion benchmarks on provider safety notices anywhere in the response, including discarded commentary, while retaining settled usage or unresolved reservations.
+- Allow fusion workload acceptance tests to declare pinned helper modules without exposing or changing them during agent execution.
+
+- Let repository fusion benchmarks declare new source modules, with isolated initialization and guarded first writes.
+
+- Bind custom fusion acceptance receipts to their matching validator and grader; reject custom receipts in default Git-oracle runners.
+- Add explicit GPT-6.2 Sol and Astra choices to native fusion benchmarks with published tariffs and conservative cache-write reservations. Existing defaults stay unchanged.
+- Require an explicit submission before scoring or exporting paired fusion repairs; reject legacy positive scores for unfinished patches during analysis.
+
+- Include declared read-only repository context in fusion benchmark planning and review, matching the worker context without changing empty-context prompts.
+
+- Allow fusion benchmark runners to select one fixed-model control without rerunning or reserving budget for the other control. Keep the default two-control run and record single-control limitations.
+
+- Run the realtime cadence proof before the concurrent CI script suite, retaining every test, deadline, bounded diagnostic and failure status.
+
+- Allow interactive fusion pair benchmarks to opt into the existing bounded action schema for every comparison arm, and record the selected profile in the result.
+
+- Let fusion benchmark agents read up to twelve source ranges across three files, and identify rejected edit anchors without exposing source text. Preserve atomic edit batches and existing error metadata.
+
+- Let custom fusion benchmark runners opt into remaining-action-turn feedback, including after handoff and context eviction. Default prompts and execution limits stay unchanged.
+
+- Surface provider prompt-policy rejections in fusion benchmark diagnostics while preserving the stop, full reservation, and private response boundary.
+
+- Activate the three finite Baseten SystemOne DecisionV2 models through the existing native adapter. Preserve Chat, selected credentials, bounded complete JSON and unknown-price budget denial. Add a pinned registered-client Worker/SQLite contract with original acquisition, reader, release and source retirement; physical pre-response disconnect propagation remains separately unqualified.
+
+- Activate finite Vydra Models video creates for Kling and Veo3 alongside Jobs. Retain the original create adapter for shared GET controls, deny Models DELETE, bind native JSON reads to their operation signal, and hide pending output URLs until terminal success. Qualify configured OpenClaw video selection, distinct motion inputs, bounded credential-free downloads and one durable fixed-policy settlement; unknown dollar tariffs remain denied.
+
 - Preserve the registered Perplexity Search client's rejected original body cancellation after an authored post-header abort. Admit only the exact owned body/read/closed reason and completed unlock/release relationship; keep raw rejections, independent faults and Worker acceptance unchanged.
 
 - Exercise registered Perplexity Search through its actual catalog-selected native route, selected and rotated credentials, request-based SQLite receipts, bounded results and joined post-header cancellation. Preserve independent Responses and generic Search pins; retain unexpected-dispatch observer faults even when the client wraps the error.
+
+- Retain qualified xAI Responses web-search support in authenticated catalogs and bind admission to the selected native or manifest offer. Preserve credential isolation, hard-budget pricing denial and explicit fixed-policy accounting. Qualify the registered client through native and manifest Worker/SQLite routes with original-operation retirement.
+
+- Qualify the registered Google image host and acquired image tool through native Worker/SQLite offers, distinct inline edit bytes, fresh credential scope and original-operation retirement. Keep validated-response host cancellation separate from background-tool preparation and physical upstream cancellation.
+
+- Add a pinned registered Google continuation contract through the Worker and SQLite: EOF-bound receipts, two explicit request-bound hops, independent budgets and settlement, changed-authority denials and original-operation retirement. Keep the separate physical pre-header cancellation limitation explicit.
 
 - Include the canonical service-provider v1 JSON Schema in the portable provider contract archive for external editors and validators. Keep semantic qualification in the ClawRouter compiler.
 
@@ -51,6 +237,22 @@
 - Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
 
 ## Unreleased
+
+- Add strict replay reconciliation for process IDs in Node's EventSource warning, preserving recorded request bytes and rejecting other request changes.
+
+- Add a fusion benchmark cost screen that requires both invoice and cache-neutral savings, with complete paired cost accounting.
+
+- Add a credential-free Fusion fallback replay that charges failed attempts and exposes public-test false accepts separately from hidden-label diagnostics.
+
+- Validate `access_programs` on unified Responses and reject unsupported selections before dispatch to other providers or Fusion Chat.
+
+- Clarify the existing Copilot catalog normalization of reported reasoning-effort tags, including unknown tags and missing, null, or empty observations.
+
+- Add an opt-in supporting-source selector for fusion benchmarks, with hashed omissions and conservative handling of unresolved imports; benchmark and Worker defaults are unchanged.
+
+- Collect bounded read-only source and fixture context from literal references in fusion task tests.
+
+- Add a caller-side fusion edit schema that binds replacement region IDs to their files before inference.
 
 - Activate Radius API-key Pi routes and bounded, owner-bound config filtering with a closed native metadata projection. Add registered configured-stream, replay, cache-counter, denial and original cancellation/accounting checks; keep automatic catalog/OAuth routing and unknown tariffs explicitly separate.
 
@@ -101,6 +303,7 @@
 
 - Bind private-catalog fixture reads to their original request and resource identities, join originals and observer/producer tails before accounting, and preserve strict failures with bounded diagnostics and permanent retirement seals.
 - Qualify Bifrost progress cancellation only for the privately bound read and its paired observer after successful cancel, closed, source and release joins and fixed-cost accounting. Preserve rejected states and independent faults; keep inherited reporter harnesses and consumer priority checks compatible with the Bifrost-first matrix.
+- Apply the same joined-read cancellation contract to the exact Bifrost partial cases, requiring actual caller abort, a successfully retired bounded producer, original resource ownership and fixed-charge accounting. Retain both original read/observer rejections and all independent failures; this does not identify their native error cause.
 
 - Report Bifrost Worker deadline-test failure boundaries through its own complete native event census. Preserve original joins, cleanup, undefined failures and strict retirement/accounting assertions; missing or unbound diagnostics remain unknown.
 
@@ -212,7 +415,7 @@
 
 - Reserve complete Bifrost diagnostic groups before optional parent records and join output completion without changing native failure acceptance.
 
-- Bound Bifrost partial-fixture demand to nonterminal SSE comments before holding, retaining the original cancellation lifetime, escape deadline and strict retirement/accounting checks.
+- Bound Bifrost partial fixtures to one nonterminal SSE comment while retaining the independent original producer lifetime and expiry in the request context. Join direct-consumer reader cancellation before release, preserving strict source retirement and accounting without claiming abort-only physical disconnect propagation.
 
 - Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
 
@@ -303,6 +506,7 @@
 - Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
 
 - Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
+- Let fusion repair tasks supply pinned public regression tests consistently to all isolated trials and qualification checks.
 
 - Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
 
@@ -798,6 +1002,7 @@
 - Exercise the compiled Wan lifecycle through Worker/SQLite and the actual OpenClaw native video host, preserving proxy credentials, unknown-price denial and one conservative settlement through observation loss.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
 - Support authenticated one-job PixVerse image intake with bounded multipart bytes, original-owner upload/create ordering, dual operation reservations and acknowledged native-response delivery; generic JSON and unowned image IDs remain closed.
+- Activate the exact PixVerse composed-image catalog for the two frozen video models and add a pinned registered-client contract, preserving text routes, original-create-bound retrieval, separate upload/create prices and owner retention requirements.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.
 - Add the experimental Gradium unary speech manifest, binary-mode guard and native fixtures, with conservative plan-dependent credit accounting and explicit runtime activation requirements.
 - Route model-less Gradium unary speech through bounded native binary validation, original credentials and conservative reservation settlement without replaying synthesis.
@@ -1102,6 +1307,7 @@
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
+- Bind the frozen OpenCode Console and Go catalogs to native Chat, Messages and Responses, preserving both GLM defaults and four closed rows; add registered-client session, protocol, retirement and policy-fixed accounting qualification without inventing prices or plan entitlement.
 - Wire Requesty managed catalogs through original-owner discovery authorization, preserving native facts and final policy filtering with bounded reads, cancellation and delivery capacity.
 - Add a bounded Requesty managed-catalog request/reader leaf preserving native policy identities and unknown facts, without activating discovery or inferring current prices or entitlements.
 - Qualify the paired Requesty managed-catalog compiler contract with its fixed original-key GET route, model-less metadata selector and closed override surface; provider activation remains separate.

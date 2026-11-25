@@ -1,4 +1,4 @@
-import '../../../test/helpers/typescript-resolver.mjs';
+import '../../../scripts/typescript-resolver.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {sqliteStorage} from '../../../worker/test/sqlite-storage.mjs';
 const {PolicyBindingIndexObject}=await import('../../../worker/authority.ts');

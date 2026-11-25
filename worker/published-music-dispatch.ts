@@ -1,6 +1,7 @@
 import { BodyLease } from "./body-budget.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { freezeInlineMusicInput } from "./openrouter-music-input.ts";
@@ -12,10 +13,10 @@ import { authorizePublishedInputCaller, assertPublishedInputCredential, assertPu
 import { parsePublishedInputUrl, publishedInputCall } from "./published-input-archive.ts";
 import { assertPublishedInputLive, publishedInputUnavailable, samePublishedInput, validatePublishedAttempt,
   type PublishedInputAttempt, type PublishedInputBinding, type PublishedInputReceipt } from "./published-input-receipt.ts";
-import { publishedMusicRequestDigest } from "./published-music.ts";
-import { publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader, publishedMusicReference } from "./published-music-runtime.ts";
+import { publishedMusicRequestDigest, publishedMusicBodyBytes, publishedMusicDispatchBytes, publishedMusicDispatchHeader, publishedMusicReference } from "./published-music-request.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
-import { errorResponse, HttpError, sha256Hex } from "./utils.ts";
+import { errorResponse, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface Input { binding: PublishedInputBinding; attempt: PublishedInputAttempt; body: string; deadline: number }
 export interface PreparedPublishedMusicForward {

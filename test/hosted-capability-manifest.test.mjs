@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 
 const original = parse(readFileSync(new URL("../providers/openai.provider.yaml", import.meta.url), "utf8"));
 const sol = manifest => manifest.models.entries.find(model => model.id === "openai/gpt-6.1-sol");

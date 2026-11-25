@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const CODING_PROVIDERS = new Set(["qwen-coding-global", "qwen-coding-cn"]);
 

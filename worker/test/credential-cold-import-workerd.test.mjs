@@ -12,7 +12,8 @@ const cases = Object.fromEntries(['admin', 'personal'].flatMap(scope => modes.ma
 const router = String.raw`
 import worker from './worker/index.ts';
 import {PolicyBindingIndexObject as Owner} from './worker/authority.ts';
-import {HttpError,sha256Hex} from './worker/utils.ts';
+import { sha256Hex } from './worker/utils.ts';
+import { HttpError } from './worker/http-error.ts';
 export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 // Test-only raw SQL inspection: never calls a list/import API or repairs state.
 export class PolicyBindingIndexObject extends Owner {

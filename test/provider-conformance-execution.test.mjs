@@ -1,11 +1,11 @@
+import { providerPluginFixture as fixture } from "./helpers/provider-plugin-fixture.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { parse, stringify } from "yaml";
 import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 
@@ -19,19 +19,6 @@ function run(paths) {
   });
   assert.equal(result.error, undefined);
   return result;
-}
-function fixture(t) {
-  const directory = mkdtempSync(join(tmpdir(), "provider-conformance-execution-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  cpSync(join(root, "examples/provider-plugin"), directory, { recursive: true });
-  const change = (file, yaml, mutate) => {
-    const path = join(directory, file);
-    const value = yaml ? parse(readFileSync(path, "utf8")) : JSON.parse(readFileSync(path, "utf8"));
-    mutate(value); writeFileSync(path, yaml ? stringify(value) : JSON.stringify(value));
-  };
-  return { descriptor: join(directory, "clawrouter.plugin.json"),
-    scenario: mutate => change("fixtures/request.json", false, mutate),
-    manifest: mutate => change("example.provider.yaml", true, mutate) };
 }
 function failed(result, pattern) {
   assert.equal(result.status, 1, result.stderr);
@@ -156,7 +143,7 @@ test("all packages validate before execution and failures produce no partial rep
 
 test("failed host execution restores global transport and the bundled provider registry", async t => {
   const { runProviderConformance } = await import("../scripts/run-provider-conformance.mjs");
-  const { snapshot } = await import("../worker/providers.ts");
+  const { snapshot } = await import("../worker/provider-catalog.ts");
   const before = { fetch: globalThis.fetch, providers: snapshot.providers, models: snapshot.model_index };
   const f = fixture(t); f.scenario(s => { s.response.status = 201; });
   await assert.rejects(runProviderConformance([f.descriptor]), /client response status mismatch/);

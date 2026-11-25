@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "study": "Short-circuit failed public tests before compilation",
+  "scope": "Two cached upload draft artifacts, one failed and one passed. Alternate original/short-circuit verification order. Every original public test and exact-lock Worker compile remains unchanged. Failed public tests can skip compilation but never pass. Paired model-free verification timing only; no inference/workflow/generalization speed claim.",
+  "provenance": {
+    "sourceCommit": "b8283216cae773909d05675803b25e47d25651a1",
+    "protocolSha256": "84fd934ded7046ff130e6dd9754321ab28440305ebf2b533a6a12b4b4ab4cfc0",
+    "resultSha256": "1e6d820275bfe07a49396f0a8bfac73f7f83d8781f038fc96be1769d50deef6e",
+    "parentProtocolSha256": "b883b01c4ffe4ea92e0d32956b35e96d0bfb6f8d52700db9e1988c2b0357e7a2",
+    "parentResultSha256": "b147b678e928b20a6a996cfc1ac78d69288550f27d5bb7f68366ecba1e94a765",
+    "parentTerminalAuditSha256": "fb82cd027cacc3b43041cd61316baff788752af525790596ca1f25ce8f90c7f4",
+    "sources": {
+      "scripts/fusion-public-short-circuit.local.mjs": "81c84fac13db4f9da8597a046cd876877572e09d2ca246f7e75016d503b4cd28",
+      "scripts/fusion-fast-public-check.local.mjs": "6309f82977a46392610e5fe766702e1b98a101f5935fe84c1896f9a93db6c593",
+      "scripts/fusion-public-verification.mjs": "b9f2622a96289082021c0c14e50507fc1a47b791325ad02f8641dc2ecf8cbf94",
+      "scripts/fusion-typecheck.local.mjs": "fe78191ace92df5d06a7d43e21d47fa5463c9e9a501ab7aaae505360f1a47e33",
+      "scripts/fusion-older-fix-qualification.local.mjs": "3bf3b9f91357ed8bb5444015252edefb383f5524ef3907af1deb8d1eb6f7c6e1",
+      "scripts/fusion-edit-artifact.local.mjs": "57bca822768611faced7c386c3cd2579d759dac0ca9cbeee0c341dd9db11d286"
+    }
+  },
+  "method": {
+    "candidateSelection": "One recorded failed upload draft and one recorded passing upload draft, selected after their outcomes were known. These are verification fixtures, not unseen evaluation tasks.",
+    "comparison": "Same original public tests, exact test counts, artifacts, cached dependency image, protected execution and Worker compiler. Original first on failure; short-circuit first on success. One run per method and artifact, each in its own sandbox.",
+    "acceptance": "Only valid passing public tests with exact expected count and zero skips can invoke compilation. Rejection marks compilation skipped and passed=false. Accepted candidates must pass compilation. Full acceptance grading is unchanged.",
+    "measurement": "Elapsed time surrounds each complete verifier, including sandbox cleanup. Serial local wall-clock samples; no confidence interval or inference/workflow latency claim.",
+    "reproducibility": "Raw private fixtures and reports are hash-pinned. Public report omits source artifacts, prompts and raw diagnostics."
+  },
+  "rows": [
+    {
+      "taskId": "history-7fdb64c885ce/repeat-0",
+      "expectedPublicPassed": false,
+      "results": {
+        "original": {
+          "accepted": false,
+          "elapsedMs": 2354.5610420000003,
+          "compilerPassed": true,
+          "compilerSkipped": false,
+          "tests": {
+            "valid": true,
+            "passed": false,
+            "tests": 13,
+            "failures": 1,
+            "skipped": 0
+          }
+        },
+        "shortCircuit": {
+          "accepted": false,
+          "elapsedMs": 1813.9605410000004,
+          "compilerPassed": false,
+          "compilerSkipped": true,
+          "tests": {
+            "valid": true,
+            "passed": false,
+            "tests": 13,
+            "failures": 1,
+            "skipped": 0
+          }
+        }
+      },
+      "elapsedRatio": 0.7704028515902032
+    },
+    {
+      "taskId": "history-7fdb64c885ce/repeat-2",
+      "expectedPublicPassed": true,
+      "results": {
+        "shortCircuit": {
+          "accepted": true,
+          "elapsedMs": 2144.0747499999998,
+          "compilerPassed": true,
+          "compilerSkipped": false,
+          "tests": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          }
+        },
+        "original": {
+          "accepted": true,
+          "elapsedMs": 2122.520375000001,
+          "compilerPassed": true,
+          "compilerSkipped": false,
+          "tests": {
+            "valid": true,
+            "passed": true,
+            "tests": 13,
+            "failures": 0,
+            "skipped": 0
+          }
+        }
+      },
+      "elapsedRatio": 1.0101550850836938
+    }
+  ],
+  "decision": {
+    "accepted": true,
+    "reason": "Both methods agree on public outcomes and final acceptance. Failed public tests avoid a redundant compiler call; passing candidates still compile. The failing sample saved about 0.54 seconds. This is a local verifier optimization, not proof of faster end-to-end fusion.",
+    "newModelCalls": 0,
+    "newSpendMicros": 0,
+    "qualifiedProductionGain": false,
+    "deployment": "None; optional caller-side helper only."
+  }
+}

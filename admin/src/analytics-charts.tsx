@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ServerCog } from "lucide-react";
-import { BrandMark } from "./components";
-import { formatCount } from "./ui-helpers";
+import { BrandMark, InlineNote } from "./components";
+import { formatCount, formatTimestamp } from "./ui-helpers";
 import { presentAccountedSpend } from "./cost-presentation";
 import { niceChartMaximum, providerChartRows, usageTimeline } from "./usage-analytics";
 import type { ProviderUsageSummary, ServiceItem, UsageDailySummary, UsageSnapshot } from "./ui-types";
@@ -180,4 +180,11 @@ export function PersonalUsageTimeSeries({ points, label, formatValue, formatAxis
     </div>
     <div className="personalChartReadout" role="status" aria-live="polite">{selected ? <><span>{selected.label}</span><strong>{formatValue(selected.value)}</strong>{selected.partial ? <span>Partial coverage</span> : null}<small>{new Date(selected.start).toISOString()} → {new Date(selected.end).toISOString()} (exclusive)</small></> : <span>Hover, tap, or use arrow keys to inspect a day.</span>}</div>
   </div>;
+}
+
+export function UsageFreshness({ loaded, stale, error, updatedAt }: { loaded: boolean; stale: boolean; error: string; updatedAt: number | null }) {
+  if (loaded && !stale) return null;
+  return <div className="usageFreshness" role="status"><InlineNote>{loaded && updatedAt !== null
+    ? <>Showing last known usage from <time dateTime={new Date(updatedAt).toISOString()}>{formatTimestamp(updatedAt, true)}</time>. Balances may have changed.</>
+    : error ? "Usage unavailable. Spend and remaining balances are unknown." : "Loading usage…"}</InlineNote></div>;
 }

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { types } from "node:util";
 import vm from "node:vm";
 import { parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
+import { parseRealtimeDiagnostic, realtimeObservationContract } from "../scripts/realtime-diagnostics.mjs";
 
 const helperSource = readFileSync(new URL("./helpers/http-deadline.mjs", import.meta.url), "utf8");
 const entrySource = readFileSync(new URL("./http-deadline.test.mjs", import.meta.url), "utf8");
@@ -241,7 +242,7 @@ function reporter() {
   const prefix=reporterSource.slice(reporterSource.indexOf("const failureTypes"),reporterSource.indexOf("// Node-side fixture evidence"));
   const tail=reporterSource.slice(reporterSource.indexOf("function failureRecord("),reporterSource.indexOf("export default workerFailureReport")).replace(/^export /gm,"");
   const decoder=reporterSource.slice(reporterSource.indexOf("export function decodeWorkerReporterRecord"),reporterSource.indexOf("function trackedTestFiles")).replace(/^export /gm, "");
-  const context={types,Buffer,parseObservationDiagnostic,searchObservationContract,process:{cwd:()=>"/fixture"},trackedTestFiles:()=>file=>file,workerAbortInvocation:()=>null,workerAbortAdmission:()=>({observe(){},finish(){return {failure:null,records:[],record:null};}})};
+  const context={types,Buffer,parseObservationDiagnostic,searchObservationContract,parseRealtimeDiagnostic,realtimeObservationContract,process:{cwd:()=>"/fixture"},trackedTestFiles:()=>file=>file,workerAbortInvocation:()=>null,workerAbortAdmission:()=>({observe(){},finish(){return {failure:null,records:[],record:null};}})};
   vm.createContext(context);vm.runInContext(prefix+decoder+tail+"\nglobalThis.report=workerFailureReport;globalThis.decode=decodeWorkerReporterRecord;",context);return { report:context.report, decode:context.decode };
 }
 

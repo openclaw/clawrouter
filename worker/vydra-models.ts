@@ -1,5 +1,5 @@
 import { mediaObject } from "./managed-media-json.ts";
-import { readNativeJson } from "./native-json.ts";
+import { readNativeJson, type NativeJsonInputHooks } from "./native-json.ts";
 import { validateVydraJobId } from "./vydra-jobs.ts";
 
 export const vydraModels = ["grok-imagine", "veo3", "kling", "elevenlabs/tts"] as const;
@@ -23,7 +23,7 @@ export function prepareVydraModel(model: string, value: unknown): VydraModelRequ
     const image = assetUrl(value.image_url), video = assetUrl(value.video_url);
     // Frozen OpenClaw supplied the same image twice. The native contract needs
     // an actual motion video; do not silently reinterpret that legacy request.
-    if (image === video) fail("motion_reference");
+    if (new URL(image).href === new URL(video).href) fail("motion_reference");
   }
   return { model: model as VydraModel, kind, path: "/api/v1/models/" + model, body: structuredClone(value),
     headers: new Headers({ "content-type": "application/json", accept: "application/json" }) };
@@ -60,13 +60,16 @@ export function observeVydraModel(value: unknown, request: Pick<VydraModelReques
 }
 
 export async function readVydraModel(response: Response, request: Pick<VydraModelRequest, "model" | "kind">,
-  action: "create" | "retrieve", signal: AbortSignal, expectedId?: string): Promise<VydraModelObservation> {
+  action: "create" | "retrieve", signal: AbortSignal, expectedId?: string, hooks?: NativeJsonInputHooks): Promise<VydraModelObservation> {
   const allowed = action === "create" && request.kind === "video" ? [200, 202] : [200];
-  if (response.redirected || !allowed.includes(response.status)) { void response.body?.cancel().catch(() => undefined); fail("http"); }
+  if (response.redirected || !allowed.includes(response.status)) {
+    // The same bounded reader owns rejection cleanup; never detach cancellation.
+    return readNativeJson(response, signal, maxEnvelope, () => fail("http"), fail, hooks);
+  }
   // Preserve the stream and its length/range headers while using the common
   // strict JSON reader for the documented 202 create envelope.
   const normalized = response.status === 202 ? new Response(response.body, { status: 200, headers: response.headers }) : response;
-  return readNativeJson(normalized, signal, maxEnvelope, value => observeVydraModel(value, request, action, expectedId), fail);
+  return readNativeJson(normalized, signal, maxEnvelope, value => observeVydraModel(value, request, action, expectedId), fail, hooks);
 }
 
 function extractAssets(body: Json, kind: VydraModelRequest["kind"]): { url: string; kind: VydraModelRequest["kind"] }[] {

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { compileProviderSnapshot } from "./compile-providers.mjs";
+import { compileProviderSnapshot } from "./provider-compiler.mjs";
 import { providerPluginManifest, parseProviderCompilerArgs } from "./provider-manifest-inputs.mjs";
 import { loadProviderPlugins } from "./provider-plugin-loader.ts";
 

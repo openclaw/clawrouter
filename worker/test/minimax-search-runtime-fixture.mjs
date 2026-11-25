@@ -2,7 +2,7 @@ import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import assert from "node:assert/strict";
 import { byteBody, syntheticTransport } from "./minimax-search-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { miniMaxSearchBinding } = await import("../../shared/minimax-search-binding.ts");
 export { grantKey };

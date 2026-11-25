@@ -1,7 +1,7 @@
-import "../test/helpers/typescript-resolver.mjs";
+import "./typescript-resolver.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
-import { PROVIDER_CONFORMANCE_EXECUTION_SCHEMA } from "../packages/provider-plugin-contract/src/index.ts";
+import { PROVIDER_CONFORMANCE_EXECUTION_SCHEMA } from "../packages/provider-plugin-contract/src/conformance.ts";
 import { loadProviderConformancePlan } from "./validate-provider-conformance.mjs";
 
 const secret = "synthetic-conformance-key";
@@ -100,13 +100,13 @@ async function environment(provider, sha256Hex) {
 
 /**
  * Dedicated-process test harness. Never call concurrently or from the Worker.
- * @returns {Promise<import('../packages/provider-plugin-contract/src/index.ts').ProviderConformanceExecution>}
+ * @returns {Promise<import('../packages/provider-plugin-contract/src/conformance.ts').ProviderConformanceExecution>}
  */
 export async function runProviderConformance(pluginPaths) {
   const plan = loadProviderConformancePlan(pluginPaths);
   const cases = plan.cases.map(entry => ({ ...entry, authentication: preflight(entry) }));
   const [{ default: worker }, { snapshot }, { sha256Hex }, { clearHotCaches }] = await Promise.all([
-    import("../worker/index.ts"), import("../worker/providers.ts"), import("../worker/utils.ts"), import("../worker/hot-cache.ts"),
+    import("../worker/index.ts"), import("../worker/provider-catalog.ts"), import("../worker/utils.ts"), import("../worker/hot-cache.ts"),
   ]);
   const originalFetch = globalThis.fetch;
   const original = { providers: snapshot.providers, model_index: snapshot.model_index };

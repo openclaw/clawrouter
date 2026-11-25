@@ -1,13 +1,14 @@
 import { CompactionWitnessProducer } from "./compaction-witness.ts";
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner, EvidenceFinalization, PricingEvidence } from "./continuation-store.ts";
-import type { PinnedGrant } from "./grant-selection.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { createResponseIdentityInspector, responseIdentity, type ResponseIdentity } from "./response-identities.ts";
 import { createResponsesToolEvidence, retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import { responseOutcome } from "./token-usage.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { WebSocketContinuationPin, WebSocketContinuationWitnesses } from "./websocket-continuation-witnesses.ts";
 
 export function continuationRestart(): HttpError {

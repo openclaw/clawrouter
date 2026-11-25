@@ -1,7 +1,7 @@
 import { readUpstreamRetentionPolicy } from "../shared/upstream-retention.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { AccessPolicy, Env } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface ManagedCreateAdmission { readonly upstreamRetention: "allowed" | "denied" }
 const denied: ManagedCreateAdmission = Object.freeze({ upstreamRetention: "denied" });

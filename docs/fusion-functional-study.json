@@ -1,0 +1,1032 @@
+{
+  "version": 1,
+  "study": "adapted-livecodebench-functional-collaboration-20261124",
+  "qualifiedFusionGain": false,
+  "developmentLead": false,
+  "sourceCommit": "aefa3cc8e4ce015401cb41c1505ce463c0876ec6",
+  "protocolSha256": "05913ac74718027beba773f31fc11f60bdcc2e8cf58e417407711012abd977b0",
+  "cohortProtocolSha256": "12d9d89d6bb4374c9a0247b545ab02a0988282129db26ce42e0276341b6c5de7",
+  "qualificationSha256": "e40263785b21a24449813fafc15f46471bb6ef2e863b86f1c633ef70016caf32",
+  "terminalAuditSha256": "363c7fa1240568b0b9822f39a442c195486da735564340a126dec1d7e782ae88",
+  "dataset": {
+    "repository": "livecodebench/code_generation_lite",
+    "revision": "0fe84c3912ea0c4d4a78037083943e8f0c4dd505",
+    "file": "test6.jsonl",
+    "sha256": "bb4c364f71921c4495a6ad15abe1a927350b720009f4933e2e71f8af0f6fd1f5"
+  },
+  "freshAtInference": true,
+  "uniquePaidCalls": 40,
+  "uniquePaidCostMicros": 251886,
+  "arms": {
+    "weak": {
+      "passed": 7,
+      "costMicros": 8032
+    },
+    "medium": {
+      "passed": 8,
+      "costMicros": 50809
+    },
+    "strong": {
+      "passed": 8,
+      "costMicros": 99172
+    },
+    "fusion": {
+      "passed": 8,
+      "costMicros": 56489
+    },
+    "self-revision": {
+      "passed": 8,
+      "costMicros": 96225
+    }
+  },
+  "lostStrongSuccesses": 0,
+  "tasks": [
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "identity": "leetcode:3785",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "identity": "leetcode:3781",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "identity": "leetcode:3795",
+      "difficulty": "medium",
+      "publicTests": 4,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "identity": "leetcode:3739",
+      "difficulty": "hard",
+      "publicTests": 2,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "identity": "leetcode:3722",
+      "difficulty": "medium",
+      "publicTests": 2,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "identity": "leetcode:3777",
+      "difficulty": "hard",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "identity": "leetcode:3794",
+      "difficulty": "medium",
+      "publicTests": 3,
+      "privateTests": 16
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "identity": "leetcode:3765",
+      "difficulty": "hard",
+      "publicTests": 2,
+      "privateTests": 16
+    }
+  ],
+  "rows": [
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "arm": "weak",
+      "codeSha256": "b056ff469c2bdffa07e458a1288fdcb8a940c79f73bfe579167ca5c1661a6a9e",
+      "costMicros": 155,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "arm": "medium",
+      "codeSha256": "b2c71d18c3b51d698b6567b3bfdec42bf4da633675ac693f730188f208fc868b",
+      "costMicros": 1650,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "arm": "strong",
+      "codeSha256": "39055d7f38c5693a5f4edab32ac948fc651129f454b6a89c0a38414ced9bbac5",
+      "costMicros": 3030,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "arm": "fusion",
+      "codeSha256": "f2ffb44b41a905ac1ab1260165e1f2492595f5759aa17efffb86b9084d442689",
+      "costMicros": 2233,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-b0ddca4a15cee9ce",
+      "arm": "self-revision",
+      "codeSha256": "565b8b69544dbbdc7313e1bcad1abd7f6f36a0c33ab2790a850dba0e5e83b210",
+      "costMicros": 3556,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "arm": "weak",
+      "codeSha256": "d1b713a8dcff3a76109f0f511862dfd2d2a3229061cb39dee2de519437d9455d",
+      "costMicros": 2299,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "arm": "medium",
+      "codeSha256": "49a692b8be5b5be06c37ac0d86b05d56cf157914945a94dcd56388bc76c3333c",
+      "costMicros": 12852,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "arm": "strong",
+      "codeSha256": "3b9f0816449d6831f6dbe0035eb405d4873d9f8623219ad0ed4b46daebc5ebc8",
+      "costMicros": 24794,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "arm": "fusion",
+      "codeSha256": "fdb841123a7434915bc14886066beb13222eece4605a4a2e4ae5b64168cb8e73",
+      "costMicros": 15389,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-446c573cc6d30663",
+      "arm": "self-revision",
+      "codeSha256": "29b3b7759255c84b429dd6b70640ca2728a521ec5b75c96a78f3dd6a62ea1105",
+      "costMicros": 29185,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "arm": "weak",
+      "codeSha256": "1510c3a9794de00b188ae2c67bc594b7db4b5792e96b0d6dceda976b9bb139bd",
+      "costMicros": 403,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "arm": "medium",
+      "codeSha256": "14a56ef1451ca87fbca96e1783aa74a576c98a1975f5e41a229280a049e92562",
+      "costMicros": 3435,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "arm": "strong",
+      "codeSha256": "87644add773caaf3b01f8d61fec7edd9e29daa5ed554c9335794cd7ca62c5c4a",
+      "costMicros": 5774,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "arm": "fusion",
+      "codeSha256": "639a454e016a3d3ee7919c82708b8a013b0d735d962ede30298224235b841ec7",
+      "costMicros": 4515,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-fb46f5ee6c192f57",
+      "arm": "self-revision",
+      "codeSha256": "0f262aa3eb7a6a3d87f8d0bfe3e34db7513ec7846d2ac668e6a6b7a8aead53f0",
+      "costMicros": 7383,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "arm": "weak",
+      "codeSha256": "cd7ba2af05e8cf2311b3a2c671d31bf288c3bef8b2b8320f92b016470326821d",
+      "costMicros": 628,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "arm": "medium",
+      "codeSha256": "0e36b139838c6d627da13397bbfa87fc1a3a2820327fcdd61d91820ff15fcdc3",
+      "costMicros": 5271,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "arm": "strong",
+      "codeSha256": "e3f286a2196acbbdd990893cc2165981d3dcbe496a6738bdfe736c212f2bec9c",
+      "costMicros": 4552,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "arm": "fusion",
+      "codeSha256": "b8cb13d5bebcd86f7c2bef58e42c5d46430af4f2cf43cd1052e8ebca1871b850",
+      "costMicros": 2964,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9758bb553a100af3",
+      "arm": "self-revision",
+      "codeSha256": "0e36b139838c6d627da13397bbfa87fc1a3a2820327fcdd61d91820ff15fcdc3",
+      "costMicros": 9201,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "arm": "weak",
+      "codeSha256": "2c43a0a2e9fcd099b37123594b9e78e58cb7aa3ef4513b682ad279262c1683a6",
+      "costMicros": 333,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "arm": "medium",
+      "codeSha256": "c5ac259a35a88efa76623c3ba7a8a1bc00ada135e02a4a66b5c16aad6522b6a3",
+      "costMicros": 4341,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "arm": "strong",
+      "codeSha256": "d95f9a127f81f54327b5006b5b958e08f8ac9cb9dc8e83b044a54772850da363",
+      "costMicros": 19222,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "arm": "fusion",
+      "codeSha256": "316582d9a74501b18c2272492bfaf22af1033178c45ec08e8f9ef24782df99ac",
+      "costMicros": 5955,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-48b04873483a97a1",
+      "arm": "self-revision",
+      "codeSha256": "8cf047b9d101add1b854c54754b633cf13b1c958b6b75058c86c9d5f403cb78e",
+      "costMicros": 7437,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "arm": "weak",
+      "codeSha256": "e68616b8aec3eeaa0984050d5db64f3e22352e9417fd46f02b2bb2e4d1f8f817",
+      "costMicros": 1998,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "arm": "medium",
+      "codeSha256": "c830817f7ec0b33e28cf96b233da10aa063adc8cb8ff9bddfd84dc9017e5dbc3",
+      "costMicros": 12346,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "arm": "strong",
+      "codeSha256": "2fb951b4730832d942a3b14ad66135cbfc6b826a7bf73ee0b1eaab0ff3be9c69",
+      "costMicros": 28692,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "arm": "fusion",
+      "codeSha256": "05d3449d71bd1d1111232d0dd52f4b425a74db8ae15ffd73aa941b26aebd4b8e",
+      "costMicros": 11533,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-e853e1c7e5885c63",
+      "arm": "self-revision",
+      "codeSha256": "148f95bac806ed982cfd9af84b90a63de4cdeab048ca8590159baa4fd72f7714",
+      "costMicros": 19482,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "arm": "weak",
+      "codeSha256": "474572e43c840c3d042521009995ae8ab8bd17278e079c4e1282e9322c0f19dd",
+      "costMicros": 1013,
+      "public": {
+        "valid": false,
+        "passed": false,
+        "failure": "RuntimeError"
+      },
+      "full": {
+        "valid": false,
+        "passed": false,
+        "failure": "RuntimeError"
+      },
+      "passed": false
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "arm": "medium",
+      "codeSha256": "36507ede3a944c1fd0734141c1ff239d88f28d58c1084f635d55e61e6dd91efd",
+      "costMicros": 6241,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "arm": "strong",
+      "codeSha256": "e1e597b26eafef6e46135113f9ec62e0cbcabd37151e452990d4d532af32c0db",
+      "costMicros": 6272,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "arm": "fusion",
+      "codeSha256": "e494220734ddfc5e961020ac7a373ba3b8816ab758bfd9534dc12ebafe86eb6d",
+      "costMicros": 6685,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-242445161e0017ba",
+      "arm": "self-revision",
+      "codeSha256": "067a3d1777b54e56365763c8cf32340ee924cf237cc002368a6c273a32fcf7f0",
+      "costMicros": 11183,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 19,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "arm": "weak",
+      "codeSha256": "3a94c2aa1b37f9a2009951710ba6a3ba76049a908162a4da2721ae9a5380066e",
+      "costMicros": 1203,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "arm": "medium",
+      "codeSha256": "8cd238cbf1d7ddaa59f11afa8a2c0c4fa5f6110b7c6bb6cbc8cb0585f5ea337d",
+      "costMicros": 4673,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "arm": "strong",
+      "codeSha256": "d17ec0509e10b6230c7a0d37850b63b0501f4b24400d2ddab6e3bb4b9218a4f8",
+      "costMicros": 6836,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "arm": "fusion",
+      "codeSha256": "bd82745ee6d5eca8cfbd8efc49e28c44d17eae756f28faf021f24a0ad63ae139",
+      "costMicros": 7215,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    },
+    {
+      "id": "lcb-9b5f8b16377aa677",
+      "arm": "self-revision",
+      "codeSha256": "0f8c1dbeb14a0018ca5a5fa7955c01022da4910928fba7333779626c357f8c55",
+      "costMicros": 8798,
+      "public": {
+        "valid": true,
+        "passed": true,
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 18,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true
+    }
+  ],
+  "interfaceDiagnostic": {
+    "scope": "Post-hoc deterministic function-name normalization diagnostic. Original arm grades and protocol unchanged. No model call.",
+    "id": "lcb-242445161e0017ba",
+    "originalCodeSha256": "474572e43c840c3d042521009995ae8ab8bd17278e079c4e1282e9322c0f19dd",
+    "normalizedCodeSha256": "949c520f9f257960e7be304b3da57beff61cf0b9781c1c22d552f64a1e06b48a",
+    "normalization": "Rename sole top-level minTime to solve; no other code changed.",
+    "full": {
+      "valid": true,
+      "passed": true,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  }
+}

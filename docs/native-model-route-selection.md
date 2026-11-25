@@ -7,7 +7,7 @@ Declaration order and caller body hints do not choose between registered
 operations.
 
 `nativeModelEndpoint(provider, matching, path, method)` in
-`worker/proxy-selection.ts` returns the unique eligible compiled endpoint. It
+`worker/native-route.ts` returns the unique eligible compiled endpoint. It
 uses existing `path_params`, `native_proxy`, methods, provider capabilities and
 model capabilities. It adds no manifest or compiled property.
 

@@ -1,4 +1,4 @@
-import { HttpError } from './utils';
+import { HttpError } from './http-error';
 
 // Source-qualified 2026-10-20: model page, pricing page and Realtime client
 // events reference. Generic manifest rates are highest-modality upper bounds;

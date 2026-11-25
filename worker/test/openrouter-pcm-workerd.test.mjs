@@ -11,12 +11,12 @@ import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 const router = `
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {configurePcm,pcmBody} from './worker/test/openrouter-pcm-runtime-fixture.mjs';
 const provider=snapshot.providers.find(p=>p.id==='openrouter');configurePcm(provider);
 const original=globalThis.fetch.bind(globalThis);let initialized,proof={},pending=new Set();

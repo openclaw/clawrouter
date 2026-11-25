@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildAdviserBody, DEFAULT_FUSION_CONFIG } from "../fusion.ts";
 import { estimateModelCost } from "../pricing.ts";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 import { fixture, policy } from "./credential-fixture.mjs";
 
 const { fusionReadiness, fusionCatalogReadiness } = await import("../fusion-readiness.ts");

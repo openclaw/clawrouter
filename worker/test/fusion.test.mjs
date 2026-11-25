@@ -361,3 +361,54 @@ test("fusion retires a successful reader without cancelling its source", async (
   assert.equal(cancellations, 0);
   assert.equal(response.body.locked, false);
 });
+
+
+for (const [name, invalid] of [
+  ["lone continuation", [0x80]],
+  ["broken sequence", [0xe2, 0x28, 0xa1]],
+  ["overlong sequence", [0xc0, 0xaf]],
+  ["encoded surrogate", [0xed, 0xa0, 0x80]],
+  ["out-of-range code point", [0xf4, 0x90, 0x80, 0x80]],
+]) {
+  test(`fusion discards malformed UTF-8 advice (${name}) and retains healthy peers`, async () => {
+    const config = normalizeFusionConfig({ adviserModels: ["local/malformed", "local/healthy"] });
+    const encoder = new TextEncoder();
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"choices":[{"finish_reason":"stop","message":{"content":"before '));
+        for (const byte of invalid) controller.enqueue(Uint8Array.of(byte));
+        controller.enqueue(encoder.encode(' after"}}]}'));
+        controller.close();
+      },
+    }));
+    const retained = [], models = [];
+    const result = await collectFusionProposals(config, { messages: [] }, async (model) => {
+      models.push(model);
+      return model === "local/malformed" ? response
+        : Response.json({ choices: [{ finish_reason: "stop", message: { content: "healthy advice" } }] });
+    }, work => retained.push(work));
+    await Promise.all(retained);
+    assert.deepEqual(result.proposals, [{ model: "local/healthy", content: "healthy advice" }]);
+    assert.deepEqual(result.failedModels, ["local/malformed"]);
+    assert.deepEqual(models, ["local/malformed", "local/healthy"], "invalid advice must not trigger a retry");
+    assert.equal(response.body.locked, false);
+  });
+}
+
+test("fusion preserves valid UTF-8 advice split across byte boundaries", async () => {
+  const content = "Résumé 🦊";
+  const bytes = new TextEncoder().encode(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }));
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+      controller.close();
+    },
+  }));
+  const retained = [];
+  const result = await collectFusionProposals(normalizeFusionConfig({ adviserModels: ["local/unicode"] }),
+    { messages: [] }, async () => response, work => retained.push(work));
+  await Promise.all(retained);
+  assert.deepEqual(result.proposals, [{ model: "local/unicode", content }]);
+  assert.deepEqual(result.failedModels, []);
+  assert.equal(response.body.locked, false);
+});

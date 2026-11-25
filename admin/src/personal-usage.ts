@@ -18,25 +18,6 @@ export function usageGroupLabel(groupBy: UsageGroupBy, value: string | null): st
   return value ?? (groupBy === 'key' ? 'Dashboard session' : 'Unattributed');
 }
 export const emptyFilters: UsageFilters = { model: '', provider: '', key: '', status: '', costClass: '', lane: '' };
-export function rollingUsageQuery(days: 7 | 30 = 7): PersonalUsageQuery {
-  // Presets are resolved by the Worker clock, never the browser clock. Fields
-  // remain blank until the server supplies the authoritative display range.
-  return { rollingDays: days, from: '', to: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', groupBy: 'model', filters: { ...emptyFilters } };
-}
-/** Keep the explicit preset marker; each uncached read resolves it on the server. */
-export function refreshUsageQuery(query: PersonalUsageQuery): PersonalUsageQuery {
-  return query;
-}
-export function resolvedUsageQuery(query: PersonalUsageQuery, report: PersonalUsageReport): PersonalUsageQuery {
-  return { ...query, from: new Date(report.range.from).toISOString(), to: new Date(report.range.to).toISOString(), timezone: report.range.timezone, groupBy: report.groupBy };
-}
-export function usageQueryString(query: PersonalUsageQuery): string {
-  const params = new URLSearchParams({ timezone: query.timezone, groupBy: query.groupBy });
-  if (query.rollingDays) params.set('days', String(query.rollingDays));
-  else { params.set('from', query.from); params.set('to', query.to); }
-  for (const [key, value] of Object.entries(query.filters)) if (value) params.set(key, value);
-  return params.toString();
-}
 export function usageMoney(micros: number | null): string {
   if (micros === null) return 'Unknown';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(micros / 1_000_000);
@@ -48,21 +29,6 @@ export function costCell(costs: UsageCostSummary[], lane: UsageCostLane, classes
   if (classes.includes('unknown')) return calls + ' calls · price unknown';
   if (classes.includes('no_charge')) return calls + ' calls · no charge';
   return usageMoney(values.reduce((sum, value) => sum + value.amountMicros, 0)) + ' · ' + calls + ' calls';
-}
-/** Small per-auth-lifetime cache. Never share instances across accepted sessions. */
-export class UsageQueryCache<T> {
-  private entries = new Map<string, { at: number; value: T }>();
-  get(key: string, now = Date.now()): T | undefined {
-    const entry = this.entries.get(key);
-    if (!entry || now - entry.at >= 15_000) { this.entries.delete(key); return undefined; }
-    this.entries.delete(key); this.entries.set(key, entry);
-    return entry.value;
-  }
-  set(key: string, value: T, now = Date.now()) {
-    this.entries.delete(key); this.entries.set(key, { value, at: now });
-    while (this.entries.size > 8) this.entries.delete(this.entries.keys().next().value!);
-  }
-  clear() { this.entries.clear(); }
 }
 /** Quote every cell; neutralize spreadsheet formulas, including leading whitespace/control. */
 export function csvCell(value: unknown): string {

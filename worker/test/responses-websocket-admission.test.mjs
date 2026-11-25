@@ -8,7 +8,7 @@ import { overrideHotCacheConfig, pendingBackgroundWork, setHotCacheClock } from 
 import { invalidateAdmissions } from "../admission-cache.ts";
 import { sha256Hex } from "../utils.ts";
 import { authenticateProxyKey, proxyAdmission, proxySessionHash } from "../proxy-auth.ts";
-import { assertProviderAccess, providerById } from "../providers.ts";
+import { assertProviderAccess } from "../providers.ts"; import { providerById } from "../provider-catalog.ts";
 const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 const { prepareSelected } = await import("../proxy.ts");
 import { grantRevision } from "../grant-eligibility.ts";

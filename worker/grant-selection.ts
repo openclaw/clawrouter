@@ -1,11 +1,11 @@
 import { canonicalFreshIdentityRouting, admitIdentity, admitIdentityCount, identitySourceBudget, readIdentityKv } from "./identity-admission.ts";
 import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
-import { grantQuotaRatio } from "./grant-quota.ts";
+import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { rankingStaleAfterMs } from "./grant-routing.ts";
-export * from "./grant-eligibility.ts";
-import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy } from "./grant-routing.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
@@ -32,19 +32,6 @@ export async function selectProviderPolicy(entries: AccessPolicyEntry[], provide
     if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
   }
   return entries[0];
-}
-
-export async function selectGrant(
-  providerId: string,
-  policyId: string,
-  tenantId: string,
-  defaultTokenRef: string,
-  env: Env,
-  excludedKeys: ReadonlySet<string> = new Set(),
-  routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
-  stickyHash: string | null = null,
-): Promise<SelectedGrant | null> {
-  return (await resolveGrantSelection(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, stickyHash)).selected;
 }
 
 export async function resolveGrantSelection(

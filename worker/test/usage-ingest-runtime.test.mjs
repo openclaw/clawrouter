@@ -11,7 +11,8 @@ test("workerd ingest client validates stored, duplicate and retention-expired pr
   try {
     worker = await startWorkerdFixture(temporary, `
       export * from "./worker/index.ts";
-      import { ingestUsage, usageStub } from "./worker/ledgers.ts";
+      import { ingestUsage } from "./worker/ledgers.ts";
+import { usageStub } from "./worker/usage-ledger-client.ts";
       export default { async fetch(request, env) {
         if (new URL(request.url).pathname === "/producer-ingest") return usageStub(env, "tenant", "").fetch(new Request("https://ledger/ingest", request));
         if (request.method === "POST") {

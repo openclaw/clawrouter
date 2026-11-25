@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
-import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { nativeCodexClient } from "../scripts/native-codex-client.mjs";
 import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const binary = process.env.CLAWROUTER_CODEX_BINARY;

@@ -12,7 +12,7 @@ function fixture(outcomes = [[1, 1, 1], [0, 1, 1]], costs = [10, 100, 40]) {
     const taskId = `case-${i}`;
     run.receipts.push({ taskId, oracleTests: 2, oracleSkipped: 0 });
     strategies.forEach((strategy, j) => {
-      run.records.push({ taskId, strategy, status: 'complete', score: scores[j], calls: 1,
+      run.records.push({ taskId, strategy, status: 'complete', outcome: 'submitted', score: scores[j], calls: 1,
         costMicros: costs[j], publicPassed: true, verdict: { valid: true, passed: Boolean(scores[j]), tests: 2, skipped: 0 },
         privateSource: 'do not copy this sentinel' });
       run.calls.push({ trialId: `${taskId}:${strategy}`, model: j === 0 ? 'cheap-model' : 'strong-model', costMicros: costs[j] });
@@ -41,6 +41,25 @@ test('equal aggregate score cannot hide a lost strong-model repair', () => {
   assert.equal(report.observedCostSavingWithoutStrongRegressions, false);
   assert.equal(report.controlComplementarity, 1);
   assert.equal(report.controlOracleSolved, 2);
+});
+
+test('joint outcomes separate shared failures, rescues and lost control successes', () => {
+  const outcomes = [0, 1].flatMap(cheap => [0, 1].flatMap(strong => [0, 1].map(candidate => [cheap, strong, candidate])));
+  const report = analyzePairRun(fixture(outcomes));
+  assert.deepEqual(report.controlJointOutcomes, {
+    bothPassed: { candidatePassed: 1, candidateFailed: 1 },
+    cheapOnly: { candidatePassed: 1, candidateFailed: 1 },
+    strongOnly: { candidatePassed: 1, candidateFailed: 1 },
+    bothFailed: { candidatePassed: 1, candidateFailed: 1 },
+  });
+  assert.equal(report.controlOracleSolved, 6);
+  assert.equal(report.totals[2].solved, 4);
+  const repeated = analyzePairRepeats(repeats(outcomes));
+  assert.equal(repeated.distinctTasks, 8);
+  assert.equal(repeated.attemptsPerStrategy, 16);
+  for (const cell of Object.values(repeated.controlJointOutcomes)) {
+    assert.deepEqual(cell, { candidatePassed: 2, candidateFailed: 2 });
+  }
 });
 
 test('incomplete, missing, duplicate and unverified outcomes cannot yield a gain', () => {
@@ -134,6 +153,8 @@ test('unsafe provenance is not copied into the summary', () => {
 
 function repeats(outcomes, costs) {
   const first = fixture(outcomes, costs);
+  // Route the first candidate to cheap and the second to strong.
+  first.calls.find(call => call.trialId === 'case-0:scope').model = 'cheap-model';
   first.records.forEach(row => { row.elapsedMs = 100; });
   const second = structuredClone(first);
   second.config.priorCostMicros = first.spentOrReservedMicros;
@@ -251,6 +272,7 @@ test('submission failures stay distinct from budget stops and passing partial pa
   rows[1].outcome = 'turn_limit';
   rows[2].outcome = 'budget'; rows[2].verdict.passed = true;
   // An older receipt without an outcome cannot establish submission.
+  delete rows[3].outcome;
   const signals = report => report.totals.find(row => row.strategy === 'scope');
   assert.equal(signals(analyzePairRun(runs[0])).falseAccepts, 1);
   assert.equal(signals(analyzePairRun(runs[1])).falseAccepts, 0);
@@ -266,10 +288,14 @@ test('submission failures stay distinct from budget stops and passing partial pa
 
 test('an arm win from another single-model sample is not counted as a mixed-model win', () => {
   const runs = repeats();
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = 'strong-model';
+  }
   const first = analyzePairRepeats(runs);
   assert.equal(first.comparisons[0].wins, 2);
-  assert.deepEqual(first.candidateModelUse, { cheapOnlyAttempts: 0, strongOnlyAttempts: 4,
-    mixedAttempts: 0, noCallAttempts: 0, mixedWinsOverCheap: 0 });
+  assert.equal(first.candidateModelUse.cheapOnlyAttempts, 0);
+  assert.equal(first.candidateModelUse.strongOnlyAttempts, 4);
+  assert.equal(first.candidateModelUse.mixedWinsOverCheap, 0);
   const call = runs[0].calls.find(call => call.trialId === 'case-1:scope');
   call.costMicros -= 10;
   runs[0].calls.push({ ...call, model: 'cheap-model', costMicros: 10 });
@@ -278,6 +304,51 @@ test('an arm win from another single-model sample is not counted as a mixed-mode
   assert.equal(mixed.candidateModelUse.mixedAttempts, 1);
   assert.equal(mixed.candidateModelUse.mixedWinsOverCheap, 1);
   assert.equal(mixed.candidateModelUse.strongOnlyAttempts, 3);
+});
+
+test('cheap-only and strong-only resampling cannot pass the fusion pilot screen', () => {
+  for (const model of ['cheap-model', 'strong-model']) {
+    const runs = repeats();
+    for (const run of runs) for (const call of run.calls) {
+      if (call.trialId.endsWith(':scope')) call.model = model;
+    }
+    const report = analyzePairRepeats(runs);
+    assert.equal(report.pilotScreen.rescuedBeyondCheap, true);
+    assert.equal(report.pilotScreen.passed, false, model);
+  }
+});
+
+test('routing across tasks qualifies without requiring two models on every task', () => {
+  const report = analyzePairRepeats(repeats());
+  assert.equal(report.candidateModelUse.mixedAttempts, 0);
+  assert.equal(report.pilotScreen.usesBothModelsOnSuccesses, true);
+  assert.equal(report.pilotScreen.rescuedUsingStrong, true);
+  assert.equal(report.pilotScreen.passed, true);
+});
+
+test('using the strong model only on failures cannot qualify cheap-only wins', () => {
+  const runs = repeats([[1, 1, 1], [0, 1, 1], [1, 1, 1], [0, 0, 0]]);
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = call.trialId.startsWith('case-3:') ? 'strong-model' : 'cheap-model';
+  }
+  const screen = analyzePairRepeats(runs).pilotScreen;
+  assert.equal(screen.enoughSolved, true);
+  assert.equal(screen.noStrongRegressions, true);
+  assert.equal(screen.usesBothModelsOnSuccesses, false);
+  assert.equal(screen.rescuedUsingStrong, false);
+  assert.equal(screen.passed, false);
+});
+
+test('a cheap-only rescue cannot borrow strong-model use from another task', () => {
+  const runs = repeats();
+  for (const run of runs) for (const call of run.calls) {
+    if (call.trialId.endsWith(':scope')) call.model = call.trialId.startsWith('case-0:') ? 'strong-model' : 'cheap-model';
+  }
+  const screen = analyzePairRepeats(runs).pilotScreen;
+  assert.equal(screen.usesBothModelsOnSuccesses, true);
+  assert.equal(screen.rescuedBeyondCheap, true);
+  assert.equal(screen.rescuedUsingStrong, false);
+  assert.equal(screen.passed, false);
 });
 
 
@@ -365,7 +436,8 @@ test('single-block model use distinguishes rescues, single-model samples and no-
   empty.calls = 0; empty.costMicros = 0;
   run.spentOrReservedMicros -= 40;
   assert.deepEqual(analyzePairRun(run).candidateModelUse, { cheapOnlyAttempts: 1, strongOnlyAttempts: 1,
-    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1 });
+    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1,
+    successfulCheapUse: 2, successfulStrongUse: 2, winsOverCheapUsingStrong: 2 });
 });
 
 
@@ -446,4 +518,44 @@ test('repeated comparisons bind the OpenAI route and interpret missing legacy me
   assert.equal(analyzePairRepeats(runs).openAiApi, 'responses');
   runs[0].openAiApi = 'unknown';
   assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+});
+
+
+test('action schema profiles stay distinct while absent legacy metadata remains compatible', () => {
+  const runs = repeats();
+  for (const run of runs) { run.policy = 'architect'; run.executor = 'interactive'; }
+  assert.equal(analyzePairRun(runs[0]).actionSchemaProfile, 'legacy');
+  runs[1].actionSchemaProfile = 'legacy';
+  assert.equal(analyzePairRepeats(runs).actionSchemaProfile, 'legacy');
+  runs[0].actionSchemaProfile = 'compact';
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  runs[1].actionSchemaProfile = 'compact';
+  assert.equal(analyzePairRepeats(runs).actionSchemaProfile, 'compact');
+  assert.equal(analyzePairRun(runs[0]).actionSchemaProfile, 'compact');
+  for (const actionSchemaProfile of ['unknown', null, false, 0]) {
+    assert.throws(() => analyzePairRun({ ...runs[0], actionSchemaProfile }), /invalid_pair_run/);
+  }
+  for (const policy of ['contract', 'probe-selection', 'draft-sampling']) {
+    assert.throws(() => analyzePairRun({ ...runs[0], policy }), /invalid_pair_run/);
+  }
+  assert.throws(() => analyzePairRun({ ...runs[0], executor: 'single-draft' }), /invalid_pair_run/);
+});
+
+for (const outcome of [undefined, 'turn_limit', 'deadline', 'budget', 'draft_rejected']) {
+  test(`passing partial patches cannot enter gain analysis (${outcome})`, () => {
+    const run = fixture();
+    run.records[0].outcome = outcome;
+    assert.throws(() => analyzePairRun(run), /unverified_pair_score/);
+    const blocks = repeats();
+    blocks[1].records[0].outcome = outcome;
+    assert.throws(() => analyzePairRepeats(blocks), /unverified_pair_score/);
+  });
+}
+
+test('submitted single drafts contribute to analysis and false-accept diagnostics', () => {
+  const run = fixture([[1, 1, 0]]);
+  for (const row of run.records) row.outcome = 'draft_submitted';
+  const report = analyzePairRun(run);
+  assert.equal(report.totals[0].solved, 1);
+  assert.equal(report.totals[2].falseAccepts, 1);
 });

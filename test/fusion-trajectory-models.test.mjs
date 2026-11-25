@@ -1,0 +1,358 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { runModelTrajectory, runSingleModelTrajectory, runAdaptiveModelTrajectory, runFinalReviewedModelTrajectory } from '../scripts/fusion-trajectory-models.mjs';
+
+const answer = content => ({ action: { type: 'final', content } });
+const response = value => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] });
+
+test('a read-only critic delegates corrections to a separately metered model', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    const calls = [];
+    let writes = 0;
+    const options = fixture(async (_id, model, body) => {
+      calls.push(model);
+      if (model === 'review-model') {
+        assert.deepEqual(body.response_format.json_schema.schema.properties.replacement, { type: 'null' });
+        assert.match(body.messages[0].content, /A separate model owns corrections/);
+        return response({ accepted: writes ? 1 : 0, reason: writes ? '' : 'A write is required.', replacement: null });
+      }
+      if (model === 'repair-model') return response({ action: { type: 'tool', name: 'write', arguments: {} } });
+      return response(answer('done'));
+    });
+    options.tools.push({ name: 'write', effect: 'write',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      validate: args => Object.keys(args).length === 0, execute: async () => ({ writes: ++writes }) });
+    const result = await run({ ...options, repairModel: 'repair-model', reviewCanReplace: false, maxModelCalls: 5 });
+    assert.deepEqual(calls, ['draft-model', 'review-model', 'repair-model', 'draft-model', 'review-model']);
+    assert.equal(writes, 1);
+    assert.equal(result.stats.modelCalls, 5);
+    assert.equal(result.stats.repairs, 1);
+  }
+});
+
+test('a critic replacement is rejected locally even if transport ignores the schema', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    let calls = 0, writes = 0;
+    const options = fixture(async () => response(++calls === 1 ? answer('done') : {
+      accepted: 0, reason: 'Replace it.', replacement: { type: 'tool', name: 'write', arguments: {} },
+    }));
+    options.tools.push({ name: 'write', effect: 'write',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+      validate: () => true, execute: async () => { writes++; } });
+    await assert.rejects(run({ ...options, repairModel: 'repair-model', reviewCanReplace: false }), /invalid_trajectory_verdict/);
+    assert.equal(calls, 2);
+    assert.equal(writes, 0);
+  }
+});
+
+test('separate repairs retain the shared call limit and cannot enter draft selection', async () => {
+  let calls = 0;
+  const options = fixture(async () => response(++calls === 1 ? answer('done')
+    : { accepted: 0, reason: 'Incomplete.', replacement: null }));
+  await assert.rejects(runFinalReviewedModelTrajectory({ ...options, repairModel: 'repair-model',
+    reviewCanReplace: false, maxModelCalls: 2 }), /trajectory_model_limit/);
+  assert.equal(calls, 2);
+  await assert.rejects(runAdaptiveModelTrajectory({ ...options, repairModel: 'repair-model',
+    selectModel: () => 'repair-model' }), /invalid_trajectory_selected_model/);
+  assert.equal(calls, 2);
+  for (const config of [{ repairModel: '' }, { repairModel: null }, { reviewCanReplace: 'false' }]) {
+    await assert.rejects(runFinalReviewedModelTrajectory({ ...options, ...config }), /invalid_trajectory_models/);
+  }
+  assert.equal(calls, 2);
+});
+
+function fixture(invoke) {
+  return { task: 'Look up a value.', runId: 'trajectory-test', draftModel: 'draft-model', reviewModel: 'review-model',
+    tools: [{ name: 'read', effect: 'read',
+      parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+      validate: args => typeof args.key === 'string', execute: async args => ({ value: args.key }) }], invoke };
+}
+
+test('all model roles use the injected metered transport with strict structured responses', async () => {
+  const calls = [];
+  const options = fixture(async (trial, model, body, signal) => {
+    assert.equal(trial, 'trajectory-test'); assert.ok(signal instanceof AbortSignal);
+    assert.equal(body.response_format.json_schema.strict, true);
+    assert.equal(body.response_format.json_schema.schema.additionalProperties, false);
+    calls.push(model);
+    if (calls.length === 1) return response({ action: { type: 'tool', name: 'read', arguments: { key: 'wrong' } } });
+    if (calls.length === 2) return response(answer('wrong answer'));
+    if (calls.length === 3) {
+      const request = JSON.parse(body.messages[1].content);
+      assert.equal(request.segment[0].observation.value, 'wrong');
+      assert.equal(request.segment[1].observation, null);
+      assert.equal(body.max_tokens, 768);
+      return response({ accepted: 0, reason: 'Wrong lookup.', replacement: null });
+    }
+    const repair = JSON.parse(body.messages[1].content);
+    assert.deepEqual(repair.history, []); assert.equal(Object.hasOwn(repair, 'segment'), false);
+    assert.equal(body.max_tokens, 1024);
+    return response(answer('repaired'));
+  });
+  const result = await runModelTrajectory(options);
+  assert.equal(result.content, 'repaired');
+  assert.deepEqual(calls, ['draft-model', 'draft-model', 'review-model', 'review-model']);
+  assert.equal(result.stats.modelCalls, calls.length);
+});
+
+test('truncated and malformed responses stop without retries', async () => {
+  for (const result of [
+    { choices: [{ finish_reason: 'length', message: { content: JSON.stringify(answer('partial')) } }] },
+    { choices: [{ finish_reason: 'stop', message: { content: '{bad' } }] },
+    response({ action: answer('nested'), extra: true }),
+  ]) {
+    let calls = 0;
+    await assert.rejects(runModelTrajectory(fixture(async () => { calls++; return result; })), /provider_truncated|invalid_trajectory_model_json/);
+    assert.equal(calls, 1);
+  }
+});
+
+test('review schemas bound acceptance to each current segment, not committed history', async () => {
+  let actions = 0; const reviewed = [];
+  const options = fixture(async (_trial, _model, body) => {
+    if (body.response_format.json_schema.name === 'trajectory_action') {
+      return response(++actions <= 2
+        ? { action: { type: 'tool', name: 'read', arguments: { key: String(actions) } } }
+        : answer('done'));
+    }
+    const request = JSON.parse(body.messages[1].content);
+    const accepted = body.response_format.json_schema.schema.properties.accepted;
+    assert.deepEqual(accepted, { type: 'integer', minimum: 0, maximum: request.segment.length });
+    reviewed.push([request.history.length, accepted.maximum]);
+    return response({ accepted: request.segment.length, reason: '', replacement: null });
+  });
+  const result = await runModelTrajectory({ ...options, chunkSize: 2 });
+  assert.equal(result.content, 'done');
+  assert.deepEqual(reviewed, [[0, 2], [2, 1]]);
+  assert.equal(result.stats.modelCalls, 5);
+});
+
+test('runtime rejects an out-of-range verdict even if the transport ignores its schema', async () => {
+  for (const run of [runModelTrajectory, runFinalReviewedModelTrajectory]) {
+    let calls = 0;
+    await assert.rejects(run(fixture(async (_trial, _model, body) => {
+      calls++;
+      if (body.response_format.json_schema.name === 'trajectory_action') return response(answer('done'));
+      assert.equal(body.response_format.json_schema.schema.properties.accepted.maximum, 1);
+      return response({ accepted: 4, reason: '', replacement: null });
+    })), /invalid_trajectory_verdict/);
+    assert.equal(calls, 2);
+  }
+});
+
+test('metering failures propagate and preflight rejects malformed tools without calling models', async () => {
+  await assert.rejects(runModelTrajectory(fixture(async () => { throw new Error('campaign_budget'); })), /campaign_budget/);
+  const options = fixture(async () => { throw new Error('must_not_call'); });
+  options.tools[0].parameters.additionalProperties = true;
+  await assert.rejects(runModelTrajectory(options), /invalid_trajectory_parameters/);
+});
+
+test('optional fields and non-strict nested objects fail before a paid call', async () => {
+  for (const parameters of [
+    { type: 'object', properties: { key: { type: 'string' }, limit: { type: 'integer' } }, required: ['key'], additionalProperties: false },
+    { type: 'object', properties: { child: { type: 'object', properties: {}, required: [] } }, required: ['child'], additionalProperties: false },
+    { type: 'object', properties: { child: { $ref: '#/$defs/Child' } }, required: ['child'], additionalProperties: false },
+    { type: 'object', properties: { child: { type: 'array', items: { type: 'object', properties: {} } } }, required: ['child'], additionalProperties: false },
+  ]) {
+    let calls = 0;
+    const options = fixture(async () => { calls++; throw new Error('must_not_call'); });
+    options.tools[0].parameters = parameters;
+    await assert.rejects(runModelTrajectory(options), /invalid_trajectory_parameters/);
+    assert.equal(calls, 0);
+  }
+});
+
+test('explicit nullable fields preserve null and support strict nested schema alternatives', async () => {
+  const options = fixture(async (_trial, _model, body) => body.response_format.json_schema.name === 'trajectory_action'
+    ? response(answer('done')) : response({ accepted: 1, reason: '', replacement: null }));
+  options.tools[0].parameters = { type: 'object', properties: {
+    key: { type: ['string', 'null'] },
+    rows: { type: 'array', items: { anyOf: [{ type: 'null' },
+      { type: 'object', properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false }] } },
+  }, required: ['key', 'rows'], additionalProperties: false };
+  assert.equal((await runModelTrajectory(options)).content, 'done');
+});
+
+test('fixed-model control never invokes a verifier or changes the selected model', async () => {
+  let calls = 0;
+  const options = fixture(async (_trial, model, body) => {
+    assert.equal(model, 'control-model');
+    assert.equal(body.response_format.json_schema.name, 'trajectory_action');
+    assert.ok(!body.messages[0].content.includes('held for review'));
+    return response(calls++ ? answer('done') : { action: { type: 'tool', name: 'read', arguments: { key: 'value' } } });
+  });
+  const result = await runSingleModelTrajectory({ ...options, model: 'control-model' });
+  assert.equal(calls, 2);
+  assert.equal(result.stats.modelCalls, 2);
+  assert.equal(result.stats.reviews, 0);
+});
+
+test('adaptive selection is restricted to the pinned pair and cannot mutate the request', async () => {
+  let calls = 0;
+  const options = fixture(async (_trial, model, body) => {
+    calls++; assert.equal(model, 'review-model');
+    assert.equal(JSON.parse(body.messages[1].content).task, 'Look up a value.');
+    return response(answer('done'));
+  });
+  const output = await runAdaptiveModelTrajectory({ ...options,
+    selectModel: request => { request.task = 'changed'; return 'review-model'; } });
+  assert.equal(output.content, 'done'); assert.equal(calls, 1);
+  await assert.rejects(runAdaptiveModelTrajectory({ ...options, selectModel: () => 'unconfigured-model' }),
+    /invalid_trajectory_selected_model/);
+  assert.equal(calls, 1);
+});
+
+
+test('adaptive tool feedback switches the pinned model and checks the corrected final result', async () => {
+  let value = false;
+  const calls = [];
+  const output = await runAdaptiveModelTrajectory({
+    task: 'Set the value to true.', runId: 'feedback-routing', draftModel: 'small', reviewModel: 'strong',
+    maxModelCalls: 3, maxToolCalls: 3, finalCheckTool: 'check',
+    tools: [
+      { name: 'set_value', effect: 'write', parameters: {
+        type: 'object', properties: { value: { type: 'boolean' } }, required: ['value'], additionalProperties: false },
+        validate: args => Object.keys(args).length === 1 && typeof args.value === 'boolean',
+        execute: async args => { value = args.value; return { applied: true }; } },
+      { name: 'check', effect: 'write', parameters: {
+        type: 'object', properties: {}, required: [], additionalProperties: false },
+        validate: args => Object.keys(args).length === 0, execute: async () => ({ passed: value }) },
+    ],
+    selectModel: request => request.history.some(step => step.observation.passed === false) ? 'strong' : 'small',
+    invoke: async (id, model, body, signal) => {
+      assert.equal(id, 'feedback-routing'); assert.ok(signal instanceof AbortSignal); calls.push(model);
+      const request = JSON.parse(body.messages[1].content);
+      if (calls.length === 2) {
+        assert.equal(request.history[0].observation.passed, false);
+        return response({ action: { type: 'tool', name: 'set_value', arguments: { value: true } } });
+      }
+      return response(answer('done'));
+    },
+  });
+  assert.deepEqual(calls, ['small', 'strong', 'strong']);
+  assert.equal(output.history.at(-1).observation.passed, true);
+  assert.equal(output.stats.modelCalls, 3); assert.equal(output.stats.toolCalls, 3);
+});
+
+
+test('schema dependencies fail preflight at the root and in nested parameters', async () => {
+  for (const keyword of ['dependentRequired', 'dependentSchemas']) for (const nested of [false, true]) {
+    let calls = 0;
+    const options = fixture(async () => { calls++; throw new Error('must_not_call'); });
+    const dependency = { type: 'object', properties: {}, required: [], additionalProperties: false, [keyword]: {} };
+    options.tools[0].parameters = nested ? { type: 'object', properties: { child: dependency }, required: ['child'], additionalProperties: false } : dependency;
+    await assert.rejects(runModelTrajectory(options), /invalid_trajectory_parameters/);
+    assert.equal(calls, 0);
+  }
+});
+
+test('model adapters forward checkpoint hooks without adding inference calls', async () => {
+  let calls = 0; const checkpoints = [];
+  const options = fixture(async () => ++calls === 1
+    ? response({ action: { type: 'tool', name: 'read', arguments: { key: 'value' } } })
+    : response(answer('done')));
+  const result = await runSingleModelTrajectory({ ...options, model: 'fixed-model',
+    onCheckpoint: snapshot => checkpoints.push(structuredClone(snapshot)) });
+  assert.equal(calls, 2);
+  assert.equal(checkpoints.length, 1);
+  assert.equal(checkpoints[0].stats.modelCalls, 1);
+  assert.deepEqual(checkpoints[0].history, result.history);
+  assert.equal(result.content, 'done');
+});
+
+
+test('completion review uses a strong correction and forwards opt-in re-review', async () => {
+  for (const reviewAfterCorrection of [false, true]) {
+    const models = [], checkpoints = []; let value = 0;
+    const result = await runFinalReviewedModelTrajectory({ task: 'Set two.', runId: 'final-review',
+      draftModel: 'draft-model', reviewModel: 'review-model', selectModel: () => 'draft-model',
+      reviewAfterCorrection, maxModelCalls: reviewAfterCorrection ? 5 : 6, maxToolCalls: 3, finalCheckTool: 'check',
+      tools: [{ name: 'write', effect: 'write', parameters: { type: 'object', properties: { value: { type: 'integer' } }, required: ['value'], additionalProperties: false },
+        validate: args => Number.isInteger(args.value), execute: async args => { value = args.value; return { value }; } },
+      { name: 'check', effect: 'read', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+        validate: args => Object.keys(args).length === 0, execute: async () => ({ passed: value === 2 }) }],
+      onCheckpoint: async ({ history }) => { await Promise.resolve(); checkpoints.push(history.length); },
+      invoke: async (_id, model, body) => {
+        models.push(model);
+        const step = models.length;
+        if (step === 1 || step === 4) return response({ action: { type: 'tool', name: 'write', arguments: { value: step === 1 ? 1 : 2 } } });
+        if (step === 2 || step === 5 && !reviewAfterCorrection) return response(answer('done'));
+        assert.match(body.messages[0].content, /Passing public checks is not proof/);
+        if (step > 3) assert.deepEqual(checkpoints, [1, 2]);
+        return response(step === 3 ? { accepted: 0, reason: 'Wrong value.', replacement: null }
+          : { accepted: 1, reason: '', replacement: null });
+      } });
+    assert.equal(value, 2);
+    assert.deepEqual(models, ['draft-model', 'draft-model', 'review-model', 'review-model',
+      ...(reviewAfterCorrection ? [] : ['draft-model']), 'review-model']);
+    assert.deepEqual(checkpoints, [1, 2, 3]);
+    assert.equal(result.stats.modelCalls, reviewAfterCorrection ? 5 : 6);
+    assert.equal(result.stats.toolCalls, 3);
+    assert.equal(result.stats.reviews, 2); assert.equal(result.stats.repairs, 1);
+  }
+});
+
+test('a supplied candidate makes only the metered reviewer call before acceptance', async () => {
+  const calls = [];
+  const options = fixture(async (_run, model, body) => {
+    calls.push(model);
+    assert.equal(body.response_format.json_schema.name, 'trajectory_verdict');
+    const request = JSON.parse(body.messages[1].content);
+    assert.deepEqual(request.segment, [{ action: { type: 'final', content: 'restored candidate' }, observation: null }]);
+    return response({ accepted: 1, reason: '', replacement: null });
+  });
+  const result = await runFinalReviewedModelTrajectory({ ...options, initialFinalAnswer: 'restored candidate', maxModelCalls: 1 });
+  assert.deepEqual(calls, ['review-model']); assert.equal(result.stats.modelCalls, 1);
+  assert.equal(result.content, 'restored candidate');
+});
+
+test('a supplied candidate uses separate diagnosis and repair roles before its final check', async () => {
+  for (const finalPassed of [true, false]) {
+    const calls = [], checkpoints = [];
+    let revision = 'candidate', checks = 0;
+    const run = runFinalReviewedModelTrajectory({
+      task: 'Repair the supplied candidate.', runId: 'diagnosis-repair',
+      draftModel: 'small-model', reviewModel: 'review-model', repairModel: 'small-model',
+      reviewCanReplace: false, reviewAfterCorrection: true,
+      initialFinalAnswer: 'Candidate ready for review.',
+      maxModelCalls: 3, maxToolCalls: 2, finalCheckTool: 'check',
+      reviewSnapshot: () => ({ revision }),
+      onCheckpoint: ({ history }) => checkpoints.push(history.length),
+      tools: [
+        { name: 'write', effect: 'write',
+          parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+          validate: args => Object.keys(args).length === 0,
+          execute: async () => { revision = 'repaired'; return { revision }; } },
+        { name: 'check', effect: 'read',
+          parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+          validate: args => Object.keys(args).length === 0,
+          execute: async () => { checks++; return { passed: finalPassed }; } },
+      ],
+      invoke: async (_id, model, body) => {
+        calls.push(model);
+        const request = JSON.parse(body.messages[1].content);
+        if (model === 'review-model') {
+          assert.deepEqual(body.response_format.json_schema.schema.properties.replacement, { type: 'null' });
+          assert.equal(request.snapshot.revision, revision);
+          assert.equal(request.segment[0].action.content, 'Candidate ready for review.');
+          if (revision === 'candidate') return response({ accepted: 0, reason: 'Repair the candidate.', replacement: null });
+          assert.deepEqual(checkpoints, [1]);
+          return response({ accepted: 1, reason: '', replacement: null });
+        }
+        assert.equal(model, 'small-model');
+        assert.equal(request.reason, 'Repair the candidate.');
+        assert.deepEqual(request.history, []);
+        return response({ action: { type: 'tool', name: 'write', arguments: {} } });
+      },
+    });
+    if (finalPassed) {
+      const result = await run;
+      assert.equal(result.content, 'Candidate ready for review.');
+      assert.deepEqual(result.stats, { modelCalls: 3, toolCalls: 2, reviews: 2, repairs: 1, rejectedSteps: 1 });
+    } else await assert.rejects(run, /trajectory_model_limit/);
+    assert.deepEqual(calls, ['review-model', 'small-model', 'review-model']);
+    assert.deepEqual(checkpoints, [1, 2]);
+    assert.equal(checks, 1);
+    assert.equal(revision, 'repaired');
+  }
+});

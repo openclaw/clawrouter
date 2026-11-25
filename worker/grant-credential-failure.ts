@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Internal selection context only: never add grant identity to public errors.
 export class SelectedGrantCredentialFailure extends HttpError {

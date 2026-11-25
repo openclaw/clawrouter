@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 const ids = ["llama-cpp", "lmstudio", "ollama", "omlx", "sglang", "vllm"];
@@ -16,7 +16,7 @@ const compiled = compileProviderSnapshot(ids.map(id => `providers/${id}.provider
 const router = `
 import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
 import { putGrantCredentials, revokeGrantCredentials } from './worker/grant-credentials.ts';
-import { snapshot } from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
 for (const provider of ${JSON.stringify(compiled.providers)}) { const index=snapshot.providers.findIndex(p=>p.id===provider.id); if(index<0) snapshot.providers.push(provider); else snapshot.providers[index]=provider; }
 Object.assign(snapshot.model_index,${JSON.stringify(compiled.model_index)});

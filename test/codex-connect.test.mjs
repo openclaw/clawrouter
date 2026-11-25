@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { manageCodex } from "../scripts/codex-connect.mjs";
-import { nativeCodexClient } from "./helpers/native-codex.mjs";
+import { nativeCodexClient } from "../scripts/native-codex-client.mjs";
 
 const secret = "fixture-client-key-not-a-real-credential";
 const instructions = "Synthetic full native instructions.\nKeep these bytes.\n";

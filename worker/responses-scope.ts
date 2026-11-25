@@ -1,7 +1,8 @@
 import { inputUnavailable, managedInputState, type ManagedInputAllocation, type ManagedInputBinding } from "./managed-input-receipt.ts";
 import { markBudgetDispatched, reserveLedgerIntent } from "./accounting.ts";
 import { collectBackground } from "./background-collection.ts";
-import { BackgroundStore, liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
+import { BackgroundStore } from "./background-store.ts";
+import { liveBackground, type BackgroundAdmission, type ManagedAdmission, type BackgroundJob, type SettlementDisposition } from "./background-record.ts";
 import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { identityKey } from "./http-continuation.ts";
@@ -12,7 +13,8 @@ import type { ManagedFileDescriptor, ManagedObservationLoss } from "./managed-li
 import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
-import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
+import { json, readJson, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { assertPublishedVerifier, samePublishedInput, publishedInputUnavailable, type PublishedInputBinding,
   type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 

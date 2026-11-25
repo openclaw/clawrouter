@@ -1,4 +1,5 @@
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Separate namespace even when a provider reuses an OpenAI response-looking ID.
 export function managedPredictionKey(value: string): Promise<string> {

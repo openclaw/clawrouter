@@ -5,7 +5,7 @@ import { admissionFixture, admissionHeaders } from './admission-fixture.mjs';
 import { attachGrantCredentialNamespace } from './grant-credential-mock.mjs';
 import { putGrantCredentials } from '../grant-credentials.ts';
 import { resolveGrantSelection } from '../grant-selection.ts';
-import { providerById } from '../providers.ts';
+import { providerById } from '../provider-catalog.ts';
 const { default: worker } = await import('../index.ts');
 
 const provider = providerById('anthropic');

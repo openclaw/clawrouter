@@ -2,7 +2,7 @@ import { prepareXaiImage, type XaiImageRequest } from "./xai-images.ts";
 import { deepSeekSearchReserve, imageRequestReserve, requestOutcomeCost, type ImageRequestSelection, type RequestCostReceipt } from "./pricing.ts";
 import type { DeepSeekSearchRequestPricing, ImageRequestPricing, OutcomeRequestPricing } from "../shared/request-pricing.ts";
 import type { CompiledEndpoint, ProxyRequestBody } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // Only admission creates this snapshot. It contains the selected scalar rate,
 // never the caller body, mutable manifest table, credential or native output.

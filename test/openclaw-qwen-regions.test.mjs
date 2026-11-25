@@ -9,7 +9,7 @@ import { createRequire, stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { types as utilTypes } from "node:util";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
 import { runOpenClawConsumer, settleRunnerReport } from "./helpers/openclaw-consumer.mjs";
@@ -591,7 +591,8 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
-import {ingestUsage,usageSnapshot,budgetStatus} from './worker/ledgers.ts';
+import { ingestUsage, budgetStatus } from './worker/ledgers.ts';
+import { usageSnapshot } from './worker/usage-ledger-client.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {sha256Hex} from './worker/utils.ts';
 ${createQwenLedger.toString()}

@@ -3,13 +3,7 @@ import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
-import {
-  copyRequestHeaders,
-  providerById,
-  providerReadinessFromState,
-  signSigV4,
-  upstreamPath,
-} from "../providers.ts";
+import { providerReadinessFromState, signSigV4 } from "../providers.ts"; import { copyRequestHeaders, upstreamPath } from "../provider-request.ts"; import { providerById } from "../provider-catalog.ts";
 
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 

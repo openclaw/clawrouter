@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-const { configuredUpstream, endpointForPath, upstreamPath, unifiedPathForEndpoint } = await import("../providers.ts");
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
+const { configuredUpstream } = await import("../providers.ts"); const { upstreamPath } = await import("../provider-request.ts"); const { endpointForPath, unifiedPathForEndpoint } = await import("../provider-catalog.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 

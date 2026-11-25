@@ -12,7 +12,7 @@ const routerScript = `
   import handler from "./worker/index.ts";
   import { GrantCredentialObject as Credentials } from "./worker/grant-credentials.ts";
   import { oauthCallback } from "./worker/oauth.ts";
-  import { providerById } from "./worker/providers.ts";
+  import { providerById } from "./worker/provider-catalog.ts";
   export * from "./worker/index.ts";
   providerById("openai").auth.authorization = {
     tokenUrl: "https://token.example/oauth/token", clientId: "fixture-client",

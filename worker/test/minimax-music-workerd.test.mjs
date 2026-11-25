@@ -22,12 +22,12 @@ async function barriers(t) {
 const router = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import worker from './worker/index.ts';
-import {snapshot} from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 import {authorityCall} from './worker/authority.ts';
 import {inspectGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {BodyLease,bodyBudgetCharged} from './worker/body-budget.ts';
-import {usageStub} from './worker/ledgers.ts';
+import { usageStub } from './worker/usage-ledger-client.ts';
 import {setHotCacheClock} from './worker/hot-cache.ts';
 import {configureMusic,musicBody,musicModels} from './worker/test/minimax-music-runtime-fixture.mjs';
 configureMusic(snapshot.providers.find(p=>p.id==='minimax'));

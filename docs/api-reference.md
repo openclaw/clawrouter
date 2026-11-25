@@ -148,6 +148,18 @@ Unified routes require matching OpenAI request and response formats. A provider'
 Chat or embeddings capability alone is insufficient: use its native route when
 the protocol differs, such as Cohere's `/v2/embed` with `texts` input.
 
+The native OpenAI Responses route (`/v1/native/openai/v1/responses`) and unified
+`/v1/responses` with an `openai/` model ID forward a client's Daybreak Blue
+selection to OpenAI. OpenAI checks entitlement on the selected API key's project
+and returns `403 access_program_not_enabled` if the project lacks access. Scope
+the OpenAI API-key grant from a Daybreak-enabled project to the policies that
+need Blue. Unified Responses validates `access_programs` as an object with
+exactly one `cyber` key and a token matching `^[a-z][a-z0-9_]{0,63}$`. It omits
+the field when the caller supplies `null`. Unified Responses and Chat requests
+routed to other providers and Fusion Chat requests also omit `{"cyber":"standard"}`.
+They reject other non-null values with `400 model_parameter_unsupported` before
+dispatch.
+
 Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Known models must support the selected endpoint. Caller-supplied unknown models require that endpoint's explicit `modelPassthrough` declaration; this preserves opaque model selection on the bundled model-provider routes without claiming model availability or copying another model's capabilities. Such models remain absent from discovery and unpriced unless the endpoint declares an applicable pricing reference. The local Chat endpoint explicitly retains its zero API charge. Either a policy or provider budget requires declared pricing or an explicit fixed request tariff before dispatch.
 
 Opaque native IDs are preserved even when they begin with the provider's routing

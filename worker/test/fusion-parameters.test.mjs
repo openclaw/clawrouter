@@ -1,7 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 import { normalizeFusionConfig } from "../fusion.ts";
 import { sha256Hex } from "../utils.ts";
 const { default: worker } = await import("../index.ts");
@@ -53,6 +53,18 @@ test("single Fusion dispatches only the final model with one-call accounting", a
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].compound_request_size, 1);
   assert.equal(f.events[0].compound_request_stage, "fusion_synthesizer");
+});
+
+test("Fusion rejects a nonstandard access program before reserving or dispatching", async (t) => {
+  const f = await fixture("openai/gpt-4.1-mini", ["local/fixture"]);
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("must not dispatch"); });
+  const response = await f.call({ access_programs: { cyber: "daybreak_blue" } });
+  assert.equal(response.status, 400);
+  const { error } = await response.json();
+  assert.equal(error.code, "model_parameter_unsupported");
+  assert.match(error.message, /access_programs/);
+  assert.equal(upstream.mock.callCount(), 0);
+  assert.deepEqual(f.ledgerCalls, []);
 });
 
 // Explicit descriptors isolate the constructor proof from catalog generation.

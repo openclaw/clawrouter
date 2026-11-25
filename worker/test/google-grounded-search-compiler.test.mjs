@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareGoogleGroundedSearch, googleGroundedSearchModel } = await import("../google-grounded-search.ts");
 const { prepareNativeGoogleGroundedSearch } = await import("../native-google-grounded-search.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");

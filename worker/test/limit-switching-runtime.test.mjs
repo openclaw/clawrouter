@@ -327,7 +327,7 @@ test("OpenAI owner rejects malformed pointer ancestors without retiring SQL exha
   mf = await startWorkerdFixture(directory, `
     export * from "./worker/index.ts";
     import { putGrantCredentials } from "./worker/grant-credentials.ts";
-    import { grantQuotaExhausted } from "./worker/grant-quota.ts";
+    import { grantQuotaExhausted } from "./shared/grant-quota.ts";
     const key = "oauth/fixture/openai"; let clock = ${now}; Date.now = () => clock;
     export default { async fetch(request, env) {
       const path = new URL(request.url).pathname;

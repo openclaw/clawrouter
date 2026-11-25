@@ -1,5 +1,5 @@
 import type { CompiledEndpoint } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const mappedMethods: Readonly<Record<string, string>> = {
   "openai.chat_completions": "POST", "anthropic.messages": "POST", "openai.responses": "POST",

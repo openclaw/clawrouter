@@ -1,10 +1,10 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-const { PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate, optionalConfigKeys } = await import('../provider-templates.ts');
-const { providerConfigurationList, normalizeConnectionMutation } = await import('../provider-connections.ts');
+const { providerConfigurationList, PreparationAdmission, isPreparationLimit, preparationHeader, preparationReplace, resolveTemplate, resolveHeaderTemplate, optionalConfigKeys } = await import('../provider-templates.ts');
+const { normalizeConnectionMutation } = await import('../provider-connections.ts');
 const { applyTransportHeaders } = await import('../provider-auth.ts');
-const { providerById, configuredUpstream, upstreamPath, signSigV4 } = await import('../providers.ts');
+const { configuredUpstream, signSigV4 } = await import('../providers.ts'); const { upstreamPath } = await import('../provider-request.ts'); const { providerById } = await import('../provider-catalog.ts');
 const { prepareManifestRequest, concreteOpenAiSelection, isSelectionFailure, manifestEnvelope } = await import('../proxy-selection.ts');
 const { prepareUpstreamRequest } = await import('../proxy-upstream-request.ts');
 const { qualifyMiniMaxEnvironmentBinding } = await import('../native-media-credential.ts');

@@ -1,6 +1,7 @@
 import { normalizeBudgetOverride } from "./budget-overrides.ts";
 import type { AccessControlUser, AccessPolicyEntry, Env } from "./types";
-import { HttpError, json, readJson } from "./utils.ts";
+import { json, readJson } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 interface BudgetAuthority {
   user(email: string): AccessControlUser | null;

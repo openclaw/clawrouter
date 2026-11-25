@@ -65,12 +65,81 @@ correlated tasks, biased graders and contaminated test sets still invalidate a
 claim. Predeclare tolerances, use enough independent cases per domain, and
 confirm the selected configuration on a fresh holdout.
 
+Cost and latency comparisons also report mean differences, ratios of case means,
+and paired bootstrap intervals. A ratio below one favors the candidate. These
+ratios divide the candidate mean by the baseline mean; they do not average
+per-case ratios. Each resample keeps the paired strategies together, after
+averaging trials within each case. Failed runs retain their cost and latency.
+
+All intervals are null for a single case. A ratio is null when its baseline mean
+is zero or the ratio exceeds numeric range. A ratio interval is null if any
+bootstrap sample has an undefined ratio; those samples are never discarded.
+Differences remain available in that case.
+The intervals describe each metric separately, not joint confidence that a
+quality, cost and latency gate passes. A favorable point estimate alone does not
+establish the required savings.
+
 Choose a measured quality/cost tradeoff, subject to latency and worst-domain
 retention constraints. Never promote a configuration solely because a judge
 prefers its prose. Keep tuning data separate from the test split.
+
+### Related tasks
+
+For related repairs, assign `domain` to the source file or other predeclared
+independence group. Import `clusteredFusionIntervals` from
+`scripts/fusion-cluster-intervals.mjs` and call it with the same input and baseline.
+It resamples whole domains, keeps paired strategies together, and averages
+trials within each task. Tasks retain equal weight; large domains are not reduced
+to one equally weighted task. It reports the number of clusters alongside
+quality, cost and latency intervals. Fewer than two clusters produce null intervals.
+
+Read these intervals alongside the original task-level report. The grouping must
+be chosen before viewing model outcomes. Few clusters, selection bias and
+dependence between domains still limit generalization. A zero-loss bootstrap
+interval is not a bound on the probability of a future lost success.
 
 Related primary sources:
 [TRINITY](https://arxiv.org/abs/2512.04695),
 [Conductor](https://arxiv.org/abs/2512.04388),
 [inflation-aware routing](https://arxiv.org/abs/2608.13571), and
 [FusionEval](https://arxiv.org/abs/2610.30162).
+
+### Predeclared strata
+
+To inspect a frozen routing policy's admitted and bypassed tasks, import
+`stratifiedFusionEvaluation` from `scripts/fusion-stratified-evaluation.mjs`:
+
+```js
+const result = stratifiedFusionEvaluation(input, 'strong', {
+  revision: 'frozen-admission-v1',
+  assignments: [
+    { caseId: 'case-a', stratum: 'admitted' },
+    { caseId: 'case-b', stratum: 'bypass' },
+  ],
+});
+```
+
+Assign every case exactly once using metadata frozen before model outcomes.
+The helper rejects missing, duplicate and unknown cases. It returns the full
+cohort plus every stratum, with the same paired trials, equal-case weighting,
+loss counts and source-clustered intervals. Failures remain in their assigned
+group. Repeat with the cheap single-model baseline to expose gains that cheap
+execution alone can explain. Development data requires the explicit fourth
+argument `'development'`.
+
+The revision identifies externally retained partition evidence; the helper
+cannot establish when that evidence was frozen. Subgroup intervals do not
+adjust for multiple comparisons. Treat strata as diagnostics, retain the full
+cohort as the primary result, and test any newly selected policy on fresh tasks.
+
+
+For binary scores, `binaryTaskLoss` also counts each task that loses a baseline
+success in **any** paired trial. Another trial's gain cannot cancel this event.
+`upper95` is the one-sided 95% Clopper-Pearson upper bound on that task-event rate;
+it is not a bound on net accuracy loss or on the conditional rate among baseline
+successes. Fractional scores produce `null`. Thirty tasks with zero observed
+losses still give an upper bound of about 9.5%; repeating those same tasks does
+not increase the independent sample size. The bound assumes independent tasks
+sampled from the target population and a fixed trial protocol. Correlated source
+families, selected tasks, or adaptive tuning invalidate that population claim.
+See [NIST's exact binomial limits](https://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/exacbici.htm).

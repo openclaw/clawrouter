@@ -1,8 +1,8 @@
+import { googleCandidateCount } from "./google-hop-billing.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure } from "./identity-admission.ts";
-import { providerConfigurationList } from "./provider-connections.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
-import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
+import { providerConfigurationList, PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
@@ -22,16 +22,15 @@ import { readInlineMusicJson } from "./openrouter-music-input.ts";
 import { nativeResponseLease } from "./native-response.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
-import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
+import { REQUESTY_MODELS_FORMAT, isKeyedModelDiscovery, manifestOnlyPublicCatalog, publicCatalogProvider, isModelDiscovery } from "./model-discovery-formats.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
 import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
-import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
+import { prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
-import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
 import { ownMiniMaxImageInput } from "./minimax-image-input.ts";
 import { prepareMiniMaxImageDispatch } from "./minimax-image-dispatch.ts";
 import { prepareMiniMaxMediaDispatch } from "./minimax-media-dispatch.ts";
@@ -50,7 +49,7 @@ import { fusionAdviserModels, fusionStrategy } from "../shared/fusion-strategy.t
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
 import { SelectedGrantCredentialFailure } from "./grant-credential-failure.ts";
-import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
+import { discoveryQuery, modelDiscoveryResponse, validateDiscoveryQuery } from "./model-discovery.ts";
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
@@ -74,10 +73,9 @@ import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
-import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
-  prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
-} from "./proxy-selection";
+import { normalizeUnifiedAccessPrograms } from "./access-programs.ts";
+import { concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection } from "./proxy-selection";
+import { nativeMatch, nativeModelEndpoint, nativeParams } from "./native-route";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
@@ -89,7 +87,8 @@ import {
 import { loadFusionConfig } from "./fusion-config";
 import { shouldFailoverGrant } from "./grant-quota";
 import { observeProviderGrantQuota, providerCreditExhausted } from "./provider-quota.ts";
-import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
+import { grantRoutingPolicy } from "./grant-routing";
+import { type PinnedGrant } from "./grant-eligibility";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
@@ -100,17 +99,12 @@ import { permitsGrantFailover, transportDispatchStarted } from "./upstream-trans
 import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
-import {
-  assertProviderAccess, capabilityForPath, modelRoute, modelSupportsEndpoint, providerById, configuredUpstream,
-  signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
-} from "./providers";
+import { assertProviderAccess, configuredUpstream, signSigV4, upstreamAuth, type UpstreamAuth } from "./providers"; import { upstreamPath } from "./provider-request"; import { modelRoute, providerById } from "./provider-catalog"; import { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
 import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
-import {
-  decodePathSegment,
-  errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
-} from "./utils";
+import { decodePathSegment, errorResponse, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake } from "./utils";
+import { HttpError } from "./http-error";
 
 const MAX_GRANT_ATTEMPTS = 4;
 
@@ -370,6 +364,7 @@ async function proxyUnifiedOpenAi(request: Request, env: Env, context: Execution
   if (modelId === FUSION_MODEL_ID) {
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
     if (admission.expanded) return expandedTooLarge();
+    normalizeUnifiedAccessPrograms(body, false);
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
   if (!isSelectionFailure(earlySelection)) return admission.expanded && !mediaEnvelope(earlySelection.endpoint) ? expandedTooLarge() : proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
@@ -946,7 +941,6 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   const searchOwner = admission?.search;
   const published = publishedMusicInput(selection);
   const music = inlineMusicInput(selection) ?? published;
-  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
@@ -1430,6 +1424,9 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
+  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format,
+    googleCandidates: selection.endpoint.response_format === "google.stream_generate_content" ? googleCandidateCount(selection.body) : undefined,
+    pricedModel: cost.basis === "manifest_pricing" ? selection.model?.upstream : undefined });
   let observed!: ReturnType<typeof observeUsage>;
   const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
   if (completion) completion.start(() => { observed = observe(); return observed.retired; });

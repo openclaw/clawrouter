@@ -10,7 +10,7 @@ import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { identitySourceBudget, readIdentityKv } = await import("../identity-admission.ts");
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
-const { snapshot, configuredUpstream, providerModel } = await import("../providers.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { snapshot, providerModel } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const provider = JSON.parse(execFileSync(process.execPath,

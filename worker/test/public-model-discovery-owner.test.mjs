@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot, upstreamAuth } = await import("../providers.ts");
+const { upstreamAuth } = await import("../providers.ts"); const { snapshot } = await import("../provider-catalog.ts");
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { preparePublicDiscoveryOwner } = await import("../public-model-discovery-owner.ts");

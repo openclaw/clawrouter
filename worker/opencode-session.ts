@@ -3,7 +3,8 @@ import { continuationScope } from "./http-continuation.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { AuthorizedIdentity } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const standalone = new WeakMap<Request, string>();
 const formats = new Set(["openai.chat_completions", "openai.responses", "anthropic.messages"]);

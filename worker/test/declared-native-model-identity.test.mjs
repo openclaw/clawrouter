@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture } from "./managed-runtime-fixture.mjs";
-const { providerById, providerModel } = await import("../providers.ts");
+const { providerById, providerModel } = await import("../provider-catalog.ts");
 const { prepareNativeRequest } = await import("../proxy-selection.ts");
 const publicId = "particle/particle-ai/particle-1", nativeId = "particle-ai/particle-1", physicalId = "particle-1";
 const chat = { model: nativeId, messages: [{ role: "user", content: "Synthetic prompt." }] };

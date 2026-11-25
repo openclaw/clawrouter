@@ -128,7 +128,7 @@ async function bundle(root, replaceWitnessStore = false, script = router) {
     builder.onResolve({ filter: /compaction-witness-store\.ts$/ }, args => args.namespace === "pre-producer" ? { path: resolve(root, "worker/compaction-witness-store.ts") } : { path: "store", namespace: "pre-producer" });
     builder.onLoad({ filter: /.*/, namespace: "pre-producer" }, () => ({ resolveDir: resolve(root, "worker"), loader: "ts", contents: `
       export * from "./compaction-witness-store.ts";
-      import { HttpError } from "./utils.ts";
+      import { HttpError } from "./http-error.ts";
       export class CompactionWitnessStore {
         constructor(_storage) {}
         handle() { throw new HttpError(400, "invalid_continuation", "pre-producer continuation stores do not understand witnesses"); }

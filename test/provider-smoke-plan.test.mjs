@@ -1,14 +1,9 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-import {
-  buildProviderSmokePlan,
-  compileProviderSnapshot,
-  inspectSmokeKeyProviderAccess,
-  runLiveProviderSmokes,
-  selectLiveProviderPlans,
-  SmokeKeyInspectionUnavailableError,
-} from "../scripts/provider-smoke-plan.mjs";
+import { buildProviderSmokePlan, selectLiveProviderPlans } from "../scripts/provider-smoke-planning.mjs";
+import { compileProviderSnapshot, inspectSmokeKeyProviderAccess, runLiveProviderSmokes, SmokeKeyInspectionUnavailableError } from "../scripts/provider-smoke-plan.mjs";
 
 const plan = {
   providers: [
@@ -495,3 +490,34 @@ async function withFetch(fetch, run) {
     globalThis.fetch = originalFetch;
   }
 }
+
+
+test("legacy smoke planning exports retain their owner identities", async () => {
+  const legacy = await import("../scripts/provider-smoke-plan.mjs");
+  const planning = await import("../scripts/provider-smoke-planning.mjs");
+  for (const name of Object.keys(planning)) assert.equal(legacy[name], planning[name], name);
+});
+
+test("credential planning does not load provider compilation, execution, or secret upload", () => {
+  const output = execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { registerHooks } from "node:module";
+    registerHooks({ load(url, context, next) {
+      assert.ok(!url.includes("/node_modules/"), url);
+      assert.ok(!url.endsWith("/provider-smoke-plan.mjs"), url);
+      assert.ok(!url.endsWith("/smoke-readiness.mjs"), url);
+      assert.ok(!url.endsWith("/compile-providers.mjs"), url);
+      assert.ok(!url.endsWith("/put-provider-secrets.mjs"), url);
+      assert.ok(!url.endsWith("/deployment-profile.mjs"), url);
+      assert.ok(!url.endsWith("/edge-proof-profile.mjs"), url);
+      return next(url, context);
+    } });
+    const { fakecoProviderCredentialPlan } = await import("./scripts/provider-credential-preflight.mjs");
+    const result = fakecoProviderCredentialPlan({ environment: "fakeco" }, {
+      providers: [{ id: "openai", target: {}, requiredConfig: [] }],
+    }, { CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "existing", CLAWROUTER_SMOKE_LIVE_PROVIDERS: "openai" });
+    assert.deepEqual(result, { mode: "existing", providerIds: ["openai"], secretNames: [] });
+    process.stdout.write("isolated credential planning\\n");
+  `], { cwd: new URL("..", import.meta.url), encoding: "utf8" });
+  assert.equal(output, "isolated credential planning\n");
+});

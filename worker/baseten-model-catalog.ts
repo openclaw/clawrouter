@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const BASETEN_MODELS_FORMAT = "baseten.models";
 const MAX_BYTES = 2 * 1024 * 1024;

@@ -6,7 +6,8 @@ import { inputRetirement } from "./input-retirement.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { copilotControlHeaders, assertCopilotControlHeaders, qualifiedCopilotControlHeaders, type CopilotInferenceControl, type CopilotControlSlot } from "./copilot-inference-control.ts";
 import { BodyLease } from "./body-budget.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import type { Env } from "./types.ts";
 

@@ -9,7 +9,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { providerById, snapshot } = await import("../providers.ts");
+const { providerById, snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { UsageLedgerObject } = await import("../ledgers.ts");
 export const contract = JSON.parse(readFileSync(new URL("../../providers/_fixtures/replicate/prediction-lifecycle.json", import.meta.url)));

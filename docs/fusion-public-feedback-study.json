@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "study": "public-feedback repair of saved compact drafts",
+  "scope": "Exposed-task component study. Three repairs reuse already-paid drafts. This is not a new end-to-end comparison, independent replication or production qualification.",
+  "provenance": {
+    "sourceCommit": "3f3157fb7c661a6881ab030c728d05415e9ebb4e",
+    "hashes": {
+      "protocol": "58ffd22a64a9e37493d4058bba41a19c92f2a646e06df21d8f552f927fe7cf0a",
+      "qualification": "d1f2dd7c422c781f08aa2062ec5de71a2f3dd1a8bc9df6c8ae2e4cf37c1babd2",
+      "result": "f12fbe61a7428973ecceb5a60d75fe4c188d3cbc5bb648ca8fa1238f38aa910c",
+      "terminal-audit": "4dba5d788cf6287c676dbe118cfbb8d4e12b31ba7b507f3b50a399e9c7b0ed4a"
+    },
+    "parentProtocol": "f571d108c0809da422fd84ff759fc2b3281eba14676c6c9b597fe5dd689dc75a",
+    "parentResult": "0712a09addea6c0b9238785c723976b61f48a15a27b3172443d8bfe0a7bc6287",
+    "parentAudit": "dbbe7b551d74850d65293e82e749be450a3d2044e46e4e6c0906e50e76a97765"
+  },
+  "protocol": {
+    "selection": "Every decodable saved draft with valid public verification and a runtime or compiler failure. One repair each; no outcome-based retry.",
+    "inputs": "Same public task, candidate files, public tests and public runtime/compiler failure. No strong answer, held-out test or full-test diagnostic in requests.",
+    "generationOrder": "All three generation calls complete before any repaired artifact is graded.",
+    "model": "openai/gpt-6-luna",
+    "reasoning": "none",
+    "maxOutputTokens": 4096,
+    "maxCalls": 3,
+    "maxPlannedCostMicros": 37380,
+    "stageCapMicros": 1000000,
+    "campaignCapMicros": 400000000
+  },
+  "excluded": [
+    {
+      "id": "history-836b2072a67b",
+      "reason": "truncated-unusable-draft"
+    },
+    {
+      "id": "history-6933f3d98b7e",
+      "reason": "accepted-draft"
+    }
+  ],
+  "rows": [
+    {
+      "id": "history-94575e6b2ab4",
+      "selection": "runtime-test-failure",
+      "publicTestsBefore": {
+        "passed": false,
+        "tests": 23,
+        "failures": 14
+      },
+      "compilerPassedBefore": true,
+      "repair": {
+        "model": "openai/gpt-6-luna",
+        "disposition": "complete",
+        "costMicros": 3581,
+        "normalizedMicros": 2878,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 28122,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 130
+        }
+      },
+      "draftCosts": {
+        "costMicros": 3112,
+        "normalizedMicros": 2502
+      },
+      "draftAndRepairCostMicros": 6693,
+      "draftAndRepairNormalizedMicros": 5380,
+      "publicTestsAfter": {
+        "passed": false,
+        "tests": 23,
+        "failures": 14
+      },
+      "fullTestsAfter": {
+        "passed": false,
+        "tests": 24,
+        "failures": 14,
+        "skipped": 0
+      },
+      "compilerPassedAfter": true,
+      "passed": false,
+      "savedStrongControlPassed": true
+    },
+    {
+      "id": "history-ff6b7f68a005",
+      "selection": "compiler-failure",
+      "publicTestsBefore": {
+        "passed": true,
+        "tests": 2,
+        "failures": 0
+      },
+      "compilerPassedBefore": false,
+      "repair": {
+        "model": "openai/gpt-6-luna",
+        "disposition": "complete",
+        "costMicros": 512,
+        "normalizedMicros": 421,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 3611,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 119
+        }
+      },
+      "draftCosts": {
+        "costMicros": 573,
+        "normalizedMicros": 488
+      },
+      "draftAndRepairCostMicros": 1085,
+      "draftAndRepairNormalizedMicros": 909,
+      "publicTestsAfter": {
+        "passed": true,
+        "tests": 2,
+        "failures": 0
+      },
+      "fullTestsAfter": {
+        "passed": true,
+        "tests": 3,
+        "failures": 0,
+        "skipped": 0
+      },
+      "compilerPassedAfter": true,
+      "passed": true,
+      "savedStrongControlPassed": true
+    },
+    {
+      "id": "history-e74789a5404d",
+      "selection": "runtime-test-failure",
+      "publicTestsBefore": {
+        "passed": false,
+        "tests": 77,
+        "failures": 9
+      },
+      "compilerPassedBefore": true,
+      "repair": {
+        "model": "openai/gpt-6-luna",
+        "disposition": "complete",
+        "costMicros": 3498,
+        "normalizedMicros": 2817,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 27263,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 179
+        }
+      },
+      "draftCosts": {
+        "costMicros": 3268,
+        "normalizedMicros": 2651
+      },
+      "draftAndRepairCostMicros": 6766,
+      "draftAndRepairNormalizedMicros": 5468,
+      "publicTestsAfter": {
+        "passed": false,
+        "tests": 77,
+        "failures": 9
+      },
+      "fullTestsAfter": {
+        "passed": false,
+        "tests": 68,
+        "failures": 9,
+        "skipped": 0
+      },
+      "compilerPassedAfter": true,
+      "passed": false,
+      "savedStrongControlPassed": true
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "passed": 1,
+    "newCalls": 3,
+    "newCostMicros": 7591,
+    "priorSpentMicros": 312048048,
+    "cumulativeSpentMicros": 312055639,
+    "remainingMicros": 87944361,
+    "qualifiedProductionGain": false
+  },
+  "interpretation": [
+    "The compiler-only failure was repaired and passed both original public and held-out suites.",
+    "Both runtime-logic failures retained the same number of failing tests after repair.",
+    "This supports further testing of compiler-triggered repair; it does not validate general cheap repair or a routing policy.",
+    "Reused drafts, one trial per task and selection on public failure prevent an independent end-to-end gain claim."
+  ]
+}

@@ -2,7 +2,7 @@ import type { FusionConfig } from "../shared/contracts.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { InternalHttpAbort } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson,
@@ -223,7 +223,7 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
   if (!response.body) throw new Error("fusion adviser response has no body");
   const reader = response.body.getReader();
   const input = inputRetirement(reader);
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let text = "";
   try {

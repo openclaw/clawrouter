@@ -113,7 +113,8 @@ export { PolicyBindingIndexObject, BudgetLedgerObject, GrantCredentialObject, Us
 import { authorityCall } from "../authority.ts";
 import { putGrantCredentials } from "../grant-credentials.ts";
 import { sha256Hex } from "../utils.ts";
-import { usageSnapshot, budgetStatus } from "../ledgers.ts";
+import { budgetStatus } from "../ledgers.ts";
+import { usageSnapshot } from "../usage-ledger-client.ts";
 import type { Env } from "../types.ts";
 
 type Case = { id: string; role: "eof" | "preabort" | "partial_abort" | "provider_error"; api: "stream" | "streamSimple"; proxy: string; upstream: string; control: string };

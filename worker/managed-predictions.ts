@@ -4,7 +4,7 @@ import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./min
 import { videoCollectionAuthorization } from "./response-control-authorization.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
-import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-store.ts";
+import type { BackgroundJob, BackgroundRecord, ManagedAdmission } from "./background-record.ts";
 import { retentionRequired } from "./content-retention.ts";
 import { setBackgroundRecovery } from "./correlation.ts";
 import { backgroundCall, HttpBackground } from "./http-background.ts";
@@ -16,13 +16,13 @@ import { createProxyAccounting } from "./proxy-accounting.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { ManagedCreate, ManagedFileDescriptor, ManagedObservation, ManagedObservationLoss } from "./managed-lifecycle-types.ts";
-import { managedLifecycleAdapter } from "./managed-lifecycle-adapters.ts";
 import { applyManagedHeaders, assertManagedDispatch, managedProbeId } from "./managed-dispatch.ts";
 import { managedFileBase, managedFilePublicBody, qualifyManagedFiles } from "./managed-files.ts";
 import { managedPaths, managedRoute } from "./managed-routes.ts";
 import { dispatchResponseControl, type ResponseControlDispatch } from "./responses-control-dispatch.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { errorResponse, HttpError, json, sha256Hex } from "./utils.ts";
+import { errorResponse, json, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { WanManagedOperation, preflightWanJson, assertWanHeaders, wanRecordBytes } from "./managed-media-json.ts";
 
 // Opt-in protocol path. Ordinary requests keep their existing hot path and do
@@ -91,7 +91,7 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
   if (wan) assertWanHeaders(prepared.headers);
   if (video) { assertVideoHeaders(prepared.headers); await video.reserveProvider(); await prepared.revalidateAccount?.(video.controlSignal); }
   const dispatchRequest = new Request(prepared.url, { method: "POST", headers: prepared.headers });
-  assertManagedDispatch(adapter.protocol, dispatchRequest);
+  assertManagedDispatch(adapter.protocol, dispatchRequest, selection.endpoint.request_format);
   const currentFixed = video ? policyRequestCost(auth.policy, selection.capability) : fixed;
   if (currentFixed == null || !Number.isSafeInteger(currentFixed) || currentFixed < 0) throw new HttpError(400, "pricing_required", "managed predictions require a current fixed tariff");
   if (video) prepared.connection = video.currentConnection;
@@ -110,14 +110,14 @@ async function managedPrediction(request: Request, env: Env, context: ExecutionC
     if (wan) wan.controlSignal = operation.signal;
     try {
       request.signal.throwIfAborted();
-      assertManagedDispatch(adapter.protocol, dispatchRequest);
+      assertManagedDispatch(adapter.protocol, dispatchRequest, selection.endpoint.request_format);
       attempted = true;
       await background.dispatch(null);
       dispatchConfirmed = true;
       if ((wan || video) && prepared.revalidateAccount) await operation.wait(prepared.revalidateAccount(operation.signal), video ? undefined : "upstream");
       if (adapter.prepareAdmitted) requireManagedCreateAdmission(auth.policy, env, prepared.continuation, adapter.protocol);
       operation.signal.throwIfAborted();
-      if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest);
+      if (wan) assertManagedDispatch(adapter.protocol, dispatchRequest, selection.endpoint.request_format);
       if (video) {
         operation = video.detachAtPost();
         const upload = miniMaxVideoUpload(video, create.body);
@@ -214,8 +214,10 @@ export function managedObservationUnavailable(wan?: WanManagedOperation | MiniMa
 type ControlRead = { prediction: ManagedObservation; status: number };
 export async function readManagedControl(env: Env, input: ResponseControlDispatch, operation: HttpOperation, fileBaseUrl?: string,
   wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<ControlRead & { evidence: ControlRead }> {
-  const adapter = input.protocol && managedLifecycleAdapter(input.protocol);
-  if (!adapter) throw new HttpError(409, "response_owner_unavailable", "the managed protocol is unavailable");
+  const { providerById } = await import("./provider-catalog.ts");
+  const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
+  if (!provider || !create || create.lifecycle?.protocol !== input.protocol) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
+  const { adapter } = managedRoute(provider, create, input.route.pathParams);
   const read = async (action: "retrieve" | "result" | "cancel"): Promise<ControlRead> => {
     let response: Response | undefined;
     const dispatch = { ...input, action };
@@ -226,7 +228,7 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
         const physical = ownership.track(dispatchResponseControl(env, dispatch, operation.signal, wan, video));
         response = await operation.wait(physical, "upstream", late => { void ownership.discard(late).catch(() => undefined); });
         // The single native ticket owns the actual 1MiB response, not an ACK.
-        const { providerById } = await import("./providers.ts");
+        const { providerById } = await import("./provider-catalog.ts");
         const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
         if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
         const reading = adapter.read(response, { action, expectedId: input.responseId,
@@ -238,7 +240,7 @@ export async function readManagedControl(env: Env, input: ResponseControlDispatc
     try {
       response = await operation.wait(dispatchResponseControl(env, dispatch, operation.signal), "upstream",
         late => { void late.body?.cancel().catch(() => undefined); });
-      const { providerById } = await import("./providers.ts");
+      const { providerById } = await import("./provider-catalog.ts");
       const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
       if (!provider || !create) throw new HttpError(409, "response_owner_unavailable", "original route is unavailable");
       const prediction = await operation.wait(adapter.read(response, { action, expectedId: input.responseId,

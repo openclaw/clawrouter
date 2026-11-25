@@ -8,7 +8,7 @@ import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { sha256Hex } = await import("../utils.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const { applyProviderCredential } = await import("../provider-auth.ts");
 const { assertXiaomiTokenPlanCredential } = await import("../xiaomi-plan-credentials.ts");

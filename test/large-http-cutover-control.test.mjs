@@ -269,7 +269,7 @@ test('fenced stops preserve uncertain owners and native replay history; reopenin
 for (const kind of [undefined,'control']) test('HTTP coordinator replaces and recovers real native journals: '+(kind??'payload'),async t=>{
  t.mock.timers.enable({apis:['Date'],now:1_800_000_000_000});
  const f=await fixture(t);await f.warm();
- await import('./helpers/typescript-resolver.mjs');
+ await import('../scripts/typescript-resolver.mjs');
  const {adminApi}=await import('../worker/admin.ts');
  f.env.CLAWROUTER_ADMIN_TOKEN_SHA256=createHash('sha256').update('synthetic').digest('hex');
  const refused=await adminApi(new Request('https://clawrouter.openclaw.ai/v1/admin/large-http',{method:'POST',headers:{authorization:'Bearer wrong','content-type':'application/json'},body:JSON.stringify(managed(false,0,'unauthorized'))}),f.env,'/v1/admin/large-http');
