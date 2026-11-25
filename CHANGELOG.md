@@ -18,6 +18,8 @@
 
 - Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
 
+- Add offline Fusion uncertainty intervals that resample related tasks together by source or domain.
+
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
 
 - Report task-level lost baseline successes and a one-sided exact binary loss bound in Fusion evaluations.
