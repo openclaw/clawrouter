@@ -59,6 +59,12 @@ Unexpected results cannot authorize production. Partial case evidence survives.
 Each qualification subprocess is bounded to 40 minutes; the workflow's existing
 phase deadlines and independent recovery bound production work. No soak test.
 
+Setup failures retain a public-safe diagnostic with fixed stage/category names,
+elapsed time, HTTP status and allowlisted transport/filesystem error codes. Unknown
+errors are `unclassified`. Both recording and public-artifact collection exclude
+raw errors, URLs, headers, paths, credentials and request/response content. These
+diagnostics do not retry fixture initialization or uncertain deployment writes.
+
 Deployment, continuity, payload, accounting, recovery and cleanup have separate
 outcomes. Cleanup is required before qualification authorizes production. An
 additional fresh-runner cleanup job covers cancellation/runner loss. It consumes

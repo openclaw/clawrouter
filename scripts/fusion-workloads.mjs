@@ -268,12 +268,41 @@ function failureFingerprints(text) {
   return { version: 1, kind: 'tap-label-path-sha256', digests: [...digests], truncated };
 }
 
-export function testResult(result) {
+// Node counts a declared test timeout as cancellation. Opt in only for a flat,
+// complete census; parent or runner cancellation remains invalid.
+function declaredTestTimeouts(text, { tests, failed, passed, cancelled, skipped }) {
+  if (cancelled < 1 || skipped !== 0 || failed + passed + cancelled !== tests) return 0;
+  const rows = [...text.matchAll(/^(not )?ok ([1-9][0-9]*) - [^\r\n]+\r?$/gm)];
+  if (rows.length !== tests || rows.some((row, i) => Number(row[2]) !== i + 1)
+    || rows.filter(row => !row[1]).length !== passed) return 0;
+  const summary = new RegExp(`^1\\.\\.${tests}\\r?\\n# tests ${tests}\\r?\\n# suites 0\\r?\\n# pass ${passed}\\r?\\n# fail ${failed}\\r?\\n# cancelled ${cancelled}\\r?\\n# skipped 0\\r?\\n# todo 0\\r?\\n# duration_ms [0-9]+(?:\\.[0-9]+)?\\r?\\n?$`, 'm');
+  const tail = summary.exec(text);
+  if (!tail || tail.index + tail[0].length !== text.length) return 0;
+  let timeouts = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (!rows[i][1]) continue;
+    const block = text.slice(rows[i].index + rows[i][0].length, rows[i + 1]?.index ?? tail.index);
+    if (!/^\r?\n  ---\r?\n/.test(block) || !/^  \.\.\.\r?$/m.test(block)) return 0;
+    const types = [...block.matchAll(/^  failureType: ['"]?([A-Za-z]+)['"]?\r?$/gm)];
+    if (types.length !== 1) return 0;
+    if (types[0][1] === 'testTimeoutFailure') timeouts++;
+    else if (types[0][1] !== 'testCodeFailure') return 0;
+  }
+  return timeouts === cancelled ? timeouts : 0;
+}
+
+export function testResult(result, { countTestTimeoutsAsFailures = false } = {}) {
+  if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
   const text = result.stdout.toString();
   const count = key => Number(text.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? -1);
   const tests = count('tests'), failed = count('fail'), passed = count('pass'), skipped = count('skipped'), cancelled = count('cancelled');
-  const valid = tests > 0 && failed >= 0 && passed >= 0 && skipped >= 0 && cancelled === 0 && failed + passed + skipped === tests;
-  return { valid, passed: valid && passed > 0 && result.code === 0 && failed === 0, tests, failures: failed, skipped,
+  const timeouts = countTestTimeoutsAsFailures && result.code === 1
+    ? declaredTestTimeouts(text, { tests, failed, passed, cancelled, skipped }) : 0;
+  const failures = failed + timeouts;
+  const valid = tests > 0 && failed >= 0 && passed >= 0 && skipped >= 0
+    && cancelled === timeouts && failures + passed + skipped === tests;
+  return { valid, passed: valid && passed > 0 && result.code === 0 && failures === 0, tests, failures, skipped,
+    ...(timeouts ? { testTimeoutFailures: timeouts } : {}),
     digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
@@ -335,9 +364,10 @@ function tapTestName(name) {
   return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, normalizeFeedbackTimings = false } = {}) {
+export async function check(box, paths, timeout = 120000, { testNamePrefix, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
+  if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
@@ -345,7 +375,7 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, norm
   const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
     'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
-  const metrics = testResult(result);
+  const metrics = testResult(result, { countTestTimeoutsAsFailures });
   if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
   // Node can report the test file itself as passing when no name matched.
   const encodedPrefix = tapTestName(testNamePrefix);

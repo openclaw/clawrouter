@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 1,
+  "study": "Inventory count and digest preservation with verified cheap-first execution",
+  "scope": "One previously model-unexercised historical inventory repair, three paired repetitions. A different source and bug from the provider-plugin studies. One task cluster; no generalization or production claim.",
+  "task": {
+    "id": "history-c9ca118038a7",
+    "baseCommit": "6401056167956f395e21068771147c346274e5e2",
+    "referenceCommit": "c9ca118038a77e086e5c0873622fe7d93ff304fa",
+    "sourcePaths": [
+      "scripts/grant-pool-operations.mjs"
+    ],
+    "testPaths": [
+      "test/grant-pool-operations.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "ca9390b98a1d139982e6f4ea42c5048deab26e46",
+    "protocolSha256": "a683858bc589620c0247b19c33392d938c54a15aa8edb4b264565b2ce3ad0be4",
+    "resultSha256": "1300a2c10ad090c5210812ff6f3f5a74738edca8348c2d381a21e9d661c8df4e",
+    "terminalAuditSha256": "2eea010dc5fe1ee296792ebba31c6d657bb892f765ea52c20cc2f7a23b7e5ee8",
+    "qualificationProtocolSha256": "65b0c27d0dd9a7a437e79ff9a01afc4df324f1a761a0342a16f794178e840302",
+    "qualificationResultSha256": "58fc1e641ad6d1fdd4b3c6e23c44e7be0d5346d8850859a8501d2d0842d48f29"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Alternating arm order, matched two-attempt ceilings, same original source and public tests. A failed draft requires fresh strong fallback. All calls finish before full grading. Every edit applies to the original baseline.",
+    "context": "Both arms receive the original editable module and the same public tests. The original multi-case regression and its digest assertion are excluded from requests.",
+    "qualification": "The cached task was previously excluded for insufficient separable regression groups. Both suites preserve all baseline tests. One public assertion that an empty revocation marker does not increment the count is appended to both suites. The full suite also retains the complete original multi-case regression and its empty-versus-null digest distinction. The public reproduction was authored after reading that regression; it is not independently authored evidence.",
+    "runtime": "Existing immutable exact-lock runtime; original repository tests plus Worker compilation. No downloads or additional compute allocation.",
+    "cost": "Integer microUSD estimates from recorded usage and frozen tariffs. Cache-neutral normalization prices all input at the base rate. These are estimates, not provider invoices.",
+    "elapsed": "Per-arm wall-clock time includes generation and public verification.",
+    "gates": "Full correctness with zero false accepts and at least 20% savings on both cost measures. Development lead additionally requires a successful fallback rescue and elapsed ratio <=1.2. Thresholds are unchanged.",
+    "reproducibility": "Hashes identify retained private protocols and raw proof. This report is an audited observation, not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 10,
+      "failures": 0,
+      "skipped": 0
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 9,
+      "failures": 0,
+      "skipped": 0
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 10,
+      "failures": 2,
+      "skipped": 0
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 9,
+      "failures": 1,
+      "skipped": 0
+    }
+  },
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 7064,
+      "elapsedMs": 15445.971208999996
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 816,
+      "elapsedMs": 13261.354874
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 0,
+    "escalations": 0,
+    "costRatio": 0.11551528878822197,
+    "elapsedRatio": 0.8585640031669183,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 7064,
+        "normalizedMicros": 14475
+      },
+      "cascade": {
+        "costMicros": 816,
+        "normalizedMicros": 1512
+      },
+      "costRatio": 0.11551528878822197,
+      "normalizedCostRatio": 0.1044559585492228,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "rows": [
+    {
+      "id": "history-c9ca118038a7/repeat-0",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 5948,
+      "normalizedMicros": 4825,
+      "elapsedMs": 5467.164917,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-c9ca118038a7/repeat-0",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 610,
+      "normalizedMicros": 498,
+      "elapsedMs": 4535.538125,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-c9ca118038a7/repeat-1",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 104,
+      "normalizedMicros": 508,
+      "elapsedMs": 4693.219165999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-c9ca118038a7/repeat-1",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 558,
+      "normalizedMicros": 4825,
+      "elapsedMs": 5206.816291999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-c9ca118038a7/repeat-2",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 558,
+      "normalizedMicros": 4825,
+      "elapsedMs": 4771.989999999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    },
+    {
+      "id": "history-c9ca118038a7/repeat-2",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 102,
+      "normalizedMicros": 506,
+      "elapsedMs": 4032.5975830000025,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 10,
+        "failures": 0,
+        "skipped": 0,
+        "failureFingerprints": {
+          "version": 1,
+          "kind": "tap-label-path-sha256",
+          "digests": [],
+          "truncated": false
+        },
+        "exitCode": 0,
+        "runtime": {
+          "node": "v24.22.1",
+          "platform": "linux",
+          "arch": "arm64"
+        }
+      }
+    }
+  ],
+  "calls": [
+    {
+      "stage": "case-0/strong/control",
+      "protocolSha256": "abeb4dc9af98d0eb01d2638a7524a3ad4c5080986badb2a78b54729fa5563e79",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5948,
+      "normalizedMicros": 4825,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4492,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 66
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-0/cascade/draft",
+      "protocolSha256": "dd49b1b8712da8e9a27087e2902f85eb8ac747a3c6344d8a265268d7d9951546",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 610,
+      "normalizedMicros": 498,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4492,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 95
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/cascade/draft",
+      "protocolSha256": "95a6579834ac6f0ee47751a15b6d9b837626bd0910740b637ef33d91cc115583",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 104,
+      "normalizedMicros": 508,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4492,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 116
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/strong/control",
+      "protocolSha256": "4ce90284e4a214c193bc83c2925b6ac8a24d0b01db9a0106cd8344c1a161a4b7",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 558,
+      "normalizedMicros": 4825,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4492,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 66
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/strong/control",
+      "protocolSha256": "32186ed9b58f5dae3d8ee724846a6c600dce29ab1bce5b91e0f5a901c6a1bf2e",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 558,
+      "normalizedMicros": 4825,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4492,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 66
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/cascade/draft",
+      "protocolSha256": "6dfa7e1ffb4c13c1eaf0c8eb6a4ac2aac703c498a9cfeb4adce791acbd777ccb",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 102,
+      "normalizedMicros": 506,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4492,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 112
+      },
+      "disposition": "complete"
+    }
+  ],
+  "conclusion": "Both arms passed 3/3 full evaluations, including the original digest regression. Every small-model draft passed directly. Normalized cost fell 89.6% and elapsed time fell 14.1%. This is another task-level gain for verified cheap-first execution, not proof of multi-model synergy. No fallback was exercised, so the full development gate remains false.",
+  "limitations": [
+    "Three repetitions are one task cluster, not three independent tasks or the required 30-task confirmation.",
+    "Previously unexercised refers to recorded experiment history, not model pretraining exclusion.",
+    "The public reproduction was constructed after inspecting historical regression semantics. Final-only examples do not make this independently authored validation.",
+    "No fallback robustness evidence from this run; no production traffic, deployment or default enablement."
+  ]
+}

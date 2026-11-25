@@ -15,29 +15,48 @@ import {assertContextAnswer,observeInterruptedTurn} from './native-session-conti
 import {versionId} from './deploy-train-policy.mjs';
 const hash=x=>createHash('sha256').update(x).digest('hex'),id=()=>randomBytes(16).toString('hex');
 const caseText=(caseId,mode,direction)=>'NATIVE_REHEARSAL_CASE:'+caseId+':'+mode+':'+direction;
-const clientStages=new Set(['client_inputs','native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','held_active','admission_close','held_release','native_after_readiness','followup_start','followup_complete','fixture_verification','evidence_save','client_close']);
+const setupStages=new Set(['client_inputs','setup_prepare','setup_state_save','fixture_setup','fixture_decode','setup_commit']);
+const filesystemCodes=new Set(['ENOENT','EEXIST','EACCES','ENOSPC','EIO']);
+const transportCodes=new Set(['UND_ERR_SOCKET','ECONNRESET','EPIPE','UND_ERR_RES_CONTENT_LENGTH_MISMATCH','ENOTFOUND','EAI_AGAIN','ECONNREFUSED','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','CERT_HAS_EXPIRED','UNABLE_TO_VERIFY_LEAF_SIGNATURE','DEPTH_ZERO_SELF_SIGNED_CERT']);
+const clientStages=new Set([...setupStages,'native_readiness','catalog_request','catalog_native_export','catalog_remote_request','catalog_decode','catalog_projection','catalog_write','codex_start','codex_initialize','codex_thread','session_save','turn_start','turn_complete','held_active','admission_close','held_release','native_after_readiness','followup_start','followup_complete','fixture_verification','evidence_save','client_close']);
 function clientFailure(error){
  const status=error?.status;
  if(Number.isInteger(status)&&status>=400&&status<=599)return {kind:'http',status};
  if(error?.name==='AssertionError')return {kind:'assertion'};
  if(['AbortError','TimeoutError'].includes(error?.name))return {kind:'timeout'};
- if(['ENOENT','EEXIST','EACCES','ENOSPC','EIO'].includes(error?.code))return {kind:'filesystem',code:error.code};
- if(error instanceof TypeError&&['UND_ERR_SOCKET','ECONNRESET','EPIPE','UND_ERR_RES_CONTENT_LENGTH_MISMATCH'].includes(error.cause?.code))return {kind:'transport',code:error.cause.code};
+ if(filesystemCodes.has(error?.code))return {kind:'filesystem',code:error.code};
+ if(error instanceof TypeError&&transportCodes.has(error.cause?.code))return {kind:'transport',code:error.cause.code};
  return {kind:'unexpected'};
+}
+// Public artifacts use a field/value allowlist, never raw errors or redaction.
+// Reapply it at collection so even an extended/private record cannot leak text.
+export function publicSetupDiagnostic(value){
+ if(value?.schema!==1||value.command!=='setup'||!setupStages.has(value.stage)||!['running','completed','failed'].includes(value.outcome)||
+ !Number.isSafeInteger(value.startedAt)||value.startedAt<0||!Number.isSafeInteger(value.updatedAt)||value.updatedAt<0)return null;
+ const result={schema:1,command:'setup',startedAt:value.startedAt,updatedAt:value.updatedAt,elapsedMs:Math.max(0,value.updatedAt-value.startedAt),stage:value.stage,outcome:value.outcome};
+ if(Number.isInteger(value.response?.status)&&value.response.status>=100&&value.response.status<=599)result.response={status:value.response.status};
+ if(value.outcome==='failed'){
+  const f=value.failure;result.failure={kind:'unclassified'};
+  if(f?.kind==='http'&&Number.isInteger(f.status)&&f.status>=400&&f.status<=599)result.failure={kind:'http',status:f.status};
+  else if(['assertion','timeout'].includes(f?.kind))result.failure={kind:f.kind};
+  else if((f?.kind==='filesystem'&&filesystemCodes.has(f.code))||(f?.kind==='transport'&&transportCodes.has(f.code)))result.failure={kind:f.kind,code:f.code};
+ }
+ return result;
 }
 function clientDiagnostic(root,command,args){
  const direction=['overlap','followup'].includes(command)?args[0]:undefined;
- if(command!=='seed'&&(!['overlap','followup'].includes(command)||!['forward','recovery'].includes(direction)))return null;
+ if(!['setup','seed'].includes(command)&&(!['overlap','followup'].includes(command)||!['forward','recovery'].includes(direction)))return null;
  const path=join(root,[command,direction,'diagnostic.json'].filter(Boolean).join('-')),next=path+'.next';
  const receipt={schema:1,command,...(direction?{direction}:{}),startedAt:Date.now(),stage:'client_inputs',outcome:'running'};
  let created=false;
  const persist=async()=>{
-  receipt.updatedAt=Date.now();const text=JSON.stringify(receipt,null,2)+'\n';
+  receipt.updatedAt=Date.now();const text=JSON.stringify(command==='setup'?publicSetupDiagnostic(receipt):receipt,null,2)+'\n';
   if(!created){await writeFile(path,text,{mode:0o600,flag:'wx'});created=true;}
   else{await writeFile(next,text,{mode:0o600,flag:'wx'});await rename(next,path);}
  };
  return {
   async stage(stage){assert(clientStages.has(stage));receipt.stage=stage;await persist();},
+  async response(status){assert.equal(command,'setup');receipt.response={status};await persist();},
   async complete(){receipt.outcome='completed';await persist();},
   async failed(error){if(!created)return;receipt.outcome='failed';receipt.failure=clientFailure(error);await persist();},
  };
@@ -73,7 +92,7 @@ export async function runClient(command,preparation,directory,args=[],env=proces
  const onStage=stage=>diagnostic?.stage(stage);
  try{
   await onStage('client_inputs');
-  const result=await runClientOwned(command,preparation,root,args,env,onStage);
+  const result=await runClientOwned(command,preparation,root,args,env,onStage,status=>diagnostic?.response(status));
   await diagnostic?.complete();return result;
  }catch(error){
   // Keep only fixed stages and bounded values. Never persist native exception
@@ -82,7 +101,7 @@ export async function runClient(command,preparation,directory,args=[],env=proces
   throw error;
  }finally{await rm(lock,{recursive:true});}
 }
-async function runClientOwned(command,preparation,directory,args,env,onStage=async()=>{}){
+async function runClientOwned(command,preparation,directory,args,env,onStage=async()=>{},onResponse=async()=>{}){
  const p=JSON.parse(await readFile(preparation,'utf8'));
  if(p.schema!==1||p.qualified!==false||p.controlSha256!==nativeControlDigest())throw Error('Preparation/control source mismatch');
  const target=isolatedNativeTarget({worker:p.worker,origin:p.origin,account:env.NATIVE_REHEARSAL_ACCOUNT_ID});
@@ -93,17 +112,23 @@ async function runClientOwned(command,preparation,directory,args,env,onStage=asy
  if(env.CF_ACCESS_CLIENT_ID)Object.assign(headers,{'CF-Access-Client-Id':env.CF_ACCESS_CLIENT_ID,'CF-Access-Client-Secret':env.CF_ACCESS_CLIENT_SECRET});
  const api=async(op,body={})=>{
   const r=await fetch(target.origin+'/__native_rehearsal/'+op,{method:'POST',headers,body:JSON.stringify(body),redirect:'error',signal:AbortSignal.timeout(20000)});
-  if(!r.ok){await r.body?.cancel();throw Error('Fixture '+op+' HTTP '+r.status+'; do not replay a mutation');}return r.json();
+  if(command==='setup')await onResponse(r.status);
+  if(!r.ok){await r.body?.cancel();const error=Error('Fixture '+op+' HTTP '+r.status+'; do not replay a mutation');error.status=r.status;throw error;}
+  if(command==='setup')await onStage('fixture_decode');
+  return r.json();
  };
  const control=createNativeControl({target,env:{CLOUDFLARE_ACCOUNT_ID:target.account,CLAWROUTER_NATIVE_ADMIN_TOKEN:env.NATIVE_REHEARSAL_ADMIN_TOKEN,CF_ACCESS_CLIENT_ID:env.CF_ACCESS_CLIENT_ID,CF_ACCESS_CLIENT_SECRET:env.CF_ACCESS_CLIENT_SECRET}});
  let local,evidence;
  const atomic=async(path,value)=>{const next=path+'.next';await writeFile(next,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);};
  const save=async()=>{await atomic(localPath,local);await atomic(evidencePath,evidence);};
  if(command==='setup'){
+  await onStage('setup_prepare');
   await mkdir(join(root,'codex'),{mode:0o700});
   local={schema:1,origin:target.origin,seed:randomBytes(32).toString('hex'),secret:randomBytes(32).toString('hex'),pending:'setup',threadId:null,producer:null};
   evidence={schema:1,qualified:false,source:p.source,controlSha256:p.controlSha256,blueRuntimeSha:p.blueRuntimeSha,greenRuntimeSha:p.greenRuntimeSha,origin:p.origin,steps:[]};
-  await save();await api('setup',{seedHash:hash(local.seed),credentialHash:hash(local.secret)});local.pending=null;await save();return {initialized:true,qualified:false};
+  await onStage('setup_state_save');await save();
+  await onStage('fixture_setup');await api('setup',{seedHash:hash(local.seed),credentialHash:hash(local.secret)});
+  await onStage('setup_commit');local.pending=null;await save();return {initialized:true,qualified:false};
  }
  local=JSON.parse(await readFile(localPath,'utf8'));evidence=JSON.parse(await readFile(evidencePath,'utf8'));
  if(local.schema!==1||local.origin!==target.origin||evidence.controlSha256!==p.controlSha256)throw Error('Foreign client directory');

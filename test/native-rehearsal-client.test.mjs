@@ -8,6 +8,7 @@ import {createServer} from 'node:http';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {nativeControlDigest} from '../scripts/deploy-native-qualification.mjs';
+import {publicSetupDiagnostic} from '../scripts/native-rehearsal-client.mjs';
 const exec=promisify(execFile),version='11111111-1111-4111-8111-111111111111',runtime='c'.repeat(64),fingerprint='d'.repeat(64);
 const worker='clawrouter-native-qualification-abcdef012345',origin='https://'+worker+'.fixture.workers.dev';
 const unsafe='fixture-private-text-never-in-diagnostics';
@@ -23,7 +24,7 @@ const catalog={version:'clawrouter.client-catalog.v1',scope:{authType:'proxy_key
 async function publishFixtureState(path,state){
  const next=path+'.server-'+randomUUID();await writeFile(next,JSON.stringify(state),{flag:'wx',mode:0o600});await rename(next,path);
 }
-async function entrypoint(t,mode){
+async function entrypoint(t,mode,{setup=true}={}){
  const directory=await mkdtemp(join(tmpdir(),'native-client-cli-'));let server;const requests=[];let closed=false;
  const modeFile=join(directory,'mode.json'),stateFile=join(directory,'fixture-state.json');await writeFile(modeFile,JSON.stringify(mode));await publishFixtureState(stateFile,{phase:'ready',cases:[],callbacks:[],replays:0,accounting:{events:[]}});
  t.after(async()=>{await new Promise(resolve=>server?.close(resolve)??resolve());await rm(directory,{recursive:true,force:true});});
@@ -33,7 +34,13 @@ async function entrypoint(t,mode){
   s.setHeader('content-type','application/json');s.setHeader('x-clawrouter-version-id',version);
   if(r.url==='/__native_rehearsal/snapshot')return s.end(JSON.stringify(state));
   if(r.url==='/__native_rehearsal/release'){const c=state.cases.find(c=>c.id===JSON.parse(body).id);c.outcome='completed';c.releasedAt=Date.now();state.accounting.events.push({});state.callbacks.push({op:'finish',runtimeSha:runtime,at:Date.now(),status:200,clean:true});await publishFixtureState(stateFile,state);return s.end('{}');}
-  if(r.url==='/__native_rehearsal/setup')return s.end('{}');
+  if(r.url==='/__native_rehearsal/setup'){
+   s.setHeader('x-private-fixture',unsafe);
+   if(mode==='setup-http'){s.statusCode=503;return s.end(JSON.stringify({error:unsafe,headers:{authorization:unsafe}}));}
+   if(mode==='setup-decode')return s.end(unsafe);
+   if(mode==='setup-commit')await writeFile(join(directory,'client/session.json.next'),unsafe,{flag:'wx'});
+   return s.end('{}');
+  }
   if(r.url==='/__native_rehearsal/close'){closed=true;return s.end('{}');}
   if(r.url==='/v1/admin/large-http'){
    if(mode==='readiness-not-warm'&&!closed){const value=snapshot();value.state.slots[3].phase='starting';value.slots[3].qualified=false;return s.end(JSON.stringify(value));}
@@ -54,7 +61,7 @@ async function entrypoint(t,mode){
  // Transport substitution stays in this child-only test preload. Production
  // identity/target guards and the CLI entrypoint remain unchanged; external
  // network is rejected. The app-server below is a protocol fixture, not Codex.
- const preload=join(directory,'bridge.mjs');await writeFile(preload,`const real=globalThis.fetch;globalThis.fetch=(input,init)=>{const r=new Request(input,init),u=new URL(r.url);if(u.origin!==${JSON.stringify(origin)})throw Error('unexpected egress');return real(${JSON.stringify(bridge)}+u.pathname+u.search,{method:r.method,headers:r.headers,body:r.body,duplex:'half',redirect:'error',signal:r.signal});};\n`);
+ const preload=join(directory,'bridge.mjs');await writeFile(preload,`import{readFileSync}from'node:fs';const real=globalThis.fetch;globalThis.fetch=(input,init)=>{const r=new Request(input,init),u=new URL(r.url);if(u.origin!==${JSON.stringify(origin)})throw Error('unexpected egress');const mode=JSON.parse(readFileSync(${JSON.stringify(modeFile)},'utf8'));if(u.pathname==='/__native_rehearsal/setup'){const unsafe=${JSON.stringify(unsafe)};if(mode==='setup-timeout')throw new DOMException(unsafe,'TimeoutError');if(['setup-transport','setup-unclassified'].includes(mode))throw new TypeError(unsafe,{cause:Object.assign(new Error(unsafe),{code:mode==='setup-transport'?'ENOTFOUND':unsafe,hostname:unsafe,path:unsafe})});}return real(${JSON.stringify(bridge)}+u.pathname+u.search,{method:r.method,headers:r.headers,body:r.body,duplex:'half',redirect:'error',signal:r.signal});};\n`);
  const binary=join(directory,'codex-fixture.mjs');
  await writeFile(binary,`#!/usr/bin/env node
 import{createInterface}from'node:readline';import{createHash,randomUUID}from'node:crypto';import{writeFileSync,readFileSync,appendFileSync,renameSync}from'node:fs';
@@ -82,9 +89,53 @@ if(v.method==='turn/start'){
  await writeFile(preparation,JSON.stringify({schema:1,qualified:false,source:'a'.repeat(40),controlSha256:nativeControlDigest(),worker,origin,blueRuntimeSha:runtime,greenRuntimeSha:runtime}));
  const env={PATH:process.env.PATH,HOME:directory,NODE_OPTIONS:'--import='+preload,NATIVE_REHEARSAL_ACCOUNT_ID:'a'.repeat(32),NATIVE_REHEARSAL_ADMIN_TOKEN:'synthetic-admin',CLAWROUTER_CODEX_BINARY:binary};
  const run=async(command,...args)=>{try{return {code:0,...await exec(process.execPath,[resolve('scripts/native-rehearsal-client.mjs'),command,preparation,client,...(args.length?args:command==='seed'?[version]:[])],{cwd:process.cwd(),env,timeout:20000})};}catch(e){return {code:e.code,stdout:e.stdout??'',stderr:e.stderr??''};}};
- assert.equal((await run('setup')).code,0);
- return {directory,client,requests,run,async setMode(value){mode=value;await writeFile(modeFile,JSON.stringify(value));}};
+ if(setup)assert.equal((await run('setup')).code,0);
+ return {directory,client,preparation,requests,run,async setMode(value){mode=value;await writeFile(modeFile,JSON.stringify(value));}};
 }
+for(const [mode,stage,failure,status] of [
+ ['setup-http','fixture_setup',{kind:'http',status:503},503],
+ ['setup-decode','fixture_decode',{kind:'unclassified'},200],
+ ['setup-transport','fixture_setup',{kind:'transport',code:'ENOTFOUND'}],
+ ['setup-timeout','fixture_setup',{kind:'timeout'}],
+ ['setup-unclassified','fixture_setup',{kind:'unclassified'}],
+ ['setup-commit','setup_commit',{kind:'filesystem',code:'EEXIST'},200],
+])test('actual setup CLI retains only allowlisted diagnostics: '+mode,{timeout:30000},async t=>{
+ const f=await entrypoint(t,mode,{setup:false}),result=await f.run('setup');assert.equal(result.code,1);
+ const path=join(f.client,'setup-diagnostic.json'),text=await readFile(path,'utf8'),receipt=JSON.parse(text);
+ assert.equal(receipt.stage,stage);assert.equal(receipt.outcome,'failed');assert.deepEqual(receipt.failure,failure);
+ assert.deepEqual(receipt.response,status?{status}:undefined);assert.equal(receipt.elapsedMs,Math.max(0,receipt.updatedAt-receipt.startedAt));
+ assert.deepEqual(Object.keys(receipt).sort(),['command','elapsedMs','failure','outcome',...(status?['response']:[]),'schema','stage','startedAt','updatedAt'].sort());
+ const local=JSON.parse(await readFile(join(f.client,'session.json'),'utf8'));
+ for(const secret of [unsafe,local.secret,local.seed,'synthetic-admin',f.directory,origin])for(const output of [text,result.stdout,result.stderr])assert(!output.includes(secret));
+ assert.equal(local.pending,'setup','uncertain fixture initialization is not marked completed');
+ assert.equal((await stat(path)).mode&0o777,0o600);await assert.rejects(access(join(f.client,'owner')));
+ const count=f.requests.length;assert.equal(count,status?1:0);assert(f.requests.every(x=>x==='POST /__native_rehearsal/setup'));
+ assert.equal((await f.run('setup')).code,1);assert.equal(f.requests.length,count);assert.equal(await readFile(path,'utf8'),text);
+ assert.equal((await f.run('cleanup')).code,0);assert.equal(await readFile(path,'utf8'),text);await assert.rejects(access(join(f.client,'session.json')));
+ t.diagnostic(JSON.stringify({kind:'setup-cli-proof',mode,stage,failure,status,clientExit:result.code,setupRequests:count,replayed:false,cleanup:true,privateTextRetained:false,limits:'Actual CLI with controlled loopback fixture and injected transport failures; no Cloudflare mutation or inference'}));
+});
+test('setup input failures and successful initialization retain bounded records',{timeout:30000},async t=>{
+ const failed=await entrypoint(t,'success',{setup:false});await writeFile(failed.preparation,unsafe);
+ assert.equal((await failed.run('setup')).code,1);
+ const failure=JSON.parse(await readFile(join(failed.client,'setup-diagnostic.json'),'utf8'));
+ assert.equal(failure.stage,'client_inputs');assert.deepEqual(failure.failure,{kind:'unclassified'});assert.equal(failed.requests.length,0);
+ const f=await entrypoint(t,'success');
+ const receipt=JSON.parse(await readFile(join(f.client,'setup-diagnostic.json'),'utf8'));
+ assert.equal(receipt.outcome,'completed');assert.equal(receipt.stage,'setup_commit');assert.deepEqual(receipt.response,{status:200});assert.equal(receipt.failure,undefined);
+ assert.equal(f.requests.filter(x=>x==='POST /__native_rehearsal/setup').length,1);
+ assert.equal(JSON.parse(await readFile(join(f.client,'session.json'),'utf8')).pending,null);
+ assert.equal((await f.run('cleanup')).code,0);
+});
+test('public setup projection drops private fields and refuses arbitrary enum/status/code values',()=>{
+ const base={schema:1,command:'setup',stage:'fixture_setup',outcome:'failed',startedAt:100,updatedAt:125};
+ const expected={...base,elapsedMs:25,response:{status:503},failure:{kind:'http',status:503}};
+ assert.deepEqual(publicSetupDiagnostic({...base,name:unsafe,message:unsafe,url:unsafe,path:unsafe,seed:unsafe,secret:unsafe,elapsedMs:unsafe,response:{status:503,body:unsafe,headers:{authorization:unsafe}},failure:{kind:'http',status:503,message:unsafe,stack:unsafe,cause:{secret:unsafe}}}),expected);
+ for(const failure of [{kind:unsafe},{kind:'filesystem',code:unsafe},{kind:'transport',code:unsafe},{kind:'http',status:unsafe},{kind:'http',status:600},{kind:'http',status:200}]){
+  const result=publicSetupDiagnostic({...base,response:{status:unsafe},failure});assert.deepEqual(result.failure,{kind:'unclassified'});assert.equal(result.response,undefined);assert(!JSON.stringify(result).includes(unsafe));
+ }
+ for(const failure of [{kind:'filesystem',code:'ENOSPC'},{kind:'transport',code:'CERT_HAS_EXPIRED'},{kind:'assertion'},{kind:'timeout'}])assert.deepEqual(publicSetupDiagnostic({...base,failure:{...failure,message:unsafe}}).failure,failure);
+ for(const patch of [{stage:unsafe},{outcome:unsafe},{command:unsafe},{schema:2},{startedAt:unsafe},{updatedAt:unsafe}])assert.equal(publicSetupDiagnostic({...base,...patch}),null);
+});
 for(const [mode,stage,failure] of [
  ['readiness-http','native_readiness',{kind:'http',status:500}],
  ['catalog-http','catalog_request',{kind:'http',status:403}],

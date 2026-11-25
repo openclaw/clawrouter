@@ -72,8 +72,12 @@ export function evaluateFusion(input, baseline, expectedSplit = 'test') {
   });
   const comparisons = [...strategies.keys()].filter((id) => id !== baseline).map((strategy) => {
     const differences = new Map();
+    const binaryLosses = new Map();
+    let binary = true;
     for (const pair of pairs.values()) {
       const row = pair.get(strategy), base = pair.get(baseline);
+      binary &&= [row.score, base.score].every((score) => score === 0 || score === 1);
+      binaryLosses.set(row.caseId, (binaryLosses.get(row.caseId) ?? false) || (base.score === 1 && row.score === 0));
       if (!differences.has(row.caseId)) differences.set(row.caseId, []);
       differences.get(row.caseId).push({ score: row.score - base.score,
         cost: row.costMicros, baseCost: base.costMicros,
@@ -93,6 +97,7 @@ export function evaluateFusion(input, baseline, expectedSplit = 'test') {
       meanLatencyDeltaMs: average("latency") - average("baseLatency"),
       meanLatencyRatio: ratio(average("latency"), average("baseLatency")),
       ...bootstrapIntervals(cases),
+      binaryTaskLoss: binary ? taskLossBound(binaryLosses) : null,
     };
   });
   return {
@@ -100,6 +105,29 @@ export function evaluateFusion(input, baseline, expectedSplit = 'test') {
     graderRevision: input.graderRevision, split: input.split, baseline,
     weighting: "equal case; trials averaged within case", strategies: results, comparisons,
   };
+}
+
+// A task counts once if any paired trial loses a baseline success. Gains in
+// other trials cannot cancel it. The binomial model assumes independent tasks.
+function taskLossBound(losses) {
+  const cases = losses.size, count = [...losses.values()].filter(Boolean).length;
+  let low = 0, high = 1;
+  if (count < cases) {
+    // Invert P(Binomial(cases, p) <= count) = 0.05 in log space.
+    for (let step = 0; step < 60; step++) {
+      const p = (low + high) / 2;
+      let term = cases * Math.log1p(-p), sum = term;
+      for (let k = 1; k <= count; k++) {
+        term += Math.log(cases - k + 1) - Math.log(k) + Math.log(p) - Math.log1p(-p);
+        const max = Math.max(sum, term);
+        sum = max + Math.log1p(Math.exp(Math.min(sum, term) - max));
+      }
+      if (sum > Math.log(0.05)) low = p;
+      else high = p;
+    }
+  }
+  return { cases, casesWithLostBaselineSuccess: count, observedRate: count / cases,
+    upper95: high, method: "one-sided Clopper-Pearson; any paired trial loss per task" };
 }
 
 function ratio(value, baseline) {

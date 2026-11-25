@@ -2,7 +2,35 @@
 
 - Add an opt-in caller-side verified candidate pool with aggregate reservation, bounded fan-out and deterministic selection; keep production routing unchanged.
 
+- Report the frozen 30-task, three-arm Fusion confirmation, retaining all failures, costs, admission strata and source-clustered uncertainty.
+
+- Allow an opt-in third caller-side Fusion attempt to repair a rejected strong fallback, retaining verification, cancellation and complete cost accounting.
+
+- Report complete predeclared Fusion strata alongside the full cohort, preserving paired trials, failures and source-clustered uncertainty.
+
+- Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.
+
+- Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
+
+- Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
+
+- Add optional lossless rejected-candidate prompt context that avoids repeating unchanged source.
+
+- Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
+
+- Add optional nested test prompt compaction that preserves suite wrappers, hooks, and ambiguous registrations.
+
+- Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
+
+- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
+
+- Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
+
+- Add offline Fusion uncertainty intervals that resample related tasks together by source or domain.
+
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
+
+- Report task-level lost baseline successes and a one-sided exact binary loss bound in Fusion evaluations.
 
 - Add caller-side multi-file Fusion artifacts with exact source-path coverage, bounded content, and test-file exclusions.
 
@@ -17,6 +45,8 @@
 - Report verified cascade studies: a tuned cost-saving development gain, a failed fresh-task confirmation, and quality recovery with feedback repair that still fails latency.
 
 - Allow an opt-in two-call cascade repair to pass the rejected artifact and verifier feedback to its fallback, preserving the fresh-fallback default.
+
+- Add opt-in Fusion grading for declared Node test timeouts, counting fully accounted timeouts as failures while rejecting unresolved cancellation.
 
 - Add an opt-in two-call cascade to the caller-side verified workflow, with explicit checks, complete attempt costs and cancellation boundaries.
 
@@ -207,6 +237,8 @@
 - Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
 
 ## Unreleased
+
+- Add strict replay reconciliation for process IDs in Node's EventSource warning, preserving recorded request bytes and rejecting other request changes.
 
 - Add a fusion benchmark cost screen that requires both invoice and cache-neutral savings, with complete paired cost accounting.
 

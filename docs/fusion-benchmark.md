@@ -592,3 +592,19 @@ failed its quality and no-regression criteria despite lower cost. No truncation
 retry occurred, so this run does not measure the recovery change's benefit.
 Both reports were complete and all new calls settled. Costs apply published
 tariffs to usage; they are not provider invoices. Do not promote this policy.
+
+## Replaying recorded repair feedback
+
+An isolated Node process can emit the same EventSource experimental warning
+with a different process ID during replay. `reconcileRecordedRepairRequest`
+permits only that ID to differ in the exact warning line inside a repair
+message's `acceptance.feedback`. It compares the complete request and restores
+the recorded bytes after that comparison. Model settings, source, verdicts,
+assertion values, warning text and message framing must still match.
+
+Use this helper only in a separately recorded replay procedure. Keep the
+original requests, responses, source pins and failed replay evidence. Record
+the replay procedure's source hash and every substitution, and rerun public
+verification and final grading. The helper does not authorize another model
+call or alter the original experiment. It must not normalize feedback sent in
+new inference requests or relax a grading outcome.
