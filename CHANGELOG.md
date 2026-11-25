@@ -2,6 +2,8 @@
 
 - Add optional lossless rejected-candidate prompt context that avoids repeating unchanged source.
 
+- Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
+
 - Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
 
 - Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
