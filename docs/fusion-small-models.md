@@ -2605,3 +2605,9 @@ a different task; workflow time rises 28.06%. Cheap-only solves 24/30. These are
 thirty exposed tasks in one repository, divided into accounting batches, not
 three repeated draws. The report retains every outcome and all three terminal replay audits; it does
 not qualify production routing.
+
+The [anchored-edit follow-up](fusion-anchored-transfer30.md) retains the same
+thirty tasks and original fixtures. Cascade and strong each solve 29/30 with
+zero lost strong successes, while cheap solves 22/30. Model cost falls 27.41%,
+but workflow time rises 77.86%, failing the time gate. These are new draws on
+exposed tasks, not causal evidence that anchors fixed the prior quality loss.
