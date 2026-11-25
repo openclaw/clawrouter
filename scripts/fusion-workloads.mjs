@@ -333,7 +333,7 @@ function normalizeTapTimings(text) {
 function normalizeNodeWarningPids(text) {
   // Only the process identifier in a top-level Node warning header is metadata.
   // Indented assertion values, warning codes and messages remain evidence.
-  return text.replace(/^(# )?\(node:[1-9][0-9]*\)( \[[A-Z][A-Z0-9_-]*\] (?:Warning|[A-Za-z]+Warning):)/gm,
+  return text.replace(/^(# )?\(node:[1-9][0-9]*\)( (?:\[[A-Z][A-Z0-9_-]*\] )?(?:Warning|[A-Za-z]+Warning):)/gm,
     '$1(node:<pid>)$2');
 }
 

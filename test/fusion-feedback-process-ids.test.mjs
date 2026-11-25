@@ -37,11 +37,13 @@ test('preserves warning messages, codes, stacks and PID-shaped assertion values'
 });
 
 test('normalizes an actual Node warning and validates the option before execution', async () => {
-  const child = spawnSync(process.execPath, ['-e', "process.emitWarning('native warning', {code:'FUSION-TEST'})"], { encoding: 'utf8' });
-  assert.equal(child.status, 0);
-  assert.match(child.stderr, /\(node:[0-9]+\) \[FUSION-TEST\] Warning: native warning/);
-  const result = await check(fixture(tap, child.stderr), ['test/example.js'], 120000, { normalizeFeedbackProcessIds: true });
-  assert.match(result.feedback, /\(node:<pid>\) \[FUSION-TEST\] Warning: native warning/);
+  for (const suffix of [", {code:'FUSION-TEST'}", '', ", 'ExperimentalWarning'"]) {
+    const child = spawnSync(process.execPath, ['-e', `process.emitWarning('native warning'${suffix})`], { encoding: 'utf8' });
+    assert.equal(child.status, 0);
+    assert.match(child.stderr, /\(node:[0-9]+\) (?:\[FUSION-TEST\] )?(?:ExperimentalWarning|Warning): native warning/);
+    const result = await check(fixture(tap, child.stderr), ['test/example.js'], 120000, { normalizeFeedbackProcessIds: true });
+    assert.match(result.feedback, /\(node:<pid>\) (?:\[FUSION-TEST\] )?(?:ExperimentalWarning|Warning): native warning/);
+  }
   await assert.rejects(check({ exec: () => { throw Error('must not execute'); } }, ['test/example.js'], 120000,
     { normalizeFeedbackProcessIds: 'yes' }), /invalid_feedback_process_id_option/);
 });
