@@ -2611,3 +2611,9 @@ thirty tasks and original fixtures. Cascade and strong each solve 29/30 with
 zero lost strong successes, while cheap solves 22/30. Model cost falls 27.41%,
 but workflow time rises 77.86%, failing the time gate. These are new draws on
 exposed tasks, not causal evidence that anchors fixed the prior quality loss.
+
+The [first-failure feedback follow-up](fusion-first-failure-transfer30.md)
+passes the complete development screen: cascade and strong both solve 29/30,
+with 38.84% lower model cost and 2.35% less workflow time for the cascade.
+All ninety outcomes and three exact replay audits are retained. This remains
+one draw on the same exposed repository, not production qualification.
