@@ -54,6 +54,8 @@
 
 - Add offline Fusion uncertainty intervals that resample related tasks together by source or domain.
 
+- Separate recorded model-call time from other workflow time in complete sequential Fusion timing reports.
+
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
 
 - Report task-level lost baseline successes and a one-sided exact binary loss bound in Fusion evaluations.
