@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { check } from '../scripts/fusion-workloads.mjs';
 
@@ -11,7 +11,8 @@ async function fixture(source, options = {}, { expectOuterTimeout = false } = {}
   const root = await mkdtemp(join(tmpdir(), 'fusion-failure-stop-'));
   const children = [];
   try {
-    await writeFile(join(root, 'case.test.mjs'), source);
+    const files = typeof source === 'string' ? { 'case.test.mjs': source } : source;
+    for (const [path, content] of Object.entries(files)) await writeFile(join(root, path), content);
     const box = { exec: async (args, config) => {
       assert.equal(args[0], 'timeout');
       assert.equal(config.allowFailure, true);
@@ -34,7 +35,7 @@ async function fixture(source, options = {}, { expectOuterTimeout = false } = {}
       assert.equal(timedOut, expectOuterTimeout, 'unexpected fixture deadline outcome');
       return { code: timedOut ? 137 : code, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) };
     } };
-    return await check(box, ['case.test.mjs'], 5000, { stopOnTestFailure: true, ...options });
+    return await check(box, Object.keys(files), 5000, { stopOnTestFailure: true, ...options });
   } finally {
     for (const pid of children) {
       try { process.kill(-pid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
@@ -132,5 +133,18 @@ test('ordinary invocation forwards test deadlines and validates them before exec
       await assert.rejects(check(box, ['case.test.mjs'], 1000, { testTimeoutMs, stopOnTestFailure }), /invalid_node_test_timeout/);
       assert.equal(command, undefined);
     }
+  }
+});
+
+test('failure-stop preserves CLI concurrency across test files', { skip: availableParallelism() < 3 }, async () => {
+  const files = {
+    'first.test.mjs': "import {test} from 'node:test';import {access} from 'node:fs/promises';test('wait for second file',async()=>{for(;;){try{await access('started.marker');return;}catch{await new Promise(resolve=>setTimeout(resolve,5));}}});",
+    'second.test.mjs': "import {test} from 'node:test';import {writeFile} from 'node:fs/promises';test('release first file',async()=>{await writeFile('started.marker','ready');});",
+  };
+  for (const stopOnTestFailure of [false, true]) {
+    const result = await fixture(files, { stopOnTestFailure });
+    assert.equal(result.passed, true);
+    assert.equal(result.valid, true);
+    assert.equal(result.tests, 2);
   }
 });

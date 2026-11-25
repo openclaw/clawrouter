@@ -48,3 +48,6 @@ the rejected draft failed in 128 ms, and the passing control completed its full
 check in 4.16 seconds. These are diagnostic replays, not a paired model study or
 an end-to-end service benchmark. The running model-format experiment does not
 enable this mode.
+
+The programmatic runner retains the CLI default file concurrency. Failure-stop
+changes rejection timing, not the scheduling policy for passing test files.

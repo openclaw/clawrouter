@@ -8,6 +8,7 @@ const marked = value => value === true || typeof value === 'string';
 const stream = run({
   files: config.paths,
   isolation: 'process',
+  concurrency: true,
   ...(config.testTimeoutMs === undefined ? {} : { timeout: config.testTimeoutMs }),
   execArgv: config.exposeGc ? ['--expose-gc'] : [],
   ...(config.pattern === undefined ? {} : { testNamePatterns: config.pattern }),
