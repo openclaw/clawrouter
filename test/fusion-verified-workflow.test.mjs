@@ -42,6 +42,82 @@ test('cascade treats a declared unusable draft as a failed attempt', async () =>
   const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade' });
   assert.equal(r.passed, true); assert.equal(r.costMicros, 12); assert.equal(f.requests.length, 2);
 });
+test('optional fallback repair uses the failed strong candidate and retains every charge', async () => {
+  for (const fallbackMode of ['fresh', 'repair']) {
+    const failed = { ...runtimeError, detail: { cases: ['regression'] } };
+    const f = fixture({ draft: typeError, 'strong-fallback': failed, 'strong-fallback-repair': good });
+    const invoke = f.invoke;
+    f.invoke = async request => {
+      if (request.stage === 'strong-fallback-repair') {
+        assert.deepEqual(request.draft, { name: 'strong-fallback' });
+        assert.deepEqual(request.feedback, failed);
+        request.feedback.detail.cases.push('changed');
+      }
+      return invoke(request);
+    };
+    const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackMode, fallbackAttempts: 2 });
+    assert.equal(r.passed, true); assert.equal(r.costMicros, 21);
+    assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'strong-fallback', 'strong-fallback-repair']);
+    assert.deepEqual(f.requests.map(x => x.model), [models.draft, models.repair, models.repair]);
+    assert.deepEqual(failed.detail.cases, ['regression']);
+    assert.deepEqual(r.steps, f.receipts);
+  }
+});
+test('optional fallback repair stops on acceptance or after its third failed call', async () => {
+  for (const verdicts of [{}, { draft: runtimeError },
+    { draft: runtimeError, 'strong-fallback': runtimeError, 'strong-fallback-repair': runtimeError }]) {
+    const f = fixture(verdicts);
+    const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackAttempts: 2 });
+    const expected = Object.keys(verdicts).length === 3 ? 3 : Object.keys(verdicts).length + 1;
+    assert.equal(f.requests.length, expected); assert.equal(r.costMicros, expected * 7);
+    assert.equal(r.passed, expected !== 3);
+  }
+});
+test('optional fallback repair retains missing-candidate diagnostics', async () => {
+  const f = fixture({ draft: runtimeError }), invoke = f.invoke;
+  f.invoke = async request => {
+    if (request.stage === 'strong-fallback') {
+      f.requests.push(request);
+      return { artifact: null, feedback: 'invalid edit anchor', costMicros: 5 };
+    }
+    if (request.stage === 'strong-fallback-repair') {
+      assert.equal(request.draft, null);
+      assert.deepEqual(request.feedback, { runtimePassed: false, compilerPassed: false, feedback: 'invalid edit anchor' });
+    }
+    return invoke(request);
+  };
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackAttempts: 2 });
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 19);
+});
+test('optional fallback repair never retries callback errors or cancellation', async () => {
+  for (const origin of ['invoke', 'verify', 'onStep']) {
+    const f = fixture({ draft: runtimeError, 'strong-fallback': runtimeError });
+    const operation = f[origin];
+    f[origin] = async request => {
+      if (request.stage === 'strong-fallback') throw Error('fallback_failed');
+      return operation(request);
+    };
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackAttempts: 2 }), /fallback_failed/);
+    assert.ok(f.requests.length <= 2);
+  }
+  const f = fixture({ draft: runtimeError, 'strong-fallback': runtimeError }), controller = new AbortController();
+  f.onStep = step => { if (step.stage === 'strong-fallback') controller.abort(Error('stop_after_fallback')); };
+  await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackAttempts: 2,
+    signal: controller.signal }), /stop_after_fallback/);
+  assert.equal(f.requests.length, 2);
+});
+test('invalid fallback attempt limits fail before any provider call', async () => {
+  for (const fallbackAttempts of [null, 0, 3, 1.5, '2', true]) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', fallbackAttempts }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+  for (const strategy of ['fusion', 'strong']) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy, fallbackAttempts: 2 }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+});
 test('cascade repair passes cloned rejected artifacts and verifier feedback to one fallback', async () => {
   const feedback = { ...runtimeError, counterexample: { input: [1, 2, 1], expected: 0 } };
   const f = fixture({ draft: feedback, 'strong-fallback': runtimeError });
