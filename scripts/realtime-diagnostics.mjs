@@ -16,7 +16,11 @@ export function realtimeDiagnosticText(value) {
   const keys = Object.keys(row).sort().join(",");
   if (row.v !== 1 || typeof row.case !== "string" || !/^r(?:0[1-9]|1[0-2])$/.test(row.case) || !Number.isSafeInteger(row.unreportedCases) || row.unreportedCases < 0 || row.unreportedCases > 1000000) throw Error("invalid realtime diagnostic");
   if (row.kind === "realtime_boundary") {
-    if (keys !== "case,failurePresent,kind,operation,reasonDefined,unreportedCases,v" || !realtimeOperations.has(row.operation) || typeof row.failurePresent !== "boolean" || (row.failurePresent ? typeof row.reasonDefined !== "boolean" : row.reasonDefined !== null)) throw Error("invalid realtime diagnostic");
+    const timed = keys === "case,clientCloseMs,closeMs,failurePresent,kind,mutationMs,operation,reasonDefined,receiverMs,unreportedCases,v";
+    const duration = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000000;
+    if ((!timed && keys !== "case,failurePresent,kind,operation,reasonDefined,unreportedCases,v") || !realtimeOperations.has(row.operation) || typeof row.failurePresent !== "boolean" || (row.failurePresent ? typeof row.reasonDefined !== "boolean" : row.reasonDefined !== null)
+      || (timed && (!duration(row.mutationMs) || !duration(row.closeMs) || ![row.receiverMs, row.clientCloseMs].every(value => value === null || duration(value))
+        || ((row.receiverMs === null) !== (row.clientCloseMs === null)) || (row.receiverMs !== null && row.receiverMs + row.clientCloseMs !== row.closeMs)))) throw Error("invalid realtime diagnostic");
   } else if (row.kind === "realtime_cleanup") {
     if (keys !== "case,kind,outcomes,recorderFailures,recorderFirstDefined,registered,unreportedCases,v" || typeof row.registered !== "boolean" || typeof row.outcomes !== "string" || !/^[upfdr]{9}$/.test(row.outcomes)
       || !Number.isSafeInteger(row.recorderFailures) || row.recorderFailures < 0 || row.recorderFailures > 1000000 || (row.recorderFailures ? typeof row.recorderFirstDefined !== "boolean" : row.recorderFirstDefined !== null)
@@ -33,14 +37,16 @@ export function parseRealtimeDiagnostic(text) {
   return row;
 }
 export function createRealtimeLedger(caseId, deliver) {
-  let operation = "temporary", boundary, registered = false, flushed = false;
+  let operation = "temporary", boundary, timing, registered = false, flushed = false;
   const outcomes = Array(9).fill("u"), reporting = [];
   const ledger = {
     mark(value) { if (realtimeOperations.has(value)) operation = value; else reporting.push(undefined); },
     registered() { registered = true; },
     start(key) { outcomes[realtimeCleanupKeys.indexOf(key)] = "p"; },
     end(key, failed = false, reason) { outcomes[realtimeCleanupKeys.indexOf(key)] = failed ? reason === undefined ? "r" : "d" : "f"; },
-    body(failed, reason) { boundary = { v: 1, kind: "realtime_boundary", case: caseId, operation, failurePresent: failed, reasonDefined: failed ? reason !== undefined : null, unreportedCases: 0 }; },
+    // Durations only: no absolute timestamps, raw diagnostics or error text.
+    timing(mutationMs, closeMs, receiverMs = null, clientCloseMs = null) { timing = { mutationMs, closeMs, receiverMs, clientCloseMs }; },
+    body(failed, reason) { boundary = { v: 1, kind: "realtime_boundary", case: caseId, operation, failurePresent: failed, reasonDefined: failed ? reason !== undefined : null, unreportedCases: 0, ...timing }; },
     flush() {
       if (flushed) return []; flushed = true;
       if (boundary) try { deliver(realtimeDiagnosticText(boundary)); } catch (error) { reporting.push(error); }

@@ -1,5 +1,7 @@
 # Changelog
 
+- Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
+
 - Add opt-in caller-side Fusion repair feedback normalization for temporary loopback URL ports, preserving distinct ports and assertion paths.
 
 - Report the complete anchored-edit Fusion cohort, retaining matched strong-model outcomes and the failed workflow-time gate.
