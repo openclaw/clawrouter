@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { googleUnderstandingModel, prepareGoogleUnderstanding } = await import("../google-media-understanding.ts");
 const { prepareNativeGoogleMediaUnderstanding } = await import("../native-google-media-understanding.ts");
 const { prepareManifestRequest } = await import("../proxy-selection.ts");
@@ -20,11 +20,13 @@ function fixture(modes = ["audio", "video"], isolated = false) {
   const manifest = structuredClone(existing), model = manifest.models.entries.find(model => model.upstream === wire.model);
   assert.ok(model, "the qualified frozen card is already declared");
   if (isolated) {
-    // Keep provider-wide negative cases independent of the image/music guard order.
-    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate"].includes(row.endpoint));
+    // Keep provider-wide negative cases independent of the image/music/speech guard order.
+    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate", "speech_generate_content", "speech_interactions"].includes(row.endpoint));
     delete manifest.endpoints.image_generate;
     delete manifest.endpoints.music_generate;
-    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate"].includes(id)));
+    delete manifest.endpoints.speech_generate_content;
+    delete manifest.endpoints.speech_interactions;
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate", "audio.speech"].includes(id)));
   }
   for (const mode of modes) {
     const id = `inline_${mode}`;

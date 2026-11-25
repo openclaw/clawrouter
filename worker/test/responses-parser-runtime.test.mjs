@@ -10,7 +10,7 @@ import { startBundledWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 const require = createRequire(import.meta.url);
 
-test("maintained parser imports and flushes in the unchanged Wrangler/workerd runtime", { timeout: 180_000 }, async () => {
+test("maintained parser imports and flushes in the deployment Wrangler/workerd runtime", { timeout: 180_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-parser-runtime-"));
   let worker;
   try {
@@ -23,6 +23,9 @@ test("maintained parser imports and flushes in the unchanged Wrangler/workerd ru
     // that would rewrite shared checkout files while sibling tests read them.
     delete config.build;
     config.main = resolve("worker/test/fixtures/responses-parser-runtime.ts");
+    // Production supplies prebundled JavaScript. Bundle this replacement source
+    // fixture explicitly while retaining the production runtime settings.
+    config.no_bundle = false;
     config.assets.directory = join(temporary, "assets");
     await mkdir(config.assets.directory);
     await writeFile(join(config.assets.directory, "index.html"), "parser runtime fixture");

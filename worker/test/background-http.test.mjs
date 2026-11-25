@@ -10,7 +10,7 @@ const { default: worker } = await import("../index.ts");
 const { UsageLedgerObject } = await import("../ledgers.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 

@@ -50,6 +50,7 @@ endpoints:
 models:
   entries:
     - id: stepfun-cn/step-3.7-flash
+      displayName: "Step 3.7 Flash"
       upstream: step-3.7-flash
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -67,6 +68,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text, image]
     - id: stepfun-cn/step-3.5-flash
+      displayName: "Step 3.5 Flash"
       upstream: step-3.5-flash
       capabilities: [llm.chat]
       requestParameters:

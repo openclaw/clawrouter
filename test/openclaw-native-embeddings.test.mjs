@@ -10,19 +10,19 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "60e29ff604075d6961e19469a60530782fb644f7";
 // Finite, activated contracts only. Bedrock and asynchronous file batches retain
-// their own runtime and consumer qualification gates.
+// their own runtime and consumer qualification gates. Google memory prefers batch
+// when both real endpoints are offered; single-endpoint Worker tests are separate.
 const modelsByFormat = {
   "cohere.embed": ["embed-v4.0"],
   "voyage.embeddings": ["voyage-4", "voyage-4-large", "voyage-4-lite"],
-  "google.embed_content": ["gemini-embedding-001", "gemini-embedding-2"],
   "google.batch_embed_contents": ["gemini-embedding-001", "gemini-embedding-2"],
 };
 const cases = snapshot.providers.flatMap(provider => provider.endpoints
   .filter(endpoint => endpoint.request_format === endpoint.response_format && modelsByFormat[endpoint.request_format])
   .flatMap(endpoint => provider.models.filter(model => modelsByFormat[endpoint.request_format].includes(model.upstream) && model.capabilities.includes("llm.embeddings"))
-    .flatMap(model => ["native", "manifest"].map(dispatch => ({ provider, endpoint, model, dispatch })))))
+    .flatMap(model => (endpoint.request_format.startsWith("google.") ? ["native"] : ["native", "manifest"]).map(dispatch => ({ provider, endpoint, model, dispatch })))))
   .map((entry, index) => ({ ...entry, credential: `native_embed_${index}` }));
-const successCalls = entry => entry.endpoint.request_format === "google.embed_content" ? 3 : 2;
+const successCalls = () => 2;
 const inputTexts = body => body.texts ?? body.input ?? (body.requests ?? [body]).map(item => item.content.parts.filter(part => part.text).map(part => part.text).join("\n"));
 
 for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch} memory consumer through workerd and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
@@ -32,7 +32,10 @@ for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch}
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(selectedCases, dispatch), upstreamFixture());
+    if (dispatch === "manifest") {
+      const { startCatalogVariantFixture } = await import("./helpers/openclaw-catalog-variant.mjs");
+      mf = await startCatalogVariantFixture(temporary, routerFixture(selectedCases), upstreamFixture(), ["cohere", "voyage"]);
+    } else mf = await startWorkerdFixture(temporary, routerFixture(selectedCases), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const { provider, model, credential } of selectedCases) {
       for (const suffix of ["", "_unpriced", "_error", "_eof", "_invalid"]) {
@@ -49,6 +52,13 @@ for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch}
       const catalog = await response.json();
       const offered = catalog.providers.find(row => row.id === provider.id)?.offers;
       assert.ok(offered?.some(offer => offer.endpoint === endpoint.id && offer.modelId === model.id && offer.routeKind === dispatch && offer.eligible), `${model.id}: real ${dispatch} offer must precede client execution`);
+      if (provider.id === "google-gemini") {
+        for (const format of ["google.embed_content", "google.batch_embed_contents"]) {
+          const original = provider.endpoints.find(row => row.request_format === format);
+          assert.ok(offered.some(offer => offer.endpoint === original.id && offer.modelId === model.id && offer.routeKind === "native" && offer.eligible));
+          assert.ok(offered.filter(offer => offer.endpoint === original.id).every(offer => offer.routeKind !== "manifest"));
+        }
+      } else if (dispatch === "manifest") assert.ok(offered.filter(offer => offer.endpoint === endpoint.id).every(offer => offer.routeKind !== "native"));
     }
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-native-embeddings-contract.test.ts", import.meta.url),
@@ -126,30 +136,11 @@ for (const dispatch of ["native", "manifest"]) test(`actual OpenClaw ${dispatch}
   }
 });
 
-function routerFixture(selectedCases, dispatch) {
+function routerFixture(selectedCases) {
   const config = Object.fromEntries(selectedCases.flatMap(({ provider }) => provider.config_keys.map(name => [name, `fixture-upstream-${provider.id}`])));
-  const routes = selectedCases.map(({ credential, provider, endpoint, dispatch }) => ({ credential, provider: provider.id, endpoint: endpoint.id, dispatch }));
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-import { snapshot } from "./worker/providers.ts";
-const routes = ${JSON.stringify(routes)};
-// Exercise the supported manifest-only declaration using a separate isolate.
-// The real catalog computes its offers, eligibility and billing qualifications.
-if (${JSON.stringify(dispatch)} === "manifest") for (const provider of snapshot.providers) {
-  for (const endpoint of provider.endpoints) {
-    if (routes.some(route => route.provider === provider.id && route.endpoint === endpoint.id)) endpoint.native_proxy = false;
-  }
-}
-export default { ...handler, async fetch(request, env, context) {
-  const response = await handler.fetch(request, { ...env, ...${JSON.stringify(config)} }, context);
-  if (new URL(request.url).pathname !== "/v1/catalog" || !response.ok) return response;
-  const id = /^Bearer clawrouter-live-([^-]+)-/.exec(request.headers.get("authorization") ?? "")?.[1];
-  const route = routes.find(row => id === row.credential || id?.startsWith(row.credential + "_"));
-  if (!route) throw new Error("unknown fixture credential");
-  const catalog = await response.json();
-  // Restrict real, credential-scoped offers to exercise each existing transport.
-  // Never manufacture eligibility, model metadata or an unsupported endpoint.
-  for (const provider of catalog.providers) provider.offers = provider.offers.filter(offer => offer.endpoint === route.endpoint && offer.routeKind === route.dispatch);
-  return Response.json(catalog, response);
+export default { ...handler, fetch(request, env, context) {
+  return handler.fetch(request, { ...env, ...${JSON.stringify(config)} }, context);
 } };`;
 }
 

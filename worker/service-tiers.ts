@@ -4,7 +4,7 @@ import type { ProxySelection } from "./proxy-selection";
 import { googleRequestServiceTier } from "./google-protocol.ts";
 import { extractServiceTier } from "./token-usage.ts";
 import { withLimitHint } from "./policy-limits.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function normalizeTierList(value: unknown, code = "invalid_policy"): string[] {
   if (!Array.isArray(value) || value.some(tier => typeof tier !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(tier) || normalizeServiceTier(tier) !== tier)) throw new HttpError(400, code, "service tiers must be lowercase canonical tier ids (use priority for fast and default for auto)");

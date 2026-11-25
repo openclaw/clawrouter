@@ -136,7 +136,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/decisions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/moderations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact", "/v1/playground/v1/responses/input_tokens"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/decisions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/edits", "/v1/playground/v1/images/generations", "/v1/playground/v1/moderations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact", "/v1/playground/v1/responses/input_tokens"]);
     const moderationOffers = view.offers.filter(({ endpoint }) => endpoint === "moderations");
     assert.ok(moderationOffers.length > 0);
     assert.ok(moderationOffers.every(({ eligible, policyId, transport, affordability }) => eligible && policyId === "api" && transport === "http" && affordability === "exact-covered"));

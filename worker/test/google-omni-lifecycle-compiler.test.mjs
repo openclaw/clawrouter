@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { googleOmniVideoManagedAdapter: adapter } = await import("../managed-google-omni.ts");
 const { googleOmniApiBase, googleOmniVideos, prepareGoogleOmniFileControl, readGoogleOmniFileState } = await import("../provider-google-omni-files.ts");
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/google-omni/video.json", import.meta.url), "utf8"));
@@ -13,7 +13,7 @@ function fixture(isolated = false) {
   const manifest = structuredClone(bundled);
   if (isolated) {
     // Provider-wide negative cases must exercise the Omni guard itself.
-    const unrelatedCapabilities = ["llm.embeddings", "image.generate", "audio.generate"];
+    const unrelatedCapabilities = ["llm.embeddings", "image.generate", "audio.generate", "audio.speech"];
     const unrelatedEndpoints = new Set(manifest.capabilities.filter(row => unrelatedCapabilities.includes(row.id)).map(row => row.endpoint));
     for (const id of unrelatedEndpoints) delete manifest.endpoints[id];
     manifest.capabilities = manifest.capabilities.filter(row => !unrelatedEndpoints.has(row.endpoint));

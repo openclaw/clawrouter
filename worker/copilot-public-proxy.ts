@@ -1,6 +1,7 @@
 import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement } from "./input-retirement.ts";
-import { HttpError, errorResponse, sha256Hex } from "./utils.ts";
+import { errorResponse, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { copilotInferencePaths, copilotInferenceInput, type CopilotInferenceInput } from "./copilot-inference-dispatch.ts";
 import { currentCopilotPublicIdentity, readCopilotPublicJson, type CopilotPublicIdentityAttestation } from "./copilot-public-identity.ts";
 import type { CopilotCatalogInput } from "./copilot-catalog-flow.ts";
@@ -48,7 +49,7 @@ export function copilotPublicEndpoint(provider: CompiledProvider, endpoint: Comp
 
 export async function copilotPublicInferenceInput(value: unknown, seed: CopilotPublicSeed, env: Env): Promise<CopilotInferenceInput> {
   if (seed.route.mode !== "native" && seed.route.mode !== "manifest") throw unavailable();
-  const { providerById } = await import("./providers.ts");
+  const { providerById } = await import("./provider-catalog.ts");
   const { prepareNativeRequest, prepareManifestRequest, manifestEnvelope } = await import("./proxy-selection.ts");
   const provider = providerById(providerId), endpoint = provider?.endpoints.find(row => row.id === seed.route.endpointId);
   if (!provider || !endpoint) throw unavailable();
@@ -617,7 +618,7 @@ export async function proxyCopilotDiscovery(request: Request, env: Env, context:
     const url = new URL(request.url);
     if (request.method !== "GET" || request.body !== null || !["/v1/catalog", "/v1/models"].includes(url.pathname)
       || [...url.searchParams].length !== 1 || url.searchParams.get("provider") !== providerId) throw unavailable();
-    const { providerById } = await import("./providers.ts"), provider = providerById(providerId);
+    const { providerById } = await import("./provider-catalog.ts"), provider = providerById(providerId);
     if (!provider) throw unavailable();
     const { authenticateProxyKey, proxySessionHash } = await import("./proxy-auth.ts");
     const { publicControlAuthorization } = await import("./response-control-authorization.ts");

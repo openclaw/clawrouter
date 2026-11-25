@@ -43,6 +43,7 @@ endpoints:
 models:
   entries:
     - id: anthropic-vertex/claude-sonnet-4-6
+      displayName: "Claude Sonnet 4.6"
       upstream: claude-sonnet-4-6
       capabilities: [llm.chat, llm.messages]
       nativeCapabilities:

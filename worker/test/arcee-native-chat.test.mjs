@@ -9,7 +9,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
-const { snapshot, configuredUpstream, providerModel } = await import("../providers.ts");
+const { configuredUpstream } = await import("../providers.ts"); const { snapshot, providerModel } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const provider = JSON.parse(execFileSync(process.execPath,
@@ -73,7 +73,7 @@ test("Arcee direct declaration preserves three frozen identities without invente
     assert.equal(m.requestParameters.chat_completions.toolCalling, "supported");
     assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions", "models_list"]);
   const opaque = providerModel(provider, "arcee/synthetic-tenant-model", provider.endpoints[0]);
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { OPENROUTER_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");

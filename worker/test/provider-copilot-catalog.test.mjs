@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { decodeCopilotModelCatalog } from "../provider-copilot-catalog.ts";
-import { copilotModelFormats, filterCopilotModels } from "../provider-copilot.ts";
+import { copilotModelFormats } from "../provider-copilot.ts";
 
 const message = "invalid_copilot_model_catalog";
 const row = (id = "fixture-model", patch = {}) => ({ id, model_picker_enabled: true, policy: { state: "enabled" }, supported_endpoints: ["/responses"], ...patch });
@@ -36,7 +36,6 @@ test("data-only native envelope and authoritative empty projection do not requir
   const result = decode([row()]);
   assert.equal(result.data[0].id, "fixture-model");
   assert.equal(Object.isFrozen(result) && Object.isFrozen(result.data) && Object.isFrozen(result.data[0]), true);
-  assert.deepEqual(filterCopilotModels(result, () => false), { data: [] });
   assert.deepEqual(decode([]), { data: [] });
 });
 
@@ -46,7 +45,6 @@ test("empty, disabled, unconfigured and hidden rows never resurrect static seeds
     const result = decode([row("fixture", { policy })]);
     assert.equal(result.data.length, 1);
     assert.equal("entitled" in result.data[0], false);
-    assert.deepEqual(filterCopilotModels(result, () => false), { data: [] });
   }
 });
 
@@ -150,7 +148,6 @@ test("missing facts stay absent; explicit false/empty facts survive without star
   assert.deepEqual(present.capabilities, { supports: { vision: false, streaming: false, tool_calls: false, reasoning_effort: [] }, limits: {} });
   assert.equal(present.preview, false);
   assert.equal(Object.isFrozen(present.capabilities) && Object.isFrozen(present.capabilities.supports) && Object.isFrozen(present.capabilities.limits), true);
-  assert.deepEqual(filterCopilotModels({ data: [present] }, () => false), { data: [] });
 });
 
 test("reported reasoning and vision facts do not supply missing modalities, limits or prices", () => {
@@ -182,6 +179,5 @@ for (const [id, format] of frozen) {
     assert.deepEqual(copilotModelFormats(result.data[0]), [format]);
     assert.deepEqual(decode([row(id, { supported_endpoints: undefined })]), { data: [] });
     assert.deepEqual(decode([row(id, { policy: { state: "unconfigured" } })]), { data: [] });
-    assert.deepEqual(filterCopilotModels(result, () => false), { data: [] });
   });
 }

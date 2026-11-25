@@ -67,6 +67,7 @@ models:
       upstream: syn:large:text
       capabilities: [llm.chat, llm.messages]
     - id: synthetic/hf:openai/gpt-oss-120b
+      displayName: "GPT-OSS 120B"
       upstream: hf:openai/gpt-oss-120b
       capabilities: [llm.chat, llm.messages]
       nativeCapabilities:
@@ -85,6 +86,7 @@ models:
             contextWindow: 131072
             maxOutputTokens: 65536
     - id: synthetic/hf:zai-org/GLM-4.7-Flash
+      displayName: "GLM-4.7 Flash"
       upstream: hf:zai-org/GLM-4.7-Flash
       capabilities: [llm.chat, llm.messages]
       nativeCapabilities:

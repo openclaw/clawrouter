@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "../grant-runtime.ts";
-import { grantQuotaExhausted, grantQuotaRatio, quotaRuntime } from "../grant-quota.ts";
+import { quotaRuntime } from "../grant-quota.ts";
+import { grantQuotaExhausted, grantQuotaRatio } from "../../shared/grant-quota.ts";
 
 const now = Date.parse("2030-01-01T00:00:00Z"), iso = offset => new Date(now + offset).toISOString();
 const window = (id, remaining = 0, offset = 0) => ({ id, kind: "subscription", unit: "percent", window: id, limit: 100, remaining, resetAt: null, observedAt: iso(offset) });

@@ -1,0 +1,213 @@
+{
+  "schema": 1,
+  "source": "e3bfa63b8bd162d2bfd632bafec8842902f74a28",
+  "controlSha256": "1e9d87757d9dcfce668aeb5000e95a0adb6dc26d1d0d3cc9520624835c22afa1",
+  "worker": "clawrouter-native-qualification-870a9258ae58",
+  "blue": "009c3288-ee3f-4d50-97c2-dddb97591a4f",
+  "green": "094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+  "recovery": "6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+  "blueRuntimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+  "greenRuntimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+  "startedAt": "2026-11-18T07:11:50.401Z",
+  "mode": "recover",
+  "qualified": false,
+  "limits": [
+    "Controller evidence only; synthetic upstream, old-state/mixed-callback, accounting/envelope and saved Codex session evidence must be independently collected and reviewed."
+  ],
+  "result": "recovered",
+  "finishedAt": "2026-11-18T07:12:15.600Z",
+  "observations": [
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:52.952Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 2,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 1,
+      "members": 8,
+      "issued": 2,
+      "seen": 2
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:53.414Z",
+      "accepting": false,
+      "poolPhase": "draining",
+      "control": {
+        "schema": 1,
+        "revision": 3,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 1,
+      "members": 8,
+      "issued": 2,
+      "seen": 2
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:55.708Z",
+      "accepting": false,
+      "poolPhase": "draining",
+      "control": {
+        "schema": 1,
+        "revision": 3,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 1,
+      "issued": 1,
+      "seen": 1
+    },
+    {
+      "phase": "snapshot:094f4132-7383-40bb-aa9c-a83f3ee4ba08",
+      "at": "2026-11-18T07:11:58.001Z",
+      "accepting": false,
+      "poolPhase": "closed",
+      "control": {
+        "schema": 1,
+        "revision": 3,
+        "runtimeSha": "b5b109dfccd9bc42ac8b1fdf7cbb621c58d2294753a19ba1f39fc1758086e7eb",
+        "fingerprint": "b8398c83dbf94161e958d460b773975e64a58c1f019969201fadd3806edecf88"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:02.016Z",
+      "accepting": false,
+      "poolPhase": "closed",
+      "control": {
+        "schema": 1,
+        "revision": 3,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:02.674Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:04.935Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 0,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:07.364Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 1,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:09.560Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 3,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:11.778Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 5,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "snapshot:6c19de8b-49c7-4c63-a4e7-a0fd731ae499",
+      "at": "2026-11-18T07:12:13.998Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 0,
+      "members": 8,
+      "issued": 0,
+      "seen": 0
+    },
+    {
+      "phase": "recovered",
+      "at": "2026-11-18T07:12:15.600Z",
+      "accepting": true,
+      "poolPhase": "serving",
+      "control": {
+        "schema": 1,
+        "revision": 4,
+        "runtimeSha": "6475f07303ec02b2a981825e95224b0e89e38d2d7ab0079279d839beb31e3671",
+        "fingerprint": "1d6a24f384273b48ac9d4348f6304c62110e699e4739c7119558885053a82082"
+      },
+      "grants": 1,
+      "members": 8,
+      "issued": 1,
+      "seen": 1
+    }
+  ]
+}

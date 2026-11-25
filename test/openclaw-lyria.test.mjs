@@ -12,11 +12,12 @@ const sourceHead = "3645a2c86518e9e98e4df2a81d00355bc6b082c0";
 const models = ["lyria-3-clip-preview", "lyria-3-pro-preview"];
 const dispatched = ["clip", "pro", "image", "text", "eof", "error", "persist", "cancel"];
 const denied = ["budget", "denied", "missing", "stale", "foreign", "preabort"];
-const entries = ["native", "manifest"].flatMap(route => [...dispatched, ...denied].map(kind => ({
+const route = "native";
+const entries = [...dispatched, ...denied].map(kind => ({
   id: `lyria_${route}_${kind}`, route, kind, model: kind === "pro" ? models[1] : models[0],
-})));
+}));
 
-for (const route of ["native", "manifest"]) test(`actual registered Lyria music tool through ${route} Worker and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
+test("actual registered Lyria music tool through native Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const mp3 = readFileSync(join(source, "test/fixtures/media/lyria-silence.mp3"));
   assert.equal(createHash("sha256").update(mp3).digest("hex"), "94bf451427043b32a9893976aefdea79d784323e5422f1f986fb22548615162b");
   const wav = silenceWav(), audio = { mp3: mp3.toString("base64"), wav: wav.toString("base64") };
@@ -24,7 +25,7 @@ for (const route of ["native", "manifest"]) test(`actual registered Lyria music 
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(route), upstreamFixture(audio));
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(audio));
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const entry of entries.filter(entry => entry.route === route)) {
       await kv.put(`policies/${entry.id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: entry.kind === "denied" ? ["openai"] : ["google-gemini"],
@@ -34,6 +35,11 @@ for (const route of ["native", "manifest"]) test(`actual registered Lyria music 
     }
     await kv.put("connections/google-gemini", JSON.stringify({ providerId: "google-gemini", enabled: true }));
     const origin = String(await mf.ready).replace(/\/$/, "");
+    const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-lyria_native_clip-fixture-secret" } });
+    assert.equal(catalogResponse.status, 200);
+    const offers = (await catalogResponse.json()).providers.find(provider => provider.id === "google-gemini").offers;
+    for (const model of models) assert.ok(offers.some(offer => offer.endpoint === "music_generate" && offer.modelId === `google/${model}` && offer.routeKind === "native" && offer.eligible));
+    assert.ok(offers.filter(offer => offer.endpoint === "music_generate").every(offer => offer.routeKind !== "manifest"));
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-lyria-contract.test.ts", import.meta.url),
       testPath: "src/agents/tools/worker-contract.test.ts", env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_ROUTE: route, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio) } });
     const upstream = await mf.getWorker("upstream");
@@ -77,6 +83,7 @@ for (const route of ["native", "manifest"]) test(`actual registered Lyria music 
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
 
+// Direct Worker transport coverage does not imply a manifest catalog offer.
 test("real Worker negotiates identity without changing complete audio or accounting", { timeout: 30_000 }, async () => {
   const audio = { mp3: "", wav: silenceWav().toString("base64") };
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
@@ -84,7 +91,7 @@ test("real Worker negotiates identity without changing complete audio or account
     const temporary = await mkdtemp(join(tmpdir(), "clawrouter-lyria-encoding-"));
     let mf;
     try {
-      mf = await startWorkerdFixture(temporary, routerFixture(route), upstreamFixture(audio));
+      mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(audio));
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       for (const kind of ["pro", "negotiated"]) {
         const id = `lyria_${route}_${kind}`;
@@ -140,11 +147,8 @@ async function settledUsage(origin, id, charged) {
   }
   return receipt;
 }
-function routerFixture(transport) {
+function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-    import { snapshot } from "./worker/providers.ts";
-    // Exercise actual manifest discovery in its own isolate, matching existing media fixtures.
-    ${transport === "manifest" ? 'snapshot.providers.find(provider => provider.id === "google-gemini").endpoints.find(endpoint => endpoint.id === "music_generate").native_proxy = false;' : ""}
     const requests = [];
     export default { ...handler, async fetch(request, env, context) {
       const path = new URL(request.url).pathname;
@@ -153,10 +157,8 @@ function routerFixture(transport) {
       if (path === "/fixture/alternate") return new Response("unexpected alternate");
       const response = await handler.fetch(request, { ...env, GOOGLE_API_KEY: "fixture-original-google-key" }, context);
       const id = /^Bearer clawrouter-live-([^-]+)-/.exec(request.headers.get("authorization") ?? "")?.[1] ?? "";
-      if (path !== "/v1/catalog" || !response.ok) return response;
-      const route = id.includes("_manifest_") ? "manifest" : "native", catalog = await response.json();
-      // Narrow only real scoped offers; preserve model, eligibility and billing facts.
-      for (const provider of catalog.providers) provider.offers = provider.offers.filter(offer => offer.endpoint === "music_generate" && offer.routeKind === route);
+      if (path !== "/v1/catalog" || !response.ok || !(id.endsWith("_stale") || id.endsWith("_foreign"))) return response;
+      const catalog = await response.json();
       // Explicit malformed-discovery cases must fail before any paid POST.
       if (id.endsWith("_stale")) catalog.observedAt = new Date(Date.now() - 61000).toISOString();
       if (id.endsWith("_foreign")) for (const provider of catalog.providers) for (const offer of provider.offers) offer.route = "https://foreign.example/music";

@@ -9,12 +9,14 @@ import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { isQualifiedVertexModelLocation } from "./vertex-model-eligibility.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
 import { miniMaxEnvironmentBinding, miniMaxMediaProjection, miniMaxMusicRequirement } from "./native-media-credential.ts";
-import { isModelDiscovery } from "./model-discovery.ts";
-import { publicCatalogProvider } from "./public-model-discovery-formats.ts";
+import { isModelDiscovery, publicCatalogProvider } from "./model-discovery-formats.ts";
 import { configuredEndpointPath } from "./endpoint-path.ts";
 import { applyTemplateHeaders, resolveTemplate, PreparationAdmission, preparationValue, preparationHeader, preparationReplace } from "./provider-templates.ts";
 import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
-import { envValue, HttpError } from "./utils.ts";
+import { envValue } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
+import { assertXiaomiTokenPlanCredential } from "./xiaomi-plan-credentials.ts";
+import { assertQwenCodingPlanCredential } from "./qwen-plan-credentials.ts";
 
 export interface GrantRequirement extends ProviderBindingRequirement { model?: string | null }
 
@@ -141,6 +143,8 @@ export function applyProviderCredential(
 ): void {
   const scheme = providerCredentialScheme(provider, grant);
   const secret = providerSecret(provider, scheme, grant, env, owner);
+  if (secret) assertXiaomiTokenPlanCredential(provider.id, secret);
+  if (secret) assertQwenCodingPlanCredential(provider.id, secret);
   if (scheme.type === "bearer" && secret) preparationHeader(headers, scheme.header, preparationReplace(scheme.format, "${secret}", () => secret, owner, 8192), owner);
   else if (scheme.type === "api_key" && secret) preparationHeader(headers, scheme.header, secret, owner);
   else if (scheme.type === "query_api_key" && secret) { owner?.query(scheme.param, secret); query.set(scheme.param, secret); }

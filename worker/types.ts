@@ -1,5 +1,6 @@
 import type { GrantKind, GrantQuotaKind } from "../shared/provider-snapshot.ts";
 import type { MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
+import type {LargeHttpEnv} from './large-http/admission.ts';
 import type { GrantRoutingPolicy, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride } from "../shared/contracts";
 export type { GrantSelectionStrategy, GrantStickiness, GrantRoutingPolicy, ProviderConnection, GrantAccount, GrantExtraUsage, GrantLane, BudgetOverride, PolicyBinding } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
@@ -27,7 +28,7 @@ export type {
 } from "../shared/provider-snapshot.ts";
 export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing } from "../shared/contracts";
 
-export interface Env {
+export interface Env extends LargeHttpEnv {
   CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
   // Object bindings, never generic provider environment strings or grant-pool entries.
   PRIVATE_CODEX_POLICY?: { get(): Promise<string> };

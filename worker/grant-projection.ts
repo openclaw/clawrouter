@@ -6,7 +6,7 @@ import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
 import { miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import type { UpstreamGrant } from "./types";
 import { readNativeMediaBinding } from "../shared/native-media-binding.ts";
 

@@ -1,3 +1,4 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page } from "@playwright/test";
 import type { AccessPolicy, AccessUser, AdminBootstrapResponse, AdminUsageRow, UsageAuditEvent, UsageSnapshot } from "../src/ui-types";
 
@@ -5,6 +6,7 @@ test("unavailable usage shows unknown spend and policy limits, then recovers", a
   const state = await fixture(page);
   state.failUsage = true;
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
   await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
   await expect(page.getByText("No request audit events recorded yet.")).toHaveCount(0);
@@ -43,6 +45,7 @@ test("Usage renders recorded cost bases and partial Fusion without reclassifying
   ];
   Object.assign(state.usage.usage.summary, { requestCount: 1_000, actualCostMicros: 2_000_000, unpricedRequestCount: 2 });
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".auditCost strong")).toHaveText([...cases.map(([, , value]) => value), "≥$1.00 accounted; 1 unpriced"]);
   await expect(page.locator(".auditCost small")).toHaveText([...cases.map(([, , , label]) => label), "accounted spend"]);
   const spend = page.locator(".usageSummaryGrid .metric").filter({ has: page.getByText("accounted spend", { exact: true }) });
@@ -94,6 +97,7 @@ test("policy and principal budget views show used reservations separately from r
       breakdown: [{ principal: "member@example.com", configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 }] },
   });
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".budgetUsage").first()).toContainText("$2.00 used");
   await expect(page.locator(".budgetUsage").first()).toContainText("$8.00 remaining · Shared policy pool");
   await expect(page.locator(".budgetUsage").nth(1)).toContainText("Separate balance per principal");
@@ -114,11 +118,11 @@ for (const principal of ["initial", "changed"] as const) {
       state.email = "second@example.com";
     }
     state.failBootstrap = true;
-    if (principal === "initial") await page.goto("/dashboard/usage");
+    if (principal === "initial") { await page.goto("/dashboard/usage"); await openLegacyUsage(page); }
     else await focusRefresh(page, "2026-07-06T12:01:00.000Z");
     await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
     await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
-    if (principal === "changed") await page.getByRole("button", { name: "Usage", exact: true }).click();
+    if (principal === "changed") { await page.getByRole("button", { name: "Usage", exact: true }).click(); await openLegacyUsage(page); }
     await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
     await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
     await expect(page.getByRole("button", { name: "Retry refresh" })).toBeEnabled();

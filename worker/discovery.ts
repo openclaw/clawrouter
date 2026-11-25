@@ -2,7 +2,7 @@ import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
 import { isPublishedMusicInputSupport } from "../shared/native-capabilities.ts";
 import { readPublishedInputOrigin } from "./published-input-receipt.ts";
-import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
+import { manifestOnlyPublicCatalog } from "./model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
@@ -16,7 +16,8 @@ import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
 import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
-import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
+import { activeOperationCandidates } from "./grant-eligibility";
+import { policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
 import { assertOperationConfiguration, openRouterPcmModel, type GrantRequirement } from "./provider-auth";
 import { budgetPrincipal } from "./budget-scope";
 import { budgetStatus, providerBudgetStatus } from "./ledgers";
@@ -27,9 +28,10 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey, hasProxyKeyIntent, proxyAdmission } from "./proxy-auth";
-import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import { assertProviderAccess, listHealth, providerReadinessForState, type Readiness } from "./providers"; import { modelRoute, snapshot, unifiedPathForEndpoint } from "./provider-catalog"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types";
-import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
+import { errorResponse, privateJson, sha256Hex } from "./utils";
+import { HttpError } from "./http-error";
 import { responsesControl } from "./responses-lifecycle.ts";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
@@ -39,7 +41,7 @@ import { copilotPublicRecord, qualifiedPublicModel, type CopilotPublicDiscoveryV
 // and policy projections are always rebuilt from this request's observations.
 function staticProviderProjection(provider: CompiledProvider) {
   const models = new Map(provider.models.map(model => {
-    const display_name = `${provider.display_name} · ${model.id}`;
+    const display_name = model.displayName ?? `${provider.display_name} · ${model.id}`;
     const availability = model.availability ? { availability: structuredClone(model.availability) } : {};
     return [model.id, {
       openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name, ...availability }),
@@ -104,7 +106,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const inventory = entitlements.inventory;
   if (anthropic) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
-      id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
+      id: model.id, type: "model", display_name: model.displayName ?? `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
       capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
     return { data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null };
@@ -112,7 +114,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).flatMap((model) => {
     const capabilities = model.capabilities;
     const compiled = compiledProjection(provider).models.get(model.id)?.openai;
-    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}` }), capabilities }] : [];
+    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: model.displayName ?? `${provider.display_name} · ${model.id}` }), capabilities }] : [];
   }));
   const fusion = rows.find((row) => row.provider === "clawrouter");
   if (fusion?.allowed && fusion.readiness.executable) data.unshift({
@@ -209,7 +211,7 @@ export function* copilotDiscoveryPieces(view: CopilotPublicDiscoveryView, varian
 function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, endpointId: string): boolean {
   const endpoint = provider.endpoints.find(endpoint => endpoint.id === endpointId);
   const facts = model.nativeCapabilities?.endpoints[endpointId];
-  return provider.id === "openai" && endpointId === "responses" && endpoint?.path === "/v1/responses"
+  return ["openai", "xai"].includes(provider.id) && endpointId === "responses" && endpoint?.path === "/v1/responses"
     && endpoint.method === "POST" && endpoint.request_format === "openai.responses" && endpoint.response_format === "openai.responses"
     && model.capabilities.includes("llm.responses") && modelSupportsEndpoint(provider, model, endpoint)
     && model.nativeCapabilities?.version === "clawrouter.native-capabilities.v1"
@@ -296,6 +298,14 @@ function catalogProjection(entitlements: ClientEntitlements, publicOrigin: strin
     models: fusion.readiness.executable ? [{ id: FUSION_MODEL_ID, upstream: FUSION_MODEL_ID, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }] : [],
   });
   return { version: "clawrouter.client-catalog.v1", observedAt: entitlements.observedAt, scope: entitlements.scope, providers };
+}
+
+// Authenticated control-plane callers reuse the exact inference eligibility
+// projection. Rebuild from this request's admission; never cache this separately.
+export async function catalogForProxyIdentity(auth: AuthorizedIdentity, env: Env): Promise<ClientCatalog> {
+  return catalogProjection(await entitlementRowsForEntries([auth], env, {
+    authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId,
+  }));
 }
 
 export async function meResponse(request: Request, env: Env): Promise<Response> {
@@ -615,13 +625,14 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog" && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
-        if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
+        if (keyScope && mode === "http" && common.eligible && model && (provider.id === "xai" || unified === "/v1/responses") && supportsHostedSearch(provider, model, endpoint.id)) {
           const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] }, provider.id);
           if (hosted.status !== "exact-blocked" || hosted.reasonCode === "pricing_required") hostedToolAdmission = {
             version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
           };
         }
-        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+        if (provider.id === "xai" && hostedToolAdmission) native.hostedToolAdmission = hostedToolAdmission;
+        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(provider.id === "openai" && hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
       });
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];

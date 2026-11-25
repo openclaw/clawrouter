@@ -6,7 +6,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { createRealtimeLedger } from '../scripts/realtime-diagnostics.mjs';
 import { startBundledWorkerdFixture } from './helpers/workerd.mjs';
+import { createWsCloseObservation } from './helpers/ws-close-observation.mjs';
 const require = createRequire(import.meta.resolve('wrangler/package.json'));
 const { build } = require('esbuild');
 
@@ -119,13 +121,16 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     const url = new URL(typeof input[0] === 'string' || input[0] instanceof URL ? input[0] : input[0].url);
     if (key === 'ledger' && url.pathname === holdPath) { calls.held++; await new Promise(resolve => releases.push(resolve)); }
     const observed = key === 'authority' || url.pathname === '/status';
-    const started = Date.now();
+    const started = Date.now(), startedMono = performance.now();
     if (observed) { calls[key]++; await pause(delay[key]); }
-    const dispatched = Date.now(), response = await stub.fetch(...input);
+    const dispatched = Date.now(), dispatchedMono = performance.now(), response = await stub.fetch(...input);
+    const completedMono = performance.now();
     if(key==='authority'&&holdInspection&&!heldInspection){heldInspection=true;preparation.phase='held-completed-authority-reply';
       try{const gate=await fetch('https://cadence-gate.example/observation');await gate.text();}
       catch(primary){try{await response.body?.cancel();}catch(cleanup){throw new AggregateError([primary,cleanup],'cadence held-reply cleanup');}throw primary;}}
-    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status });
+    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status,
+      isolate: { clock: "performance.now", started: startedMono, dispatched: dispatchedMono, completed: completedMono,
+        injectedDelayMs: delay[key], preDispatchWaitMs: dispatchedMono - startedMono, fetchMs: completedMono - dispatchedMono } });
     return response;
   } }; };
 } }); }
@@ -171,10 +176,15 @@ export default { async fetch(r, env, ctx) {
 }, queue: handler.queue };
 `;
 const upstream = String.raw`
-let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null, connections = 0;
+let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null, connections = 0, timerStartedAt = null;
 export default { async fetch(r) {
   if(new URL(r.url).origin==='https://cadence-gate.example')return fetch(__GATE_ORIGIN__+new URL(r.url).pathname,r);
-  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, closedAt, connections, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
+  if (new URL(r.url).pathname === '/fixture-stats') {
+    const statsSnapshotAt = Date.now();
+    return Response.json({ appends, outputs, creates, closedAt, connections, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])),
+      timer: { clock: 'upstream Date.now', startedAt: timerStartedAt, firstTickAt: ticks[0] ?? null,
+        lastTickAt: ticks.at(-1) ?? null, statsSnapshotAt, tickCount: ticks.length } });
+  }
   if (r.headers.get('authorization') !== __EXPECTED_AUTH__) throw Error('wrong route');
   connections++;
   const pair = new WebSocketPair(), ws = pair[1]; ws.accept(); let timer, active;
@@ -187,6 +197,7 @@ export default { async fetch(r) {
       creates++; active = 'response_cadence';
       send({ type: 'response.created', response: { id: active, metadata: e.response.metadata } });
       send({ type: 'response.output_item.added', response_id: active, item: { id: 'assistant_cadence', type: 'message', role: 'assistant' } });
+      timerStartedAt = Date.now();
       timer = setInterval(() => { outputs++; ticks.push(Date.now()); send({ type: 'response.output_audio.delta', response_id: active, item_id: 'assistant_cadence', delta: btoa(String.fromCharCode(...new Uint8Array(160))), fixture_at: Date.now() }); }, 20);
     }
     if (e.type === 'input_audio_buffer.append') {
@@ -215,7 +226,8 @@ function observe(ws) {
     throw Error('missing ' + type + ': ' + errors);
   } };
 }
-async function observedRuntime(temporary, upstreamSource, bindings) {
+async function observedRuntime(temporary, upstreamSource, bindings, witness) {
+  witness?.mark("bundle");
   const bundle = await build({ stdin: { contents: router.replace('__INITIAL_SESSION__', JSON.stringify(session(false))).replace('__ASR_SESSION__', JSON.stringify(session(true))),
     resolveDir: process.cwd(), sourcefile: 'cadence-fixture.ts', loader: 'ts' }, write: false, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
     plugins: [{ name: 'observe-original-realtime-preparation', setup(build) {
@@ -242,42 +254,80 @@ async function observedRuntime(temporary, upstreamSource, bindings) {
         return { contents: source.replace(closed, closed + '\n    this.options.fixtureProducerClosed?.();'), loader: 'ts', resolveDir: dirname(path) };
       });
     } }] });
+  witness?.mark("ready");
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamSource, { preventEviction: true, bindings });
 }
 async function fixture(t, options = {}) {
+  const witness = options.witness; witness?.mark("temporary");
   const temporary = await mkdtemp(join(tmpdir(), 'clawrouter-cadence-'));
-  let mf, server, gate, drainProbe, released = false, hasPrimary = false, primary; const clients = [], sockets = [], serverFailures = [];
+  let mf, server, gate, drainProbe, closeObservation, released = false, hasPrimary = false, primary; const clients = [], sockets = [], serverFailures = [];
   const release = () => { released = true; gate?.end('released'); gate = undefined; };
+  witness?.mark("cleanup_registration");
   t.after(async () => {
-    release(); const failures = [];
+    // BEGIN original cadence cleanup: independently attempted, never replayed.
+    const failures = [];
+    witness?.start("release");
+    try { release(); witness?.end("release"); } catch (error) { failures.push(error); witness?.end("release", true, error); }
+    witness?.start("sockets"); let before = failures.length;
     for (const socket of sockets) try { socket.close(); } catch (error) { failures.push(error); }
-    try { await drainProbe?.(); } catch (error) { failures.push(error); }
-    for (const observed of clients) { const outcome = await observed; if (outcome.failed) failures.push(outcome.error); }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    if (server) try { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } catch (error) { failures.push(error); }
-    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    witness?.end("sockets", failures.length > before, failures[before]);
+    if (drainProbe) {
+      witness?.start("drain");
+      try { await drainProbe?.(); witness?.end("drain"); } catch (error) { failures.push(error); witness?.end("drain", true, error); }
+    }
+    witness?.start("clients"); before = failures.length;
+    for (const observed of clients) try { const outcome = await observed; if (outcome.failed) failures.push(outcome.error); } catch (error) { failures.push(error); }
+    witness?.end("clients", failures.length > before, failures[before]);
+    if (mf) {
+      witness?.start("dispose");
+      try { await mf?.dispose(); witness?.end("dispose"); } catch (error) { failures.push(error); witness?.end("dispose", true, error); }
+    }
+    if (closeObservation) {
+      witness?.start("observer");
+      try { await closeObservation?.finish(); witness?.end("observer"); } catch (error) { failures.push(error); witness?.end("observer", true, error); }
+    }
+    if (server) {
+      witness?.start("server");
+      try { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); witness?.end("server"); } catch (error) { failures.push(error); witness?.end("server", true, error); }
+    }
+    witness?.start("remove");
+    try { await rm(temporary, { recursive: true, force: true }); witness?.end("remove"); } catch (error) { failures.push(error); witness?.end("remove", true, error); }
     failures.push(...serverFailures);
+    witness?.end("server_errors", serverFailures.length > 0, serverFailures[0]);
+    failures.push(...(witness?.flush() ?? []));
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'cadence fixture cleanup');
+    // END original cadence cleanup.
   });
+  witness?.registered();
   try {
+  witness?.mark("server");
   server = createServer((request, response) => { request.resume(); if (request.url !== '/observation') { response.writeHead(404); response.end(); }
     else if (released) response.end('released'); else if (gate) { serverFailures.push(Error('unexpected second held observation')); response.writeHead(500); response.end(); } else gate = response; });
   server.on('error', error => serverFailures.push(error));
+  witness?.mark("listen");
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); }); });
   const expectedKey = options.large ? 's'.repeat(8185) : 'fixture-upstream-key';
   const upstreamSource = upstream.replace('__GATE_ORIGIN__', JSON.stringify('http://127.0.0.1:' + server.address().port)).replace('__EXPECTED_AUTH__', JSON.stringify('Bearer ' + expectedKey));
   // Idle Durable Object eviction is a local co-scheduling stall, not router latency.
-  mf = await observedRuntime(temporary, upstreamSource, { OPENAI_API_KEY: expectedKey });
+  mf = await observedRuntime(temporary, upstreamSource, { OPENAI_API_KEY: expectedKey }, witness);
+  if (options.observeClose) {
+    witness?.mark("ready"); const ready = await mf.ready;
+    witness?.mark("observer"); closeObservation = createWsCloseObservation(ready);
+  }
+  witness?.mark("namespace");
   const kv = await mf.getKVNamespace('POLICY_KV', 'router'), ns = await mf.getDurableObjectNamespace('ACCESS_CONTROL', 'router');
+  witness?.mark("authority");
   const authority = ns.get(ns.idFromName('policy-bindings')), svc = await mf.getWorker('upstream');
   const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret, ...(options.probe ? { 'x-fixture-preparation-probe': 'on' } : {}), ...(options.lateFailure ? { 'x-fixture-late-failure': 'on' } : {}), ...(options.large ? { 'openai-organization': 'o'.repeat(8192), 'openai-project': 'p'.repeat(8192) } : {}) };
   const track = pending => { clients.push(Promise.resolve(pending).then(value => ({ failed: false, value }), error => ({ failed: true, error }))); return pending; };
   const policy = async (extra = {}) => {
-    const r = await authority.fetch('https://authority/policies/put', { method: 'POST', body: JSON.stringify({ policyId: 'fixture', policy: { enabled: true, generation: 'g1', providers: ['openai'], budgetMode: 'soft', monthlyBudgetMicros: 100_000_000, retainRequestContent: false, ...extra } }) }); await r.text(); assert.equal(r.status, 200);
+    witness?.mark("policy");
+    const r = await authority.fetch('https://authority/policies/put', { method: 'POST', body: JSON.stringify({ policyId: 'fixture', policy: { enabled: true, generation: 'g1', providers: ['openai'], budgetMode: 'soft', monthlyBudgetMicros: 100_000_000, retainRequestContent: false, ...extra } }) }); await r.text(); witness?.mark("policy_status"); assert.equal(r.status, 200);
   };
   const credential = { enabled: true, secretSha256: createHash('sha256').update(secret).digest('hex'), policyId: 'fixture', policyGeneration: 'g1' };
-  const setCredential = async extra => { const r = await authority.fetch('https://authority/credentials/mutate', { method: 'POST', body: JSON.stringify({ operation: 'put', credentialId: 'fixture', scope: 'admin', actor: { auth: 'admin_token', role: 'admin', email: 'fixture@example.invalid' }, credential: { ...credential, ...extra } }) }); assert.equal(r.status, 200, await r.text()); };
-  await track(policy()); await kv.put('credentials/fixture', JSON.stringify(credential));
+  const setCredential = async extra => { witness?.mark("credential"); const r = await authority.fetch('https://authority/credentials/mutate', { method: 'POST', body: JSON.stringify({ operation: 'put', credentialId: 'fixture', scope: 'admin', actor: { auth: 'admin_token', role: 'admin', email: 'fixture@example.invalid' }, credential: { ...credential, ...extra } }) }); witness?.mark("credential_status"); assert.equal(r.status, 200, await r.text()); };
+  await track(policy()); witness?.mark("credential"); await kv.put('credentials/fixture', JSON.stringify(credential));
+  witness?.mark("connection");
   await kv.put('connections/openai', JSON.stringify({ providerId: 'openai', enabled: true, monthlyBudgetMicros: 100_000_000 }));
   const call = (url, options) => track(mf.dispatchFetch(url, options).then(async response => ({ status: response.status, text: await response.text() })));
   const probeState = async () => { const response = await call('https://router/fixture-calls'); assert.equal(response.status, 200); return JSON.parse(response.text); };
@@ -291,13 +341,24 @@ async function fixture(t, options = {}) {
     return done;
   } : undefined;
   return { mf, kv, authority, svc, headers, policy, setCredential, release, released: () => released, held: () => !!gate, primary(error) { hasPrimary = true; primary = error; },
-    track, probeState, drain: drainProbe,
+    track, probeState, drain: drainProbe, closeObservation,
     owned(mode) { return call('https://router/fixture-owned-inspection', { method: 'POST', headers, body: mode }); },
-    control(path, body) { return call('https://router' + path, { method: 'POST', body }); },
-    stats() { return track(svc.fetch('https://upstream/fixture-stats').then(response => response.json())); },
+    control(path, body) { witness?.mark("control"); return call('https://router' + path, { method: 'POST', body }); },
+    stats() { witness?.mark("stats"); return track(svc.fetch('https://upstream/fixture-stats').then(response => response.json())); },
     open(asr, response = true, authHeaders = headers) { return track((async () => {
-      const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
-      const ws = r.webSocket, socket = ownSocket(ws); sockets.push(socket); const q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
+      witness?.mark("upgrade");
+      const dispatch = () => mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } });
+      const r = await (closeObservation ? closeObservation.capture(dispatch) : dispatch());
+      let socket;
+      if (closeObservation && r.webSocket) { socket = ownSocket(r.webSocket); sockets.push(socket); }
+      witness?.mark("observer_acquired");
+      closeObservation?.assertAcquired();
+      witness?.mark("upgrade101");
+      assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
+      const ws = r.webSocket;
+      if (!socket) { socket = ownSocket(ws); sockets.push(socket); }
+      witness?.mark("session");
+      const q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); witness?.mark("session_ack"); await q.next('session.updated');
       if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
       return { ws, q, close: socket.close };
     })()); }
@@ -320,6 +381,7 @@ async function cadence(t, asr, frames, rpc) {
   const delay = stats.appends.map(x => x.at - offeredAt[x.index]);
   const result = { asr, durationMs: Date.now() - start, offered: frames, nativeChunkMs: 20, bytesPerChunk: 160, injectedAuthorityRpcMs: rpc?.authority ?? 15, injectedLedgerStatusRpcMs: rpc?.ledger ?? 30,
     egress: stats.appends.length, acknowledgments: c.q.acks.length, upstreamAudioFrames: stats.outputs, receivedAudioFrames: c.q.outputDelay.length, maxUpstreamTickGapMs: stats.maxTickGapMs,
+    readerSnapshot: { clock: 'Node Date.now', phase: 'after stats and probeState RPCs; before close/assertions', at: Date.now(), windowStartedAt: start }, upstreamTimer: stats.timer,
     maxEgressMs: Math.max(-1, ...delay), maxDownstreamMs: Math.max(-1, ...c.q.outputDelay), maxSenderScheduleLagMs: Math.max(...scheduleLag), errors: c.q.errors, closed: c.q.closed, calls,
     limits: 'Production shared16-event/256KiB queue, aggregate/idle limits and4096 bidirectional event cap unchanged. Synthetic workerd/SQL only; no physical/provider acceptance.' };
   t.diagnostic(JSON.stringify(result));
@@ -343,15 +405,17 @@ test('ASR first-byte admission keeps native cadence with 40ms authority / 30ms l
 
 const append = (c, index) => c.ws.send(JSON.stringify({ type: 'input_audio_buffer.append', event_id: 'cad_' + index, audio: Buffer.alloc(160, 255).toString('base64') }));
 async function until(check) { const end = Date.now() + 3000; for (;;) { const value = await check(); if (value) return value; if (Date.now() >= end) assert.fail('condition deadline exceeded'); await sleep(5); } }
-for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 'tenant', 'generation', 'route', 'asr-model', 'budget']) {
-  if (!asr && ['asr-model', 'budget'].includes(kind)) continue;
-  test('bounded media authority ' + kind + ', ASR=' + asr, { timeout: 15_000 }, async t => {
-    const f = await fixture(t);
+async function authorityVariant(t, asr, kind, caseId) {
+  const witness = createRealtimeLedger(caseId, text => t.diagnostic(text));
+  let f, bodyFailed = false, bodyReason;
+  try {
     const diagnostic = asr && ['revocation', 'generation', 'budget'].includes(kind);
+    f = await fixture(t, { observeClose: diagnostic, witness });
     if (diagnostic) await f.control('/fixture-observe', 'on');
     if (kind === 'route') await f.control('/fixture-grant', 'put');
     const c = await f.open(asr, false);
-    append(c, 0); await c.q.next('rate_limits.updated');
+    witness.mark('first_send'); append(c, 0); witness.mark('first_ack'); await c.q.next('rate_limits.updated');
+    witness.mark('mutation');
     const mutationStarted = Date.now();
     if (kind === 'revocation') await f.setCredential({ enabled: false });
     if (kind === 'principal') await f.setCredential({ principalId: 'reassigned@example.invalid' });
@@ -364,23 +428,48 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
     // storage/RPC latency is outside the socket's media freshness window.
     const changed = Date.now(), mutationMs = changed - mutationStarted;
     let sent = 1; const sentAt = [];
+    witness.mark('send_loop');
     while (!c.q.closed && Date.now() - changed < 1000) { sentAt.push(Date.now()); append(c, sent++); await sleep(20); }
     const elapsed = Math.max(0, (c.q.closedAt ?? Date.now()) - changed), stats = await f.stats();
     if (diagnostic) {
+      witness.mark('calls');
       const calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
       // A failed deadline must retain authority/RPC, sender and both socket
       // observations; diagnostics after the assertion lose the failing state.
-      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls }));
+      witness.mark('close_snapshot');
+      const closeFrame = f.closeObservation.snapshot(changed, c.q.closedAt);
+      witness.mark('diagnostic');
+      t.diagnostic(JSON.stringify({ kind, asr, clocks: { host: "Date.now; authority ACK to client close before stats RPC", router: "performance.now; isolate-local only" }, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
+      witness.mark('assert_snapshot');
+      assert.equal(closeFrame.valid, true, 'one valid selected receiver conclude observation');
     }
+    witness.mark('assert_closed');
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
+    witness.mark('assert_elapsed');
     assert.ok(elapsed <= 250, '100ms freshness plus observed RPC envelope: ' + elapsed);
     const code = { revocation: /authority_revoked/, principal: /caller_changed/, tenant: /caller_changed/, generation: /policy_changed|authority_revoked/, route: /grant|route/, 'asr-model': /model_not_allowed/, budget: /budget_exhausted/ }[kind];
-    assert.equal(c.q.errors.length, 1); assert.match(c.q.errors[0], code);
+    witness.mark('assert_error_count'); assert.equal(c.q.errors.length, 1); witness.mark('assert_error_code'); assert.match(c.q.errors[0], code);
+    witness.mark('assert_egress');
     assert.ok(stats.appends.length <= 7, JSON.stringify({ kind, elapsed, stats }));
-    await sleep(120); assert.equal((await f.stats()).appends.length, stats.appends.length, 'no egress after retirement');
+    witness.mark('wait120'); await sleep(120); const retiredAppends = (await f.stats()).appends.length; witness.mark('assert_retired'); assert.equal(retiredAppends, stats.appends.length, 'no egress after retirement');
+    witness.mark('diagnostic');
     t.diagnostic(JSON.stringify({ kind, asr, mutationMs, closeMs: elapsed, egress: stats.appends.length, code: c.q.errors[0] }));
-  });
+    witness.mark('complete'); witness.body(false);
+  } catch (error) { bodyFailed = true; bodyReason = error; witness.body(true, error); f?.primary(error); throw error; }
+  finally { witness.finishUnregistered(bodyFailed, bodyReason); }
 }
+test('bounded media authority revocation, ASR=false', { timeout: 15_000 }, t => authorityVariant(t, false, 'revocation', 'r01'));
+test('bounded media authority principal, ASR=false', { timeout: 15_000 }, t => authorityVariant(t, false, 'principal', 'r02'));
+test('bounded media authority tenant, ASR=false', { timeout: 15_000 }, t => authorityVariant(t, false, 'tenant', 'r03'));
+test('bounded media authority generation, ASR=false', { timeout: 15_000 }, t => authorityVariant(t, false, 'generation', 'r04'));
+test('bounded media authority route, ASR=false', { timeout: 15_000 }, t => authorityVariant(t, false, 'route', 'r05'));
+test('bounded media authority revocation, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'revocation', 'r06'));
+test('bounded media authority principal, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'principal', 'r07'));
+test('bounded media authority tenant, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'tenant', 'r08'));
+test('bounded media authority generation, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'generation', 'r09'));
+test('bounded media authority route, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'route', 'r10'));
+test('bounded media authority asr-model, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'asr-model', 'r11'));
+test('bounded media authority budget, ASR=true', { timeout: 15_000 }, t => authorityVariant(t, true, 'budget', 'r12'));
 for (const mode of ['response', 'ASR', 'hard-response']) test('authority changes across real ' + mode + ' funding await retire unsent unit once', { timeout: 15_000 }, async t => {
   const input = mode === 'ASR', f = await fixture(t);
   if (mode === 'hard-response') await f.policy({ budgetMode: 'hard' });

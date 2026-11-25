@@ -1,7 +1,8 @@
 # Copilot catalog response codec
 
 `decodeCopilotModelCatalog(text: string): CopilotModelCatalog` in
-`worker/provider-copilot-catalog.ts` is an inactive pure decoder. Its result is
+`worker/provider-copilot-catalog.ts` is the pure decoder used by
+`CopilotCatalogFlow`. Its result is
 `{ data: readonly CopilotModelRow[] }`, a typed projection of reported native
 fields. It does not fetch, select credentials, publish a catalog or authorize
 inference. Existing account/request/header/format/visibility helpers remain
@@ -24,15 +25,19 @@ Known non-model objects, non-chat capabilities and `accounts/` router IDs are
 excluded. The decoder reuses `isCopilotCatalogModelVisible` and
 `copilotModelFormats`: hidden, disabled, unconfigured or unadvertised transports
 cannot reappear from static seeds or model-name guesses. Empty catalogs remain
-empty. Missing/unknown policy facts are not inference entitlement. Original
-current-policy filtering through `filterCopilotModels` is still required after
+empty. Missing/unknown policy facts are not inference entitlement.
+`CopilotCatalogFlow.acquire` intersects admitted and current caller policy after
 the complete read and fresh owner check.
 
 Context-window, prompt and output token limits remain three separate optional
 positive-safe-integer observations. Missing or invalid numeric facts stay absent;
 there is no 8192 output guess, synthetic context size, clamping or inferred limit.
-Explicit support booleans, including false, and empty or null reasoning-effort
-observations survive. Missing support facts stay unknown. Starter selection's
+Explicit support booleans, including false, survive. For
+`capabilities.supports.reasoning_effort`, the decoder trims each string, converts
+it to lowercase, removes empty strings, and removes duplicates in first-seen
+order. Unknown nonempty tags survive. An empty array stays empty, explicit
+`null` stays `null`, and a missing field stays absent. Missing support facts stay
+unknown. Starter selection's
 tool/streaming requirements remain separate from picker visibility and inference
 authority. No modalities are guessed from model names.
 

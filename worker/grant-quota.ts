@@ -1,4 +1,3 @@
-export { grantQuotaRatio, windowApplies, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh, grantCoolingDown } from "../shared/grant-quota.ts";
 import type {
   CompiledQuotaConfig, CompiledQuotaProbe, CompiledQuotaProbeWindow, CompiledQuotaWindow,
   GrantQuotaWindow, GrantRuntimeState, GrantAccount, GrantExtraUsage,
@@ -79,8 +78,8 @@ export function validGrantQuotaSnapshot(payload: unknown, probe: CompiledQuotaPr
   return probe.windows.every(definition => valid(payload, definition));
 }
 
-export function shouldFailoverGrant(status: number, method: string, capability: string, grantKey: string | null, enabled = true): boolean {
-  return enabled && !!grantKey && [401, 403, 429].includes(status) && (["GET", "HEAD"].includes(method.toUpperCase()) || capability.startsWith("llm."));
+export function shouldFailoverGrant(status: number, method: string, capability: string, grantKey: string | null, enabled = true, creditExhausted = false): boolean {
+  return enabled && !!grantKey && ([401, 403, 429].includes(status) || creditExhausted) && (["GET", "HEAD"].includes(method.toUpperCase()) || capability.startsWith("llm."));
 }
 
 // Only declared scalar account facts cross the credential-owner boundary.

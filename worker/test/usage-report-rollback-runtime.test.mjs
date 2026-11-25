@@ -13,8 +13,8 @@ test("persisted candidate/baseline/candidate keeps empty and completed projectio
     for (const cycle of entry.cycles) {
       assert.equal(cycle.reportCallsBeforeApply, cycle.canonicalCalls);
       assert.equal(cycle.eventCallsBeforeApply, cycle.canonicalCalls);
-      assert.equal(cycle.sourceBeforeApply, "retained_ledger");
-      assert.equal(cycle.sourceAfterApply, "projection");
+      assert.equal(cycle.projectionBeforeApply, false);
+      assert.equal(cycle.projectionAfterApply, true);
     }
   }
 });

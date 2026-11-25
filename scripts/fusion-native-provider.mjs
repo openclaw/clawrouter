@@ -1,8 +1,12 @@
+import { randomUUID } from 'node:crypto';
+
 // Native transports for the opt-in benchmark, not production gateway adapters.
 const rate = (input, cached, write, output) => ({ input: input / 1e6, cached: cached / 1e6, write: write / 1e6, output: output / 1e6, request: 0, tiers: [] });
 export const nativeModels = {
   'openai/gpt-6-luna': { provider: 'openai', upstream: 'gpt-6-luna', price: rate(0.1, 0.01, 0.125, 0.5), source: 'https://developers.openai.com/api/docs/models/gpt-6-luna' },
   'openai/gpt-6.1-sol': { provider: 'openai', upstream: 'gpt-6.1-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.1-sol' },
+  'openai/gpt-6.2-sol': { provider: 'openai', upstream: 'gpt-6.2-sol', price: rate(2, 0.1, 2.5, 10), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-sol', checkedAt: '2026-11-21' },
+  'openai/gpt-6.2-astra': { provider: 'openai', upstream: 'gpt-6.2-astra', price: rate(8, 0.4, 10, 40), source: 'https://developers.openai.com/api/docs/models/gpt-6.2-astra', checkedAt: '2026-11-21' },
   'anthropic/claude-sonnet-5.5': { provider: 'anthropic', upstream: 'claude-sonnet-5-5', price: rate(2, 0.1, 2.5, 10), source: 'https://platform.claude.com/docs/en/models/sonnet-5-5/overview' },
 };
 
@@ -16,9 +20,26 @@ function integer(value, optional = false) {
   return value;
 }
 
-export function nativeRequest(model, body, env) {
+export function validateOpenAiApi(api) {
+  if (!['chat-completions', 'responses'].includes(api)) throw new Error('invalid_openai_api');
+}
+
+export function nativeRequest(model, body, env, openAiApi = 'chat-completions') {
+  validateOpenAiApi(openAiApi);
   const entry = nativeModels[model];
   if (!entry) throw new Error('native_model_unknown');
+  if (entry.provider === 'openai' && openAiApi === 'responses') {
+    const format = body.response_format;
+    if (format && !['json_object', 'json_schema'].includes(format.type)) throw new Error('native_format_unsupported');
+    return {
+      url: 'https://api.openai.com/v1/responses',
+      headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
+      body: { model: entry.upstream, input: body.messages, max_output_tokens: body.max_tokens,
+        reasoning: { effort: 'medium' }, service_tier: 'default', store: false,
+        ...(format ? { text: { format: format.type === 'json_schema'
+          ? { type: 'json_schema', ...format.json_schema } : { type: 'json_object' } } } : {}) },
+    };
+  }
   if (entry.provider === 'openai') return {
     url: 'https://api.openai.com/v1/chat/completions',
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
@@ -38,7 +59,68 @@ export function nativeRequest(model, body, env) {
   };
 }
 
-export function nativeResult(model, result) {
+// Correlation only: never retain arbitrary response headers or error text.
+export function attachNativeRequestId(model, request) {
+  if (nativeModels[model]?.provider !== 'openai') return {};
+  const clientRequestId = randomUUID();
+  request.headers['X-Client-Request-Id'] = clientRequestId;
+  return { clientRequestId };
+}
+
+export function nativeResponseMetadata(model, response) {
+  if (nativeModels[model]?.provider !== 'openai') return {};
+  const id = response.headers?.get('x-request-id');
+  return typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
+    ? { providerRequestId: id } : {};
+}
+
+// Keep usage settlement independent of whether generated text is usable. Never
+// forward reasoning items or the convenience output_text field to the executor.
+const zeroToolUsage = value => value === 0 || (value !== null && typeof value === 'object'
+  && !Array.isArray(value) && Object.values(value).every(zeroToolUsage));
+
+function responsesResult(result) {
+  const u = result.usage;
+  if (!u) throw new Error('native_usage_or_identity_missing');
+  const input = integer(u.input_tokens), output = integer(u.output_tokens);
+  if (integer(u.total_tokens) !== input + output
+    || integer(u.output_tokens_details?.reasoning_tokens, true) > output) throw new Error('native_usage_invalid');
+  if (result.tool_usage !== undefined && !zeroToolUsage(result.tool_usage)) throw new Error('native_usage_unqualified');
+  const writes = u.input_tokens_details?.cache_write_tokens_details;
+  if (writes !== undefined) {
+    if (writes === null || typeof writes !== 'object') throw new Error('native_usage_invalid');
+    const long = integer(writes.ttl_12h_tokens, true), short = integer(writes.ttl_30m_tokens, true);
+    if (long) throw new Error('native_usage_unqualified');
+    if (short !== integer(u.input_tokens_details?.cache_write_tokens, true)) throw new Error('native_usage_invalid');
+  }
+  const items = Array.isArray(result.output) ? result.output : [];
+  const messages = items.filter(item => item?.type === 'message');
+  const answers = messages.filter(message => message.phase == null || message.phase === 'final_answer');
+  const message = answers[0];
+  let content = '', finish_reason = 'unknown';
+  if (result.status === 'incomplete') {
+    finish_reason = { max_output_tokens: 'length', content_filter: 'content_filter' }[result.incomplete_details?.reason] ?? 'unknown';
+  } else if (result.status === 'completed') {
+    if (items.some(item => item?.type === 'function_call')) finish_reason = 'tool_calls';
+    else if (answers.length === 1 && messages.every(item => item.role === 'assistant' && item.status === 'completed'
+      && Array.isArray(item.content) && (item.phase == null || ['commentary', 'final_answer'].includes(item.phase)))
+      && items.every(item => ['message', 'reasoning'].includes(item?.type))) {
+      if (message.content.some(part => part?.type === 'refusal')) finish_reason = 'refusal';
+      else if (message.content.every(part => part?.type === 'output_text' && typeof part.text === 'string')) {
+        content = message.content.map(part => part.text).join('');
+        finish_reason = 'stop';
+      }
+    }
+  }
+  return { model: result.model, service_tier: result.service_tier,
+    choices: [{ message: { content }, finish_reason }],
+    usage: { prompt_tokens: input, completion_tokens: output,
+      prompt_tokens_details: u.input_tokens_details, completion_tokens_details: u.output_tokens_details } };
+}
+
+export function nativeResult(model, result, openAiApi = 'chat-completions') {
+  validateOpenAiApi(openAiApi);
+  if (nativeModels[model]?.provider === 'openai' && openAiApi === 'responses') result = responsesResult(result);
   const { provider, price, upstream } = nativeModels[model];
   const u = result.usage;
   const identity = result.model === upstream || (typeof result.model === 'string' && result.model.startsWith(`${upstream}-`) && /^\d{4}-?\d{2}-?\d{2}$/.test(result.model.slice(upstream.length + 1)));
@@ -50,7 +132,9 @@ export function nativeResult(model, result) {
     const write = integer(u.prompt_tokens_details?.cache_write_tokens, true);
     if (input > 200000 || cached + write > input) throw new Error('native_usage_invalid');
     if (integer(u.prompt_tokens_details?.audio_tokens, true) || integer(u.completion_tokens_details?.audio_tokens, true)) throw new Error('native_usage_unqualified');
-    return { result, costMicros: costMicros([[input - cached - write, price.input], [cached, price.cached], [write, price.write], [output, price.output]]), provider };
+    return { result, costMicros: costMicros([[input - cached - write, price.input], [cached, price.cached], [write, price.write], [output, price.output]]), provider,
+      usageBreakdown: { uncachedInputTokens: input - cached - write, cacheReadInputTokens: cached,
+        cacheWriteInputTokens: write, cacheWrite1hInputTokens: 0, outputTokens: output } };
   }
   if (u.service_tier && u.service_tier !== 'standard') throw new Error('native_tier_unqualified');
   if (u.speed && u.speed !== 'standard') throw new Error('native_tier_unqualified');
@@ -63,7 +147,9 @@ export function nativeResult(model, result) {
   if (short + hour !== write || input + cached + write > 200000) throw new Error('native_usage_invalid');
   const content = (result.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('');
   return { result: { model: result.model, choices: [{ message: { content }, finish_reason: result.stop_reason }], usage: u },
-    costMicros: costMicros([[input, price.input], [cached, price.cached], [short, price.write], [hour, price.input * 2], [output, price.output]]), provider };
+    costMicros: costMicros([[input, price.input], [cached, price.cached], [short, price.write], [hour, price.input * 2], [output, price.output]]), provider,
+    usageBreakdown: { uncachedInputTokens: input, cacheReadInputTokens: cached,
+      cacheWriteInputTokens: short, cacheWrite1hInputTokens: hour, outputTokens: output } };
 }
 
 // Classify normalized responses before treating their text as an action.
@@ -103,9 +189,13 @@ export async function nativePins(env, fetcher = fetch, selected = Object.keys(na
     // though this benchmark does not request explicit cache creation.
     pins[id] = { id, canonicalSlug: entry.upstream, provider: entry.provider,
       price: { ...entry.price, input: Math.max(entry.price.write, entry.price.input * (entry.provider === 'anthropic' ? 2 : 1)) },
-      usagePrice: entry.price, source: entry.source, checkedAt: '2026-11-05', costSource: 'published-tariff-estimate' };
+      usagePrice: entry.price, source: entry.source, checkedAt: entry.checkedAt ?? '2026-11-05', costSource: 'published-tariff-estimate' };
   }
   return pins;
+}
+
+export function hasNativeSafetyNotice(body) {
+  return /this content can[’']t be shown|cybersecurity safety notice|safety refusal/i.test(JSON.stringify(body));
 }
 
 // Error messages may echo request content. Persist only finite diagnostic labels.
@@ -121,8 +211,10 @@ export function nativeErrorMetadata(body) {
   const param = typeof body?.error?.param === 'string' ? body.error.param : '';
   const providerParam = parameters.find(name => param === name || param.startsWith(name + '.') || param.startsWith(name + '[')) ?? 'unknown';
   const message = typeof body?.error?.message === 'string' ? body.error.message.toLowerCase() : '';
+  const policyRejection = body?.error?.type === 'invalid_request_error'
+    && body.error.code === 'invalid_prompt'
+    && message.includes('prompt was flagged as potentially violating our usage policy');
   const hints = [
-    ['safety_notice', /this content can[’']t be shown|safety refusal/],
     ['credit_balance', /credit balance/], ['spend_limit', /spend(?:ing)? (?:limit|cap)/],
     ['structured_output', /output_config|response_format|json schema|structured output/],
     ['thinking_parameters', /thinking|reasoning_effort/], ['message_format', /prefill|messages\./],
@@ -130,6 +222,6 @@ export function nativeErrorMetadata(body) {
     ['service_tier', /service_tier|service tier/],
   ];
   return { errorType: types.has(body?.error?.type) ? body.error.type : 'unknown',
-    errorHint: hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
+    errorHint: policyRejection || hasNativeSafetyNotice(body) ? 'safety_notice' : hints.find(([, pattern]) => pattern.test(message))?.[0] ?? 'unknown',
     providerCode: codes.has(body?.error?.code) ? body.error.code : 'unknown', providerParam };
 }

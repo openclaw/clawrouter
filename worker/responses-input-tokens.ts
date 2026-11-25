@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 
 // Counts share a pool, not custody. Only self-contained input is safe to send to

@@ -3,7 +3,7 @@ import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 const { openCodeSessionHeader } = await import("../opencode-session.ts");
 const { correlateIngressRequest } = await import("../correlation.ts");
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const session = "conversation:fixture/project+turn@scope=1";
 const request = (value = session, extra = {}) => {

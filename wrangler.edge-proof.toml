@@ -1,0 +1,63 @@
+# Projection only. Render with scripts/edge-proof.mjs; never deploy this template.
+name = "clawrouter-edge-proof"
+account_id = "@@ACCOUNT@@"
+main = "@@MAIN@@"
+no_bundle = true
+compatibility_date = "2026-06-05"
+compatibility_flags = ["enable_request_signal"]
+workers_dev = true
+preview_urls = false
+keep_vars = false
+
+[observability]
+enabled = false
+
+[[kv_namespaces]]
+binding = "POLICY_KV"
+id = "@@KV@@"
+
+[[queues.producers]]
+binding = "USAGE_QUEUE"
+queue = "clawrouter-edge-proof-usage"
+
+[[queues.consumers]]
+queue = "clawrouter-edge-proof-usage"
+dead_letter_queue = "clawrouter-edge-proof-usage-dlq"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 0
+
+[[durable_objects.bindings]]
+name = "BUDGET_LEDGER"
+class_name = "BudgetLedgerObject"
+[[durable_objects.bindings]]
+name = "USAGE_LEDGER"
+class_name = "UsageLedgerObject"
+[[durable_objects.bindings]]
+name = "ACCESS_CONTROL"
+class_name = "PolicyBindingIndexObject"
+[[durable_objects.bindings]]
+name = "GRANT_CREDENTIALS"
+class_name = "GrantCredentialObject"
+[[durable_objects.bindings]]
+name = "PROOF_RECORDS"
+class_name = "ProofRecords"
+
+[[migrations]]
+tag = "edge-proof-v1"
+new_sqlite_classes = ["BudgetLedgerObject", "UsageLedgerObject", "PolicyBindingIndexObject", "GrantCredentialObject", "ProofRecords"]
+
+[vars]
+CLAWROUTER_DEPLOY_ENV = "edge-proof"
+CLAWROUTER_CONTENT_RETENTION_DEFAULT = "false"
+CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS = "0"
+LARGE_HTTP_ENABLED = "0"
+LARGE_HTTP_INGRESS_ENABLED = "0"
+LITELLM_BASE_URL = "@@UPSTREAM@@"
+LITELLM_MODEL = "tenant/edge-proof"
+EDGE_PROOF_RUN = "@@RUN@@"
+EDGE_PROOF_EXPIRES = "@@EXPIRES@@"
+EDGE_PROOF_SOURCE = "@@SOURCE@@"
+EDGE_PROOF_TREE = "@@TREE@@"
+EDGE_PROOF_ORIGIN = "@@EDGE@@"
+EDGE_PROOF_UPSTREAM = "@@UPSTREAM@@"

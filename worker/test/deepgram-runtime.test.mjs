@@ -7,7 +7,7 @@ import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
 import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: handler } = await import("../index.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
 const { transcriptionLimits } = await import("../transcription-body.ts");
 const { deepgramAudioLimit } = await import("../deepgram-prerecorded.ts");

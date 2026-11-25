@@ -77,15 +77,28 @@ export async function provePersonalUsageRollback() {
         assert.deepEqual(after.config, before.config);
       };
       const owned = async expected => {
-        const report = await json("/v1/session/usage/report?days=7");
-        const range = new URLSearchParams({ from: new Date(report.range.from).toISOString(), to: new Date(report.range.to).toISOString(), timezone: report.range.timezone });
-        const events = await json("/v1/session/usage/events?" + range);
-        assert.equal(report.metrics.calls, expected);
-        assert.equal(events.events.length, expected);
-        assert.equal(report.historyComplete, true);
-        assert.equal(events.historyComplete, true);
-        assert.equal(events.events.reduce((sum, event) => sum + event.recordedChargeMicros, 0), expected * 17);
-        return { report, events };
+        const outcome = await json("/v1/session/usage/report?days=7&intent=browse");
+        assert.equal(outcome.kind, "complete", JSON.stringify(outcome));
+        const report = outcome.value;
+        try {
+          const range = new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to).toISOString(), timezone: report.query.timezone, cut: report.cut });
+          const page = await json("/v1/session/usage/events?" + range);
+          assert.equal(page.kind, "complete", JSON.stringify(page));
+          const events = page.value;
+          assert.equal(report.metrics.calls, expected);
+          assert.equal(events.events.length, expected);
+          assert.equal(report.coverage.allDiscoveredSourcesAnswered, true);
+          assert.equal(report.coverage.historicalLocations, "not_exhaustively_assessed");
+          assert.deepEqual(events.coverage, report.coverage);
+          assert.equal(events.events.reduce((sum, event) => sum + event.recordedChargeMicros, 0), expected * 17);
+          // Projection qualification is private storage evidence, not an assertion
+          // that the public response exhaustively covers historical locations.
+          const projectionComplete = (await state()).projectionComplete;
+          return { report, events, projectionComplete };
+        } finally {
+          const response = await read("/v1/session/usage/report?" + new URLSearchParams({ cut: report.cut }), { method: "DELETE", headers: { origin: "https://router.example" } });
+          assert.equal(response.status, 200, await response.clone().text());
+        }
       };
 
       // Start from an empty candidate shard, or from baseline history that the
@@ -96,7 +109,7 @@ export async function provePersonalUsageRollback() {
       await until(historical);
       if (historical) { await start("current"); await repair(); }
       const initial = await owned(historical);
-      assert.equal(initial.report.projectionComplete, true);
+      assert.equal(initial.projectionComplete, true);
       assert.equal((await state()).projection, historical);
 
       const cycles = [];
@@ -108,10 +121,7 @@ export async function provePersonalUsageRollback() {
         assert.equal(before.projection, expected - 1, "baseline writes only the canonical ledger");
         await start("current");
         const fallback = await owned(expected);
-        assert.equal(fallback.report.projectionComplete, false);
-        assert.equal(fallback.report.historySource, "retained_ledger");
-        assert.equal(fallback.events.projectionComplete, false);
-        assert.equal(fallback.events.historySource, "retained_ledger");
+        assert.equal(fallback.projectionComplete, false);
         const afterRead = await state();
         assertUnchanged(before, afterRead);
         assert.equal(afterRead.projection, before.projection, "reads must not backfill");
@@ -121,14 +131,12 @@ export async function provePersonalUsageRollback() {
         assert.equal(afterPreview.projection, before.projection);
         const applyBatches = await repair();
         const indexed = await owned(expected);
-        assert.equal(indexed.report.projectionComplete, true);
-        assert.equal(indexed.report.historySource, "projection");
-        assert.equal(indexed.events.projectionComplete, true);
+        assert.equal(indexed.projectionComplete, true);
         const afterApply = await state();
         assertUnchanged(before, afterApply);
         assert.equal(afterApply.projection, expected);
         assert.deepEqual(indexed.events.events.map(event => event.id).sort(), fallback.events.events.map(event => event.id).sort());
-        cycles.push({ canonicalCalls: expected, reportCallsBeforeApply: fallback.report.metrics.calls, eventCallsBeforeApply: fallback.events.events.length, sourceBeforeApply: fallback.report.historySource, applyBatches, sourceAfterApply: indexed.report.historySource });
+        cycles.push({ canonicalCalls: expected, reportCallsBeforeApply: fallback.report.metrics.calls, eventCallsBeforeApply: fallback.events.events.length, projectionBeforeApply: fallback.projectionComplete, applyBatches, projectionAfterApply: indexed.projectionComplete });
       }
       cases.push({ initialState: historical ? "completed historical projection" : "initially empty projection", cycles });
       await worker.dispose();

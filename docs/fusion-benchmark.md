@@ -70,12 +70,38 @@ in `scripts/compile-providers.mjs`. Every comparison arm must receive the same
 context. Changing a selector changes the task digest and requires qualification
 again. Context is input evidence, not an acceptance test or a known repair.
 
+Tasks that intentionally change an existing test contract may declare
+`publicTestFiles`: up to 12 `{path, content}` replacements for declared
+`visibleTests`, limited to 256 KB each and 1 MB combined. Every isolated trial
+receives these exact test bytes before source reads or checks. Models cannot
+edit them. The immutable source image stays unchanged, and the declaration is
+part of the task digest. Requalify both the original and reference source after
+changing it. Use this to disclose updated regression tests when an old assertion
+contradicts the requested behavior; it does not waive reference, preservation,
+or final acceptance checks. The original may fail the declared updated tests,
+but its test run must complete with a valid failure verdict. The reference must
+pass both the public tests and final acceptance. Undeclared tasks still require
+their original visible tests to pass.
+
 ## Analyze paired repair results
 
 Run `node scripts/fusion-pair-analysis.mjs <pair.json>` on a complete native
 repair comparison. It checks that each qualified task has every arm and that
 row costs and call counts reconcile with settled attempts. Incomplete runs,
 unknown charges and duplicate or missing outcomes are rejected.
+
+New test receipts include up to 128 SHA-256 fingerprints of failing TAP label
+paths, with a truncation flag. Compare them with qualification receipts to help
+distinguish an existing failure from a new regression. The fingerprints retain
+no test titles, source or error text. They identify reported label paths, not
+authenticated tests, and do not alter acceptance or replace test-count checks.
+Older receipts without fingerprints remain readable.
+
+If final acceptance returns an incomplete receipt, the pair checkpoint retains
+that receipt and the completed agent diagnostics, including the patch digest.
+It excludes generated source. The trial keeps an error status and zero score,
+and the campaign stops before another paid arm. An incomplete receipt cannot
+establish a quality or cost comparison.
 
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
@@ -89,6 +115,29 @@ cost-saving flag therefore requires no lost strong-model repair. These are
 observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
+
+Pass two or more report paths in execution order to analyze repeated blocks:
+`node scripts/fusion-pair-analysis.mjs <block-a.json> <block-b.json>`.
+Every block must be complete and settled, use the same source, task and
+qualification digests, model pins, settings and receipts, and continue the
+previous block's spending ledger. Duplicate reports and missing elapsed times
+are rejected. The output distinguishes distinct tasks from repeated attempts,
+sums costs and elapsed times, and reports false accepts and cheap-model dominance.
+It also reports which candidate attempts actually used both models. An observed
+win from a cheap-only or strong-only candidate is another sample from that model,
+not evidence of model mixing. Even mixed-model wins need matched retry controls
+before attributing a benefit to collaboration.
+
+The repeat summary applies a fixed exploratory screen: at least 75% solved,
+no lost strong-control attempt, at least 20% savings, at most twice strong-control
+elapsed time, and at least one rescue beyond cheap-only. All conditions must
+pass. Successful candidate attempts must use both models across the cohort,
+and at least one rescue beyond the cheap control must use the strong model.
+The models can serve different tasks; every task need not call both. Extra
+single-model samples and model calls confined to failures do not meet these
+conditions. Observed use does not prove that a model caused an improvement.
+This screen does not establish significance or authorize production changes;
+it also cannot detect experiments omitted from the supplied report list.
 
 ### Declared-scope routing experiment
 
@@ -361,6 +410,11 @@ three development tasks, not independent holdout evidence.
 
 ### Single-draft supplied checks
 
+For baseline calibration without a supplied reproducer, combine
+`FUSION_PAIR_EXECUTOR=single-draft` with `FUSION_PAIR_CONTROLS_ONLY=1`.
+Each fixed model gets one patch attempt and independent acceptance grading.
+No candidate or fallback runs, so these receipts do not establish a Fusion gain.
+
 `FUSION_PAIR_POLICY=contract-draft` uses one cheap-model call to propose
 1–8 exact source edits. It receives the original editable source, declared
 read-only context, visible test examples and the supplied reproducer. The
@@ -370,6 +424,10 @@ A failed or malformed draft falls back to the original-source strong worker,
 with the remaining shared call and time budget. Unknown charges and refusals
 stop execution. A settled empty or truncated draft consumes its call and falls
 back without applying partial output.
+
+An incomplete visible-test run stops one-shot and refined drafts with
+`incomplete_test_run`. It does not trigger another draft, a probe, or strong
+fallback. Complete assertion failures remain eligible for correction or fallback.
 
 Both fixed controls receive the same supplied reproducer and shared ceiling.
 The cheap-stage allowance does not add draft calls: this policy always makes
@@ -534,3 +592,19 @@ failed its quality and no-regression criteria despite lower cost. No truncation
 retry occurred, so this run does not measure the recovery change's benefit.
 Both reports were complete and all new calls settled. Costs apply published
 tariffs to usage; they are not provider invoices. Do not promote this policy.
+
+## Replaying recorded repair feedback
+
+An isolated Node process can emit the same EventSource experimental warning
+with a different process ID during replay. `reconcileRecordedRepairRequest`
+permits only that ID to differ in the exact warning line inside a repair
+message's `acceptance.feedback`. It compares the complete request and restores
+the recorded bytes after that comparison. Model settings, source, verdicts,
+assertion values, warning text and message framing must still match.
+
+Use this helper only in a separately recorded replay procedure. Keep the
+original requests, responses, source pins and failed replay evidence. Record
+the replay procedure's source hash and every substitution, and rerun public
+verification and final grading. The helper does not authorize another model
+call or alter the original experiment. It must not normalize feedback sent in
+new inference requests or relax a grading outcome.

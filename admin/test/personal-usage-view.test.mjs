@@ -5,8 +5,8 @@ import { usageMoney } from '../src/personal-usage.ts';
 
 const metrics = (overrides = {}) => ({ calls: 4, generationCalls: 3, utilityCalls: 1, successfulCalls: 3, errorCalls: 1, deniedCalls: 0, inputTokens: 100, outputTokens: 30, cachedInputTokens: 80, cacheWriteInputTokens: 10, reasoningOutputTokens: 20, inputReportedCalls: 4, outputReportedCalls: 4, cacheReadReportedCalls: 4, cacheWriteReportedCalls: 2, reasoningReportedCalls: 3, ...overrides });
 const cost = (lane, costClass, amountMicros, calls = 1) => ({ lane, costClass, amountMicros, calls });
-const group = (value, calls, costs = []) => ({ value, metrics: metrics({ calls }), costs });
-const report = (overrides = {}) => ({ range: { from: 1000, to: 3000, timezone: 'Pacific/Auckland' }, metrics: metrics(), costs: [], groupBy: 'model', groups: [], buckets: [], groupsTruncated: false, ...overrides });
+const group = (value, calls, costs = []) => ({ identity: { owner: null, value }, metrics: metrics({ calls }), costs });
+const report = (overrides = {}) => ({ query: { from: 1000, to: 3000, timezone: 'Pacific/Auckland', groupBy: 'model' }, coverage: { allDiscoveredSourcesAnswered: false, clippedFrom: null, effectiveFrom: 500 }, metrics: metrics(), costs: [], groups: [], buckets: [], rank: { distinctGroups: 0 }, ...overrides });
 
 test('inclusive input + output never double counts cache or reasoning', () => {
   assert.deepEqual(tokenTotal(metrics()), { value: 130, input: 100, output: 30, partial: false });
@@ -20,6 +20,30 @@ test('missing fields are not zero; partial token coverage is explicit', () => {
   assert.equal(tokenTotal(metrics({ outputReportedCalls: 2 })).partial, true);
   assert.equal(tokenTotal(metrics({ inputTokens: 0, outputTokens: 0 })).value, 0, 'reported zeros are genuine');
 });
+test('complete idle buckets are zero, but incomplete, clipped and unreported buckets stay unknown', () => {
+  const empty = Object.fromEntries(Object.keys(metrics()).map(key => [key, 0]));
+  const bucket = { start: 1000, end: 2000, label: 'idle', metrics: empty, costs: [] };
+  const complete = report({ query: { from: 1000, to: 2000 }, coverage: { allDiscoveredSourcesAnswered: true, effectiveFrom: 500, clippedFrom: null }, metrics: empty, buckets: [bucket] });
+  assert.deepEqual(personalTrendRows(complete, 'tokens').map(row => row.value), [0]);
+  assert.deepEqual(personalTrendRows(complete, 'apiCost').map(row => row.value), [0]);
+  for (const value of [
+    { ...complete, coverage: { ...complete.coverage, allDiscoveredSourcesAnswered: false } },
+    { ...complete, coverage: { ...complete.coverage, allDiscoveredSourcesAnswered: undefined } },
+    { ...complete, coverage: { ...complete.coverage, clippedFrom: 500 } },
+    { ...complete, coverage: { ...complete.coverage, effectiveFrom: 1500 } },
+    { ...complete, buckets: [{ ...bucket, start: 500 }] },
+    { ...complete, buckets: [{ ...bucket, end: 2500 }] },
+    { ...complete, buckets: [{ ...bucket, metrics: { ...empty, calls: 1 } }] },
+  ]) {
+    assert.equal(personalTrendRows(value, 'tokens')[0].value, null);
+    assert.equal(personalTrendRows(value, 'apiCost')[0].value, null);
+  }
+  for (const field of ['inputTokens', 'outputTokens', 'inputReportedCalls', 'outputReportedCalls']) {
+    const missing = { ...complete, buckets: [{ ...bucket, metrics: { ...empty, [field]: undefined } }] };
+    assert.equal(personalTrendRows(missing, 'tokens')[0].value, null, field);
+  }
+});
+
 test('known API subtotal excludes other quality and billing lanes', () => {
   const costs = [cost('api', 'calculated', 20), cost('api', 'fixed', 3), cost('api', 'no_charge', 0), ...['unknown', 'estimated', 'upper_bound', 'partial'].map(quality => cost('api', quality, 900)), cost('subscription', 'calculated', 10000), cost('unattributed', 'fixed', 20000)];
   assert.deepEqual(knownLaneCost(costs, 'api'), { value: 23, knownCalls: 3, totalCalls: 7, partial: true, present: true });
@@ -57,13 +81,13 @@ test('trend preserves exact server clipped bounds, labels and gaps, not padded U
 });
 test('ranked bars sort only returned groups, stable ties, null last, bounded and explicit truncation', () => {
   const groups = [group('missing', 50), group('free', 2, [cost('api', 'no_charge', 0)]), group('high', 4, [cost('api', 'fixed', 100)]), group('tie', 1, [cost('api', 'calculated', 100)]), group(null, 1, [cost('api', 'estimated', 999)])];
-  const value = report({ groups, groupsTruncated: true });
+  const value = report({ groups, rank: { distinctGroups: groups.length + 1 } });
   const ranked = personalRankedGroups(value, 'apiCost');
-  assert.deepEqual(ranked.rows.map(row => [row.group.value, row.value]), [['high', 100], ['tie', 100], ['free', 0], ['missing', null], [null, null]]);
+  assert.deepEqual(ranked.rows.map(row => [row.group.identity.value, row.value]), [['high', 100], ['tie', 100], ['free', 0], ['missing', null], [null, null]]);
   assert.equal(ranked.missing, 2); assert.equal(ranked.total, 5); assert.equal(ranked.truncated, true);
   assert.equal(personalRankedGroups(value, 'apiCost', 2).rows.length, 2);
-  assert.equal(personalRankedGroups(value, 'calls').rows[0].group.value, 'missing');
-  assert.deepEqual(value.groups, groups, 'sorting does not mutate response order');
+  assert.equal(personalRankedGroups(value, 'calls').rows[0].group.identity.value, 'missing');
+  assert.deepEqual(value.groups.map(group => group.identity.value), ['missing', 'free', 'high', 'tie', null], 'sorting does not mutate response order');
   assert.deepEqual(personalRankedGroups(report(), 'tokens'), { rows: [], missing: 0, total: 0, truncated: false });
 });
 
@@ -79,6 +103,10 @@ test('glance cost rounds cents but preserves positive sub-cent values and reject
 });
 test('success caption is selected-period success/calls, never an invalid or invented percentage', () => {
   assert.equal(personalSuccessCaption({ calls: 400, successfulCalls: 390 }), '97.5% successful');
+  assert.equal(personalSuccessCaption({ calls: 10_000, successfulCalls: 9_999 }), '>99.9% successful');
+  assert.equal(personalSuccessCaption({ calls: 10_000, successfulCalls: 1 }), '<0.1% successful');
+  assert.equal(personalSuccessCaption({ calls: 1_000, successfulCalls: 999 }), '99.9% successful');
+  assert.equal(personalSuccessCaption({ calls: 1_000, successfulCalls: 1 }), '0.1% successful');
   assert.equal(personalSuccessCaption({ calls: 7, successfulCalls: 7 }), '100% successful');
   assert.equal(personalSuccessCaption({ calls: 7, successfulCalls: 0 }), '0% successful');
   assert.equal(personalSuccessCaption({ calls: 0, successfulCalls: 0 }), 'No calls');

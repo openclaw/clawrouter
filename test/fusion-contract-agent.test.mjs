@@ -26,8 +26,39 @@ function fixture(probes, responses = [{ probe: 'private probe sentinel' }]) {
     return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(generated.shift() ?? {}) } }] };
   } };
 }
-const failed = { passed: false, assertionFailed: true, feedback: 'invariant failed' };
-const passed = { passed: true, assertionFailed: false, feedback: '' };
+const failed = { valid: true, passed: false, assertionFailed: true, feedback: 'invariant failed' };
+const passed = { valid: true, passed: true, assertionFailed: false, feedback: '' };
+
+test('draft, refined and contract runners initialize new modules in every sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const path = 'worker/fusion-new-module.ts', content = 'export const value = 7;\n';
+  const task = { instruction: 'Create the declared module.', editPaths: [path], newPaths: [path],
+    visibleTests: ['worker/test/accounting.test.mjs'],
+    reproducer: `import assert from 'node:assert/strict'; await import('./worker/test/typescript-setup.mjs');
+      const m = await import('./${path}'); assert.equal(m.value, 7);` };
+  const settings = { maxTurns: 4, outputTokens: 256, deadlineMs: 120000 };
+  let calls = 0;
+  const invoke = async (_id, _role, body) => {
+    calls++;
+    assert.match(body.messages[0].content, /Declared new files start empty/);
+    return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+      edits: [{ path, search: '', replace: content }],
+    }) } }] };
+  };
+  for (const runner of [runSingleDraft, runRefinedDraft]) {
+    const result = await runner(task, process.env.FUSION_NATIVE_IMAGE, 'strong', 'new-module', settings, invoke);
+    assert.equal(result.outcome, 'draft_submitted');
+    assert.equal(result.publicPassed, true);
+    assert.deepEqual(result.files, [{ path, content }]);
+  }
+  const contract = await runContractAgent(task, process.env.FUSION_NATIVE_IMAGE, 'new-module', settings, invoke,
+    { providedProbe: task.reproducer, cheapAgent: runSingleDraft });
+  assert.equal(contract.contractPassed, true);
+  assert.equal(contract.escalated, false);
+  assert.deepEqual(contract.files, [{ path, content }]);
+  assert.equal(calls, 3);
+});
 
 test('a reproduced frozen check accepts the cheap candidate without strong repair', async () => {
   const f = fixture([failed, passed]);
@@ -229,6 +260,7 @@ test('single drafts are bounded and reject out-of-scope or malformed edits befor
     assert.equal(calls, 1); assert.equal(writes, edits[0]?.replace === 'fixed' && edits[0]?.search === 'original' && edits[0]?.path === 'worker/a.ts' ? 1 : 0);
     assert.equal(output.publicPassed, writes === 1);
     assert.equal(output.files[0].content, writes ? 'fixed' : 'original');
+    if (edits[0]?.search === 'absent') assert.equal(output.actions[0].status, 'search_must_match_once');
     assert.ok(f.boxes.every(box => box.closed));
   }
 });
@@ -241,6 +273,36 @@ test('single drafts propagate uncertain charges and refusals; settled truncation
     if (['unknown_cost', 'provider_refused'].includes(reason)) await assert.rejects(run, new RegExp(reason));
     else assert.equal((await run).publicPassed, false);
     assert.equal(writes, 0); assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('single drafts stop on incomplete visible checks and close their sandbox', async () => {
+  for (const visible of [{ ...passed, valid: false }, { ...failed, valid: false }, { passed: true }]) {
+    const f = fixture([]); let calls = 0;
+    await assert.rejects(runSingleDraft(task, 'image', 'strong', 'draft', config,
+      async () => { calls++; return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        edits: [{ path: 'worker/a.ts', search: 'original', replace: 'fixed' }],
+      }) } }] }; }, undefined, { ...f.dependencies, test: async () => visible }), /incomplete_test_run/);
+    assert.equal(calls, 1);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('refined drafts stop incomplete checks before probing, another draft or fallback', async () => {
+  for (const visible of [{ ...passed, valid: false }, { ...failed, valid: false }, { passed: true }]) {
+    const f = fixture([failed]); let drafts = 0, probes = 0, fallback = 0;
+    await assert.rejects(runContractAgent({ ...task, reproducer: 'supplied' }, 'image', 'refine', config, f.invoke, {
+      ...f.dependencies, providedProbe: 'supplied',
+      cheapAgent: (...args) => runRefinedDraft(...args.slice(0, 7), {
+        ...f.dependencies,
+        draft: async () => { drafts++; return { ...result(), outcome: 'draft_submitted' }; },
+        test: async () => visible,
+        runProbe: async () => { probes++; return passed; },
+      }),
+      agent: async () => { fallback++; return result(); },
+    }), /incomplete_test_run/);
+    assert.equal(drafts, 1); assert.equal(probes, 0); assert.equal(fallback, 0);
+    assert.ok(f.boxes.every(box => box.closed));
   }
 });
 
@@ -264,7 +326,7 @@ test('bounded draft refinement carries current source and failed checks into one
   const output = await runRefinedDraft(refinedTask, 'image', 'strong', 'refine', config, async () => {}, undefined, {
     draft: async (_task, _image, _strategy, _id, settings, _invoke, _engine, options) => {
       seen.push({ settings, options });
-      return { ...result(), files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'incomplete' : 'fixed' }], publicPassed: false };
+      return { ...result(), outcome: 'draft_submitted', files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'incomplete' : 'fixed' }], publicPassed: false };
     },
     makeSandbox: async () => { const box = { closed: false, async close() { this.closed = true; } }; boxes.push(box); return box; },
     write: async () => {}, test: async () => passed,
@@ -285,11 +347,84 @@ test('draft refinement stops at the available allowance or three drafts', async 
     const f = fixture([]);
     const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
       { ...config, maxTurns: allowance }, async () => {}, undefined, {
-        ...f.dependencies, draft: async () => { calls++; return result(); }, test: async () => passed, runProbe: async () => failed,
+        ...f.dependencies, draft: async () => { calls++; return { ...result(), outcome: 'draft_submitted' }; }, test: async () => passed, runProbe: async () => failed,
       });
     assert.equal(calls, Math.min(allowance, 3)); assert.equal(output.turns, calls);
     assert.ok(f.boxes.every(box => box.closed));
   }
+});
+
+test('rejected drafts get actionable feedback without checking unchanged source', async () => {
+  for (const [status, expected] of [['provider_truncated', /shorter patch/],
+    ['search_must_match_once', /exact, unique anchors/], ['invalid_edits', /valid JSON/]]) {
+    const seen = []; let checks = 0, probes = 0, boxes = 0;
+    const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+      config, async () => {}, undefined, {
+        draft: async (_task, _image, _strategy, _id, _config, _invoke, _engine, options) => {
+          seen.push(options);
+          return { ...result(), outcome: seen.length === 1 ? 'draft_rejected' : 'draft_submitted',
+            files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'original' : 'fixed' }],
+            actions: [{ action: 'draft', status: seen.length === 1 ? status : 'ok' }] };
+        },
+        makeSandbox: async () => { boxes++; return { close: async () => {} }; },
+        write: async () => {}, test: async () => { checks++; return passed; },
+        runProbe: async () => { probes++; return passed; },
+      });
+    assert.equal(seen.length, 2); assert.equal(boxes, 1); assert.equal(checks, 1); assert.equal(probes, 1);
+    assert.match(seen[1].feedback, expected);
+    assert.match(seen[1].feedback, /No edits.*were applied/);
+    assert.equal(seen[1].initialFiles[0].content, 'original');
+    assert.equal(output.outcome, 'draft_submitted'); assert.equal(output.publicPassed, true);
+    assert.deepEqual(output.actions.filter(action => action.action === 'draft_check').map(action => action.status), ['not_applied', 'passed']);
+  }
+});
+
+for (const match of ['missing', 'ambiguous']) test(`draft repair identifies a ${match} anchor without applying earlier edits`, async () => {
+  const original = 'prefix\nprivate source sentinel\nneedle\nneedle';
+  const seen = [], writes = [], optionsSeen = [];
+  const dependencies = {
+    makeSandbox: async () => ({ close: async () => {} }),
+    read: async () => [{ path: 'worker/a.ts', content: original }],
+    write: async (_box, files) => { writes.push(files); },
+    test: async () => passed,
+  };
+  const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+    config, async (_id, _role, body) => {
+      seen.push(body);
+      const edits = seen.length === 1 ? [
+        { path: 'worker/a.ts', search: 'prefix', replace: 'partial prefix' },
+        { path: 'worker/a.ts', search: match === 'missing' ? 'private search sentinel' : 'needle', replace: 'private replacement sentinel' },
+      ] : [{ path: 'worker/a.ts', search: 'prefix', replace: 'fixed' }];
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ edits }) } }] };
+    }, undefined, {
+      ...dependencies, runProbe: async () => passed,
+      draft: async (...args) => {
+        optionsSeen.push(args[7]);
+        args[7] = { ...args[7], ...dependencies };
+        return runSingleDraft(...args);
+      },
+    });
+  assert.equal(seen.length, 2);
+  assert.equal(output.publicPassed, true);
+  assert.deepEqual(output.actions[0].rejectedEdit, { index: 1, path: 'worker/a.ts', match });
+  assert.match(optionsSeen[1].feedback, new RegExp(`Edit 2 in worker/a\\.ts matched ${match === 'missing' ? 'no' : 'multiple'} locations`));
+  assert.doesNotMatch(optionsSeen[1].feedback, /sentinel|partial prefix|needle/);
+  assert.doesNotMatch(JSON.stringify(output.actions), /sentinel|partial prefix|needle/);
+  assert.equal(optionsSeen[1].initialFiles[0].content, original);
+  assert.equal(writes.length, 3); // Restore current source, apply the repair, then verify it.
+  assert.equal(writes[0][0].content, original);
+  assert.ok(writes.slice(1).every(files => files[0].content === original.replace('prefix', 'fixed')));
+});
+
+test('exhausting rejected drafts cannot certify unchanged source', async () => {
+  let calls = 0;
+  const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+    config, async () => {}, undefined, {
+      draft: async () => { calls++; return { ...result(), outcome: 'draft_rejected', actions: [{ action: 'draft', status: 'provider_empty' }] }; },
+      makeSandbox: async () => { throw Error('unchanged source must not be checked'); },
+    });
+  assert.equal(calls, 3); assert.equal(output.turns, 3); assert.equal(output.publicPassed, false);
+  assert.equal(output.outcome, 'draft_rejected');
 });
 
 test('draft refinement stops on uncertain charges and rejects an escaped candidate before verification', async () => {
@@ -302,4 +437,23 @@ test('draft refinement stops on uncertain charges and rejects an escaped candida
   await assert.rejects(runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine', config,
     async () => {}, undefined, { draft: async () => ({ ...result(), files: [{ path: 'worker/test/a.test.mjs', content: 'escape' }] }),
       makeSandbox: async () => { throw Error('must_not_allocate'); } }), /invalid_edit_path/);
+});
+
+
+test('single drafts cap public validation without treating a failed check as a provider failure', async () => {
+  for (const deadlineMs of [10000, 300000]) {
+    const f = fixture([]);
+    let limit;
+    const output = await runSingleDraft(task, 'image', 'strong', 'draft', { ...config, deadlineMs },
+      async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        edits: [{ path: 'worker/a.ts', search: 'original', replace: 'fixed' }],
+      }) } }] }), undefined, { ...f.dependencies,
+        test: async (_box, paths, timeout) => { limit = timeout; assert.deepEqual(paths, task.visibleTests); return failed; } });
+    assert.ok(limit > 0 && limit <= Math.min(30000, deadlineMs));
+    if (deadlineMs > 30000) assert.equal(limit, 30000);
+    assert.equal(output.outcome, 'draft_submitted');
+    assert.equal(output.publicPassed, false);
+    assert.equal(output.files[0].content, 'fixed');
+    assert.ok(f.boxes.every(box => box.closed));
+  }
 });

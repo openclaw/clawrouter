@@ -8,7 +8,7 @@ const { default: handler } = await import("../index.ts");
 
 test("Fusion settles the final body estimate while retaining both original reservation receipts", async (t) => {
   const { estimateCost } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
   const { DEFAULT_FUSION_CONFIG, buildAggregatorBody, buildFusionReservationProposals } = await import("../fusion.ts");
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 };
@@ -28,7 +28,7 @@ test("Fusion settles the final body estimate while retaining both original reser
   env.USAGE_QUEUE = { send: async (event) => events.push(event) };
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     bodies.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "short fixture answer" } }] });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "short fixture answer" } }] });
   });
   const response = await handler.fetch(new Request("https://router.example/v1/chat/completions", {
     method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(body),
@@ -120,7 +120,7 @@ test("Fusion omitted-tier retained-envelope growth denies before reserve, advise
 });
 
 test("Fusion injected post-reserve route containment failure releases the original unclaimed IDs once", async t => {
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { DEFAULT_FUSION_CONFIG } = await import("../fusion.ts");
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 };
   const env = usageEnv([], { limit: 1_000_000, fixedCost: 7, retainContent: false });
@@ -146,7 +146,7 @@ test("Fusion injected post-reserve route containment failure releases the origin
     // Labelled containment fault, not a normal post-paid capacity decision.
     Object.defineProperty(transforms, "renameFields", { ...descriptor, value: [...descriptor.value,
       { from: "fixture_field", to: "fixture_changed", paths: [], upstreams: [route.model.upstream] }] });
-    return Response.json({ choices: [{ message: { content: "fixture adviser" } }] });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture adviser" } }] });
   });
   try {
     const response = await track(handler.fetch(new Request("https://router.example/v1/chat/completions", {
@@ -169,7 +169,7 @@ test("Fusion injected post-reserve route containment failure releases the origin
 test("reservation reuse reassesses a final pricing gap before admission and unmetered settlement", async (t) => {
   const { reserveBudget, validateBudgetReservation } = await import("../accounting.ts");
   const { createProxyAccounting, estimateCost } = await import("../proxy-accounting.ts");
-  const { modelRoute } = await import("../providers.ts");
+  const { modelRoute } = await import("../provider-catalog.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra", "llm.chat");
   const endpoint = route.provider.endpoints.find(({ id }) => id === "chat_completions");

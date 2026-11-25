@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeElevenLabsSpeech } = await import("../native-elevenlabs-speech.ts");
 const { qualifyNativeQuery } = await import("../native-query.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");

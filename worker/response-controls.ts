@@ -6,7 +6,7 @@ import { backgroundCall } from "./http-background.ts";
 import { continuationScope, identityKey } from "./http-continuation.ts";
 import { managedJobKey } from "./managed-prediction-identity.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { assertProviderAccess, providerById } from "./providers.ts";
+import { assertProviderAccess } from "./providers.ts"; import { providerById } from "./provider-catalog.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
 import { responseIdentity } from "./response-identities.ts";
@@ -14,7 +14,8 @@ import { publicControlAuthorization } from "./response-control-authorization.ts"
 import { dispatchResponseControl, retainedResponseRoute } from "./responses-control-dispatch.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { AccessSession, AuthorizedIdentity, Env } from "./types.ts";
-import { errorResponse, HttpError } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { WanManagedOperation } from "./managed-media-json.ts";
 
 export interface ResponseControlRoute { createId: string; pathParams: Record<string, string> }
@@ -46,7 +47,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
     await operation.wait(assertProviderAccess(provider, binding.auth, env, undefined, wan, video));
     if (protocol) {
       if (!binding.background) throw new HttpError(409, "response_owner_unavailable", "prediction has no original managed job");
-      const job = await operation.wait(backgroundCall<import("./background-store.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, video ?? wan));
+      const job = await operation.wait(backgroundCall<import("./background-record.ts").BackgroundRecord | null>(env, binding.scope, { action: "get", id: binding.background.id }, video ?? wan));
       if (!job?.managed || job.managed.protocol !== protocol || job.managed.upstreamId !== responseId
         || (job.managed.providerId ?? "replicate") !== provider.id) throw new HttpError(409, "response_owner_unavailable", "the original managed route is unavailable");
       const { readManagedControl, observePrediction, bindPredictionFiles, predictionResponse, managedObservationUnavailable } = await import("./managed-predictions.ts");

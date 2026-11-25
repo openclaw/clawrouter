@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { configuredUpstream } = await import("../providers.ts");
 const { VENICE_MODELS_FORMAT, veniceCatalogRequest, filterVeniceModels, readVeniceModels } = await import("../venice-model-catalog.ts");
 const { discoveryAllows, modelDiscoveryResponse } = await import("../model-discovery.ts");

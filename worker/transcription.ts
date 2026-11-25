@@ -3,7 +3,7 @@ import { assertMultipartDestination, multipartRoute, multipartSelection, prepare
 import { nativeJsonResponse, nativeResponseLease } from "./native-response.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
-import { grantRevision, type PinnedGrant } from "./grant-selection.ts";
+import { grantRevision, type PinnedGrant } from "./grant-eligibility.ts";
 import { accessIdentity } from "./access.ts";
 import { emptyReservation, planBudgetReservation, markBudgetDispatched, reserveBudget, settleBudget, type BudgetReservation } from "./accounting.ts";
 import { correlationMetadata } from "./correlation.ts";
@@ -12,14 +12,15 @@ import { inputRetirement } from "./input-retirement.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
-import { assertProviderAccess, configuredUpstream, upstreamAuth, modelSupportsEndpoint, providerById, providerModel } from "./providers.ts";
+import { assertProviderAccess, configuredUpstream, upstreamAuth } from "./providers.ts"; import { providerById, providerModel } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { prepareSelected, captureGrantRuntime } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { prepareSoftBudget, startSoftBudget, softBudget, softBudgetPolicy } from "./soft-budget.ts";
 import { readBinaryUpload, readBounded, readTranscriptionUpload, transcriptionLimits } from "./transcription-body.ts";
 import { transcriptionUsage } from "./transcription-usage.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, Env } from "./types.ts";
-import { decodePathSegment, errorResponse, HttpError } from "./utils.ts";
+import { decodePathSegment, errorResponse } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 function rawTranscriptionRoute(path: string): { provider: CompiledProvider; endpoint: CompiledEndpoint } | null {
   const match = path.replace(/^\/v1\/playground\//, "/v1/").match(/^\/v1\/(native|proxy)\/([^/]+)(\/.*)$/);

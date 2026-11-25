@@ -1,4 +1,4 @@
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 // One validator for creation, metadata writes and the serialized rename path.
 export function normalizeCredentialName(value: unknown): string | null {

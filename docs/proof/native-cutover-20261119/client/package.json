@@ -1,0 +1,11 @@
+{
+  "name": "clawrouter-captured-loss-client-proof",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "proof": "node replay.mjs"
+  },
+  "dependencies": {
+    "openai": "7.60.0"
+  }
+}

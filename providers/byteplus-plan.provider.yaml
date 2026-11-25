@@ -40,10 +40,12 @@ endpoints:
 models:
   entries:
     - id: byteplus-plan/ark-code-latest
+      displayName: "Ark Code (Latest)"
       upstream: ark-code-latest
       capabilities: [llm.chat]
     # Personal-plan deprecation does not establish universal retirement or team access.
     - id: byteplus-plan/kimi-k2.5
+      displayName: "Kimi K2.5"
       upstream: kimi-k2.5
       capabilities: []
       availability:

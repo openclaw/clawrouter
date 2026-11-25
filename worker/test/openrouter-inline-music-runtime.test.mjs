@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { crc32 } from "node:zlib";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { configureMusic, musicBody, musicModels, musicWire } from "./openrouter-music-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
 const { default: worker } = await import("../index.ts");

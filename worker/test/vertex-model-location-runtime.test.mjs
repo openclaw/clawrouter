@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
 import { configureVertex, vertexAuthorization, vertexBody, vertexJson, vertexModel, vertexModelId } from "./vertex-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { inspectGrantCredentials } = await import("../grant-credentials.ts");
 const { grantSupports } = await import("../provider-auth.ts");

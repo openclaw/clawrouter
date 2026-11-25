@@ -37,12 +37,15 @@ endpoints:
 models:
   entries:
     - id: voyage/voyage-4-large
+      displayName: "Voyage 4 Large"
       upstream: voyage-4-large
       capabilities: [llm.embeddings]
     - id: voyage/voyage-4
+      displayName: "Voyage 4"
       upstream: voyage-4
       capabilities: [llm.embeddings]
     - id: voyage/voyage-4-lite
+      displayName: "Voyage 4 Lite"
       upstream: voyage-4-lite
       capabilities: [llm.embeddings]
 billing:

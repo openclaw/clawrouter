@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 import { loadProviderManifestInputs } from "../scripts/provider-manifest-inputs.mjs";
-import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../scripts/provider-compiler.mjs";
 import { parseProviderConformanceScenario } from "../packages/provider-plugin-contract/src/index.ts";
 
 function temporary(t) {

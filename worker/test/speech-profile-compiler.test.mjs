@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 import { fixture, grantKey } from "./managed-runtime-fixture.mjs";
-const { snapshot } = await import("../providers.ts");
+const { snapshot } = await import("../provider-catalog.ts");
 const { revokeGrantCredentials } = await import("../grant-credentials.ts");
 
 const upstream = "google/gemini-3.1-flash-tts-preview", modelId = `openrouter/${upstream}`;

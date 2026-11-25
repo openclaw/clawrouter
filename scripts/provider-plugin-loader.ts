@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { parseProviderPluginDescriptor, providerPluginFiles, type ProviderPluginDescriptor } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderPluginDescriptor, providerPluginFiles, type ProviderPluginDescriptor } from "../packages/provider-plugin-contract/src/plugin-descriptor.ts";
 
 export const PROVIDER_PLUGIN_LIMITS = Object.freeze({
   descriptorBytes: 64 * 1024,

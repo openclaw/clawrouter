@@ -1,16 +1,20 @@
+import type { UsageEventScope } from "./usage-ledger-client.ts";
+import { withUsageRetention, maintainUsageVisibility } from "./usage-report-visibility.ts";
+import { reportRetentionMs } from "./usage-report-range.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
+import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport } from "./usage-report-store.ts";
+import { type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-protocol.ts";
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
-import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
-import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
+import { mergePrincipalUsage, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
+import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
+import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
 import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
-export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 export interface UsageIngestReceipt {
   eventId: string;
   outcome: "stored" | "duplicate" | "expired_by_retention";
@@ -18,8 +22,8 @@ export interface UsageIngestReceipt {
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
-const usageWindowDays = 30;
-const usageRetentionMs = usageWindowDays * usageDayMs;
+const usageRetentionMs = reportRetentionMs;
+const usageWindowDays = usageRetentionMs / usageDayMs;
 const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
@@ -185,6 +189,14 @@ export class UsageLedgerObject implements DurableObject {
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
+    if (request.method === "POST" && url.pathname === "/complete-usage") {
+      try {
+        const input = await readJson<unknown>(request, undefined, 1024 * 1024);
+        return json(this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input)));
+      } catch {
+        return json({ kind: "unavailable", reason: "source" });
+      }
+    }
     if (request.method === "POST" && (url.pathname === "/personal-report" || url.pathname === "/personal-events")) {
       const body = await request.json<{ query: UsageReportQuery; limit: number; before?: UsageEventPosition; includeEqualId?: boolean }>();
       return json(url.pathname === "/personal-report" ? queryUsageReport(this.sql, body.query) : queryUsageEvents(this.sql, body.query, body.limit, body.before, body.includeEqualId));
@@ -214,6 +226,7 @@ export class UsageLedgerObject implements DurableObject {
 
   async alarm(): Promise<void> {
     this.cleanup();
+    this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql));
     const attributionPending = this.backfillAttribution();
     const before = usageRollupProgress(this.sql).last_rowid;
     backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
@@ -420,10 +433,10 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void {
-    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => withUsageRetention(this.sql, cutoff, () => {
       this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
       this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
-    }));
+    })));
   }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
@@ -465,14 +478,6 @@ function compareSqlText(left: string | null, right: string | null): number {
 
 const grantUsageMetrics = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costMicros"] as const;
 function emptyGrantUsage(): GrantUsageTotals { return { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0 }; }
-
-export async function grantUsageSnapshot(env: Env, tenantId: string, policyId: string, days: number): Promise<GrantUsageSnapshot> {
-  const url = new URL("https://clawrouter.internal/grant-usage");
-  url.searchParams.set("policy_id", policyId); url.searchParams.set("days", String(days));
-  const response = await usageStub(env, tenantId, policyId).fetch(url);
-  if (!response.ok) throw new HttpError(response.status, "grant_usage_unavailable", response.status === 422 ? "choose a shorter usage range" : "grant usage is unavailable");
-  return response.json<GrantUsageSnapshot>();
-}
 
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
   for (const message of batch.messages) {
@@ -561,27 +566,6 @@ export async function ingestUsageNamespace(namespace: Env["USAGE_LEDGER"], event
   return { eventId: receipt.eventId, outcome: receipt.outcome };
 }
 
-export async function usageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  return usageSnapshots(env, [{ tenantId, policyId }], scope, limit);
-}
-
-export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
-  const shards = new Map(policies.map(policy => [usageShardName(policy.tenantId, policy.policyId), policy]));
-  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, scope, limit)));
-  return mergeUsageSnapshots(snapshots, limit);
-}
-
-async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit: number): Promise<UsageSnapshot> {
-  const url = new URL("https://clawrouter.internal/snapshot");
-  url.searchParams.set("policy_id", policyId);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("events", scope.kind);
-  if (scope.kind !== "admin") url.searchParams.set("event_owner", scope.id);
-  const response = await usageStub(env, tenantId, policyId).fetch(url);
-  if (!response.ok) throw new Error(`usage snapshot returned ${response.status}`);
-  return response.json<UsageSnapshot>();
-}
-
 export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, override = policy.budgetOverride, observeUncapped = false) {
   const at = Date.now();
   const [monthly, daily, weekly] = await Promise.all([
@@ -629,8 +613,6 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
     return { spentMicros: null, remainingMicros: null };
   }
 }
-
-export function usageStub(env: Env, tenantId: string, policyId: string): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName(usageShardName(tenantId, policyId))); }
 
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }

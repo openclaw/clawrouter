@@ -2,7 +2,7 @@ export const models = { cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol'
 
 export function priceBound(body, price) {
   // Preserve the pilot's conservative 4,096-token allowance even for smaller requests.
-  const requestedOutput = body.max_completion_tokens ?? body.max_tokens ?? 4096;
+  const requestedOutput = body.max_completion_tokens ?? body.max_output_tokens ?? body.max_tokens ?? 4096;
   if (!Number.isSafeInteger(requestedOutput) || requestedOutput < 1) throw new Error('invalid_output_limit');
   const outputTokens = Math.max(4096, requestedOutput);
   const inputBytes = Buffer.byteLength(JSON.stringify(body)) + 1024;

@@ -1,6 +1,6 @@
 import type { GrantRuntimeState } from "./types";
 import { quotaRuntime, sanitizeGrantFacts } from "./grant-quota.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
   if (!value || typeof value !== "object" || Array.isArray(value)) invalidRuntime("grant runtime state is invalid");

@@ -4,7 +4,7 @@ import { resolveConnection } from "./authority.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import { BodyLease } from "./body-budget.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
-import { configuredUpstream, modelSupportsEndpoint, providerById } from "./providers.ts";
+import { configuredUpstream } from "./providers.ts"; import { providerById } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { backgroundCall } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { assertManagedInputLive, inputUnavailable, managedInputMaxBytes, sameManagedInput, type ManagedInputBinding, type ManagedInputState, type ManagedInputReceipt } from "./managed-input-receipt.ts";
@@ -14,7 +14,8 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { upstreamRetentionBindingAllowed } from "./upstream-retention-admission.ts";
 import { readBounded } from "./transcription-body.ts";
 import type { CompiledEndpoint, CompiledProvider, Env, UpstreamGrant } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export interface PixVerseInputDispatch {
   binding: ManagedInputBinding;

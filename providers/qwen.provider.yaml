@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: qwen/qwen3.5-plus
+      displayName: "Qwen3.5 Plus"
       upstream: qwen3.5-plus
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -51,6 +52,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3.6-flash
+      displayName: "Qwen3.6 Flash"
       upstream: qwen3.6-flash
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -61,6 +63,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3.6-plus
+      displayName: "Qwen3.6 Plus"
       upstream: qwen3.6-plus
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -71,6 +74,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3.7-max
+      displayName: "Qwen3.7 Max"
       upstream: qwen3.7-max
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -81,6 +85,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: qwen/qwen3.7-plus
+      displayName: "Qwen3.7 Plus"
       upstream: qwen3.7-plus
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -91,6 +96,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3.8-max
+      displayName: "Qwen3.8 Max"
       upstream: qwen3.8-max
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -101,6 +107,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3.8-flash
+      displayName: "Qwen3.8 Flash"
       upstream: qwen3.8-flash
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -111,15 +118,19 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: qwen/qwen3-max-2026-01-23
+      displayName: "Qwen3 Max (2026-01-23)"
       upstream: qwen3-max-2026-01-23
       capabilities: []
     - id: qwen/qwen3-coder-next
+      displayName: "Qwen3 Coder Next"
       upstream: qwen3-coder-next
       capabilities: []
     - id: qwen/qwen3-coder-plus
+      displayName: "Qwen3 Coder Plus"
       upstream: qwen3-coder-plus
       capabilities: []
     - id: qwen/MiniMax-M2.5
+      displayName: "MiniMax M2.5"
       upstream: MiniMax-M2.5
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -130,6 +141,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: qwen/glm-5
+      displayName: "GLM-5"
       upstream: glm-5
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -140,9 +152,11 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: qwen/glm-4.7
+      displayName: "GLM-4.7"
       upstream: glm-4.7
       capabilities: []
     - id: qwen/kimi-k2.5
+      displayName: "Kimi K2.5"
       upstream: kimi-k2.5
       capabilities: [llm.chat]
       nativeCapabilities:

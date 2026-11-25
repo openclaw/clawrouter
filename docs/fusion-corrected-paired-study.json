@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 1,
+  "study": "atcoder-corrected-paired-live-v1",
+  "status": "audited",
+  "sourceSha": "4039972d119bebd7fb71818f330d6e149fe9d2a8",
+  "protocolSha256": "83eb3110eb116a55850bb26910f07749608d9b465d7c1604a2f519187a8b623e",
+  "resultSha256": "e60bc75f22f424e1f1ed787742b72e9602dd25f2f6ebcd14358db26d350f9206",
+  "auditSha256": "0f733b56da130fbdbac380417a2a9db01216ffc515d8a74c889400b1471a2b89",
+  "priorAuditSha256": "ee0b5381486630f0ac4d5ece73433188df3496f2e90455c3592fe8bd931372b9",
+  "draftMaxOutputTokens": 512,
+  "models": [
+    "openai/gpt-6-luna",
+    "openai/gpt-6.1-terra"
+  ],
+  "calls": 14,
+  "totalCostMicros": 19825,
+  "summary": {
+    "strong": {
+      "passed": 6,
+      "costMicros": 12446,
+      "elapsedMs": 50920.624
+    },
+    "cascade": {
+      "passed": 5,
+      "costMicros": 7379,
+      "elapsedMs": 46374.675333999985
+    },
+    "falseAccepts": 1,
+    "strongLosses": 1,
+    "rescues": 2,
+    "escalations": 2,
+    "costRatio": 0.5928812469869837,
+    "elapsedRatio": 0.9107248044328754,
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "records": [
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1276,
+      "elapsedMs": 7683.11175,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-1761b861a0dbcbd5",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 159,
+      "elapsedMs": 4237.992834,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 4211,
+      "elapsedMs": 16421.576,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-34a980a7d516da5e",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 3496,
+      "elapsedMs": 13714.620750000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 34,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 3
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1855,
+      "elapsedMs": 6880.493625000003,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-f8a0b853f4580678",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 169,
+      "elapsedMs": 4476.269790999999,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 182,
+      "elapsedMs": 4442.340292000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-46b9c4156c9a64d8",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1853,
+      "elapsedMs": 6199.487708000001,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1542,
+      "elapsedMs": 5446.395875000009,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-17c091672360f911",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 2361,
+      "elapsedMs": 10398.738333999994,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "cascade",
+      "publicPassed": true,
+      "passed": false,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 297,
+      "elapsedMs": 6397.758082999993,
+      "full": {
+        "valid": false,
+        "passed": false,
+        "tests": 50,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18,
+        "failureReasons": [
+          "TimeoutError"
+        ]
+      }
+    },
+    {
+      "id": "lcb-9a7df49b21a566b6",
+      "kind": "stdin",
+      "strategy": "strong",
+      "publicPassed": true,
+      "passed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2424,
+      "elapsedMs": 10996.514291999993,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 51,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "batches": 18
+      }
+    }
+  ],
+  "limitations": [
+    "All six task identities were exposed in earlier development runs. One sample per arm.",
+    "Both arms may make at most two calls and stop on accepted output; each uses the same verifier and bounded repair context.",
+    "The output instruction was corrected to the problem-defined result. Both the prompt and control methodology changed, so effects cannot be attributed to either alone.",
+    "One cascade result passed small acceptance but exceeded an isolated full-grading execution limit. It is retained as invalid and failed, with no replacement sample.",
+    "Model tariffs and live arm time exclude engineering, hardware and operational costs. No production or heterogeneous-provider claim."
+  ]
+}

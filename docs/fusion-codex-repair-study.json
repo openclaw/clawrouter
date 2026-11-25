@@ -1,0 +1,419 @@
+{
+  "schemaVersion": 1,
+  "study": "Fresh Codex configuration repair with a small-model cascade",
+  "scope": "One previously model-unexercised historical repository repair, three paired repetitions. This extends task coverage but is one cluster, not three independent tasks or a production qualification.",
+  "task": {
+    "id": "history-b658997ad0f8",
+    "baseCommit": "3e661b3da836676c6cdff75166ed9cb910158735",
+    "referenceCommit": "b658997ad0f8bd899fb8a1c89aaad8d0940bb3b7",
+    "sourcePaths": [
+      "scripts/codex-connect.mjs"
+    ],
+    "testPaths": [
+      "test/codex-connect.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "18f621bc06c8c3b8794c8f8f13069aa8dacbede8",
+    "protocolSha256": "ab71c6c5b84479094695149e729900dc964c03b102241a8b7aab50b1bf57f542",
+    "resultSha256": "7e5b4ba7fe12f78590fd7c431300101229bdb22a18a84936875f8a2dc3a37561",
+    "terminalAuditSha256": "0b391d15817b9ec9aa535234b8b57e4604b4f1567f9aebfc10ec75985821da72",
+    "qualificationProtocolSha256": "08b204ffe8225766e52f3b5e9db6b87f8fc4f4dd41d7623373f95727be31259d",
+    "qualificationResultSha256": "55b680e7afd382dbd63e8dc595402661c5bf54d573fe373525d6771ea9aa4ad2",
+    "dependencyBundleSha256": "e436cb867a5743982af4d019c466d22c68e7c3098b72c7bb3650b10927ead136"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Cheap-first verified cascade versus fresh strong control; matched two-attempt ceilings, alternating order, fresh strong fallback. Exact source edits reconstruct the same baseline. All calls finish before final grading.",
+    "publicInput": "Same baseline source, imported source module and baseline documentation for both arms. All nine baseline tests have unique same-title reference counterparts kept public, including revised assertions. Two genuinely new tests are public; one genuinely new test is held out. No reference source or held-out test body enters model input.",
+    "runtime": "Seed-masked cached Node 24.22.1 with exact cached toml-eslint-parser 1.0.3 and eslint-visitor-keys 5.0.1. Local temporary configuration, executable fixtures and local HTTP server; no real account. Native syntax checks, not a whole Worker build. No downloads or additional compute allocation.",
+    "qualificationCorrection": "The first split appended obsolete baseline assertions and failed reference public qualification (9/12). That failed run remains recorded. The corrected splitter requires unchanged test support and unique named baseline counterparts, keeps revised counterparts public, and withholds only genuinely new tests. Original full tests are unchanged.",
+    "costs": "Integer microUSD tariff estimates from recorded usage, including failed drafts and all fallbacks. Invoice estimate includes cache effects; normalized cost prices all input at the frozen base rate. Neither is a provider invoice.",
+    "elapsed": "Per-arm wall clock includes generation and verification.",
+    "gate": "All final repairs pass, zero false accepts, at least 20% invoice-estimate and normalized savings. Development lead additionally needs a successful fallback and elapsed ratio <=1.2. Thresholds unchanged after outcomes.",
+    "reproducibility": "Private protocols and raw journals are identified by hashes. This report is audited evidence, not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 12,
+      "failures": 0,
+      "skipped": 0
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 11,
+      "failures": 0,
+      "skipped": 0
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 12,
+      "failures": 6,
+      "skipped": 0
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 11,
+      "failures": 5,
+      "skipped": 0
+    }
+  },
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 34337,
+      "elapsedMs": 51098.589915000004
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 17477,
+      "elapsedMs": 105036.45175000001
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 2,
+    "escalations": 2,
+    "costRatio": 0.5089844773859102,
+    "elapsedRatio": 2.0555645845555226,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 34337,
+        "normalizedMicros": 58065
+      },
+      "cascade": {
+        "costMicros": 17477,
+        "normalizedMicros": 47029
+      },
+      "costRatio": 0.5089844773859102,
+      "normalizedCostRatio": 0.8099371394127272,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": false,
+      "costScreen": false
+    },
+    "qualityMatchedCostScreen": false,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "rows": [
+    {
+      "id": "history-b658997ad0f8/repeat-0",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 23016,
+      "normalizedMicros": 19420,
+      "elapsedMs": 16998.706833,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-b658997ad0f8/repeat-0",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 8394,
+      "normalizedMicros": 21696,
+      "elapsedMs": 37062.647125,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-b658997ad0f8/repeat-1",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 6920,
+      "normalizedMicros": 21876,
+      "elapsedMs": 36929.119667000006,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-b658997ad0f8/repeat-1",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 5673,
+      "normalizedMicros": 19335,
+      "elapsedMs": 15805.097790999993,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-b658997ad0f8/repeat-2",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 5648,
+      "normalizedMicros": 19310,
+      "elapsedMs": 18294.785291000007,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-b658997ad0f8/repeat-2",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2163,
+      "normalizedMicros": 3457,
+      "elapsedMs": 31044.684957999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 12,
+        "failures": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "calls": [
+    {
+      "stage": "case-0/strong/control",
+      "protocolSha256": "9610434640da0f438999a2e94496fcbd611ada8efe9e4227991c40bc4c853e59",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 23016,
+      "normalizedMicros": 19420,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 14382,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1007
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-0/cascade/draft",
+      "protocolSha256": "76e7836d3c7d51d6d10c9a3e1fef3d362b17645e047d7dec6111f61714fd9191",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2881,
+      "normalizedMicros": 2521,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 14382,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2165
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-0/cascade/fallback",
+      "protocolSha256": "43444d82a3eb0ba105ce5b3a987492020c8bc440f201d2716c5ead3b36702ea2",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5513,
+      "normalizedMicros": 19175,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 958
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/cascade/draft",
+      "protocolSha256": "162c3801950f2ef34f0a818437f491bbd07be6f78cf0d98d2ba1baeff6f2eeea",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1282,
+      "normalizedMicros": 2576,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 2275
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/cascade/fallback",
+      "protocolSha256": "f42acc42522c14a9f242fada838b80e424827c61a93d5f6afa382dc195db4c16",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5638,
+      "normalizedMicros": 19300,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 983
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/strong/control",
+      "protocolSha256": "b5cdf083da9cb780269826be0c4c1485bdf38e87a5dcefd3cd940b2441fa2126",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5673,
+      "normalizedMicros": 19335,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 990
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/strong/control",
+      "protocolSha256": "cea91e61ce69db40ca6aa7df06fabdae88449125e64007c084e7c99e46e53bc3",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 5648,
+      "normalizedMicros": 19310,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 985
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/cascade/draft",
+      "protocolSha256": "034413a0aeb7f98bf18f0e0ff71bec52a9c954912c04d97aa97f689bce4f9d6d",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2163,
+      "normalizedMicros": 3457,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 14382,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 4037
+      },
+      "disposition": "complete"
+    }
+  ],
+  "conclusion": "Both arms passed 3/3 full evaluations. The cascade accepted one draft directly and rescued two through fallback. Normalized cost fell 19.0%, below the predeclared 20% saving requirement; elapsed time rose 105.6%. No development lead or production gain. Do not enable this setting by default.",
+  "limitations": [
+    "Three repetitions of one historical task do not establish cross-task efficacy or statistical confidence.",
+    "Previously unexercised refers to this experiment history, not model pretraining exclusion.",
+    "Reference-derived public tests simulate a supplied task contract. One held-out test provides limited protection against overfitting.",
+    "No production traffic, deployment, or default enablement."
+  ],
+  "publicFeedbackProbe": {
+    "scope": "Outcome-informed feasibility probe on the two rejected cheap drafts from the paired experiment. No new strong controls; it is not a paired savings comparison.",
+    "sourceCommit": "a6aee6dfa60c41fb3476b5001cc1f56140a89b3a",
+    "protocolSha256": "d24f9b8eede1cd82ce6da4159fb652b80cca4de1fda16903c6236c3d3817a6be",
+    "resultSha256": "5dba5951a9a8474db4736493ff5e533482bf513dd5a72f667efb13e8833f26d5",
+    "terminalAuditSha256": "b6cdc6f0ec8658787b6b9b2bdc1facb4953877490d7e209b087489528629fbe0",
+    "method": "One additional medium-Luna call per rejected draft. Original baseline and public tests, rejected candidate and actual public-test feedback only. Complete edit lists target the original baseline. Both calls finish before grading. Hidden tests and strong answers are excluded.",
+    "costMicros": 6738,
+    "rows": [
+      {
+        "id": "history-b658997ad0f8/repeat-0",
+        "decoded": true,
+        "publicPassed": false,
+        "passed": false,
+        "costMicros": 3484,
+        "normalizedMicros": 2991,
+        "publicTests": {
+          "valid": true,
+          "tests": 11,
+          "failures": 4,
+          "skipped": 0
+        },
+        "fullTests": {
+          "valid": true,
+          "tests": 12,
+          "failures": 5,
+          "skipped": 0
+        }
+      },
+      {
+        "id": "history-b658997ad0f8/repeat-1",
+        "decoded": false,
+        "publicPassed": false,
+        "passed": false,
+        "costMicros": 3254,
+        "normalizedMicros": 2761,
+        "publicTests": null,
+        "fullTests": null
+      }
+    ],
+    "calls": [
+      {
+        "id": "history-b658997ad0f8/repeat-0/small-public-repair",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 3484,
+        "normalizedMicros": 2991,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 19706,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 2039
+        },
+        "disposition": "complete"
+      },
+      {
+        "id": "history-b658997ad0f8/repeat-1/small-public-repair",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 3254,
+        "normalizedMicros": 2761,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 19709,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 1579
+        },
+        "disposition": "complete"
+      }
+    ],
+    "conclusion": "Neither repair passed. One decoded repair regressed to four public failures and five full failures; the other returned an edit whose search did not match exactly once. Both model responses completed without truncation. Reject an unconditional small-model retry as the recovery policy; keep the prior strong fallback."
+  }
+}

@@ -37,6 +37,7 @@ models:
   entries:
     # Native query/default identity only. No qualified upstream-dollar price card.
     - id: deepgram/nova-3
+      displayName: "Nova 3"
       upstream: nova-3
       capabilities: [audio.transcription]
 billing:

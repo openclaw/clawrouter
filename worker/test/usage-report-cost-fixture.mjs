@@ -4,7 +4,7 @@ const { createProxyAccounting } = await import("../proxy-accounting.ts");
 const { anthropicPricing } = await import("../anthropic-pricing.ts");
 const { guardAnthropicPrice } = await import("../anthropic-price-response.ts");
 const { HttpOperation } = await import("../http-operation.ts");
-const { providerById } = await import("../providers.ts");
+const { providerById } = await import("../provider-catalog.ts");
 const { extractUsageTokens } = await import("../token-usage.ts");
 
 // Real receipt producers, reusable by ingestion/migration/export regression tests.

@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
-import { configuredUpstream, providerModel, upstreamPath } from "../providers.ts";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
+import { configuredUpstream } from "../providers.ts"; import { upstreamPath } from "../provider-request.ts"; import { providerModel } from "../provider-catalog.ts";
 import { resolveTemplate } from "../provider-templates.ts";
 
 const contracts = [

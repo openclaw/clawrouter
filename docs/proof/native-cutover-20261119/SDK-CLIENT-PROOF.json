@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "at": "2026-11-19T00:32:20.841Z",
+  "passed": true,
+  "node": "v24.22.1",
+  "sdk": {
+    "name": "openai",
+    "version": "7.60.0",
+    "packageIntegrity": "sha512-vipS79MnBZX6zpWjMGdRQazRcbYc3CxGUNZYLpd8YANeq1ZlTAZeHctkeUJvqDVcET7+kHI2osGWyhk3Co9odg==",
+    "sourceSha256": {
+      "client.mjs": "7cffd2a437dc1edac10bfec9118ca879848afbddc06e33d428ebf326cdd9f537",
+      "internal/parse.mjs": "8f5a74b20a9c02e5257a5819dab4ce07c7c5967140a91f8744e9b15dc80f28d1",
+      "core/api-promise.mjs": "edb8be5b07bc29b303f6ca13f35c97a21a014f8ff16be02ce38466d38a65c559",
+      "resources/responses/responses.mjs": "785bd8b1f934fb7c58dcbbe0be201de852c5cf868ddc3c19199186a7b3c0c3ae"
+    },
+    "defaultMaxRetries": 2,
+    "timeoutOverrideMs": 5000,
+    "retryOverride": false
+  },
+  "capture": {
+    "artifact": "prepared-loss/client/workload-lost-response.json",
+    "status": 200,
+    "contentType": "application/json",
+    "bodySha256": "082027641f4532cec3b8585e1d86e6a9adf1dfb9cd2333de1aca7b1b35cc4ece",
+    "bytes": 6,
+    "framing": "clean chunked EOF"
+  },
+  "malformed": {
+    "rejected": true,
+    "successfulResult": false,
+    "errorName": "SyntaxError",
+    "syntaxError": true,
+    "durationMs": 27,
+    "serverRequests": 1,
+    "fetchInvocations": 1
+  },
+  "positive": {
+    "completed": true,
+    "expectedOutput": true,
+    "serverRequests": 1
+  },
+  "requests": [
+    {
+      "operation": "captured-loss-request",
+      "bodySha256": "c1c4b7d9d0669aba1606186aa6a13d511356aa087742295dd98294e58a30d500",
+      "retryHeader": "0"
+    },
+    {
+      "operation": "distinct-positive-control",
+      "bodySha256": "b3d271eb7b297426da545fedf5695621c005052cc91ba7ee204b3745f277a03b",
+      "retryHeader": "0"
+    }
+  ],
+  "fetchInvocations": 2,
+  "serverErrors": [],
+  "serverClosed": true,
+  "realProviderRequests": 0,
+  "cloudflareCalls": 0,
+  "realCredentialsUsed": false,
+  "limits": "Official Node SDK default parsed non-streaming responses.create only. Exact body/status/content type replayed; other original headers were not retained. No claim for every client, raw-response bypass, SSE/WebSocket or timeout/transport-error retry behavior. Independent hosted continuity/accounting/quarantine/cleanup evidence is unchanged."
+}

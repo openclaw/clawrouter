@@ -1,0 +1,1458 @@
+{
+  "version": 1,
+  "study": "adapted-livecodebench-reviewer-cascade-20261124",
+  "qualifiedFusionGain": false,
+  "dataset": {
+    "repository": "livecodebench/code_generation_lite",
+    "revision": "0fe84c3912ea0c4d4a78037083943e8f0c4dd505",
+    "file": "test6.jsonl",
+    "sha256": "bb4c364f71921c4495a6ad15abe1a927350b720009f4933e2e71f8af0f6fd1f5"
+  },
+  "cohorts": [
+    {
+      "name": "reviewer-development",
+      "sourceCommit": "ae5a9ef8c394f51fbd6f9ac36a49c54a2bb5b496",
+      "protocolSha256": "db514b46e287695bff7b4bf03dddf7d595cbdb1638cac32fd30a0f5deffc76f3",
+      "cohortProtocolSha256": "8e717a9b9622cbd3d752be6bd84d22d4c02e33fd01bf953fa09e6974bb58193c",
+      "qualificationSha256": "c6f80fb5c9fc4a309f3763a68290668fbfd8e8a67344889e86237e94a8fbb19e",
+      "terminalAuditSha256": "72136c4584208fd0e3c2f9e1ec990b70e3bf66da0e806e0f54431b6b839aca2c",
+      "freshAtInference": true,
+      "arms": {
+        "weak": {
+          "passed": 8,
+          "costMicros": 19698
+        },
+        "strong": {
+          "passed": 13,
+          "costMicros": 124634
+        },
+        "strong-gate": {
+          "passed": 13,
+          "costMicros": 120234
+        },
+        "weak-gate": {
+          "passed": 13,
+          "costMicros": 121926
+        }
+      },
+      "uniquePaidCalls": 46,
+      "uniquePaidCostMicros": 182088,
+      "tasks": [
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "identity": "atcoder:abc396_c",
+          "difficulty": "medium",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "identity": "atcoder:abc388_f",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "identity": "atcoder:abc397_c",
+          "difficulty": "medium",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "identity": "atcoder:abc389_e",
+          "difficulty": "hard",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "identity": "atcoder:arc192_d",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "identity": "atcoder:arc193_a",
+          "difficulty": "hard",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "identity": "atcoder:abc395_e",
+          "difficulty": "hard",
+          "publicTests": 4,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "identity": "atcoder:abc391_e",
+          "difficulty": "hard",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "identity": "atcoder:abc394_e",
+          "difficulty": "hard",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "identity": "atcoder:abc388_e",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "identity": "atcoder:arc196_a",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "identity": "atcoder:abc387_f",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "identity": "atcoder:abc389_g",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        }
+      ],
+      "rows": [
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "f49ecbab546a0718e37e822d0bc23b91f5213b46e83cac48282ae292b314c57a",
+          "costMicros": 277,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "912f3666ba39e1a1b3b26af79853d54c7f8eb2e733180fa293562891893fdf18",
+          "costMicros": 2806,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "f49ecbab546a0718e37e822d0bc23b91f5213b46e83cac48282ae292b314c57a",
+          "costMicros": 2853,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "weak-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "f49ecbab546a0718e37e822d0bc23b91f5213b46e83cac48282ae292b314c57a",
+          "costMicros": 575,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "46493205f3b9eecf025cf8f205b11b37bdde83f9db67b72c82da6f3619b9cefb",
+          "costMicros": 1662,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "852d69bb4379ec3e9a71fdf6995e366601c90a34ba08ea47db144b896b179a46",
+          "costMicros": 13096,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "strong-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "852d69bb4379ec3e9a71fdf6995e366601c90a34ba08ea47db144b896b179a46",
+          "costMicros": 18707,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "852d69bb4379ec3e9a71fdf6995e366601c90a34ba08ea47db144b896b179a46",
+          "costMicros": 15175,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "06455c47230092ded78f6d5f00ec437be4b6dcd31c8cfd5a10a26dfe0d0bfe8a",
+          "costMicros": 171,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "79b08c7b96964e87eb7c693304c1d7d95d1dbbe470d24337a0d499e9ccb30e3a",
+          "costMicros": 3736,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "06455c47230092ded78f6d5f00ec437be4b6dcd31c8cfd5a10a26dfe0d0bfe8a",
+          "costMicros": 2571,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "weak-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "06455c47230092ded78f6d5f00ec437be4b6dcd31c8cfd5a10a26dfe0d0bfe8a",
+          "costMicros": 292,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "c7dfc3767a192f4419f3f3d2a4ef137cca1693b24694a3ee44c756cca5bc7440",
+          "costMicros": 1657,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "e0ccc31ffdbf08fb8371ed93492377244ca72afef9d9c13429d5f949979307cc",
+          "costMicros": 9550,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "c7dfc3767a192f4419f3f3d2a4ef137cca1693b24694a3ee44c756cca5bc7440",
+          "costMicros": 4391,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "e0ccc31ffdbf08fb8371ed93492377244ca72afef9d9c13429d5f949979307cc",
+          "costMicros": 11557,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "4f62db349334366cda853d41abd43f7b9f23982f73063fe9e6d48bd0db66dd7c",
+          "costMicros": 2031,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "91a5b88462c80ab555274bc787ec0cbe072809faab3bb1ee0460049114003c33",
+          "costMicros": 18508,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "4f62db349334366cda853d41abd43f7b9f23982f73063fe9e6d48bd0db66dd7c",
+          "costMicros": 6650,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "91a5b88462c80ab555274bc787ec0cbe072809faab3bb1ee0460049114003c33",
+          "costMicros": 20980,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": null,
+          "costMicros": 4254,
+          "publicPassed": false
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da068cd8cbb50ef41d89c1aa52d4502d316578fcf7551ed536b908c8bd46c55f",
+          "costMicros": 12589,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "strong-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da068cd8cbb50ef41d89c1aa52d4502d316578fcf7551ed536b908c8bd46c55f",
+          "costMicros": 16843,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da068cd8cbb50ef41d89c1aa52d4502d316578fcf7551ed536b908c8bd46c55f",
+          "costMicros": 16843,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0e86ee4361df2fad14a1119f81c958d744e4dbbd09cc54ae90fe28500e16bff3",
+          "costMicros": 462,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "0e8ffb265459fff3a1d49a19acd863e5f2e7d3d6bded788dd36d7ef00159b72e",
+          "costMicros": 6879,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0e86ee4361df2fad14a1119f81c958d744e4dbbd09cc54ae90fe28500e16bff3",
+          "costMicros": 5486,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "weak-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0e86ee4361df2fad14a1119f81c958d744e4dbbd09cc54ae90fe28500e16bff3",
+          "costMicros": 715,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "555c120eb39324e58794d0ef5bb0ede1797d11e267e08666a3205380abd31a7c",
+          "costMicros": 1063,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "14bdf80ba3d0550cc8d9c3a5f69a6e0d02016b41db8eb6c1cf09d366e8cdaac5",
+          "costMicros": 5552,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "555c120eb39324e58794d0ef5bb0ede1797d11e267e08666a3205380abd31a7c",
+          "costMicros": 4742,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "14bdf80ba3d0550cc8d9c3a5f69a6e0d02016b41db8eb6c1cf09d366e8cdaac5",
+          "costMicros": 6615,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "73d67e47c68795d0d84bc6710ac41395d61bb6e306584537843fb7f94d0c4de7",
+          "costMicros": 1315,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "3934a26c065c9ee15f99dc8942110e12bbdeabc7a9d9e731ec17d400ae8db8d4",
+          "costMicros": 8566,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "73d67e47c68795d0d84bc6710ac41395d61bb6e306584537843fb7f94d0c4de7",
+          "costMicros": 6459,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "weak-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "73d67e47c68795d0d84bc6710ac41395d61bb6e306584537843fb7f94d0c4de7",
+          "costMicros": 1721,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "78c9df859b7060d4810ac8cd50e12353e0ad7c00f38b63b07bad915e2530b1e9",
+          "costMicros": 220,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "09cca277fb9aef6b58927216086c7821fd23dd5ed5262b98dd336636caa1d5fb",
+          "costMicros": 3338,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "strong-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "78c9df859b7060d4810ac8cd50e12353e0ad7c00f38b63b07bad915e2530b1e9",
+          "costMicros": 2992,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "weak-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "78c9df859b7060d4810ac8cd50e12353e0ad7c00f38b63b07bad915e2530b1e9",
+          "costMicros": 533,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "8e43f157f0c6cd7b707a75e2350d66c207477f451e155dd12dceeb9572883fd4",
+          "costMicros": 553,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "093fb08a496f4eb18a7149192c8d14503a9cd0548d2161912f6d75aa2d5d9683",
+          "costMicros": 7392,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "strong-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "093fb08a496f4eb18a7149192c8d14503a9cd0548d2161912f6d75aa2d5d9683",
+          "costMicros": 9885,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "093fb08a496f4eb18a7149192c8d14503a9cd0548d2161912f6d75aa2d5d9683",
+          "costMicros": 8265,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "b58069ca11f55bfcabd7e364de1a3b1bb97bc31895556b919111f6d9d4630dd4",
+          "costMicros": 1851,
+          "publicPassed": false
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "bd81b8b109d070744254e76bb58f3d61cecaf7b83039246a82b10e8fbf8fc86b",
+          "costMicros": 6912,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "strong-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "bd81b8b109d070744254e76bb58f3d61cecaf7b83039246a82b10e8fbf8fc86b",
+          "costMicros": 8763,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "bd81b8b109d070744254e76bb58f3d61cecaf7b83039246a82b10e8fbf8fc86b",
+          "costMicros": 8763,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": null,
+          "costMicros": 4182,
+          "publicPassed": false
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a340dc303a0d73e3e311ca4dfb6c7934b51e5a1e99d2a44646504b7a63ae8068",
+          "costMicros": 25710,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "strong-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a340dc303a0d73e3e311ca4dfb6c7934b51e5a1e99d2a44646504b7a63ae8068",
+          "costMicros": 29892,
+          "publicPassed": true
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "weak-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a340dc303a0d73e3e311ca4dfb6c7934b51e5a1e99d2a44646504b7a63ae8068",
+          "costMicros": 29892,
+          "publicPassed": true
+        }
+      ],
+      "reviewCalls": [
+        {
+          "requestId": "lcb-ad2c3797f56dfb66/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 2576,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ad2c3797f56dfb66/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 298,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-586f210816b474ee/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 417,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-586f210816b474ee/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 3949,
+          "accepted": false
+        },
+        {
+          "requestId": "lcb-3fe9747bde131893/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 2400,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-3fe9747bde131893/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 121,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-648351c83adb9cd0/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 350,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-648351c83adb9cd0/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 2734,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-fd80ede8a0fc11e4/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 4619,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-fd80ede8a0fc11e4/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 441,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-ab5d8b81430ae3bb/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 5024,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ab5d8b81430ae3bb/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 253,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-33728a1e4ab51be8/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 0,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-33728a1e4ab51be8/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 3679,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ed2e1b4c39118bde/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 5144,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ed2e1b4c39118bde/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 406,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-b1640de796c804a9/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 313,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-b1640de796c804a9/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 2772,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-569c68d076e69159/strong/gate",
+          "model": "openai/gpt-6.2-sol",
+          "costMicros": 1940,
+          "accepted": false
+        },
+        {
+          "requestId": "lcb-569c68d076e69159/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 320,
+          "accepted": null
+        }
+      ]
+    },
+    {
+      "name": "terra-exposed-diagnostic",
+      "sourceCommit": "edefbebe62296fff766b295be8c3a972fbf4229d",
+      "protocolSha256": "a3b7a6f5d34ba749c90dd3416b99b1c16505e2e14b08054d1638fd3aef6f36d0",
+      "parentAuditSha256": "72136c4584208fd0e3c2f9e1ec990b70e3bf66da0e806e0f54431b6b839aca2c",
+      "terminalAuditSha256": "879d381586ee3936181cb22cb14a3914cb8b10e46c2c107b75ec94b4fbce8f46",
+      "freshAtInference": false,
+      "arms": {
+        "terra-gate": {
+          "passed": 13,
+          "costMicros": 113681,
+          "lostStrongSuccesses": 0
+        },
+        "weak-then-terra": {
+          "passed": 13,
+          "costMicros": 99654,
+          "lostStrongSuccesses": 0
+        }
+      },
+      "uniqueNewPaidCalls": 10,
+      "uniqueNewPaidCostMicros": 21405,
+      "rows": [
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "f49ecbab546a0718e37e822d0bc23b91f5213b46e83cac48282ae292b314c57a",
+          "costMicros": 1498
+        },
+        {
+          "id": "lcb-ad2c3797f56dfb66",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "f49ecbab546a0718e37e822d0bc23b91f5213b46e83cac48282ae292b314c57a",
+          "costMicros": 575
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "852d69bb4379ec3e9a71fdf6995e366601c90a34ba08ea47db144b896b179a46",
+          "costMicros": 17548
+        },
+        {
+          "id": "lcb-586f210816b474ee",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "852d69bb4379ec3e9a71fdf6995e366601c90a34ba08ea47db144b896b179a46",
+          "costMicros": 17965
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "06455c47230092ded78f6d5f00ec437be4b6dcd31c8cfd5a10a26dfe0d0bfe8a",
+          "costMicros": 1404
+        },
+        {
+          "id": "lcb-3fe9747bde131893",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "06455c47230092ded78f6d5f00ec437be4b6dcd31c8cfd5a10a26dfe0d0bfe8a",
+          "costMicros": 292
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "c7dfc3767a192f4419f3f3d2a4ef137cca1693b24694a3ee44c756cca5bc7440",
+          "costMicros": 3297
+        },
+        {
+          "id": "lcb-648351c83adb9cd0",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "c7dfc3767a192f4419f3f3d2a4ef137cca1693b24694a3ee44c756cca5bc7440",
+          "costMicros": 3647
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "4f62db349334366cda853d41abd43f7b9f23982f73063fe9e6d48bd0db66dd7c",
+          "costMicros": 4696
+        },
+        {
+          "id": "lcb-fd80ede8a0fc11e4",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "4f62db349334366cda853d41abd43f7b9f23982f73063fe9e6d48bd0db66dd7c",
+          "costMicros": 5137
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da068cd8cbb50ef41d89c1aa52d4502d316578fcf7551ed536b908c8bd46c55f",
+          "costMicros": 16843
+        },
+        {
+          "id": "lcb-8c1e466c28b2dfa0",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da068cd8cbb50ef41d89c1aa52d4502d316578fcf7551ed536b908c8bd46c55f",
+          "costMicros": 16843
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "0e8ffb265459fff3a1d49a19acd863e5f2e7d3d6bded788dd36d7ef00159b72e",
+          "costMicros": 9863
+        },
+        {
+          "id": "lcb-ab5d8b81430ae3bb",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0e86ee4361df2fad14a1119f81c958d744e4dbbd09cc54ae90fe28500e16bff3",
+          "costMicros": 715
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "555c120eb39324e58794d0ef5bb0ede1797d11e267e08666a3205380abd31a7c",
+          "costMicros": 3698
+        },
+        {
+          "id": "lcb-33728a1e4ab51be8",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "555c120eb39324e58794d0ef5bb0ede1797d11e267e08666a3205380abd31a7c",
+          "costMicros": 3698
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "73d67e47c68795d0d84bc6710ac41395d61bb6e306584537843fb7f94d0c4de7",
+          "costMicros": 4732
+        },
+        {
+          "id": "lcb-ed2e1b4c39118bde",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "73d67e47c68795d0d84bc6710ac41395d61bb6e306584537843fb7f94d0c4de7",
+          "costMicros": 1721
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "terra-gate",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "78c9df859b7060d4810ac8cd50e12353e0ad7c00f38b63b07bad915e2530b1e9",
+          "costMicros": 1894
+        },
+        {
+          "id": "lcb-b1640de796c804a9",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "78c9df859b7060d4810ac8cd50e12353e0ad7c00f38b63b07bad915e2530b1e9",
+          "costMicros": 533
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "093fb08a496f4eb18a7149192c8d14503a9cd0548d2161912f6d75aa2d5d9683",
+          "costMicros": 9553
+        },
+        {
+          "id": "lcb-569c68d076e69159",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "093fb08a496f4eb18a7149192c8d14503a9cd0548d2161912f6d75aa2d5d9683",
+          "costMicros": 9873
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "bd81b8b109d070744254e76bb58f3d61cecaf7b83039246a82b10e8fbf8fc86b",
+          "costMicros": 8763
+        },
+        {
+          "id": "lcb-2fafbab4062fcbad",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "bd81b8b109d070744254e76bb58f3d61cecaf7b83039246a82b10e8fbf8fc86b",
+          "costMicros": 8763
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "terra-gate",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a340dc303a0d73e3e311ca4dfb6c7934b51e5a1e99d2a44646504b7a63ae8068",
+          "costMicros": 29892
+        },
+        {
+          "id": "lcb-883af24f38c2290a",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a340dc303a0d73e3e311ca4dfb6c7934b51e5a1e99d2a44646504b7a63ae8068",
+          "costMicros": 29892
+        }
+      ],
+      "reviewCalls": [
+        {
+          "requestId": "lcb-ad2c3797f56dfb66/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 1221,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-586f210816b474ee/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 2790,
+          "accepted": false
+        },
+        {
+          "requestId": "lcb-3fe9747bde131893/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 1233,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-648351c83adb9cd0/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 1640,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-fd80ede8a0fc11e4/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 2665,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ab5d8b81430ae3bb/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 2522,
+          "accepted": false
+        },
+        {
+          "requestId": "lcb-33728a1e4ab51be8/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 2635,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ed2e1b4c39118bde/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 3417,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-b1640de796c804a9/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 1674,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-569c68d076e69159/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 1608,
+          "accepted": false
+        }
+      ]
+    },
+    {
+      "name": "fresh-cascade-replication",
+      "sourceCommit": "078cf2e52da071ef8af88c6b4b18d97b8978c758",
+      "protocolSha256": "2c118e233fe5198e134e5a6317c88db28bf251a8a7086ff83798d1d6563a80e0",
+      "cohortProtocolSha256": "7a229873d4f6183dd3b96190179787deeb5087e5ae0e004881926eb3800dcaa6",
+      "qualificationSha256": "c682f9df64e8f0ef6077b9d11de0a86809e6b2ae1d6e3ab6518cf0526ea88733",
+      "terminalAuditSha256": "8cd4bcf89014f642a7a52ccb75ae3d68dd57e957ffa4671fe3c1d8411305a472",
+      "freshAtInference": true,
+      "arms": {
+        "weak": {
+          "passed": 4,
+          "costMicros": 13214
+        },
+        "strong": {
+          "passed": 8,
+          "costMicros": 71072
+        },
+        "weak-then-terra": {
+          "passed": 7,
+          "costMicros": 53303
+        }
+      },
+      "lostStrongSuccesses": 1,
+      "developmentLead": false,
+      "uniquePaidCalls": 24,
+      "uniquePaidCostMicros": 95201,
+      "tasks": [
+        {
+          "id": "lcb-039d3ba896c1e352",
+          "identity": "atcoder:abc391_d",
+          "difficulty": "medium",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-ae5e459b19ddb51d",
+          "identity": "atcoder:abc391_f",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-3f1287300f139d0c",
+          "identity": "atcoder:abc395_c",
+          "difficulty": "medium",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-b6aff0c99e442a73",
+          "identity": "atcoder:arc195_e",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-dcd20b6cb31f36d3",
+          "identity": "atcoder:abc388_g",
+          "difficulty": "hard",
+          "publicTests": 2,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-230668ed275b9b72",
+          "identity": "atcoder:abc399_e",
+          "difficulty": "hard",
+          "publicTests": 4,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-a9be6c940bf39bf2",
+          "identity": "atcoder:abc389_f",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        },
+        {
+          "id": "lcb-443a46144bd42e8d",
+          "identity": "atcoder:abc390_f",
+          "difficulty": "hard",
+          "publicTests": 3,
+          "privateTests": 16
+        }
+      ],
+      "rows": [
+        {
+          "id": "lcb-039d3ba896c1e352",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "ffde2b7bd7e4b39320b5a96d0487026085eddb7febd5e67db4a633cac13c2e61",
+          "costMicros": 1951,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-039d3ba896c1e352",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "6f7fb6f7cf7def0a25fa2308f0d846194045bfc73bde038da4d904770b1409df",
+          "costMicros": 6818,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-039d3ba896c1e352",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "ffde2b7bd7e4b39320b5a96d0487026085eddb7febd5e67db4a633cac13c2e61",
+          "costMicros": 4417,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-ae5e459b19ddb51d",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "ee6798fcf282af446b88235e5254795f977a77c30c5149dfdf02801252e19006",
+          "costMicros": 1444,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-ae5e459b19ddb51d",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "fef886c8bedcd0b826cca827eef025aaa61698d0a649368151dc92090d58bf3a",
+          "costMicros": 12854,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-ae5e459b19ddb51d",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "ee6798fcf282af446b88235e5254795f977a77c30c5149dfdf02801252e19006",
+          "costMicros": 5090,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-3f1287300f139d0c",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "cbad0118bc2dcafa6ec4c55f839433cd26744471ab8251034996c8d6cb55e5cd",
+          "costMicros": 168,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-3f1287300f139d0c",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "a66aadf42fbdd177edbd8e239a648d06fcba058b8a00a59f160efe97ba2717ff",
+          "costMicros": 2532,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-3f1287300f139d0c",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "cbad0118bc2dcafa6ec4c55f839433cd26744471ab8251034996c8d6cb55e5cd",
+          "costMicros": 337,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-b6aff0c99e442a73",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "98907d9276d4eb513d956af36d24cabfa7479dbb532e799cdf3540ce56b4719b",
+          "costMicros": 1732,
+          "publicPassed": false,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-b6aff0c99e442a73",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "68cafcea9c6eebb757a7885d20aedb8c3709d9cba3bd16f9ee394e9e4a016044",
+          "costMicros": 9904,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-b6aff0c99e442a73",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "68cafcea9c6eebb757a7885d20aedb8c3709d9cba3bd16f9ee394e9e4a016044",
+          "costMicros": 11636,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-dcd20b6cb31f36d3",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": null,
+          "costMicros": 4265,
+          "publicPassed": false,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-dcd20b6cb31f36d3",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da3972a662d7235e56417a9f79e343ae90d84caea0681eefe9070a29e0e533cf",
+          "costMicros": 10674,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-dcd20b6cb31f36d3",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "da3972a662d7235e56417a9f79e343ae90d84caea0681eefe9070a29e0e533cf",
+          "costMicros": 14939,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-230668ed275b9b72",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "48a05888fa1feaa3d79173fa42be102a035e3d76a1da40b82dab79b7acfae7e1",
+          "costMicros": 1218,
+          "publicPassed": false,
+          "fullFailures": 3,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-230668ed275b9b72",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "14ce15a5706ac2f3709bba839fd0fc18c4d44c148a3c2c0458dece7a0fd702ec",
+          "costMicros": 8596,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-230668ed275b9b72",
+          "arm": "weak-then-terra",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "14ce15a5706ac2f3709bba839fd0fc18c4d44c148a3c2c0458dece7a0fd702ec",
+          "costMicros": 9814,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-a9be6c940bf39bf2",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "9901468e8b2939800f3f95a6e2ce5b2e209640ac3ad7f63ff263bd90aa5e466e",
+          "costMicros": 1479,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 9
+        },
+        {
+          "id": "lcb-a9be6c940bf39bf2",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "b18985447d110e08cee08b391e689882fc47f1219893000e9295e9a6260a8425",
+          "costMicros": 14976,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-a9be6c940bf39bf2",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": false,
+          "codeSha256": "9901468e8b2939800f3f95a6e2ce5b2e209640ac3ad7f63ff263bd90aa5e466e",
+          "costMicros": 5746,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 9
+        },
+        {
+          "id": "lcb-443a46144bd42e8d",
+          "arm": "weak",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0272488e4305f3981a30249d4b7ca7525add67d1b9ac73095d7e4dd474e1bcf2",
+          "costMicros": 957,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-443a46144bd42e8d",
+          "arm": "strong",
+          "selected": "strong",
+          "passed": true,
+          "codeSha256": "4c6b6b14fccfeabf6c69ff300af0ee17bb7e87d447696486eb543bbdf7a677d9",
+          "costMicros": 4718,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        },
+        {
+          "id": "lcb-443a46144bd42e8d",
+          "arm": "weak-then-terra",
+          "selected": "weak",
+          "passed": true,
+          "codeSha256": "0272488e4305f3981a30249d4b7ca7525add67d1b9ac73095d7e4dd474e1bcf2",
+          "costMicros": 1324,
+          "publicPassed": true,
+          "fullFailures": 0,
+          "fullErrors": 0
+        }
+      ],
+      "postAuditDiagnostic": {
+        "receiptSha256": "21f8ec07818b4d0260102de9bf9927bc42b88643871c885c7a2e8563ccca7e23",
+        "task": "atcoder:abc389_f",
+        "candidateSha256": "9901468e8b2939800f3f95a6e2ce5b2e209640ac3ad7f63ff263bd90aa5e466e",
+        "result": {
+          "valid": true,
+          "passed": false,
+          "tests": 19,
+          "failures": 0,
+          "errors": 9,
+          "skipped": 0,
+          "candidateExitCode": 0,
+          "candidateCpuSeconds": 1.187824,
+          "errorKinds": {
+            "RuntimeError": 9
+          }
+        },
+        "workerExceptionResult": {
+          "valid": true,
+          "passed": false,
+          "tests": 19,
+          "failures": 0,
+          "errors": 9,
+          "skipped": 0,
+          "workerErrorKinds": {
+            "MemoryError": 9
+          }
+        },
+        "changesOriginalScore": false
+      },
+      "reviewCalls": [
+        {
+          "requestId": "lcb-039d3ba896c1e352/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 416,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-ae5e459b19ddb51d/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 469,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-3f1287300f139d0c/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 169,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-a9be6c940bf39bf2/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 539,
+          "accepted": null
+        },
+        {
+          "requestId": "lcb-443a46144bd42e8d/weak/gate",
+          "model": "openai/gpt-6-luna",
+          "costMicros": 367,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-039d3ba896c1e352/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 2050,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-ae5e459b19ddb51d/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 3177,
+          "accepted": true
+        },
+        {
+          "requestId": "lcb-a9be6c940bf39bf2/terra/gate",
+          "model": "openai/gpt-6.1-terra",
+          "costMicros": 3728,
+          "accepted": true
+        }
+      ],
+      "hiddenLabelDiagnostic": {
+        "costMicros": 57364,
+        "passed": 8,
+        "deployable": false,
+        "claim": "Perfect post-seed escalation still saves only 19.29 percent before reviewer overhead."
+      }
+    }
+  ]
+}

@@ -10,6 +10,20 @@ const encode = text => new TextEncoder().encode(text);
 const wire = frames => frames.map(frame => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\r\n\r\n`).join("");
 const accepted = frames => { const stream = new OpenRouterMusicStream(request); for (const frame of frames) stream.accept(typeof frame === "string" ? frame : JSON.stringify(frame)); return stream; };
 
+test("music response reader rejects preparation errors through its returned promise", async () => {
+  for (const property of ["model", "format"]) {
+    const failure = new Error(`${property} getter failed`);
+    const context = { model: request.model, format: request.format };
+    Object.defineProperty(context, property, { get() { throw failure; } });
+    let pending;
+    assert.doesNotThrow(() => {
+      pending = readOpenRouterMusic(new Response("", { headers: { "content-type": "text/event-stream" } }), context, new AbortController().signal);
+    });
+    assert.ok(pending instanceof Promise);
+    await assert.rejects(pending, error => error === failure);
+  }
+});
+
 function freezeInput(value) {
   if (value && typeof value === "object") { Object.values(value).forEach(freezeInput); Object.freeze(value); }
   return value;

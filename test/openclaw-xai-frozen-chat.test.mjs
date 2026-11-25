@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -27,8 +28,9 @@ test("actual registered frozen xAI explicit Chat client through workerd and SQLi
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-xai-frozen-chat-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture",
@@ -41,7 +43,7 @@ test("actual registered frozen xAI explicit Chat client through workerd and SQLi
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put("connections/xai", JSON.stringify({ providerId: "xai", enabled: true, monthlyBudgetMicros: 100 }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-xai_model0-fixture-secret" } });
     assert.equal(catalogResponse.status, 200);
@@ -113,9 +115,11 @@ test("actual registered frozen xAI explicit Chat client through workerd and SQLi
       } else assert.equal(usage.budget.spentMicros, 0, id);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0), id);
     }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
   }
 });
 

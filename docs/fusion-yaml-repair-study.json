@@ -1,0 +1,698 @@
+{
+  "schemaVersion": 1,
+  "study": "Fresh YAML scaffold repair with verified model cascade",
+  "scope": "One previously model-unexercised historical repair, repeated three times per arm. A different source family from the Codex study; still one task cluster, not independent confirmation.",
+  "task": {
+    "id": "history-01cb15ee835f",
+    "baseCommit": "461d1c1fd3d0772d2b3e5b251edc84ec121739f9",
+    "referenceCommit": "01cb15ee835f80d33938cd89287de85097b8caf9",
+    "sourcePaths": [
+      "scripts/create-provider-plugin.ts"
+    ],
+    "testPaths": [
+      "test/create-provider-plugin.test.mjs"
+    ]
+  },
+  "provenance": {
+    "sourceCommit": "a82b37290004aa0ae000d6635d80dfbe2921c563",
+    "protocolSha256": "68a11bf346fc011abf0ebc017c272f1bb2ee32cf347d418a719b795a8da71bfb",
+    "resultSha256": "280159b00ea2d125a7a255babf37bbbeb6dd2fa1e45bb9c20a937684c1244fd4",
+    "terminalAuditSha256": "4efecf60ccb19d607aad9d4d7616612d63a61d81c96e912f51d794d6ad37c66d",
+    "qualificationProtocolSha256": "65fe24ac1c3e15981a4733aa3610b7cd5b5ecac7560f795e4e4ae107a481c602",
+    "qualificationResultSha256": "878ddf87ab6e81ce88ec77f2fdab87b1153491416d8d557fa91b34f4e8c2300d"
+  },
+  "method": {
+    "draftModel": "openai/gpt-6-luna",
+    "draftReasoning": "medium",
+    "draftMaxOutputTokens": 4096,
+    "strongModel": "openai/gpt-6.1-terra",
+    "strongReasoning": "low",
+    "strongMaxOutputTokens": 8192,
+    "comparison": "Verified cheap-first cascade versus fresh strong control, alternating arm order, matched two-attempt ceilings, fresh strong fallback. Exact edits reconstruct the original baseline. All calls finish before full grading.",
+    "context": "Both arms receive the same original source, baseline provider template, descriptor and plugin contract, plus public tests. No reference source or final-only literal cases enter requests.",
+    "partition": "A genuinely new test loops over four literal identifier cases. Two remain public and two are held out by a fixed hash partition. Baseline directives, statement order, duplicate statements and test bodies are preserved. Only direct callback loops with distinct primitive cases and no abrupt exits are supported.",
+    "qualificationCorrection": "The original suite rejects the broken baseline through a loader error. The first qualification therefore fails its assertion-based admission rule and is retained. The qualified revision appends explicit no-throw and string-identity checks using only the two already-public identifiers. Every original test remains unchanged in the full suite.",
+    "runtime": "Existing immutable, exact-lock cached runtime with Worker compilation and original repository tests. No downloads or additional compute allocation.",
+    "cost": "Integer microUSD tariff estimates from recorded usage, including failed drafts and fallback. Cache-neutral normalization prices all input at the frozen base rate. Neither metric is a provider invoice.",
+    "elapsed": "Per-arm wall-clock time includes generation and verification.",
+    "gates": "All final repairs pass with zero false accepts and at least 20% savings on both cost measures. The development latency gate additionally requires a successful fallback and elapsed ratio <=1.2. Thresholds are unchanged.",
+    "reproducibility": "Hashes identify retained private protocols and raw proof. This is an audited observation, not a standalone reproduction bundle."
+  },
+  "qualification": {
+    "referenceFull": {
+      "valid": true,
+      "passed": true,
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    "referencePublic": {
+      "valid": true,
+      "passed": true,
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    "baseFull": {
+      "valid": true,
+      "passed": false,
+      "tests": 6,
+      "failures": 2,
+      "skipped": 0
+    },
+    "basePublic": {
+      "valid": true,
+      "passed": false,
+      "tests": 6,
+      "failures": 2,
+      "skipped": 0
+    }
+  },
+  "summary": {
+    "strong": {
+      "passed": 3,
+      "costMicros": 11593,
+      "elapsedMs": 28885.277833000004
+    },
+    "cascade": {
+      "passed": 3,
+      "costMicros": 5230,
+      "elapsedMs": 55901.077167
+    },
+    "falseAccepts": 0,
+    "strongLosses": 0,
+    "rescues": 1,
+    "escalations": 1,
+    "costRatio": 0.45113430518416286,
+    "elapsedRatio": 1.935279192749733,
+    "costComparison": {
+      "costBasis": "invoice-and-cache-neutral-v1",
+      "strong": {
+        "costMicros": 11593,
+        "normalizedMicros": 18379
+      },
+      "cascade": {
+        "costMicros": 5230,
+        "normalizedMicros": 9777
+      },
+      "costRatio": 0.45113430518416286,
+      "normalizedCostRatio": 0.5319658305674955,
+      "invoiceCostScreen": true,
+      "normalizedCostScreen": true,
+      "costScreen": true
+    },
+    "qualityMatchedCostScreen": true,
+    "liveDevelopmentLead": false,
+    "qualifiedProductionGain": false
+  },
+  "rows": [
+    {
+      "id": "history-01cb15ee835f/repeat-0",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 7005,
+      "normalizedMicros": 5976,
+      "elapsedMs": 9059.911875000002,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-01cb15ee835f/repeat-0",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 1194,
+      "normalizedMicros": 1091,
+      "elapsedMs": 17325.529,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-01cb15ee835f/repeat-1",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 659,
+      "normalizedMicros": 1030,
+      "elapsedMs": 13649.417791999997,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-01cb15ee835f/repeat-1",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2194,
+      "normalizedMicros": 6102,
+      "elapsedMs": 9060.113792000004,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-01cb15ee835f/repeat-2",
+      "strategy": "strong",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": false,
+      "attempts": 1,
+      "costMicros": 2394,
+      "normalizedMicros": 6301,
+      "elapsedMs": 10765.252165999998,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "id": "history-01cb15ee835f/repeat-2",
+      "strategy": "cascade",
+      "passed": true,
+      "publicPassed": true,
+      "escalated": true,
+      "attempts": 2,
+      "costMicros": 3377,
+      "normalizedMicros": 7656,
+      "elapsedMs": 24926.130375000008,
+      "full": {
+        "valid": true,
+        "passed": true,
+        "tests": 6,
+        "failures": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "calls": [
+    {
+      "stage": "case-0/strong/control",
+      "protocolSha256": "61d148903e6852895030373b60631aeecd8456ac26e7675dc13c1506fea00616",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 7005,
+      "normalizedMicros": 5976,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4113,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 372
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-0/cascade/draft",
+      "protocolSha256": "49e08f01ff121f2638a37771a9845e1251528dd0c1815fdcb30f67709c53d625",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1194,
+      "normalizedMicros": 1091,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 0,
+        "cacheWriteInputTokens": 4113,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1358
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/cascade/draft",
+      "protocolSha256": "9bfbe4399b64b1b29c30a4ff4860f9be56f896a35f4d9dc99f89358bcf380a84",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 659,
+      "normalizedMicros": 1030,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4113,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1235
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-1/strong/control",
+      "protocolSha256": "efa6e03f54480b1f8645dda19e96a3bd5231dda4bd31da67835c01b988dc6d52",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 2194,
+      "normalizedMicros": 6102,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4113,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 397
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/strong/control",
+      "protocolSha256": "4f5cb712c4276c77763b19b4c350225d0059578a14f996c321fc46a59aec5b06",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 2394,
+      "normalizedMicros": 6301,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4113,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 437
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/cascade/draft",
+      "protocolSha256": "3f04b0c33a69c68fc9b57a7e00359d4b967b2762785b9b6867782617c2d75e98",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 628,
+      "normalizedMicros": 999,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4113,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 1173
+      },
+      "disposition": "complete"
+    },
+    {
+      "stage": "case-2/cascade/fallback",
+      "protocolSha256": "718e00f601e47ff13e5d3a505a8cd333f38fa252a50a462b4f555ff228e8e755",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 2749,
+      "normalizedMicros": 6657,
+      "usage": {
+        "uncachedInputTokens": 3,
+        "cacheReadInputTokens": 4113,
+        "cacheWriteInputTokens": 0,
+        "cacheWrite1hInputTokens": 0,
+        "outputTokens": 508
+      },
+      "disposition": "complete"
+    }
+  ],
+  "conclusion": "The medium-effort cascade passed all repairs at 46.8% lower normalized cost, but took 93.5% longer. Lowering draft effort reduced the delay but forced fallback on every case and failed the cost screen. Neither setting passed the full development gate or establishes production readiness.",
+  "limitations": [
+    "Three repetitions are one task cluster, not three independent tasks or the required 30-task confirmation.",
+    "Previously unexercised refers to recorded experiment history, not model pretraining exclusion.",
+    "The public contract was clarified before model calls; the first failed qualification remains evidence.",
+    "No production traffic, deployment or default enablement.",
+    "The lower-effort follow-up was chosen after seeing the medium-effort outcome and is exploratory, not a held-out confirmation."
+  ],
+  "lowerEffortFollowup": {
+    "scope": "Exposed-task follow-up: only draft reasoning changed from medium to none. Fresh paired strong controls; same task, context, public/full tests, output limits, runtime and thresholds. Not independent task evidence.",
+    "sourceCommit": "5049fd9847731838ae186185f4bd48aa936d2d2d",
+    "protocolSha256": "92a71dd9b2d1d03638f13e0537b806e2cd324e972733798c9174481a0d62821e",
+    "resultSha256": "6405105040d81e52d01b8eb9b8d681a1dbef7f79cdfb34f4850eb9fdd752ee8f",
+    "terminalAuditSha256": "8fa4ee9e0eea4e53dbed25e5322f54b8b6055bd23f47ea59287df8c63e9d6321",
+    "draftReasoning": "none",
+    "summary": {
+      "strong": {
+        "passed": 3,
+        "costMicros": 6817,
+        "elapsedMs": 30811.088750000006
+      },
+      "cascade": {
+        "passed": 3,
+        "costMicros": 6116,
+        "elapsedMs": 40518.352251000004
+      },
+      "falseAccepts": 0,
+      "strongLosses": 0,
+      "rescues": 3,
+      "escalations": 3,
+      "costRatio": 0.8971688425993839,
+      "elapsedRatio": 1.3150574645305255,
+      "costComparison": {
+        "costBasis": "invoice-and-cache-neutral-v1",
+        "strong": {
+          "costMicros": 6817,
+          "normalizedMicros": 18538
+        },
+        "cascade": {
+          "costMicros": 6116,
+          "normalizedMicros": 18475
+        },
+        "costRatio": 0.8971688425993839,
+        "normalizedCostRatio": 0.9966015751429497,
+        "invoiceCostScreen": false,
+        "normalizedCostScreen": false,
+        "costScreen": false
+      },
+      "qualityMatchedCostScreen": false,
+      "liveDevelopmentLead": false,
+      "qualifiedProductionGain": false
+    },
+    "rows": [
+      {
+        "id": "history-01cb15ee835f/repeat-0",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2374,
+        "normalizedMicros": 6281,
+        "elapsedMs": 11072.749,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      },
+      {
+        "id": "history-01cb15ee835f/repeat-0",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 2624,
+        "normalizedMicros": 6428,
+        "elapsedMs": 15068.976459,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      },
+      {
+        "id": "history-01cb15ee835f/repeat-1",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 1606,
+        "normalizedMicros": 5884,
+        "elapsedMs": 12467.739000000001,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      },
+      {
+        "id": "history-01cb15ee835f/repeat-1",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2049,
+        "normalizedMicros": 5956,
+        "elapsedMs": 9246.333167000004,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      },
+      {
+        "id": "history-01cb15ee835f/repeat-2",
+        "strategy": "strong",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": false,
+        "attempts": 1,
+        "costMicros": 2394,
+        "normalizedMicros": 6301,
+        "elapsedMs": 10492.006583000002,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      },
+      {
+        "id": "history-01cb15ee835f/repeat-2",
+        "strategy": "cascade",
+        "passed": true,
+        "publicPassed": true,
+        "escalated": true,
+        "attempts": 2,
+        "costMicros": 1886,
+        "normalizedMicros": 6163,
+        "elapsedMs": 12981.636792000005,
+        "full": {
+          "valid": true,
+          "passed": true,
+          "tests": 6,
+          "failures": 0,
+          "skipped": 0,
+          "failureFingerprints": {
+            "version": 1,
+            "kind": "tap-label-path-sha256",
+            "digests": [],
+            "truncated": false
+          },
+          "exitCode": 0,
+          "runtime": {
+            "node": "v24.22.1",
+            "platform": "linux",
+            "arch": "arm64"
+          }
+        }
+      }
+    ],
+    "calls": [
+      {
+        "stage": "case-0/strong/control",
+        "protocolSha256": "1db6d5e6fa632a394f6fca0d3e7b2858152b5e3ed0ca185d389e8aaae6cf61c9",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 2374,
+        "normalizedMicros": 6281,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 433
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-0/cascade/draft",
+        "protocolSha256": "74e54146df984eed3e3f1baa391ac76c181d83b658684c5e63c276f3db9b366c",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 590,
+        "normalizedMicros": 487,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 4113,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 150
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-0/cascade/fallback",
+        "protocolSha256": "c4db55e35bac6da9cdd43f63872c68345c677dcf8ad1431f7219508c5cd9a76e",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 2034,
+        "normalizedMicros": 5941,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 365
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-1/cascade/draft",
+        "protocolSha256": "a3d41f093fa2fd18dd857a22057075c9809d855a32e385bed0e963ebbc9d5f87",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 102,
+        "normalizedMicros": 473,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 121
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-1/cascade/fallback",
+        "protocolSha256": "db30c5f22aa39e86ce2013cee8b82c6f5e853cb9f41a6c3698b18f83d2fad90c",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 1504,
+        "normalizedMicros": 5411,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 259
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-1/strong/control",
+        "protocolSha256": "d92a6835d26707a26452286f961cc651c3aa45674f4c98db77f5efaec32559d4",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 2049,
+        "normalizedMicros": 5956,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 368
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-2/strong/control",
+        "protocolSha256": "6f6996a355c7a5b5936e38676694d8adf6f031b2b7bd433b6556a7ca416be158",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 2394,
+        "normalizedMicros": 6301,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 437
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-2/cascade/draft",
+        "protocolSha256": "e1f4a4469dacd6cd9104183a0cf180eacb730f237577ab9a6eb3a777d63264cb",
+        "model": "openai/gpt-6-luna",
+        "costMicros": 107,
+        "normalizedMicros": 477,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 130
+        },
+        "disposition": "complete"
+      },
+      {
+        "stage": "case-2/cascade/fallback",
+        "protocolSha256": "16d784a32051c3ce35a79e187d6b1a493485fa1ec95de67265564c805e65ae0b",
+        "model": "openai/gpt-6.1-terra",
+        "costMicros": 1779,
+        "normalizedMicros": 5686,
+        "usage": {
+          "uncachedInputTokens": 3,
+          "cacheReadInputTokens": 4113,
+          "cacheWriteInputTokens": 0,
+          "cacheWrite1hInputTokens": 0,
+          "outputTokens": 314
+        },
+        "disposition": "complete"
+      }
+    ],
+    "conclusion": "Both arms passed 3/3, but every small-model draft required strong fallback. Estimated invoice cost fell 10.3%, normalized cost only 0.34%, and elapsed time increased 31.5%. Both cost and latency gates failed. Reject the lower-effort setting; do not pool this with the earlier run as independent task evidence."
+  }
+}

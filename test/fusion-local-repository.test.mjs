@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hash } from '../scripts/fusion-workloads.mjs';
+import { localGenerator } from '../scripts/fusion-execution-smoke.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { localRoutes, localActionRequest, validateLocalQualification, runLocalRepository, groundedSampling } from '../scripts/fusion-local-repository.mjs';
 
@@ -35,6 +36,27 @@ test('adapter sends the same action schema through loopback with fixed limits', 
   assert.equal(sent.body.options.temperature, 0);
 });
 
+test('runtime timings preserve nanoseconds and leave missing or invalid metadata unknown', async () => {
+  const timings = { total_duration: 91, load_duration: 13, prompt_eval_duration: 17, eval_duration: 31 };
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: new AbortController().signal, seed: 4 };
+  const cases = [
+    [timings, 'available', { total: 91, load: 13, promptEval: 17, generation: 31 }],
+    [Object.fromEntries(Object.keys(timings).map(key => [key, 0])), 'available',
+      { total: 0, load: 0, promptEval: 0, generation: 0 }],
+    [{}, 'missing', null],
+    [{ ...timings, eval_duration: undefined }, 'missing', null],
+    ...[-1, '31', null, 1.5, Number.MAX_SAFE_INTEGER + 1].map(value =>
+      [{ ...timings, eval_duration: value }, 'invalid', null]),
+  ];
+  for (const [extra, status, expected] of cases) {
+    const result = await localActionRequest({ ...options, fetcher: async () => response(pins[0].model, 'complete', extra) });
+    assert.equal(result.runtimeTimingStatus, status);
+    assert.deepEqual(result.runtimeTimingsNs, expected);
+    assert.equal(result.outputTokens, 9);
+  }
+});
+
 test('grounded sampling is explicit and does not change legacy requests', async () => {
   let options;
   await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
@@ -42,6 +64,40 @@ test('grounded sampling is explicit and does not change legacy requests', async 
     fetcher: async (_url, request) => { options = JSON.parse(request.body).options; return response(pins[0].model); } });
   for (const [key, value] of Object.entries(groundedSampling)) assert.equal(options[key], value);
   assert.equal(options.seed, 4); assert.equal(options.num_predict, 1536);
+});
+
+test('an explicit output allowance reaches generation without weakening response limits', async () => {
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0],
+    body: { ...body, max_tokens: 4096 }, signal: new AbortController().signal, seed: 1 };
+  let calls = 0;
+  const fetcher = async (_url, request) => {
+    calls++;
+    assert.equal(JSON.parse(request.body).options.num_predict, 4096);
+    assert.equal(JSON.parse(request.body).options.num_ctx, 32768);
+    return response(pins[0].model, 'complete', { eval_count: 2000 });
+  };
+  await assert.rejects(localActionRequest({ ...options, fetcher }), /invalid_local_action_request/);
+  assert.equal(calls, 0);
+  const result = await localActionRequest({ ...options, maxOutputTokens: 4096, fetcher });
+  assert.equal(result.outputTokens, 2000);
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    fetcher: async () => response(pins[0].model, 'oversized', { eval_count: 4097 }) }), /invalid_local_response/);
+});
+
+test('invalid output allowances and oversized requests fail before dispatch', async () => {
+  let dispatches = 0, calls = 0;
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: new AbortController().signal, seed: 1, onDispatch: async () => { dispatches++; },
+    fetcher: async () => { calls++; return response(pins[0].model); } };
+  for (const maxOutputTokens of [0, -1, 1.5, NaN, Infinity, 8193, '4096', null]) {
+    await assert.rejects(localActionRequest({ ...options, maxOutputTokens }), /invalid_local_output_tokens/);
+  }
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    body: { ...body, max_tokens: 4097 } }), /invalid_local_action_request/);
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    body: { ...body, max_tokens: 4096, messages: [{ role: 'user', content: 'x'.repeat(27000) }] } }), /provider_context_limit/);
+  assert.equal(dispatches, 0);
+  assert.equal(calls, 0);
 });
 
 test('context overflow is rejected before fetch and identity/usage errors stop the route', async () => {
@@ -72,11 +128,30 @@ test('qualification requires matching task digests, passing oracle and failing b
     qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true }, oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
   const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
   assert.equal(validateLocalQualification([task], q).length, 1);
+  assert.throws(() => validateLocalQualification([task], { ...q, acceptanceVerifier: 'external-fixture' }), /custom_acceptance_verifier_required/);
   for (const change of [{ qualified: 'true' }, { oracleVisible: undefined }, { oracleVisible: { valid: true, passed: false } }, { taskDigest: 'wrong' }, { broken: { valid: true, passed: true } },
     { oracle: { passed: false } }, { oracle: { valid: true, passed: true, tests: 0, skipped: 0 } },
     { oracle: { valid: true, passed: true, tests: 3, skipped: -1 } }]) {
     assert.throws(() => validateLocalQualification([task], { ...q, receipts: [{ ...receipt, ...change }] }), /unqualified_local_task/);
   }
+});
+
+test('updated public tests permit valid original failures without weakening reference qualification', () => {
+  const task = { id: 'updated-tests', visibleTests: ['test/updated.test.mjs'], editPaths: ['worker/example.ts'],
+    publicTestFiles: [{ path: 'test/updated.test.mjs', content: "import 'node:test';\n" }] };
+  const receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
+    qualified: true, visible: { valid: true, passed: false, failures: 2 }, oracleVisible: { valid: true, passed: true },
+    oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+  const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
+  assert.equal(validateLocalQualification([task], q).length, 1);
+  for (const change of [{ visible: { valid: false, passed: false, failures: 2 } },
+    { visible: { valid: true, passed: false, failures: 0 } }, { oracleVisible: { valid: true, passed: false } },
+    { oracle: { valid: true, passed: false, tests: 3, skipped: 0 } }]) {
+    assert.throws(() => validateLocalQualification([task], { ...q, receipts: [{ ...receipt, ...change }] }), /unqualified_local_task/);
+  }
+  const undeclared = { ...task }; delete undeclared.publicTestFiles;
+  assert.throws(() => validateLocalQualification([undeclared], { ...q, receipts: [{ ...receipt,
+    taskDigest: hash(JSON.stringify(undeclared)) }] }), /unqualified_local_task/);
 });
 
 async function fixture() {
@@ -92,6 +167,92 @@ async function fixture() {
   return { root, options: { repo: root, qualificationPath, out: join(root, 'result'), sourceSha: 'e'.repeat(40),
     models: pins.map(row => row.model), inspectImage: async () => {}, preflight: async () => ({ pins, verifyPins: async () => {} }) } };
 }
+
+test('campaigns record and enforce an explicit output allowance', async () => {
+  const { root, options } = await fixture();
+  try {
+    const result = await runLocalRepository({ ...options, outputTokens: 4096,
+      fetcher: async (_url, request) => {
+        const sent = JSON.parse(request.body);
+        assert.equal(sent.options.num_predict, 4096);
+        return response(sent.model, 'complete', { eval_count: 2000 });
+      },
+      agent: async (_task, _image, _strategy, id, config, invoke) => {
+        assert.equal(config.outputTokens, 4096);
+        await invoke(id, roles.strong, { ...body, max_tokens: config.outputTokens }, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(result.settings.outputTokens, 4096);
+    assert.ok(result.calls.every(call => call.outputTokens === 2000));
+    assert.equal(result.summary.reduce((sum, row) => sum + row.outputTokens, 0), 6000);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('campaign timing totals never sum partial measurements or unsafe integers', async () => {
+  const { root, options } = await fixture();
+  let count = 0;
+  try {
+    const result = await runLocalRepository({ ...options,
+      fetcher: async (_url, request) => {
+        const sent = JSON.parse(request.body);
+        const extra = { total_duration: 91, load_duration: 13, prompt_eval_duration: 17, eval_duration: 31 };
+        if (count === 3) delete extra.load_duration;
+        if (count >= 4) extra.total_duration = Number.MAX_SAFE_INTEGER;
+        count++;
+        return response(sent.model, 'complete', extra);
+      },
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        for (let i = 0; i < 2; i++) await invoke(id, roles.strong, body, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(count, 6);
+    const expected = { total: 182, load: 26, promptEval: 34, generation: 62 };
+    assert.deepEqual(result.records.map(row => row.runtimeTimingsNs), [expected, null, null]);
+    assert.deepEqual(result.summary.map(row => row.runtimeTimingsNs), [expected, null, null]);
+    assert.deepEqual(result.calls.map(row => row.runtimeTimingStatus),
+      ['available', 'available', 'available', 'missing', 'available', 'available']);
+    assert.ok(result.records.every(row => row.score === 1 && !row.usageIncomplete));
+    const saved = JSON.parse(await readFile(join(options.out, 'local-repository.json'), 'utf8'));
+    assert.deepEqual(saved.summary, result.summary);
+    assert.deepEqual(saved.calls[0].runtimeTimingsNs, result.calls[0].runtimeTimingsNs);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid campaign output allowances fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    await assert.rejects(runLocalRepository({ ...options, outputTokens: 8193,
+      preflight: async () => { preflights++; } }), /invalid_local_output_tokens/);
+    assert.equal(preflights, 0);
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('compact action profiles reach every arm and are recorded for replay', async () => {
+  const { root, options } = await fixture();
+  try {
+    let arms = 0;
+    const result = await runLocalRepository({ ...options, actionSchemaProfile: 'compact',
+      agent: async (_task, _image, _strategy, _id, _config, _invoke, _engine, agentOptions) => {
+        assert.equal(agentOptions.actionSchemaProfile, 'compact'); arms++;
+        return { files: [], outcome: 'submitted', actions: [] };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(arms, 3);
+    assert.equal(result.settings.actionSchemaProfile, 'compact');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('unsupported action profiles stop before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const [profile, actionSchemaProfile] of [['legacy', 'unknown'], ['checked', 'compact'], ['grounded', 'compact']]) {
+      await assert.rejects(runLocalRepository({ ...options, profile, actionSchemaProfile,
+        preflight: async () => assert.fail('must not preflight') }), /invalid_local_action_schema_profile/);
+    }
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test('complete campaign attributes real models and retains no generated source or messages', async () => {
   const { root, options } = await fixture();
@@ -125,6 +286,50 @@ test('passing grades require the qualified test and skipped counts', async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const [profile, outcomes] of [
+  ['legacy', ['turn_limit', 'verified', 'submitted']],
+  ['grounded', ['deadline', undefined, 'submitted']],
+  ['checked', ['turn_limit', 'submitted', 'verified']],
+]) test(`${profile} scores only a completed submission even when every patch passes acceptance`, async () => {
+  const { root, options } = await fixture(); let calls = 0;
+  try {
+    const result = await runLocalRepository({ ...options, profile,
+      agent: async () => ({ files: [], outcome: outcomes[calls++], publicPassed: true,
+        reproducerQualified: true, probePassed: true }),
+      grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.deepEqual(result.records.map(row => row.score), [0, 0, 1]);
+    assert.deepEqual(result.records.map(row => row.outcome), outcomes);
+    assert.ok(result.records.every(row => row.graderTests === 3));
+    assert.equal(result.summary.reduce((sum, row) => sum + row.solved, 0), 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('runtime drift preserves completed records but cannot complete the comparison', async () => {
+  for (const drift of ['version', 'parameters']) {
+    const { root, options } = await fixture(); let version = '0.40.11', parameters = 'presence_penalty 1.5';
+    try {
+      await assert.rejects(runLocalRepository({ ...options, preflight: localGenerator,
+        fetcher: async url => {
+          if (url.endsWith('/api/version')) return Response.json({ version });
+          if (url.endsWith('/api/tags')) return Response.json({ models: pins.map(pin => ({ name: pin.model, digest: pin.digest, size: 10 })) });
+          if (url.endsWith('/api/show')) return Response.json({ template: '{{ .Prompt }}', renderer: 'qwen3-coder', parameters, capabilities: [] });
+          assert.fail('no inference required by this fixture');
+        },
+        agent: async () => { if (drift === 'version') version = '0.40.12'; else parameters = 'presence_penalty 0'; return { files: [], outcome: 'submitted' }; },
+        grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }),
+      }), /local_repository_incomplete/);
+      const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
+      assert.equal(state.complete, false); assert.equal(state.failureCode, 'local_runtime_changed');
+      assert.equal(state.records.length, 3); assert.equal(state.summary, undefined);
+      assert.equal(state.modelPins[0].runtime.serverVersion, '0.40.11');
+      assert.equal(state.modelPins[0].runtime.renderer, 'qwen3-coder');
+      assert.match(state.modelPins[0].runtime.parametersSha256, /^[a-f0-9]{64}$/);
+      assert.ok(!raw.includes('{{ .Prompt }}'));
+      assert.ok(!raw.includes('presence_penalty'));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test('transport failure checkpoints once and does not silently try another model', async () => {
   const { root, options } = await fixture(); let calls = 0;
   try {
@@ -134,6 +339,40 @@ test('transport failure checkpoints once and does not silently try another model
     assert.equal(calls, 1); assert.equal(state.complete, false); assert.equal(state.failureCode, 'local_transport_failed');
     assert.equal(state.records.length, 0); assert.equal(state.calls[0].status, 'failed');
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('rejected local responses checkpoint a bounded reason without response content or another call', async () => {
+  const cases = [
+    ['unreadable_body', { json: async () => { throw new Error('private parse failure sentinel'); } }],
+    ['invalid_envelope', { json: async () => null }],
+    ['model_mismatch', response('private model sentinel')],
+    ['incomplete', response(pins[0].model, undefined, { done: false })],
+    ['missing_content', response(pins[0].model, undefined, { message: {} })],
+    ['invalid_usage', response(pins[0].model, undefined, { eval_count: -1 })],
+    ['output_limit', response(pins[0].model, undefined, { eval_count: 1537 })],
+    ['context_limit', response(pins[0].model, undefined, { prompt_eval_count: 32768 })],
+    ['invalid_stop_reason', response(pins[0].model, undefined, { done_reason: 'private stop sentinel' })],
+  ];
+  for (const [reason, invalid] of cases) {
+    const { root, options } = await fixture(); let calls = 0;
+    try {
+      await assert.rejects(runLocalRepository({ ...options,
+        fetcher: async () => { calls++; return { ok: true, ...invalid }; },
+        agent: async (_t, _i, _s, id, _c, invoke) => invoke(id, roles.strong, body, new AbortController().signal),
+        grade: async () => assert.fail('must not grade a rejected response'),
+      }), /local_repository_incomplete/);
+      const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
+      assert.equal(state.failureCode, 'invalid_local_response', reason);
+      assert.equal(state.calls[0].responseFailure, reason);
+      assert.equal(state.calls[0].status, 'failed');
+      assert.equal(state.calls[0].dispatched, true);
+      assert.equal(state.calls[0].inputTokens, null);
+      assert.equal(state.calls[0].outputTokens, null);
+      assert.equal(state.records.length, 0); assert.equal(calls, 1);
+      for (const sentinel of ['private prompt sentinel', 'private response sentinel', 'private model sentinel',
+        'private parse failure sentinel', 'private stop sentinel']) assert.ok(!raw.includes(sentinel), reason);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test('context-limited trials are recorded without pretending that a request was dispatched', async () => {
@@ -161,4 +400,113 @@ test('checked scoring requires both the public gate and hidden acceptance', asyn
     assert.deepEqual(result.records.map(row => row.score), [1, 0, 0]);
     assert.ok(result.records.every(row => row.graderPassed));
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('supplied preservation checks require exact baseline and reference receipts before inference', () => {
+  const task = { id: 'example', preservationProbes: ['assert(true)'] };
+  const receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
+    qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true },
+    oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+  const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
+  assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
+  const result = { probeDigest: hash(task.preservationProbes[0]), passed: true, unchanged: true };
+  receipt.preservation = { baseline: [{ ...result }], reference: [{ ...result }] };
+  assert.equal(validateLocalQualification([task], q).length, 1);
+  receipt.preservation.reference[0].probeDigest = 'stale';
+  assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
+});
+
+test('request deadlines retain profile defaults and allow independent overrides', async t => {
+  const deadlines = [];
+  t.mock.method(AbortSignal, 'timeout', ms => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  for (const [profile, requestTimeoutMs] of [['legacy', undefined], ['grounded', undefined], ['checked', undefined], ['legacy', 180000]]) {
+    await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+      signal: new AbortController().signal, seed: 1, profile, requestTimeoutMs,
+      fetcher: async (_url, request) => {
+        assert.equal(JSON.parse(request.body).options.temperature, profile === 'legacy' ? 0 : groundedSampling.temperature);
+        return response(pins[0].model);
+      } });
+  }
+  assert.deepEqual(deadlines, [60000, 120000, 120000, 180000]);
+});
+
+test('invalid request deadlines fail before dispatch', async () => {
+  let dispatches = 0;
+  for (const requestTimeoutMs of [0, -1, 1.5, NaN, Infinity, 300001, '180000', null]) {
+    await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+      signal: new AbortController().signal, requestTimeoutMs,
+      onDispatch: async () => { dispatches++; }, fetcher: async () => { throw new Error('unexpected_fetch'); } }), /invalid_local_request_timeout/);
+  }
+  assert.equal(dispatches, 0);
+});
+
+test('a longer request deadline still honors caller cancellation', async () => {
+  const caller = new AbortController();
+  await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: caller.signal, requestTimeoutMs: 180000,
+    fetcher: async (_url, request) => {
+      caller.abort();
+      assert.equal(request.signal.aborted, true);
+      throw new Error('request_aborted');
+    } }), /provider_local_deadline/);
+});
+
+test('campaigns record and use their explicit request deadline', async t => {
+  const { root, options } = await fixture(), deadlines = [];
+  t.mock.method(AbortSignal, 'timeout', ms => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  try {
+    const result = await runLocalRepository({ ...options, requestTimeoutMs: 180000,
+      fetcher: async (_url, request) => response(JSON.parse(request.body).model),
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        await invoke(id, roles.strong, body, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(result.settings.requestTimeoutMs, 180000);
+    assert.deepEqual(deadlines, [180000, 180000, 180000]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid campaign request deadlines fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    await assert.rejects(runLocalRepository({ ...options, requestTimeoutMs: 300001,
+      preflight: async () => { preflights++; } }), /invalid_local_request_timeout/);
+    assert.equal(preflights, 0);
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('request timeouts fail only their trials and retain unknown usage', async t => {
+  const { root, options } = await fixture();
+  t.mock.method(AbortSignal, 'timeout', () => AbortSignal.abort(new DOMException('Expired', 'TimeoutError')));
+  try {
+    const result = await runLocalRepository({ ...options, requestTimeoutMs: 1,
+      fetcher: async (_url, request) => { request.signal.throwIfAborted(); },
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        await invoke(id, roles.strong, body, new AbortController().signal);
+      }, grade: async () => assert.fail('must not grade a timed-out request') });
+    assert.equal(result.complete, true);
+    assert.equal(result.records.length, 3);
+    assert.ok(result.records.every(row => row.outcome === 'deadline' && row.score === 0 && row.usageIncomplete));
+    assert.ok(result.calls.every(row => row.dispatched && row.status === 'failed' && row.inputTokens === null));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('request deadlines also cover reading the response body', async t => {
+  const timeout = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', () => timeout.signal);
+  await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435',
+    model: pins[0].model, pin: pins[0], body, signal: new AbortController().signal,
+    fetcher: async (_url, request) => ({ ok: true, json: async () => {
+      timeout.abort(new DOMException('Expired', 'TimeoutError'));
+      request.signal.throwIfAborted();
+    } }) }), /provider_local_deadline/);
 });

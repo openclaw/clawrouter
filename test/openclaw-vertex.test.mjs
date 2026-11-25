@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -23,7 +24,7 @@ const headers = id => ({ authorization: `Bearer clawrouter-live-${id}-fixture-se
 
 async function setup(temporary) {
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  const mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+  const mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
   try {
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
@@ -33,7 +34,7 @@ async function setup(temporary) {
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put(`connections/${providerId}`, JSON.stringify({ providerId, enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     for (const id of ids) {
       const response = await fetch(`${origin}/v1/admin/upstream-grants/policies/${id}/vertex`, {
         method: "PUT", headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, body: JSON.stringify(grant(id)),
@@ -41,11 +42,15 @@ async function setup(temporary) {
       assert.equal(response.status, 200, await response.text());
     }
     return { mf, origin, upstream: await mf.getWorker("upstream") };
-  } catch (error) { await mf.dispose(); throw error; }
+  } catch (error) {
+    await cleanupFixture([() => mf.dispose()], { failed: true, error });
+    throw error;
+  }
 }
 
 test("shipped Vertex JSON/manifest owner and unknown-price contracts through workerd", { timeout: 60_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-vertex-wire-")); let fixture;
+  const primary = { failed: false, error: undefined };
   try {
     fixture = await setup(temporary); const { origin, upstream } = fixture;
     for (const [id, manifest] of [["vertex_stream", false], ["vertex_global", true]]) {
@@ -61,13 +66,19 @@ test("shipped Vertex JSON/manifest owner and unknown-price contracts through wor
     const error = await response.json(); assert.equal(response.status, 400, JSON.stringify(error)); assert.equal(error.error.code, "pricing_required");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json(); assert.equal(calls.length, 2);
     for (const [index, id] of ["vertex_stream", "vertex_global"].entries()) assertOwner(calls[index], id, false);
-  } finally { await fixture?.mf.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
+  } finally {
+    await cleanupFixture([() => fixture?.mf.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+  }
 });
 
 test("actual registered Vertex Messages client, original owners and SQLite accounting", { skip: !source, timeout: 300_000 }, async t => {
   const provider = snapshot.providers.find(provider => provider.id === providerId);
   assert.deepEqual(provider.models.map(model => [model.id, model.upstream, model.pricing]), [[modelId, upstreamModel, null]]);
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-vertex-client-")); let fixture;
+  const primary = { failed: false, error: undefined };
   try {
     fixture = await setup(temporary); const { origin, upstream } = fixture;
     const catalog = await (await fetch(origin + "/v1/catalog", { headers: headers("vertex_stream") })).json();
@@ -115,7 +126,12 @@ test("actual registered Vertex Messages client, original owners and SQLite accou
       const receipt = await settledUsage(origin, id, false); assert.equal(receipt.budget.spentMicros, 0, id);
       assert.ok(receipt.usage.events.every(event => event.actual_cost_micros === 0), id);
     }
-  } finally { await fixture?.mf.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
+  } finally {
+    await cleanupFixture([() => fixture?.mf.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+  }
 });
 
 function assertOwner(call, id, stream) {

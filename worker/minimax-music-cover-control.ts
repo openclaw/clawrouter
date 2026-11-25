@@ -3,7 +3,7 @@ import { HttpOperation } from "./http-operation.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { claimMiniMaxMusicCoverControl, isMiniMaxMusicCoverUpload, type MusicCoverControlPhase, type MusicCoverUploadCapability, type SealedMusicCoverInput } from "./minimax-music-cover-input.ts";
 import { assertSearchHeaders, readSearchJson, searchJsonBytes } from "./minimax-search-operation.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const musicCoverControlVersion = "clawrouter.minimax-music-cover-control.v1";
 export const musicCoverControlHeader = "x-clawrouter-music-cover-control";

@@ -66,6 +66,8 @@ test('case measurements count all billed calls, failed advisers and final gradin
 test('reservation covers enlarged completion limits and rejects unbounded values', () => {
   const price = { input: 0, output: 0.00001, request: 0, tiers: [] };
   assert.equal(priceBound({ max_completion_tokens: 8192 }, price), 81920);
+  assert.equal(priceBound({ max_output_tokens: 8192 }, price), 81920);
+  assert.throws(() => priceBound({ max_output_tokens: Infinity }, price), /invalid_output_limit/);
   assert.equal(priceBound({ max_tokens: 512 }, price), 40960);
   assert.throws(() => priceBound({ max_tokens: Infinity }, price), /invalid_output_limit/);
 });

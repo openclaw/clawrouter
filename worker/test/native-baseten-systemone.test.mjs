@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { prepareNativeBasetenSystemOne } = await import("../native-baseten-systemone.ts");
 const { BASETEN_SYSTEMONE_MODELS: models } = await import("../provider-baseten-systemone.ts");
 const { basetenSystemOneRequest: input, basetenSystemOneResponse: output } = await import("./baseten-systemone-fixtures.ts");

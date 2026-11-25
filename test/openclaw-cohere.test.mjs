@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { cleanupFixture } from "./helpers/fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "b566e9a6b22a863bf0f1f869f106a2a91b062f16";
@@ -19,15 +20,16 @@ test("actual OpenClaw Cohere compatibility hooks through workerd and SQLite", { 
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-cohere-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
+  const primary = { failed: false, error: undefined };
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [id === "cohere_foreign" ? "openai" : "cohere"], models: [model.id], tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "cohere_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
       await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
     }
     await kv.put("connections/cohere", JSON.stringify({ providerId: "cohere", enabled: true }));
-    const origin = String(await mf.ready).replace(/\/$/, "");
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-cohere-contract.test.ts", import.meta.url),
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, COHERE_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" },
@@ -74,9 +76,11 @@ test("actual OpenClaw Cohere compatibility hooks through workerd and SQLite", { 
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], id === "cohere_error" || id === "cohere_cancel" ? [null, null, null] : [4, 3, 7]);
       assert.doesNotMatch(JSON.stringify(event), /synthetic-tool-result|fixture-upstream|must-not-fallback/);
     }
+  } catch (error) {
+    primary.error = error; primary.failed = true;
+    throw error;
   } finally {
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
+    await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
   }
 });
 

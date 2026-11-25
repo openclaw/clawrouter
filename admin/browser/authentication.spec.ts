@@ -1,3 +1,4 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
@@ -323,7 +324,7 @@ function deferred() { let release!: () => void; const promise = new Promise<void
 async function focus(page: Page) { await page.evaluate(() => window.dispatchEvent(new Event("focus"))); }
 async function flush(page: Page) { await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); }
 async function connected(page: Page) { await expect(page.locator(".connectionMeta strong")).toHaveText("Connected"); }
-async function open(page: Page, path = "/dashboard/access") { await page.goto(path); await connected(page); }
+async function open(page: Page, path = "/dashboard/access") { await page.goto(path); await connected(page); if (path === "/dashboard/usage") await openLegacyUsage(page); }
 async function signedOut(page: Page) { await expect(page.locator(".loginShell")).toContainText("Sign-in required"); await expect(page.locator(".appShell")).toHaveCount(0); }
 async function completePlayground(page: Page, index: number, text: string) {
   await page.evaluate(({ index, text }) => (window as TestWindow).playgroundRequests![index].resolve(new Response(JSON.stringify({ output_text: text }), { headers: { "content-type": "application/json" } })), { index, text });

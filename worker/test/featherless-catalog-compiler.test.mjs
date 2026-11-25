@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { prepareModelDiscovery, validateDiscoveryQuery } = await import("../model-discovery.ts");
 const { FEATHERLESS_MODELS_FORMAT, featherlessCatalogRequest, readFeatherlessModels } = await import("../featherless-model-catalog.ts");
 const source = parse(readFileSync(new URL("../../providers/featherless.provider.yaml", import.meta.url), "utf8"));
+// Foundation fixtures remain independent; bundled activation has its own suite.
+source.capabilities = source.capabilities.filter(capability => capability.endpoint !== "catalog");
+delete source.endpoints.catalog;
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
   const manifest = structuredClone(source);

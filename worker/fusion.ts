@@ -2,8 +2,9 @@ import type { FusionConfig } from "../shared/contracts.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { InternalHttpAbort } from "./http-operation.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson,
   accountingArrayProjection, accountingObjectProjection, accountingSequenceProjection, accountingJoinedText,
   accountingTextCapacity, isAccountingAdmissionFailure } from "./json-body.ts";
@@ -180,7 +181,10 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
     try {
       const invocation = invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal).then(response => {
         // Discarded responses still own upstream resources and delivery-based accounting.
-        if (controller.signal.aborted || !response.ok) void response.body?.cancel(controller.signal.reason ?? new InternalHttpAbort("upstream", "fusion adviser rejected")).catch(() => undefined);
+        if (controller.signal.aborted || !response.ok) {
+          const cleanup = response.body?.cancel(controller.signal.reason ?? new InternalHttpAbort("upstream", "fusion adviser rejected")).catch(() => undefined);
+          if (cleanup) retain?.(cleanup);
+        }
         return response;
       });
       // The collection watchdog is not settlement. Production registers this
@@ -190,10 +194,10 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
       const response = await beforeDeadline(invocation, deadline);
       if (!response.ok) return { model, failed: true as const };
       const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
-      const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline)).trim();
+      const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline, retain)).trim();
       bodyComplete = true;
-      return content
-        ? { model, content: content.slice(0, config.maxProposalChars) }
+      return content && content.length <= config.maxProposalChars
+        ? { model, content }
         : { model, failed: true as const };
     } catch (error) {
       if (isAccountingAdmissionFailure(error)) throw error;
@@ -215,15 +219,17 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
   };
 }
 
-async function readJsonBeforeDeadline(response: Response, maxBytes: number, deadline: number): Promise<unknown> {
+async function readJsonBeforeDeadline(response: Response, maxBytes: number, deadline: number, retain?: (work: Promise<unknown>) => void): Promise<unknown> {
   if (!response.body) throw new Error("fusion adviser response has no body");
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const input = inputRetirement(reader);
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let bytes = 0;
   let text = "";
   try {
+    retain?.(input.retired);
     while (true) {
-      const { done, value } = await beforeDeadline(reader.read(), deadline);
+      const { done, value } = await beforeDeadline(input.read(() => reader.read()), deadline);
       if (done) {
         break;
       }
@@ -231,11 +237,13 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
       if (bytes > maxBytes) throw new Error("fusion adviser response exceeds byte limit");
       text += decoder.decode(value, { stream: true });
     }
-    return JSON.parse(text + decoder.decode());
+    const result = JSON.parse(text + decoder.decode());
+    void input.retire("eof");
+    return result;
   } catch (error) {
-    void reader.cancel(error instanceof InternalHttpAbort ? error : new InternalHttpAbort("upstream", "fusion adviser response could not be consumed")).catch(() => undefined);
+    void input.retire("cancel", error instanceof InternalHttpAbort ? error : new InternalHttpAbort("upstream", "fusion adviser response could not be consumed"));
     throw error;
-  } finally { reader.releaseLock(); }
+  }
 }
 
 async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
@@ -333,9 +341,15 @@ function fusionInstruction(proposals: FusionProposal[]): ChatMessage {
 
 function completionText(value: unknown): string {
   if (!value || typeof value !== "object") return "";
-  const choice = (value as { choices?: unknown[] }).choices?.[0];
+  const response = value as { error?: unknown; choices?: unknown };
+  if (response.error != null || !Array.isArray(response.choices)) return "";
+  const choice = response.choices[0];
   if (!choice || typeof choice !== "object") return "";
-  return contentText((choice as { message?: { content?: unknown } }).message?.content);
+  if (choice.finish_reason !== "stop") return "";
+  const message = choice.message;
+  if (!message || typeof message !== "object" || message.refusal != null || message.function_call != null
+    || message.tool_calls != null && (!Array.isArray(message.tool_calls) || message.tool_calls.length)) return "";
+  return contentText(message.content);
 }
 
 function contentText(content: unknown): string {

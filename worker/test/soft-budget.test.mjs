@@ -149,7 +149,7 @@ test('admin-only overrides are audited, survive profile writes, preserve other p
 
 test('soft partial pricing charges known tokens and keeps unpriced basis', async () => {
   const { accountingReceipt } = await import('../proxy-accounting.ts');
-  const { snapshot } = await import('../providers.ts');
+  const { snapshot } = await import('../provider-catalog.ts');
   const model = snapshot.providers.find(p => p.id === 'openai').models.find(m => m.id === 'openai/gpt-6.1-sol');
   const event = accountingReceipt({ model, fixed: null, cost: { reserveMicros: 0, basis: 'unpriced_request', pricingGap: 'hosted_tool_fee' }, requestFormat: 'openai.responses', event: {}, startedAtMs: 0 }, { occurredAtMs: 1, statusCode: 200, status: 'success', billable: true, tokens: { input: 100, output: 20, total: 120, cached: 0, cacheWrite: 0, serviceTier: 'default' }, reservation: { reservations: [], reservedMicros: 0, charges: [] }, contentRef: null });
   assert.ok(event.actual_cost_micros > 0); assert.equal(event.cost_basis, 'unpriced_usage');

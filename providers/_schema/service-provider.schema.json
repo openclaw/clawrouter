@@ -1134,8 +1134,7 @@
               "type": "object",
               "required": [
                 "protocol",
-                "retrieve",
-                "cancel"
+                "retrieve"
               ],
               "additionalProperties": false,
               "properties": {
@@ -1404,6 +1403,16 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "catalogRef": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "modelId"],
+          "properties": {
+            "provider": { "type": "string", "minLength": 1, "pattern": "\\S" },
+            "modelId": { "type": "string", "minLength": 1, "pattern": "\\S" }
+          }
+        },
+        "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "availability": { "$ref": "#/$defs/modelAvailability" },
         "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./openclaw-consumer.mjs";
+import { cleanupFixture } from "./fixture-cleanup.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -21,8 +22,9 @@ export function registerGoogleTextContract({ modelId, expectedMicros, basis }) {
     assert.ok(selected); assert.equal(selected.pricing.defaultMaxOutputTokens, 65536);
     const temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-text-"));
     const { startWorkerdFixture } = await import("./workerd.mjs"); let mf;
+    const primary = { failed: false, error: undefined };
     try {
-      mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(modelId));
+      mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(modelId), { directRouter: true });
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       for (const id of ids) {
         const policyId = "google_" + id;
@@ -32,7 +34,7 @@ export function registerGoogleTextContract({ modelId, expectedMicros, basis }) {
           budgetMode: "reserve", retainRequestContent: false, grantRouting: { eligibleGrants: { "google-gemini": ["google"] }, environmentFallback: false } }));
         await kv.put("credentials/" + policyId, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId, policyGeneration: "fixture" }));
       }
-      const origin = String(await mf.ready).replace(/\/$/, "");
+      const origin = (await mf.unsafeGetDirectURL("router")).origin;
       assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
       const catalog = await (await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-google_complete-fixture-secret" } })).json();
       assert.deepEqual(catalog.providers.find(row => row.id === "google-gemini").models.map(row => row.id), [selected.id]);
@@ -81,7 +83,12 @@ export function registerGoogleTextContract({ modelId, expectedMicros, basis }) {
         assert.equal(usage.budget.spentMicros, 0);
         assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
       }
-    } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+    } catch (error) {
+      primary.error = error; primary.failed = true;
+      throw error;
+    } finally {
+      await cleanupFixture([() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })], primary);
+    }
   });
 }
 

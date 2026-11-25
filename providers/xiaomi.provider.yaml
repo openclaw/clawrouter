@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: xiaomi/mimo-v2.6-pro
+      displayName: "MiMo V2.6 Pro"
       upstream: mimo-v2.6-pro
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -51,6 +52,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: xiaomi/mimo-v2.6-flash
+      displayName: "MiMo V2.6 Flash"
       upstream: mimo-v2.6-flash
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -61,6 +63,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: xiaomi/mimo-v2.5-pro
+      displayName: "MiMo V2.5 Pro"
       upstream: mimo-v2.5-pro
       capabilities: []
       availability:
@@ -70,6 +73,7 @@ models:
         checkedAt: "2026-11-03"
         sources: [https://mimo.mi.com/docs/en-US/updates/deprecate]
     - id: xiaomi/mimo-v2.5
+      displayName: "MiMo V2.5"
       upstream: mimo-v2.5
       capabilities: []
       availability:

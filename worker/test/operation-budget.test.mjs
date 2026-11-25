@@ -2,7 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { operationAffordability } = await import("../operation-budget.ts");
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 
 const base = { credentialId: "fixture", principalId: "fixture@example.com", policyId: "policy", authType: "proxy_key", policy: { monthlyBudgetMicros: 100, requestCostMicros: null }, contentRetentionDisabled: true };
 const connection = { providerId: "openai", enabled: true, monthlyBudgetMicros: 100 };

@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseProviderConformanceScenario, parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderConformanceScenario } from "../packages/provider-plugin-contract/src/conformance.ts";
+import { parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/plugin-descriptor.ts";
 import { loadProviderPlugin } from "./provider-plugin-loader.ts";
 
 /** Generate files only. The caller must explicitly compile and admit the provider. */
@@ -38,6 +39,9 @@ export function createProviderPlugin(id: string, destination: string): string {
         `    node scripts/compile-providers.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
         `Validate fixture declarations (without executing the provider) with:\n\n` +
         `    node scripts/validate-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `Execute the starter native JSON exchange in a separate process with synthetic credentials:\n\n` +
+        `    node scripts/run-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `This checks one deterministic exchange, not live access or complete provider support.\n\n` +
         `Package creation does not register, enable, or deploy a provider. See\n` +
         `https://github.com/openclaw/clawrouter/blob/main/docs/provider-plugins.md\n`;
     }

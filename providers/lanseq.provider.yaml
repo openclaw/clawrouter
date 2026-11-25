@@ -47,6 +47,7 @@ endpoints:
 models:
   entries:
     - id: lanseq/qwen3.8-27b-int4
+      displayName: "Qwen3.8 27B INT4"
       upstream: qwen3.8-27b-int4
       capabilities: [llm.chat]
       pricingRef: lanseq-qwen3.8-27b-int4-standard-2026-09-18

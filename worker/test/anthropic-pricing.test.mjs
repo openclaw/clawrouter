@@ -5,7 +5,7 @@ import { anthropicModifiers, anthropicPricing } from "../anthropic-pricing.ts";
 import { actualModelCost, estimateModelCost } from "../pricing.ts";
 import { guardAnthropicPrice } from "../anthropic-price-response.ts";
 import { HttpOperation } from "../http-operation.ts";
-import { providerById } from "../providers.ts";
+import { providerById } from "../provider-catalog.ts";
 
 const model = providerById("anthropic").models.find(model => model.upstream === "claude-opus-5-5");
 const request = { speed: "fast", inferenceGeo: "us", serviceTier: "standard_only" };

@@ -1,0 +1,954 @@
+{
+  "schemaVersion": 1,
+  "scope": "Two exposed hard functional tasks; baseline and development-only interventions, no production or independent efficacy claim.",
+  "cohort": {
+    "ids": [
+      "leetcode:3770",
+      "leetcode:3696"
+    ],
+    "protocolSha256": "bb6d75db74788f6f49ec3fe6a1407fb2f3077f886c86d855da24878808f964e2",
+    "qualificationSha256": "749340964d38d67dd4e247bec6d6105eb8b8c39a21e39cc9eb7877c258424892",
+    "rawCases": 86,
+    "referenceVerified": 52,
+    "remainingDatasetTrust": 34,
+    "selectedPublic": 6,
+    "selectedPrivate": 32,
+    "pureFunctionBatches": [
+      1,
+      3
+    ]
+  },
+  "runtime": {
+    "addressSpaceMiB": 160,
+    "cpuSecondsPerBatch": 5,
+    "rpcDeadlineSeconds": 2,
+    "rpcLineBytes": 131072,
+    "outerPayloadBytes": 262144,
+    "jsonCodeFieldBytes": 32768,
+    "cachedContainerImage": "sha256:fd95fa221297a88e1cf49c55ec1828edd7c5a428187e67b5d1805692d11588db"
+  },
+  "uniqueModelCalls": 10,
+  "uniqueTotalCostMicros": 25738,
+  "studies": {
+    "headroom": {
+      "protocolSha256": "42bfd4cd216db733d13f42bcae55a740a611801458524155cdf4ab4e9189f120",
+      "auditSha256": "dceb60f0ba176bed2e23c521f8f62f0276211d29087d174a964e74275f2733a1",
+      "uniqueNewCostMicros": 15689,
+      "rows": [
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "weak",
+          "costMicros": 761,
+          "passed": true,
+          "codeSha256": "865788ccd7612ff444efb0916284967b8108a500ac3cf3adfdde0e9351dd27fd",
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "medium",
+          "costMicros": 9555,
+          "passed": true,
+          "codeSha256": "bc3952b08755992bc1d4e6f08b56095229a882776d9114a12a574de6d2c1859f",
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "weak",
+          "costMicros": 771,
+          "passed": false,
+          "codeSha256": "c58acbca28562ba4e2050e09dcab9e889280c8fedb3465638491c0c4a85f97dd",
+          "public": {
+            "valid": false,
+            "passed": false,
+            "tests": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": false,
+            "passed": false,
+            "tests": 0,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "medium",
+          "costMicros": 4602,
+          "passed": true,
+          "codeSha256": "1a164cb2244a10cc1f2924315ddc66e0d2edb74c60afc948979745bdb760f0f0",
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          }
+        }
+      ],
+      "counts": {
+        "both": 1,
+        "weakOnly": 0,
+        "mediumOnly": 1,
+        "neither": 0
+      },
+      "costs": {
+        "weak": 1532,
+        "medium": 14157
+      }
+    },
+    "critique": {
+      "protocolSha256": "df502090080869298c801a0689ac3b2fa6ad070c5e800e650a41975a1edcf704",
+      "auditSha256": "e0f901681c1f6bf20dee4a19da18cfd5683943e2f0363199a0fc1bac2e56c502",
+      "uniqueNewCostMicros": 4847,
+      "rows": [
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "weak",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "medium",
+          "costMicros": 9555,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "public-cascade",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "cheap",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "fusion",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "weak",
+          "costMicros": 771,
+          "passed": false,
+          "public": {
+            "valid": true,
+            "passed": false,
+            "tests": 3,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": false,
+            "tests": 19,
+            "failures": 5,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": false,
+              "passed": false,
+              "tests": 0,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": false,
+              "passed": false,
+              "tests": 0,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": false
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "medium",
+          "costMicros": 4602,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "public-cascade",
+          "costMicros": 5373,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "cheap",
+          "costMicros": 1928,
+          "passed": false,
+          "codeSha256": "6bed1ebe529f1fd2edaa6f01aa9b938b0ce09570efff3e62448d1747d2db608c",
+          "originalCodeSha256": "6bed1ebe529f1fd2edaa6f01aa9b938b0ce09570efff3e62448d1747d2db608c",
+          "validCritique": false,
+          "public": {
+            "valid": true,
+            "passed": false,
+            "tests": 3,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": false,
+            "tests": 19,
+            "failures": 5,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": false,
+              "tests": 3,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": false,
+              "tests": 19,
+              "failures": 5,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": false
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "fusion",
+          "costMicros": 4461,
+          "passed": false,
+          "codeSha256": "6d36ba981d178684bd272bb8dc35a19cc6b79e6db982d7abb4e33b9155565fdb",
+          "originalCodeSha256": "6d36ba981d178684bd272bb8dc35a19cc6b79e6db982d7abb4e33b9155565fdb",
+          "validCritique": true,
+          "public": {
+            "valid": true,
+            "passed": false,
+            "tests": 3,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": false,
+            "tests": 19,
+            "failures": 6,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": false,
+              "tests": 3,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": false,
+              "tests": 19,
+              "failures": 6,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": false
+          }
+        }
+      ],
+      "arms": {
+        "weak": {
+          "passed": 1,
+          "costMicros": 1532
+        },
+        "medium": {
+          "passed": 2,
+          "costMicros": 14157
+        },
+        "public-cascade": {
+          "passed": 2,
+          "costMicros": 6134
+        },
+        "cheap": {
+          "passed": 1,
+          "costMicros": 2689
+        },
+        "fusion": {
+          "passed": 1,
+          "costMicros": 5222
+        }
+      }
+    },
+    "exactEdits": {
+      "protocolSha256": "e986d316918de85be53dfd0b2dae8cae33311b369849b9576020b25f4263c6a5",
+      "auditSha256": "fa02e14d64fae9e854aef56df9e192dfca181a5e4507971aa5a278ac49d44b77",
+      "uniqueNewCostMicros": 5202,
+      "rows": [
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "weak",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "medium",
+          "costMicros": 9555,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "public-cascade",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "cheap",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-fd15e70d819a588b",
+          "arm": "fusion",
+          "costMicros": 761,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "weak",
+          "costMicros": 771,
+          "passed": false,
+          "public": {
+            "valid": true,
+            "passed": false,
+            "tests": 3,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": false,
+            "tests": 19,
+            "failures": 5,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": false,
+              "passed": false,
+              "tests": 0,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": false,
+              "passed": false,
+              "tests": 0,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": false
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "medium",
+          "costMicros": 4602,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": true
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "public-cascade",
+          "costMicros": 5373,
+          "passed": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "cheap",
+          "costMicros": 1276,
+          "passed": false,
+          "codeSha256": "edf323565a999dc4d43b4e0f9b5b9b07f6f2a9a5a0223700b368a34b2dde1d71",
+          "originalCodeSha256": "edf323565a999dc4d43b4e0f9b5b9b07f6f2a9a5a0223700b368a34b2dde1d71",
+          "validEdits": true,
+          "public": {
+            "valid": true,
+            "passed": false,
+            "tests": 3,
+            "failures": 1,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": false,
+            "tests": 19,
+            "failures": 5,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": false,
+              "tests": 3,
+              "failures": 1,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": false,
+              "tests": 19,
+              "failures": 5,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": false
+          }
+        },
+        {
+          "id": "lcb-a8cafb35c7b2bf4f",
+          "arm": "fusion",
+          "costMicros": 5468,
+          "passed": true,
+          "codeSha256": "2c40e1fe4dd737418fe46260ad66930a2ce099b5bc607657bd8dc97d692ec17e",
+          "originalCodeSha256": "2c40e1fe4dd737418fe46260ad66930a2ce099b5bc607657bd8dc97d692ec17e",
+          "validEdits": true,
+          "public": {
+            "valid": true,
+            "passed": true,
+            "tests": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 1
+          },
+          "full": {
+            "valid": true,
+            "passed": true,
+            "tests": 19,
+            "failures": 0,
+            "errors": 0,
+            "skipped": 0,
+            "batches": 3
+          },
+          "strict": {
+            "public": {
+              "valid": true,
+              "passed": true,
+              "tests": 3,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 1
+            },
+            "full": {
+              "valid": true,
+              "passed": true,
+              "tests": 19,
+              "failures": 0,
+              "errors": 0,
+              "skipped": 0,
+              "batches": 3
+            },
+            "passed": true
+          }
+        }
+      ],
+      "arms": {
+        "weak": {
+          "passed": 1,
+          "costMicros": 1532
+        },
+        "medium": {
+          "passed": 2,
+          "costMicros": 14157
+        },
+        "public-cascade": {
+          "passed": 2,
+          "costMicros": 6134
+        },
+        "cheap": {
+          "passed": 1,
+          "costMicros": 2037
+        },
+        "fusion": {
+          "passed": 2,
+          "costMicros": 6229
+        }
+      }
+    }
+  },
+  "qualifiedFusionGain": false
+}

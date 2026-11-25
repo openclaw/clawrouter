@@ -1,8 +1,9 @@
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
-import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
+import { filterGrantCandidates } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
 import { transportForGrant } from "./provider-auth.ts";
-import { modelSupportsEndpoint, snapshot } from "./providers.ts";
+import { snapshot } from "./provider-catalog.ts"; import { modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { authorizeIssuedControl, assertIssuedControlLive, publicControlAuthorization, type PublicControlBinding } from "./response-control-authorization.ts";
 import { assertPublishedInputLive, publishedInputUnavailable, validatePublishedIssuer, type PublishedInputBinding } from "./published-input-receipt.ts";

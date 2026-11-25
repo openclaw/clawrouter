@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse } from "yaml";
-import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
+import { compileProviderSnapshot } from "../../scripts/provider-compiler.mjs";
 const { configuredUpstream } = await import("../providers.ts");
 const { BASETEN_MODELS_FORMAT, basetenCatalogRequest, filterBasetenModels, readBasetenModels } = await import("../baseten-model-catalog.ts");
 const { discoveryAllows, modelDiscoveryResponse } = await import("../model-discovery.ts");
@@ -72,7 +72,7 @@ test("Baseten catalog rejects foreign origins, transport overrides and caller cr
     m => { m.adapter.injectHeaders = { authorization: "Bearer synthetic" }; },
     m => { m.adapter.injectQuery = { key: "synthetic" }; }, m => { m.adapter.passthroughHeaders = ["authorization"]; },
   ];
-  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten.models|invalid manifest/, String(change)); }
+  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /baseten\.(models|systemone)|invalid manifest/, String(change)); }
 });
 
 test("Baseten compiled discovery composes the original policy filter and excludes the complete decision namespace", () => {

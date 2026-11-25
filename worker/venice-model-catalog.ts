@@ -1,5 +1,5 @@
 import { readNativeJson } from "./native-json.ts";
-import { HttpError } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 export const VENICE_MODELS_FORMAT = "venice.models";
 const CAPABILITY_KEYS = ["supportsFunctionCalling", "supportsReasoning", "supportsReasoningEffort", "supportsVision",

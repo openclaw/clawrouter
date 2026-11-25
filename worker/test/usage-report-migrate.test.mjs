@@ -9,8 +9,10 @@ test("offline migration defaults read-only dry-run and explicit apply persists r
   const root = join(process.cwd(), ".openclaw/tmp"); await mkdir(root, { recursive: true }); const temporary = await mkdtemp(join(root, "report-migrate-")); const path = join(temporary, "ledger.sqlite");
   try {
     const db = new DatabaseSync(path);
-    db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, event_json TEXT NOT NULL)");
-    const insert = db.prepare("INSERT INTO usage_events VALUES (?, ?, ?)"); const now = Date.now();
+    // Match the canonical ledger columns used by reporting's scope/owner indexes.
+    // A three-column stand-in cannot exercise the real offline migration.
+    db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL, principal_key TEXT)");
+    const insert = db.prepare("INSERT INTO usage_events (id, occurred_at_ms, event_json, tenant_id, policy_id, provider, status, actual_cost_micros, principal_key) VALUES (?, ?, ?, 'tenant', 'policy', 'openai', 'success', 17, 'alice@example.com')"); const now = Date.now();
     const original = [];
     for (let i = 0; i < 5; i++) { const event = { id: "history-" + i, occurred_at_ms: now - 1000, principal_id: "alice@example.com", tenant_id: "tenant", policy_id: "policy", key_id: "key", provider: "openai", model: "model", status: "success", actual_cost_micros: 17, cost_basis: "unpriced_usage", content_ref: "private", input_tokens: null, output_tokens: 0 }; const payload = JSON.stringify(event); original.push(payload); insert.run(event.id, event.occurred_at_ms, payload); }
     // Retention-expired metadata is not projected even if physically present in a backup.

@@ -11,7 +11,7 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = `
 import worker, { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject } from './worker/index.ts';
 import { putGrantCredentials, revokeGrantCredentials } from './worker/grant-credentials.ts';
-import { snapshot } from './worker/providers.ts';
+import { snapshot } from './worker/provider-catalog.ts';
 export { PolicyBindingIndexObject, BudgetLedgerObject, UsageLedgerObject, GrantCredentialObject };
 const pending = [];
 export default { ...worker, async fetch(request, env, context) {
@@ -65,7 +65,7 @@ async function assertNoCooldown(f,provider) {
  const state=JSON.parse(await f.object('/grant-pools/states',{keys:['oauth/fixture/'+provider]}));
  assert.deepEqual(state.states,{},'discovery must not write any inference grant runtime or cooldown');
 }
-async function fixture(t) {
+async function fixture(t, { openAiGrant = true } = {}) {
  const temporary=await mkdtemp(join(tmpdir(),'cr-model-discovery-'));
  const mf=await startWorkerdFixture(temporary,router,upstream,{upstreamDurableObjects:{UPSTREAM:{className:'Upstream',useSQLite:true}}});
  t.after(async()=>{await mf.dispose();await rm(temporary,{recursive:true,force:true});});
@@ -77,10 +77,101 @@ async function fixture(t) {
  await object('/credentials/initialize-all',[{credentialId:'fixture',credential}]);
  await object('/connections/initialize-all',[{providerId:'openai',enabled:true},{providerId:'anthropic',enabled:true}]);
  const grant=async(provider,kind='api_key',revoke=false)=>{const r=await call('/fixture/grant',{method:'POST',body:JSON.stringify({key:'oauth/fixture/'+provider,revoke,grant:{provider,kind,enabled:true,credential:'synthetic-'+provider+'-key',...(kind==='api_key'?{}:{accessToken:'synthetic-subscription-token'})}})});assert.equal(r.status,200,await r.clone().text());return r.json();};
- await grant('openai');await grant('anthropic');
+ if (openAiGrant) await grant('openai');
+ await grant('anthropic');
  const state=async(replies)=>{const r=await call('/fixture/upstream',{method:'POST',body:JSON.stringify(replies?{replies}:{})}); const wire=await r.text(); assert.equal(r.status,200,wire); assert.ok(wire,'upstream state inspector must return JSON'); return JSON.parse(wire);};
  return {call,object,policy,credential,grant,state,async drain(){const r=await call('/fixture/drain');assert.equal(r.status,200,await r.text());},reply:body=>state([{body}]),async updatePolicy(change){Object.assign(policy,change);await object('/policies/put',{policyId:'fixture',policy});},async events(count){for(let n=0;n<100;n++){const s=await state();if(s.events.length>=count)return s.events;await new Promise(r=>setTimeout(r,20));}assert.fail('usage events not collected');}};
 }
+
+test('OpenAI Responses forwards Blue through native and qualified unified routes', async t => {
+ const f = await fixture(t);
+ const access_programs = { cyber: 'daybreak_blue' };
+ for (const [path, model] of [
+  ['/v1/native/openai/v1/responses', 'gpt-6.2-sol'],
+  ['/v1/responses', 'openai/gpt-6.2-sol'],
+ ]) {
+  await f.reply({ ...inferenceReply('openai'), id: path.includes('/native/') ? 'resp_fixture_native' : 'resp_fixture_unified', access_programs });
+  const response = await f.call(path, { method: 'POST', body: JSON.stringify({ model, input: 'fixture', access_programs }) });
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual((await response.json()).access_programs, access_programs);
+  const sent = (await f.state()).calls.at(-1);
+  assert.equal(sent.url, 'https://api.openai.com/v1/responses');
+  assert.equal(sent.headers.authorization, 'Bearer synthetic-openai-key');
+  assert.equal(JSON.parse(sent.body).model, 'gpt-6.2-sol');
+  assert.deepEqual(JSON.parse(sent.body).access_programs, access_programs);
+ }
+ const bare = await f.call('/v1/responses', { method: 'POST', body: JSON.stringify({ model: 'gpt-6.2-sol', input: 'fixture', access_programs }) });
+ assert.equal(bare.status, 404);
+ assert.equal((await bare.json()).error.code, 'model_not_found');
+ assert.equal((await f.state()).calls.length, 2);
+
+ const unified = access_programs => f.call('/v1/responses', {
+  method: 'POST', body: JSON.stringify({ model: 'openai/gpt-6.2-sol', input: 'fixture', access_programs }),
+ });
+ for (const invalid of [[], {}, { cyber: 1 }, { cyber: 'Invalid' }, { cyber: 'x'.repeat(65) }, { cyber: 'standard', other: true }]) {
+  const response = await unified(invalid);
+  assert.equal(response.status, 400);
+  const { error } = await response.json();
+  assert.equal(error.code, 'model_parameter_unsupported');
+  assert.match(error.message, /access_programs/);
+ }
+ assert.equal((await f.state()).calls.length, 2);
+ await f.reply({ ...inferenceReply('openai'), id: 'resp_fixture_null' });
+ const response = await unified(null);
+ assert.equal(response.status, 200, await response.text());
+ assert.equal(Object.hasOwn(JSON.parse((await f.state()).calls.at(-1).body), 'access_programs'), false);
+});
+
+test('unified Responses and Chat reject unsupported access programs before other providers see them', async t => {
+ const f = await fixture(t);
+ await f.updatePolicy({ providers: ['openrouter'] });
+ await f.object('/connections/initialize-all', [{ providerId: 'openrouter', enabled: true }]);
+ await f.grant('openrouter');
+ const model = 'openrouter/openai/gpt-6.1-terra';
+ for (const [path, input, reply] of [
+  ['/v1/responses', { input: 'fixture' }, inferenceReply('openai')],
+  ['/v1/chat/completions', { messages: [{ role: 'user', content: 'fixture' }] }, { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }],
+ ]) {
+  const call = access_programs => f.call(path, { method: 'POST', body: JSON.stringify({ model, ...input, access_programs }) });
+  const before = (await f.state()).calls.length;
+  for (const programs of [{ cyber: 'daybreak_blue' }, { cyber: 'future_program' }, { other: 'standard' }, { cyber: 'standard', other: true }]) {
+   const response = await call(programs);
+   assert.equal(response.status, 400, await response.clone().text());
+   const { error } = await response.json();
+   assert.equal(error.code, 'model_parameter_unsupported');
+   assert.match(error.message, /access_programs/);
+  }
+  assert.equal((await f.state()).calls.length, before);
+  let index = 0;
+  for (const programs of [undefined, null, { cyber: 'standard' }]) {
+   await f.reply({ ...reply, id: `fixture_${++index}` });
+   const response = await call(programs);
+   assert.equal(response.status, 200, await response.text());
+   const sent = (await f.state()).calls.at(-1);
+   assert.equal(sent.url, 'https://openrouter.ai/api' + path);
+   assert.equal(Object.hasOwn(JSON.parse(sent.body), 'access_programs'), false);
+  }
+  assert.equal((await f.state()).calls.length, before + 3);
+ }
+});
+
+test('environment-only OpenAI inference works while native model discovery requires a scoped grant', async t => {
+ const f = await fixture(t, { openAiGrant: false });
+ const models = await f.call('/v1/native/openai/v1/models');
+ assert.equal(models.status, 503);
+ assert.equal((await models.json()).error.code, 'upstream_grant_pool_unavailable');
+ assert.equal((await f.state()).calls.length, 0);
+
+ await f.reply(inferenceReply('openai'));
+ const response = await f.call('/v1/native/openai/v1/responses', {
+  method: 'POST', body: JSON.stringify({ model: 'gpt-6.2-sol', input: 'fixture' }),
+ });
+ assert.equal(response.status, 200, await response.text());
+ const { calls } = await f.state();
+ assert.equal(calls.length, 1);
+ assert.equal(calls[0].url, 'https://api.openai.com/v1/responses');
+ assert.equal(calls[0].headers.authorization, 'Bearer fixture-upstream-key');
+});
 
 test('native discovery and manifest envelopes use selected API-key grants, preserve metadata and settle zero',async t=>{
  const f=await fixture(t);let expected=0;

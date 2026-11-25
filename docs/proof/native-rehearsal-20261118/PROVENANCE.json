@@ -1,0 +1,33 @@
+{
+  "source": "e3bfa63b8bd162d2bfd632bafec8842902f74a28",
+  "originalControlSha256": "1e9d87757d9dcfce668aeb5000e95a0adb6dc26d1d0d3cc9520624835c22afa1",
+  "files": [
+    {
+      "file": "SESSION-CONTINUITY-PROOF.json",
+      "form": "unchanged original",
+      "originalSha256": "eac45922234e605aa37af0a6e42a4b2acdd7515eb1207235562a8f8ccdaae90c"
+    },
+    {
+      "file": "ATTEMPT-RESULT.json",
+      "form": "unchanged original",
+      "originalSha256": "d2fd49149c0f2ecde74773f46633c5f6645ee434d0346464e7f615fc4b3c34b0"
+    },
+    {
+      "file": "HOSTED-CLEANUP-VERIFIED.json",
+      "form": "unchanged original",
+      "originalSha256": "029a3e5ebea9ceec8921558977fddc0c9e1d894ba9867582e1808fc3f84d56e3"
+    },
+    {
+      "file": "CONTROLLER-interrupt-green-PROJECTION.json",
+      "form": "field projection; slot and inspection arrays and origin omitted",
+      "originalFile": "CONTROLLER-interrupt-green-RECEIPT.json",
+      "originalSha256": "5d9de4ec5deb876db7d65408cbad23620f35690a676aa10f5c66fb8af56ae624"
+    },
+    {
+      "file": "CONTROLLER-recover-PROJECTION.json",
+      "form": "field projection; slot and inspection arrays and origin omitted",
+      "originalFile": "CONTROLLER-recover-RECEIPT.json",
+      "originalSha256": "6a323dc87fc5dfde9087c191de69f4d6f665d3dd6197304e6c8fcdb0faa57428"
+    }
+  ]
+}

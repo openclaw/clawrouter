@@ -1,3 +1,8 @@
+> Production deployment: use **Deploy ClawRouter** on `main`, with no inputs.
+> [Deployment compatibility](deployment-compatibility.md) is the canonical operator
+> and developer contract. Older train/qualification instructions below describe
+> historical releases and diagnostic tools, not required deployment steps.
+
 # Deploy ClawRouter on Cloudflare
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
@@ -9,6 +14,85 @@ assignment rules, redacted grant metadata, and operational health.
 For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
 must be used instead of overriding the production deployment ad hoc.
+
+## Large HTTP staged release
+
+`config/deployment-hold.json` controls whether source is held out of the production
+train. When held, scheduled selection exits without deploying; manual selection and
+`pnpm cf:deploy` refuse. The hold is read from the selected commit, so an
+environment variable or a different control checkout cannot release it. Remove
+the hold only in a reviewed follow-up after separately authorized infrastructure
+preparation and a compatible recovery version exist. This does not disable the
+workflow or change an already deployed Worker. The current file has `hold: false`;
+the native source, artifact and hosted-qualification guards still apply.
+
+For a compatible control repair that must precede a native payload replacement,
+use the separately qualified `native-control` bridge described in
+[native controller qualification](native-cutover-qualification.md#compatible-control-adoption).
+It adopts current control with exact old native bytes using the ordered cutover
+and compatible recovery engine; it is not a percentage rollout or a source-guard
+override. A subsequent separately authorized `native-cutover` replaces the payload.
+
+The new `v6-large-http` Durable Object classes and cron configuration require
+an additive deployment before any percentage rollout. Do not bypass the train's
+non-versioned configuration or secret-lineage checks. Ordinary rollback across
+class creation is unavailable; recovery must retain the new classes, private
+native assets, control token, callbacks and outstanding accounting owners.
+
+After building and rendering the exact reviewed release, prepare three local
+configurations sharing the same immutable Worker, native and dashboard assets:
+
+```sh
+pnpm cf:large-http:release prepare .wrangler.generated.toml .wrangler/release
+pnpm cf:large-http:release verify .wrangler/release/manifest.json
+```
+
+Packaging does not deploy. It removes build hooks, hashes every asset and config,
+and refuses artifact/configuration drift. Bootstrap stops both large ingress and
+native starts. Compatible blue enables native lifecycle while keeping large
+ingress closed. Green opens ingress. Both controls default to enabled outside
+these explicit release artifacts. Blue and green have identical native settings
+and fingerprints, including the content-addressed private runtime.
+
+The reviewed execution sequence is bootstrap, idempotent control-secret
+provisioning, compatible blue, warm/readiness proof, then upload green and advance
+through the approved activation. A single cutover after readiness is sufficient
+when the session-continuity rehearsal supports it; gradual percentages are not a
+requirement. `cf:large-http:provision` only creates a
+missing secret, verifies its presence and never rotates an existing value or
+retries an ambiguous write. Secret creation is its own version/lineage boundary;
+attest the resulting version and establish blue afterward. Do not put it inside
+the train's preserved-secret upload sequence.
+
+Before production authorization, rehearse that sequence and recovery using
+separate Cloudflare resources and synthetic credentials/upstream. Verify
+mixed-version private callbacks, normal connection reuse/reconnects, bounded
+maximum/overflow behavior, once-only accounting, admission stop and exact
+retirement/absence. Keep native lifecycle enabled during a traffic split.
+Closing ingress preserves capacity; `/v1/admin/large-http` with
+`{"accepting":false}` stops new admission and drains it. Retain uncertain
+nonretryable deliveries and debt for reconciliation; never replay inference.
+Recovery selects a compatible post-migration version, not pre-migration main.
+Once large traffic has been admitted, that version must preserve the supported
+large-body envelope. An ingress-closed staging blue cannot restore those large
+conversations; it is a temporary fail-closed control until compatible service
+returns.
+
+The deployment requirement is session continuity, not uninterrupted execution.
+An active request, stream or Codex turn may fail briefly. An isolated rehearsal
+must deploy during a real Codex turn, then complete a subsequent turn in the same
+saved session using prior conversation context. Record the session ID, active
+request/turn and deployment timestamps, recovery duration and any scripted or
+human intervention. Reconnection alone is insufficient. Do not add socket handoff
+or live request migration solely to prevent a temporary failure. Never blindly
+replay uncertain upstream inference; preserve its continuation/accounting owner
+and use an assessed resume or a distinct follow-up question.
+
+These artifacts do not supply production authorization or an executable launch
+manifest. Record exact source/config/version identities, live preflight,
+observations, stop conditions, cost decisions and recovery receipts separately.
+Existing performance results still apply only to their measured inputs; this
+release-control change requires its own behavior proof and affected validation.
 
 ## Required Bindings
 
@@ -121,7 +205,7 @@ CLAWROUTER_ADMIN_TOKEN_SHA256
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
-CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
+CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional legacy Universal smoke-only key
 ```
 
 Set the queue variables when overriding their defaults. Set the Access
@@ -251,12 +335,22 @@ pnpm exec wrangler secret put CLOUDFLARE_AI_GATEWAY_ID --config .wrangler.genera
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config .wrangler.generated.toml
 ```
 
-For a Cloudflare AI Gateway live smoke, configure the gateway with provider
-defaults or pass an upstream OpenAI key only to the smoke runner:
+The bundled Cloudflare AI Gateway smoke now prefers the declared Messages
+operation: `/v1/proxy/cloudflare-ai-gateway/messages`, selecting
+`cloudflare-ai-gateway/claude-sonnet-4-6` with `max_tokens: 16`. The Worker sends
+`claude-sonnet-4-6` to `/anthropic/v1/messages` using the selected gateway
+credential. The gateway must resolve the provider credential through its stored
+BYOK or Unified Billing configuration. This declaration is not live account or
+SDK qualification.
 
-```sh
-export CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY=...
-```
+`CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY` and
+`CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL` apply only when a Universal smoke target is
+selected; they neither choose Universal nor supply credentials/model overrides
+to Messages. Existing Universal routes remain available. Gateway vendor pricing
+is unknown: an enforced budget requires an explicit policy-fixed request fee,
+with authoritative admission and settlement. That fee does not certify vendor
+invoice cost or establish account entitlement. See
+[Cloudflare native Messages](cloudflare-native-messages.md).
 
 ## Render and Deploy
 
@@ -887,9 +981,16 @@ for five minutes, and no explicit grant restriction:
 
 `strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
 `threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
-until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+until its most constrained open quota window reaches `switchAtUsedPercent`,
 then selects the healthiest candidate below that cutoff only when it improves
-remaining capacity by at least `hysteresisPercent`. It requires
+remaining capacity by at least `hysteresisPercent`. If no measured candidate
+qualifies, it moves to a grant with no reading in an open window: one that has
+never reported quota, or whose window has reset since it was last used.
+Threshold routing compares the last reading of every open window, however old,
+because remaining quota only falls until reset; a grant last seen at or past the
+cutoff is therefore never a replacement until its window resets.
+`staleAfterSeconds` still bounds the readings `most_remaining` ranks and the
+evidence `staleState: "deny"` requires. Threshold routing requires
 `stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
 `none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as

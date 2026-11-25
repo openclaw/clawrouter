@@ -9,14 +9,16 @@ import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { GrantChoiceInput } from "./grant-selection-strategies.ts";
 import type { AdmissionJournalEntry, GrantAttachmentSnapshot } from "./authority.ts";
 import { routingProjection } from "./grant-projection.ts";
-import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantRoutingPolicy, grantPriority, grantWeight, poolRetryAt } from "./grant-eligibility.ts";
-import { privateGrantRoutingPolicy, planPrivateGrantRouting } from "./grant-routing.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantPriority, grantWeight, poolRetryAt } from "./grant-eligibility.ts";
+import { grantRoutingPolicy } from "./grant-routing.ts";
+import { privateGrantRoutingPolicy, planPrivateGrantRouting, rankingStaleAfterMs } from "./grant-routing.ts";
 import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth.ts";
 import { isPreparationLimit, PreparationAdmission } from "./provider-templates.ts";
 import type { AdmissionScratchVector } from "./credential-preflight-arena.ts";
-import { grantQuotaRatio } from "./grant-quota.ts";
+import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { assertPolicyModel } from "./policy-models.ts";
-import { HttpError, normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
+import { normalizeEmail, safeEqual, sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 import { musicCoverControlVersion, musicCoverUnavailable } from "./minimax-music-cover-control.ts";
 import { miniMaxMusicCoverProjection } from "./native-media-credential.ts";
 
@@ -252,7 +254,7 @@ async function finishCoverSelection(env: Env, storage: DurableObjectStorage, inp
       stickyHash: routing.stickiness === "identity" || routing.stickiness === "session" ? identityHash : null,
       switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
       candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant),
-        remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, "music-cover") })) });
+        remainingRatio: grantQuotaRatio(item.runtimeState, now, rankingStaleAfterMs(routing), "music-cover") })) });
     const selected = active.find(item => item.key === choice.selectedKey);
     if (!selected) musicCoverUnavailable();
     const fresh: AdmissionResult = { credential, policy, owner, connections, pools: { minimax: pool },
@@ -277,7 +279,7 @@ export function selectAdmissionCandidate(
   const { available, hasConfiguredGrant } = filtered;
   const active = activeOperationCandidates(available, env, requirement);
   const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
-  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
+  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, rankingStaleAfterMs(routing), request.model) })) }) : null;
   const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
   const retryAt = selected ? undefined : poolRetryAt(filtered, env, requirement);
   return { selected: selected ? { ...selected, authorityRevision: revision(selected.key) } : null, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) };
@@ -315,7 +317,7 @@ export function selectGenerationAdmissionCandidate(env: Env,
   const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
   const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash,
     switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
-    candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
+    candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, rankingStaleAfterMs(routing), request.model) })) }) : null;
   const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
   let retryMs = Infinity;
   if (!selected) for (const item of filtered.recovering ?? []) {
@@ -359,7 +361,7 @@ export function selectPrivateAdmissionCandidate(env: Env, input: Parameters<type
         if (active) {
           const nextPriority = grantPriority(active.grant);
           if (nextPriority < priority) { owned.length = 0; activeCount = 0; priority = nextPriority; }
-          if (nextPriority === priority && ++activeCount <= 98) owned.push({ key: active.key, weight: grantWeight(active.grant), remainingRatio: grantQuotaRatio(active.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) });
+          if (nextPriority === priority && ++activeCount <= 98) owned.push({ key: active.key, weight: grantWeight(active.grant), remainingRatio: grantQuotaRatio(active.runtimeState, now, rankingStaleAfterMs(routing), request.model) });
         }
         const recovering = filtered.recovering?.[0];
         const retry = recovering && privateOperationConfigured(recovering.entry.grant, env, requirement, scratch)

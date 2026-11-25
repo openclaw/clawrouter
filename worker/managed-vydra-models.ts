@@ -8,8 +8,8 @@ function model(params: Record<string, string>): "veo3" | "kling" {
   if (params.model !== "veo3" && params.model !== "kling") throw new Error("unsupported_vydra_models_video");
   return params.model;
 }
-// Uses the existing Vydra job identity and scoped controller. Register only
-// after the Models create format and original-create-route lookup are qualified.
+// Models share Jobs GET identity, but retain their original create adapter and
+// never acquire the workflow Jobs DELETE authority.
 export const vydraModelVideoAdapter: ManagedLifecycleAdapter = {
   protocol: "vydra.jobs", requestFormats: ["vydra.model_video_create"], supportsResult: false, supportsCancel: false,
   validateId: validateVydraJobId,
@@ -40,12 +40,20 @@ export const vydraModelVideoAdapter: ManagedLifecycleAdapter = {
     if (context.action !== "create" && context.action !== "retrieve") throw new Error("unsupported_vydra_models_control");
     const selected = model(context.pathParams);
     if (context.requestedVersion !== selected) throw new Error("vydra_models_original_model_mismatch");
-    const observed = await readVydraModel(response, { model: selected, kind: "video" }, context.action, new AbortController().signal, context.expectedId);
+    if (!context.signal) throw new Error("vydra_models_operation_signal_required");
+    const observed = await readVydraModel(response, { model: selected, kind: "video" }, context.action, context.signal, context.expectedId,
+      { registerInput: context.registerInput });
     return { id: observed.id!, nativeStatus: observed.nativeStatus, terminal: observed.terminal, body: observed.body };
   },
   rewrite(observation, paths) {
     mediaPublicPath(paths.retrieve);
     if (paths.cancel !== undefined || paths.result !== undefined) throw new Error("unsupported_vydra_models_control");
+    if (observation.terminal !== "succeeded") {
+      // The native client treats any output URL as completion. Pending or failed
+      // observations expose status/ledger evidence only, never partial assets.
+      const fields = ["id", "jobId", "model", "status", "error", "creditsCharged", "creditsRefunded", "refundStatus"];
+      return Object.fromEntries(fields.filter(key => Object.hasOwn(observation.body, key)).map(key => [key, observation.body[key]]));
+    }
     return dropMediaControlUrls(observation.body);
   },
 };

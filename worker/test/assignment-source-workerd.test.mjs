@@ -164,7 +164,7 @@ test('actual assignment source admission: original streams, public SQLite/KV sem
         const reply = await Promise.race([call('/state?id=' + id).actual, premature]); last = reply.body;
         if (original.state.failed) throw original.state.error;
         if (last.operationSettled) { releaseAll(); const value = await original.actual; assert.equal(value.status, 200, 'origin failed before required phase'); assert.fail('unexpected successful early operation'); }
-        if (predicate(last)) return last;
+        if (last.absent !== true && predicate(last)) return last;
         await Promise.race([delay(10), premature]);
       }
       assert.fail('missing phase: ' + JSON.stringify(last));

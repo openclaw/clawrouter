@@ -1,9 +1,10 @@
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { continuationScope } from "./http-continuation.ts";
-import type { PinnedGrant } from "./grant-selection.ts";
+import type { PinnedGrant } from "./grant-eligibility.ts";
 import type { AuthorizedIdentity, Env } from "./types.ts";
-import { HttpError, sha256Hex } from "./utils.ts";
+import { sha256Hex } from "./utils.ts";
+import { HttpError } from "./http-error.ts";
 
 const commands = new Set(["search_query", "open", "click", "find", "response_length"]);
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
