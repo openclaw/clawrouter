@@ -1,5 +1,7 @@
 # Changelog
 
+- Report complete predeclared Fusion strata alongside the full cohort, preserving paired trials, failures and source-clustered uncertainty.
+
 - Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.
 
 - Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
