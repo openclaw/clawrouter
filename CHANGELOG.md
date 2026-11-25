@@ -1,12 +1,14 @@
 # Changelog
 
-- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
+- Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
 
 - Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
 
 - Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
 
 - Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
+
+- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
 
 - Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
 
