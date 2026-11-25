@@ -2219,6 +2219,13 @@ check. The result includes `matchedTestPrefix` when selection is requested.
 `checkAcceptance` accepts the same options as its fifth argument and retains
 its protected-file checks. Default calls continue to run all tests.
 
+For trusted fixtures that require `globalThis.gc`, pass `{ exposeGc: true }` to
+`check` or `checkAcceptance`. This adds only Node's `--expose-gc` flag; the default
+is off. Invalid option values fail before execution or acceptance snapshots.
+Predeclare this runtime option for every comparison arm and pin it with the
+fixture. Requalify both baseline and reference under that same runtime before
+using it in a new study. It does not repair or replace previous results.
+
 For replayable feedback, callers can also set `normalizeFeedbackTimings: true`.
 This replaces TAP test durations and the final duration summary with `<elapsed>`
 before the 12,000-character feedback limit is applied. Normalizing after clipping

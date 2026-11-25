@@ -364,7 +364,13 @@ function tapTestName(name) {
   return name.replace(/[\b\f\t\n\r\v\\#]/g, character => escapes[character]);
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false } = {}) {
+function nodeTestRuntimeArgs({ exposeGc = false }) {
+  if (typeof exposeGc !== 'boolean') throw new Error('invalid_gc_runtime_option');
+  return exposeGc ? ['--expose-gc'] : [];
+}
+
+export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false } = {}) {
+  const runtimeArgs = nodeTestRuntimeArgs({ exposeGc });
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
   if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
@@ -374,7 +380,7 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, norm
   const pattern = namedTestPattern(testNamePrefix);
   const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+    'node', ...runtimeArgs, '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
   const metrics = testResult(result, { countTestTimeoutsAsFailures });
   if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
   // Node can report the test file itself as passing when no name matched.
@@ -403,6 +409,7 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, norm
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */
 export async function checkAcceptance(box, paths, supportPaths = [], timeout = 120000, options = {}) {
+  nodeTestRuntimeArgs(options);
   namedTestPattern(options.testNamePrefix);
   if (!Number.isSafeInteger(timeout) || timeout < 1 || !Array.isArray(paths) || !paths.length
     || !Array.isArray(supportPaths) || typeof box.execUnprivileged !== 'function') {

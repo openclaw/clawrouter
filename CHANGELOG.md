@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
+
 - Add explicit, source-bound clock fixtures for caller-side Fusion verification of same-millisecond boundaries.
 
 - Report the interrupted fresh-fallback Fusion study, retaining failed replay, the clock-boundary false acceptance and all recorded outcomes.
