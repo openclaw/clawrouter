@@ -2561,6 +2561,16 @@ tasks. Its aggregate passes the frozen cost, time and quality screen, with one
 failed repeat retained. This supports broader testing of the opt-in workflow;
 it does not change routing defaults or qualify a production gain.
 
+`summarizeRepeatability(records, taskIds)` retains the six-task default. Declare
+a different cohort size before collecting results with `{ expectedTasks: 12 }`.
+The helper still requires every task and all three strategies in each of three
+repeats; 12 tasks produce 36 paired samples, not 36 independent tasks.
+
+For `{ costBasis: 'invoice-and-cache-neutral-v1' }`, every record must include
+`normalizedMicros`. Both invoice and cache-neutral cost ratios must pass the
+20% savings gate, alongside the existing quality and workflow-time checks.
+Missing normalized costs fail validation rather than falling back to invoices.
+
 ## Twelve-task routing pilot
 
 The [combined cohort pilot](fusion-cross-cohort-pilot.md) matched strong quality
