@@ -2545,3 +2545,11 @@ quality at 26.4% lower model cost and 18.3% more workflow time, while cheap-only
 solves four of six tasks. All outcomes and replay-audit evidence are retained.
 This passes the declared pilot screen; it does not qualify production routing
 or demonstrate a cross-model rescue.
+
+## Public repair repeatability
+
+The [three-repeat study](fusion-public-repair-repeats.md) keeps the first fresh
+six-task pilot separate and reports 54 new outcomes on those same six exposed
+tasks. Its aggregate passes the frozen cost, time and quality screen, with one
+failed repeat retained. This supports broader testing of the opt-in workflow;
+it does not change routing defaults or qualify a production gain.
