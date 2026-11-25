@@ -4,6 +4,8 @@
 
 - Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
 
+- Report the complete thirty-task Fusion development cohort, retaining the lost strong-model success and failed workflow-time gate.
+
 - Give Fusion workload qualification time to finish its complete regression and sandbox checks before the job deadline.
 
 - Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
