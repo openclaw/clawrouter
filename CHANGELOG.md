@@ -1,5 +1,7 @@
 # Changelog
 
+- Add opt-in caller-side Fusion source anchors for repeated snippets, retaining exact text, frozen source hashes, and atomic nonoverlapping edits.
+
 - Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
 
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
