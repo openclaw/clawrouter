@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the complete anchored-edit Fusion cohort, retaining matched strong-model outcomes and the failed workflow-time gate.
+
 - Add opt-in caller-side Fusion source anchors for repeated snippets, retaining exact text, frozen source hashes, and atomic nonoverlapping edits.
 
 - Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
