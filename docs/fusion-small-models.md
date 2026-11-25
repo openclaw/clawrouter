@@ -2577,3 +2577,14 @@ The [combined cohort pilot](fusion-cross-cohort-pilot.md) matched strong quality
 on twelve repairs while cheap alone passed six. Its 19.51% model-cost saving
 missed the fixed 20% gate; workflow time increased 14.06%. All 36 outcomes and both
 original screening shortfalls are retained. This is not a production qualification.
+
+## One-cheap-attempt repeatability
+
+The [three-draw development report](fusion-one-cheap-repeats.md) compares one
+cheap attempt followed by verified fresh strong fallback against both controls.
+On twelve exposed tasks sampled three times, cascade and strong each pass
+36/36 while cheap passes 24/36. Cascade model cost falls 50.92%, with 8.06% more
+workflow time. All three draws pass the declared efficiency screen; these are
+twelve tasks, not thirty-six independent examples. The report includes the
+caller-side recipe, every outcome and the failed earlier policy for context.
+It does not change production routing or qualify the Worker ensemble endpoint.

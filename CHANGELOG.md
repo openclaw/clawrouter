@@ -2,6 +2,8 @@
 
 - Add opt-in caller-side Fusion source anchors for repeated snippets, retaining exact text, frozen source hashes, and atomic nonoverlapping edits.
 
+- Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
+
 - Give Fusion workload qualification time to finish its complete regression and sandbox checks before the job deadline.
 
 - Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
