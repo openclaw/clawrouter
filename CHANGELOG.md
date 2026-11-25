@@ -15,6 +15,9 @@
 - Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
 
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
+
+- Allow caller-side Fusion feedback to normalize Node warning process identifiers without changing test verdicts, warning messages, or default feedback.
+
 - Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
 
 - Add explicit, source-bound clock fixtures for caller-side Fusion verification of same-millisecond boundaries.
