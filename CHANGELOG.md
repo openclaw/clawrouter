@@ -1,6 +1,6 @@
 # Changelog
 
-- Add opt-in caller-side Fusion candidate context compaction before request-size admission, preserving exact candidate files for verification.
+- Clarify that Fusion callers must compact rejected candidate context before request-size admission, with a large-source regression example.
 
 - Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
 

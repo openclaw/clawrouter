@@ -10,7 +10,7 @@ function filesByPath(files) {
   return map;
 }
 
-// Diagnostic prompt context only. Keep the actual candidate for verification.
+// Diagnostic prompt context only. Never replace the actual candidate artifacts.
 export function compactCandidateContext(original, candidate) {
   if (candidate === null) return null;
   const before = filesByPath(original), after = filesByPath(candidate);
