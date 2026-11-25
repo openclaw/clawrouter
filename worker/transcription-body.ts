@@ -1,4 +1,5 @@
 import { HttpOperation } from "./http-operation.ts";
+import { senseAudioFileLimit } from "./senseaudio-transcription.ts";
 import { HttpError } from "./utils.ts";
 
 // Router envelope, deliberately <= the vendor's 25 MB file limit. These are
@@ -27,13 +28,14 @@ export async function readTranscriptionUpload(request: Request, profile: Transcr
   if (!boundary || boundary.endsWith(" ")) invalid("multipart/form-data with one safe boundary is required");
   const length = request.headers.get("content-length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)))) invalid("invalid content length");
-  const maximum = profile === "senseaudio" ? 10_032_768 : transcriptionLimits.raw;
-  if (length !== null && Number(length) > maximum) tooLarge();
+  const fileLimit = profile === "senseaudio" ? senseAudioFileLimit : transcriptionLimits.file;
+  const maximum = fileLimit + (transcriptionLimits.raw - transcriptionLimits.file);
+  if (length !== null && Number(length) > maximum) tooLarge(fileLimit);
   const operation = new HttpOperation(request.signal, transcriptionLimits.readMs);
   try {
     const raw = await readBounded(request.body, maximum, operation, 413);
     if (profile === "senseaudio" && length !== null && Number(length) !== raw.byteLength) invalid("multipart content length does not match body");
-    return parseMultipart(raw, boundary, profile);
+    return parseMultipart(raw, boundary, profile, fileLimit);
   } catch (error) {
     if (operation.status === "timeout") throw new HttpError(408, "transcription_read_timeout", "multipart upload deadline exceeded");
     if (operation.status === "client_error") throw new HttpError(400, "transcription_canceled", "multipart upload was canceled");
@@ -66,7 +68,7 @@ export async function readBounded(body: ReadableStream<Uint8Array> | null, maxim
   }
 }
 
-function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string, profile: TranscriptionProfile): TranscriptionUpload {
+function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string, profile: TranscriptionProfile, fileLimit: number): TranscriptionUpload {
   const marker = encoder.encode('--' + boundary), separator = encoder.encode('\r\n--' + boundary), headersEnd = encoder.encode('\r\n\r\n');
   const fields: Record<string, string> = Object.create(null);
   let file: File | undefined, cursor = 0, count = 0;
@@ -99,7 +101,7 @@ function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string, profile:
     const bytes = raw.subarray(cursor, next);
     if (name === "file") {
       if (file || filename === undefined) invalid("exactly one File is required");
-      if (!bytes.length || bytes.length > (profile === "senseaudio" ? 10_000_000 : transcriptionLimits.file)) tooLarge();
+      if (!bytes.length || bytes.length > fileLimit) tooLarge(fileLimit);
       if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(filename) || filename.includes('..')) invalid("unsafe audio filename");
       const extension = filename.split('.').at(-1)?.toLowerCase() ?? "";
       const mime = headers.get("content-type")?.toLowerCase() ?? "";
@@ -139,4 +141,4 @@ function findBoundary(bytes: Uint8Array, separator: Uint8Array, start: number): 
 }
 function ascii(bytes: Uint8Array): string { if (bytes.some(byte => byte < 32 && byte !== 13 && byte !== 10 && byte !== 9 || byte > 126)) invalid("part headers must be ASCII"); return decoder.decode(bytes); }
 function invalid(message: string): never { throw new HttpError(400, "invalid_transcription_upload", message); }
-function tooLarge(): never { throw new HttpError(413, "transcription_body_too_large", "audio file must contain 1 to 25000000 bytes and fit the raw upload limit"); }
+function tooLarge(fileLimit: number): never { throw new HttpError(413, "transcription_body_too_large", `audio file must contain 1 to ${fileLimit} bytes and fit the raw upload limit`); }

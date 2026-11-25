@@ -113,7 +113,15 @@ for (const kind of ["model", "duplicate", "file-id", "stream", "language", "mime
     if (kind === "json") { body = JSON.stringify({ model: upstreamModel, file: "https://audio.example/file.wav" }); headers["content-type"] = "application/json"; }
     if (kind === "query") path += "?language=eng";
     if (kind === "destination") f.provider.base_urls.default = "https://foreign.example";
-    const response = await f.request(body, { path, headers }); await response.text(); assert.ok([400, 413].includes(response.status));
+    const response = await f.request(body, { path, headers });
+    const text = await response.text();
+    assert.ok([400, 413].includes(response.status));
+    if (kind === "oversize") {
+      assert.equal(response.status, 413);
+      const { error } = JSON.parse(text);
+      assert.equal(error.code, "transcription_body_too_large");
+      assert.match(error.message, /1 to 10000000 bytes/);
+    }
     await f.drain(); assert.equal(f.sent.length, 0); assert.ok(f.rows().every(row => row.reserved_micros === 0));
   });
 }
