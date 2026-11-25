@@ -1,10 +1,12 @@
 # Changelog
 
-- Add optional nested test prompt compaction that preserves suite wrappers, hooks, and ambiguous registrations.
+- Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
 
 - Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
 
 - Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
+
+- Add optional nested test prompt compaction that preserves suite wrappers, hooks, and ambiguous registrations.
 
 - Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
 
