@@ -1,3 +1,4 @@
+import { failureStopCommand } from './fusion-failure-stop.mjs';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
@@ -369,18 +370,22 @@ function nodeTestRuntimeArgs({ exposeGc = false }) {
   return exposeGc ? ['--expose-gc'] : [];
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false } = {}) {
+export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
   const runtimeArgs = nodeTestRuntimeArgs({ exposeGc });
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
   if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
+  if (typeof stopOnTestFailure !== 'boolean') throw new Error('invalid_failure_stop_option');
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
   const pattern = namedTestPattern(testNamePrefix);
   const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
+  const invocation = stopOnTestFailure
+    ? failureStopCommand(paths, { exposeGc, pattern: pattern === undefined ? undefined : `^${pattern}` })
+    : { args: ['node', ...runtimeArgs, '--test-reporter=tap', ...selection, '--test', ...paths] };
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
-    'node', ...runtimeArgs, '--test-reporter=tap', ...selection, '--test', ...paths], { allowFailure: true, timeout });
+    ...invocation.args], { allowFailure: true, timeout, ...(stopOnTestFailure ? { input: invocation.input } : {}) });
   const metrics = testResult(result, { countTestTimeoutsAsFailures });
   if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
   // Node can report the test file itself as passing when no name matched.
