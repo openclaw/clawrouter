@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "audited": false,
+  "audited": true,
   "scope": "One development draw on thirty previously exposed tasks. Three accounting batches, not repeated draws or independent repository confirmation.",
   "previouslyExposed": true,
   "sourceSha": "25f97c7a66b120f6e35a465084ddabb5bf94bb80",
@@ -253,8 +253,8 @@
       "batch": 3,
       "protocolSha256": "f14d24d5e7d4d94a2cf43b68996066d4cfa96053bb4d1ae778e5f5008efeed91",
       "resultSha256": "be6465b7ba69a23b806e492276a4ca4a671b1407b23e8139d75ffbe5913f6a49",
-      "auditSha256": null,
-      "audited": false,
+      "auditSha256": "fa6b9062a4aab82d679628910d3f5255d32d1158c622a89b3e2cea232529f3ce",
+      "audited": true,
       "calls": 40,
       "spentOrReservedMicros": 319853370
     }

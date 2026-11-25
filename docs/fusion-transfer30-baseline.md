@@ -6,9 +6,9 @@ and recovers a different task. It uses **40.18% less model cost** and **28.06% m
 workflow time**. Cheap-only solves 24/30. Equal aggregate accuracy hides the lost
 success; it does not establish quality preservation.
 
-The final saved-call and runtime replay is pending. The machine-readable report
-marks that batch unaudited. Do not use this report as qualified evidence until
-all three terminal audits pass.
+All three accounting batches passed saved-call and isolated-runtime replay
+with unchanged outcomes and costs. Audited evidence supports this negative
+result; it does not qualify a production gain.
 
 | Accounting batch | Strong | Cascade | Cheap | Cascade cost / strong | Cascade time / strong | Lost strong successes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -86,11 +86,11 @@ repository do not support a general production noninferiority claim.
 ## Recompute and scope
 
 The [sanitized data](fusion-transfer30-baseline.json) contains every outcome,
-public source revision, accounting batch and available protocol/result/audit
+public source revision, accounting batch and protocol/result/audit
 hash. It excludes prompts, completions, credentials and private machine paths.
 The source revision and qualification hash identify the retained local evidence.
 
-After all three audits pass, recompute the complete-cohort summary with:
+Recompute the complete-cohort summary with:
 
 ```sh
 node --input-type=module <<'JS'
