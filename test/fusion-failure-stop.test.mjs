@@ -87,6 +87,16 @@ test('default command stays unchanged and invalid options fail before execution'
   assert.equal(command, undefined);
 });
 
+test('failure-stop composes with opt-in warning PID normalization', async () => {
+  const result = await fixture("import {test} from 'node:test';test('warning',()=>process.emitWarning('fixture warning'));", {
+    normalizeFeedbackProcessIds: true,
+  });
+  assert.equal(result.passed, true);
+  assert.equal(result.valid, true);
+  assert.match(result.feedback, /\(node:<pid>\) Warning: fixture warning/);
+  assert.doesNotMatch(result.feedback, /\(node:[0-9]+\)/);
+});
+
 test('passing tests with lingering handles still require the outer deadline', async () => {
   const result = await fixture("import {test} from 'node:test';setInterval(()=>{},10000);test('pass',()=>{});", {}, { expectOuterTimeout: true });
   assert.equal(result.passed, false);

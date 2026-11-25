@@ -4,13 +4,20 @@
 
 - Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
 
+- Report the complete thirty-task Fusion development cohort, retaining the lost strong-model success and failed workflow-time gate.
+
 - Give Fusion workload qualification time to finish its complete regression and sandbox checks before the job deadline.
 
 - Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
 
+- Validate complete single-draw Fusion transfer cohorts without counting accounting batches as repeats.
+
 - Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
 
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
+
+- Allow caller-side Fusion feedback to normalize Node warning process identifiers without changing test verdicts, warning messages, or default feedback.
+
 - Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
 
 - Add explicit, source-bound clock fixtures for caller-side Fusion verification of same-millisecond boundaries.

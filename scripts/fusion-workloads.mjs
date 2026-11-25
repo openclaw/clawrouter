@@ -331,10 +331,20 @@ function normalizeTapTimings(text) {
   return lines.join('\n').replace(/(^# tests [0-9]+\r?\n# suites [0-9]+\r?\n# pass [0-9]+\r?\n# fail [0-9]+\r?\n# cancelled [0-9]+\r?\n# skipped [0-9]+\r?\n# todo [0-9]+\r?\n# duration_ms )[0-9]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?((?:\r?\n)*)(?![\s\S])/mi, '$1<elapsed>$2');
 }
 
-function testFeedback(result, normalizeTimings) {
-  const normalize = text => normalizeTimings ? normalizeTapTimings(text) : text;
+function normalizeNodeWarningPids(text) {
+  // Only the process identifier in a top-level Node warning header is metadata.
+  // Indented assertion values, warning codes and messages remain evidence.
+  return text.replace(/^(# )?\(node:[1-9][0-9]*\)( (?:\[[^\r\n]*\] )?(?:Warning|[A-Za-z]+Warning):)/gm,
+    '$1(node:<pid>)$2');
+}
+
+function testFeedback(result, normalizeTimings, normalizeProcessIds = false) {
+  const normalize = text => {
+    if (normalizeTimings) text = normalizeTapTimings(text);
+    return normalizeProcessIds ? normalizeNodeWarningPids(text) : text;
+  };
   const stdout = normalize(result.stdout.toString());
-  const text = normalizeTimings ? stdout + normalize(result.stderr.toString()) : Buffer.concat([result.stdout, result.stderr]).toString();
+  const text = normalizeTimings || normalizeProcessIds ? stdout + normalize(result.stderr.toString()) : Buffer.concat([result.stdout, result.stderr]).toString();
   if (text.length <= 12000) return text;
   const diagnostics = [];
   let failureDepth = -1;
@@ -370,10 +380,11 @@ function nodeTestRuntimeArgs({ exposeGc = false }) {
   return exposeGc ? ['--expose-gc'] : [];
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
+export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, normalizeFeedbackProcessIds = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
   const runtimeArgs = nodeTestRuntimeArgs({ exposeGc });
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
+  if (typeof normalizeFeedbackProcessIds !== 'boolean') throw new Error('invalid_feedback_process_id_option');
   if (typeof countTestTimeoutsAsFailures !== 'boolean') throw new Error('invalid_test_timeout_accounting');
   if (typeof stopOnTestFailure !== 'boolean') throw new Error('invalid_failure_stop_option');
   // Kill the in-container process group before the Docker client deadline.
@@ -387,7 +398,7 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, expo
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
     ...invocation.args], { allowFailure: true, timeout, ...(stopOnTestFailure ? { input: invocation.input } : {}) });
   const metrics = testResult(result, { countTestTimeoutsAsFailures });
-  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings) };
+  if (pattern === undefined) return { ...metrics, feedback: testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds) };
   // Node can report the test file itself as passing when no name matched.
   const encodedPrefix = tapTestName(testNamePrefix);
   const fileLabels = paths.map(path => tapTestName(path.replace(/^\.\//, '')));
@@ -408,8 +419,8 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, expo
     return matched;
   });
   return { ...metrics, passed: metrics.passed && matchedTestPrefix, matchedTestPrefix,
-    feedback: matchedTestPrefix ? testFeedback(result, normalizeFeedbackTimings)
-      : ('No test matched the required name prefix.\n' + testFeedback(result, normalizeFeedbackTimings)).slice(0, 12000) };
+    feedback: matchedTestPrefix ? testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds)
+      : ('No test matched the required name prefix.\n' + testFeedback(result, normalizeFeedbackTimings, normalizeFeedbackProcessIds)).slice(0, 12000) };
 }
 
 /** Final acceptance cannot let candidate imports rewrite their own tests. */
