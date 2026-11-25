@@ -6,6 +6,8 @@
 
 - Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
 
+- Validate complete single-draw Fusion transfer cohorts without counting accounting batches as repeats.
+
 - Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
 
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
