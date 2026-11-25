@@ -321,3 +321,63 @@ test('admission repair provider failure stops and invalid model ids are rejected
     assert.equal(invalid.requests.length, 0);
   }
 });
+
+
+test('optional draft repair stays on the draft model and stops before fallback on success', async () => {
+  const f = fixture({ draft: runtimeError });
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2 });
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-repair']);
+  assert.deepEqual(f.requests.map(x => x.model), [models.draft, models.draft]);
+  assert.deepEqual(f.requests[1].draft, { name: 'draft' });
+  assert.deepEqual(f.requests[1].feedback, runtimeError);
+  assert.equal(r.passed, true); assert.equal(r.costMicros, 14);
+});
+test('two rejected drafts keep fresh fallback isolated and repair fallback uses the latest draft', async () => {
+  for (const fallbackMode of ['fresh', 'repair']) {
+    const f = fixture({ draft: runtimeError, 'draft-repair': typeError });
+    const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2, fallbackMode });
+    assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-repair', 'strong-fallback']);
+    assert.equal(f.requests[2].model, models.repair);
+    assert.deepEqual(f.requests[2].draft, fallbackMode === 'fresh' ? null : { name: 'draft-repair' });
+    assert.deepEqual(f.requests[2].feedback, fallbackMode === 'fresh' ? null : typeError);
+    assert.equal(r.passed, true); assert.equal(r.costMicros, 21);
+  }
+});
+test('draft and fallback repairs share the four-call bound and complete cost accounting', async () => {
+  const f = fixture({ draft: runtimeError, 'draft-repair': runtimeError, 'strong-fallback': runtimeError,
+    'strong-fallback-repair': runtimeError });
+  const r = await runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2, fallbackAttempts: 2 });
+  assert.deepEqual(f.requests.map(x => x.stage), ['draft', 'draft-repair', 'strong-fallback', 'strong-fallback-repair']);
+  assert.deepEqual(f.requests[3].draft, { name: 'strong-fallback' });
+  assert.equal(r.passed, false); assert.equal(r.costMicros, 28); assert.deepEqual(r.steps, f.receipts);
+});
+test('draft repair errors and cancellation stop without dispatching strong', async () => {
+  for (const mode of ['invoke', 'verify', 'abort']) {
+    const f = fixture({ draft: runtimeError }), invoke = f.invoke, verify = f.verify;
+    const controller = new AbortController();
+    f.invoke = async request => {
+      if (request.stage === 'draft-repair' && mode === 'invoke') throw Error('repair failed');
+      const result = await invoke(request);
+      if (request.stage === 'draft-repair' && mode === 'abort') controller.abort(Error('repair aborted'));
+      return result;
+    };
+    f.verify = async request => {
+      if (request.stage === 'draft-repair' && mode === 'verify') throw Error('repair failed');
+      return verify(request);
+    };
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts: 2, signal: controller.signal }), /repair (failed|aborted)/);
+    assert.ok(f.requests.every(x => x.model === models.draft));
+  }
+});
+test('invalid draft attempt limits and other strategies reject before dispatch', async () => {
+  for (const draftAttempts of [null, 0, 3, 1.5, '2', true]) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy: 'cascade', draftAttempts }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+  for (const strategy of ['fusion', 'strong']) {
+    const f = fixture({});
+    await assert.rejects(runVerifiedWorkflow({ ...f, strategy, draftAttempts: 2 }), /invalid_verified_workflow/);
+    assert.equal(f.requests.length, 0);
+  }
+});
