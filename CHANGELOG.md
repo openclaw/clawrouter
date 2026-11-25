@@ -1,5 +1,7 @@
 # Changelog
 
+- Add opt-in caller-side Fusion candidate context compaction before request-size admission, preserving exact candidate files for verification.
+
 - Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
 
 - Add opt-in caller-side Fusion repair feedback normalization for temporary loopback URL ports, preserving distinct ports and assertion paths.
