@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the frozen 30-task, three-arm Fusion confirmation, retaining all failures, costs, admission strata and source-clustered uncertainty.
+
 - Report complete predeclared Fusion strata alongside the full cohort, preserving paired trials, failures and source-clustered uncertainty.
 
 - Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.

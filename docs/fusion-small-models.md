@@ -4,6 +4,12 @@ Research baseline reviewed on 2026-11-05; routing follow-up on 2026-11-24.
 Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+The [frozen three-arm repository confirmation](fusion-final-confirmation-study.md)
+retains 30 tasks, three trials and all 270 outcomes. Cheap-first saved 23.0% in
+model charges but passed 81/90 versus strong-only's 85/90; cheap-only passed
+70/90. It failed quality preservation. The report includes both predeclared
+admission strata and source-clustered uncertainty; no default is promoted.
+
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
