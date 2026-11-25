@@ -2536,3 +2536,12 @@ These identify private receipts, not a bundled independent reproduction suite.
 This single convenience-sampled historical task does not establish statistical
 reliability, independence from model training, production savings or a routing
 default. It also did not exercise the new invalid-edit preservation behavior.
+
+## Fresh public-controller routing pilot
+
+The [six-task routing pilot](fusion-public-repair-pilot.md) uses the public
+cheap-repair controller on locally unexposed cases. It matches strong-only
+quality at 26.4% lower model cost and 18.3% more workflow time, while cheap-only
+solves four of six tasks. All outcomes and replay-audit evidence are retained.
+This passes the declared pilot screen; it does not qualify production routing
+or demonstrate a cross-model rescue.

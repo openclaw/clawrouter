@@ -44,6 +44,8 @@
 
 - Report the harder repository cascade failure and a baseline-test fixture correction, retaining the failed quality, cost and latency results.
 
+- Report a fresh six-task routing pilot with matched strong quality, 26.4% lower model cost, complete replay evidence and explicit production limits.
+
 - Report fresh-fallback timing limits and a qualified cheap-execution gain on two real repository repairs, without claiming collaboration or production efficacy.
 
 - Report a live conditional-cascade failure: lower model cost lost three strong-model successes through public-check false acceptance.
