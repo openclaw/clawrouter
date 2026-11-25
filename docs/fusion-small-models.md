@@ -2570,3 +2570,10 @@ For `{ costBasis: 'invoice-and-cache-neutral-v1' }`, every record must include
 `normalizedMicros`. Both invoice and cache-neutral cost ratios must pass the
 20% savings gate, alongside the existing quality and workflow-time checks.
 Missing normalized costs fail validation rather than falling back to invoices.
+
+## Twelve-task routing pilot
+
+The [combined cohort pilot](fusion-cross-cohort-pilot.md) matched strong quality
+on twelve repairs while cheap alone passed six. Its 19.51% model-cost saving
+missed the fixed 20% gate; workflow time increased 14.06%. All 36 outcomes and both
+original screening shortfalls are retained. This is not a production qualification.
