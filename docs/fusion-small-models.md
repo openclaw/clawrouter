@@ -17,7 +17,10 @@ validation, not a live routing result.
 
 Clock-sensitive verification can prepare an explicit fixture with
 `freezeNodeTestClock` from `scripts/fusion-fixed-clock.mjs`. Supply the exact
-source SHA-256 and one test title. The helper returns a new file plus original
+source SHA-256, one test title and a trusted JavaScript parser returning a
+Babel File or ESTree Program with character offsets. Executable registration
+nodes, not comment or string content, select the test. Pin the parser version
+alongside the fixture. The helper returns a new file plus original
 and transformed hashes; it freezes `Date.now()` inside that test using Node's
 test-context mock, which is restored when the test ends. Other clocks and timer
 scheduling are unchanged. The helper accepts only one standalone

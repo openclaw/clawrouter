@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { freezeNodeTestClock } from '../scripts/fusion-fixed-clock.mjs';
+
+const fixtures = JSON.parse(readFileSync(new URL('./fixtures/fusion-fixed-clock-ast.json', import.meta.url), 'utf8'));
+const trees = new Map(fixtures.map(row => [row.source, row.ast]));
+const parse = content => { assert.ok(trees.has(content), 'missing parsed fixture'); return structuredClone(trees.get(content)); };
 
 const hash = text => createHash('sha256').update(text).digest('hex');
 const source = offset => `import { test } from 'node:test';
@@ -15,7 +20,7 @@ test('revalidation', async () => {
 });
 test('clock restored', () => assert.equal(Date.now, originalNow));
 `;
-const prepare = content => freezeNodeTestClock({ path: 'test/cache.js', content }, { title: 'revalidation', sourceSha256: hash(content) });
+const prepare = content => freezeNodeTestClock({ path: 'test/cache.js', content }, { title: 'revalidation', sourceSha256: hash(content), parse });
 const execute = content => {
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
@@ -33,17 +38,17 @@ test('a fixed clock exposes the same-millisecond defect and retains the correcte
 
 test('fixture preparation binds exact source bytes and leaves the original untouched', () => {
   const content = source('- 1'), file = { path: 'test/cache.js', content };
-  const result = freezeNodeTestClock(file, { title: 'revalidation', sourceSha256: hash(content) });
+  const result = freezeNodeTestClock(file, { title: 'revalidation', sourceSha256: hash(content), parse });
   assert.equal(file.content, content); assert.notEqual(result.file.content, content);
   assert.equal(result.evidence.sourceSha256, hash(content));
   assert.equal(result.evidence.fixtureSha256, hash(result.file.content));
-  assert.throws(() => freezeNodeTestClock(file, { title: 'revalidation', sourceSha256: '0'.repeat(64) }), /source_mismatch/);
+  assert.throws(() => freezeNodeTestClock(file, { title: 'revalidation', sourceSha256: '0'.repeat(64), parse }), /source_mismatch/);
 });
 
 test('callback-like text inside a test title remains unchanged', () => {
   const title = 'supports async () callbacks';
   const content = source('- 1').replace("'revalidation'", JSON.stringify(title));
-  const fixed = freezeNodeTestClock({ path: 'test/cache.js', content }, { title, sourceSha256: hash(content) });
+  const fixed = freezeNodeTestClock({ path: 'test/cache.js', content }, { title, sourceSha256: hash(content), parse });
   assert.ok(fixed.file.content.includes(`test(${JSON.stringify(title)}, async (__fusionClockTest) => {`));
   assert.equal(execute(fixed.file.content).status, 0);
 });
@@ -57,8 +62,15 @@ test('same-line bodies and expression prefixes stay separate from the injected c
 
 test('ambiguous registrations and existing callback parameters are rejected', () => {
   const original = source('- 1');
-  assert.throws(() => prepare(original + original), /requires_one_supported_test/);
+  assert.throws(() => prepare(original + "\ntest('revalidation', async () => {});\n"), /requires_one_supported_test/);
   assert.throws(() => prepare(original.replace('async ()', 'async (context)')), /requires_one_supported_test/);
   assert.throws(() => prepare(original.replace("test('revalidation'", "test('different'")), /requires_one_supported_test/);
   assert.throws(() => prepare(original + '\nconst __fusionFixedNow = 0;'), /identifier_collision/);
+});
+
+
+test('inert registrations cannot substitute for executable tests', () => {
+  for (const row of fixtures.filter(row => row.inert)) {
+    assert.throws(() => prepare(row.source), /requires_one_supported_test/);
+  }
 });
