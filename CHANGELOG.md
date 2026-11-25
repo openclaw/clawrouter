@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow caller-side Fusion feedback to normalize Node warning process identifiers without changing test verdicts, warning messages, or default feedback.
+
 - Give Fusion workload qualification time to finish its complete regression and sandbox checks before the job deadline.
 
 - Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
