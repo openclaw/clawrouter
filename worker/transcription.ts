@@ -5,7 +5,7 @@ import { HttpOperation } from "./http-operation.ts";
 import { createProxyAccounting } from "./proxy-accounting.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { proxyResponseHeaders } from "./proxy-response.ts";
-import { providerById } from "./providers.ts";
+import { modelSupportsEndpoint, providerById } from "./providers.ts";
 import { prepareSelected, captureGrantRuntime } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { softBudget, softBudgetPolicy } from "./soft-budget.ts";
@@ -15,25 +15,44 @@ import type { Env } from "./types.ts";
 import { errorResponse, HttpError } from "./utils.ts";
 
 export function transcriptionPath(path: string): boolean {
-  return ["/v1/audio/transcriptions", "/v1/native/openai/v1/audio/transcriptions", "/v1/proxy/openai/transcriptions"].includes(path);
+  return ["/v1/audio/transcriptions", "/v1/native/openai/v1/audio/transcriptions", "/v1/proxy/openai/transcriptions"].includes(path) || senseAudioPath(path);
+}
+
+function senseAudioPath(path: string): boolean {
+  return path === "/v1/native/senseaudio/v1/audio/transcriptions" || path === "/v1/proxy/senseaudio/transcriptions";
 }
 
 export async function proxyTranscription(request: Request, env: Env, context: ExecutionContext, mode: "proxy_key" | "access" = "proxy_key"): Promise<Response> {
+  let path = new URL(request.url).pathname;
+  if (mode === "access") { path = path.replace(/^\/v1\/playground(?=\/)/, ""); if (!path.startsWith("/v1/")) path = `/v1${path}`; }
+  const sense = senseAudioPath(path), providerId = sense ? "senseaudio" : "openai";
   // Authentication precedes even content-type/length checks and any stream read.
-  const initial = mode === "access" ? await accessIdentity(request, env, "openai") : await authenticateProxyKey(request.headers, env);
+  const initial = mode === "access" ? await accessIdentity(request, env, providerId) : await authenticateProxyKey(request.headers, env);
   if (initial instanceof Response) return initial;
   if (request.method !== "POST") return errorResponse("method_not_allowed", "transcription requires POST", 405);
   if (new URL(request.url).search) return errorResponse("transcription_option_unsupported", "transcription options must be multipart fields", 400);
-  const upload = await readTranscriptionUpload(request);
-  const provider = providerById("openai")!;
-  const endpoint = provider.endpoints.find(item => item.id === "transcriptions")!;
-  const model = provider.models.find(item => item.id === "openai/gpt-4o-transcribe")!;
-  const native = new URL(request.url).pathname.includes("/native/");
-  if (upload.fields.model !== model.id && !(native && upload.fields.model === model.upstream)) return errorResponse("model_capability_unsupported", "this route supports only openai/gpt-4o-transcribe", 400);
+  const provider = providerById(providerId), endpoint = provider?.endpoints.find(item => item.id === "transcriptions");
+  if (!provider || !endpoint) return errorResponse("transcription_route_unsupported", "transcription declaration is unavailable", 400);
+  if (sense && (path.includes("/native/") && !endpoint.native_proxy || endpoint.method !== "POST" || endpoint.path !== "/v1/audio/transcriptions" || endpoint.request_format !== "openai.audio_transcriptions"
+    || endpoint.response_format !== "senseaudio.transcription" || endpoint.streaming || endpoint.lifecycle || endpoint.modelPassthrough
+    || endpoint.path_params.length || Object.keys(endpoint.query).length || endpoint.upstreamPath
+    || !provider.capabilities.some(item => item.id === "audio.transcription" && item.endpoint === endpoint.id))) return errorResponse("transcription_route_unsupported", "transcription requires its qualified unary multipart declaration", 400);
+  const upload = await readTranscriptionUpload(request, sense ? "senseaudio" : "openai");
+  const senseCodec = sense ? await import("./senseaudio-transcription.ts") : null;
+  const modelId = sense ? `senseaudio/${senseCodec!.senseAudioModel}` : "openai/gpt-4o-transcribe";
+  const model = provider.models.find(item => item.id === modelId);
+  const native = path.includes("/native/");
+  if (!model || !modelSupportsEndpoint(provider, model, endpoint) || sense && model.upstream !== senseCodec!.senseAudioModel
+    || upload.fields.model !== model.id && !(native && upload.fields.model === model.upstream)) return errorResponse("model_capability_unsupported", "model is outside the selected transcription contract", 400);
+  let nativeForm: FormData | undefined;
+  if (senseCodec) {
+    try { nativeForm = senseCodec.prepareSenseAudioUpload(upload); }
+    catch { return errorResponse("invalid_transcription_upload", "upload is outside the selected transcription contract", 400); }
+  }
   const selection: ProxySelection = { provider, endpoint, model, capability: "audio.transcription", body: { ...upload.fields, model: model.upstream }, pathParams: {}, method: "POST" };
   // Upload can take time: fresh canonical policy/credential/grant admission, with
   // the exact operation recorded once; never use the initial identity for egress.
-  const auth = mode === "access" ? await accessIdentity(request, env, provider.id, { provider, endpoint, mode: "http", model: model.upstream }) : await authenticateProxyKey(request.headers, env, [{ id: provider.id, tokenRef: "openai" }], false, correlationMetadata(request).sessionId, {
+  const auth = mode === "access" ? await accessIdentity(request, env, provider.id, { provider, endpoint, mode: "http", model: model.upstream }) : await authenticateProxyKey(request.headers, env, [{ id: provider.id, tokenRef: provider.id }], false, correlationMetadata(request).sessionId, {
     providerId: provider.id, endpointId: endpoint.id, mode: "http", model: model.upstream, catalogModelId: model.id, capability: selection.capability,
   });
   if (auth instanceof Response) return auth;
@@ -54,6 +73,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       operation.signal.throwIfAborted();
       const prepared = await operation.wait(prepareSelected(request, env, selection, {}, auth));
       accounting.setGrant(prepared.grantKey, prepared.grantLane);
+      if (sense && prepared.url.href !== "https://api.senseaudio.cn/v1/audio/transcriptions") throw new HttpError(400, "transcription_destination_unsupported", "transcription requires the selected regional destination");
       const useSoft = softBudgetPolicy(auth.policy);
       if (!useSoft) {
         const pending = reserveBudget(env, auth, selection.capability, accounting.cost, prepared.connection, (intent, state) => {
@@ -76,9 +96,11 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       operation.signal.throwIfAborted();
       if (!useSoft) await operation.wait(markBudgetDispatched(env, reservation, operation.signal));
       operation.signal.throwIfAborted();
-      const form = new FormData();
-      form.set("file", upload.file, upload.file.name);
-      for (const [name, value] of Object.entries(upload.fields)) form.set(name, name === "model" ? model.upstream : value);
+      const form = nativeForm ?? new FormData();
+      if (!nativeForm) {
+        form.set("file", upload.file, upload.file.name);
+        for (const [name, value] of Object.entries(upload.fields)) form.set(name, name === "model" ? model.upstream : value);
+      }
       // Reconstructed body owns its boundary. Incoming auth and key headers are
       // never copied; prepareSelected owns the selected upstream credential.
       prepared.headers.delete("content-type");
@@ -92,11 +114,13 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       response = await operation.wait(pending, "upstream", late => { void late.body?.cancel().catch(() => undefined); });
       captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, provider.quota, response);
       if (soft) { await soft.beforeDelivery(); if (soft.denial) throw soft.denial; }
+      if (sense && (response.status !== 200 || response.headers.has("content-range")
+        || ![null, "identity"].includes(response.headers.get("content-encoding")))) throw new HttpError(502, "transcription_response_invalid", "upstream transcription response is unqualified");
       // No provider failover or HTTP redirect replay, including 401/429/3xx.
       if (!response.ok) operation.acceptRejection(response.status);
       const bytes = await readBounded(response.body, transcriptionLimits.response, operation);
       const declaredLength = response.headers.get("content-length");
-      if (!response.headers.has("content-encoding") && declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== bytes.length)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription body was truncated");
+      if ((sense || !response.headers.has("content-encoding")) && declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== bytes.length)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription body was truncated");
       if (response.status >= 300 && response.status < 400) throw new HttpError(502, "transcription_redirect_unsupported", "upstream transcription redirects are not replayed");
       let tokens: ReturnType<typeof transcriptionUsage> = null;
       if (response.ok) {
@@ -105,7 +129,9 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
         try { result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
         catch { throw new HttpError(502, "transcription_response_invalid", "upstream transcription JSON is incomplete or invalid"); }
         if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string" || "error" in result) throw new HttpError(502, "transcription_response_invalid", "upstream transcription text is missing");
-        tokens = transcriptionUsage(result);
+        if (senseCodec) {
+          if (!senseCodec.observeSenseAudioTranscription(result, true)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription result is incomplete");
+        } else tokens = transcriptionUsage(result);
       }
       operation.signal.throwIfAborted();
       // Complete bounded EOF wins the outcome before durable publication. Late
@@ -132,7 +158,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
         if (!ok) return errorResponse("accounting_unavailable", "transcription accounting could not be durably completed", 503);
         return errorResponse(soft.denial.code, soft.denial.message, 402);
       }
-      const rejected = response && response.status >= 400;
+      const rejected = !sense && response && response.status >= 400;
       await settle(failure.status, dispatched && !rejected, null, operation.status ?? (failure.status < 500 ? "client_error" : "provider_error"));
       return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
     } finally { soft?.close(); operation.stop("complete"); }
