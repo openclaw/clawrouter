@@ -2560,3 +2560,10 @@ six-task pilot separate and reports 54 new outcomes on those same six exposed
 tasks. Its aggregate passes the frozen cost, time and quality screen, with one
 failed repeat retained. This supports broader testing of the opt-in workflow;
 it does not change routing defaults or qualify a production gain.
+
+## Twelve-task routing pilot
+
+The [combined cohort pilot](fusion-cross-cohort-pilot.md) matched strong quality
+on twelve repairs while cheap alone passed six. Its 19.51% model-cost saving
+missed the fixed 20% gate; workflow time increased 14.06%. All 36 outcomes and both
+original screening shortfalls are retained. This is not a production qualification.
