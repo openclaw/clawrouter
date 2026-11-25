@@ -15,6 +15,13 @@ effects from precise edit feedback, two recovered failures from one extra strong
 repair, and an offline fresh-workflow replay. The latter is a candidate for fresh
 validation, not a live routing result.
 
+The [interrupted fresh-fallback study](fusion-fresh-workflow-study.md) records
+240 of 270 planned outcomes: 79/80 cascade successes versus 80/80 strong-only.
+A same-millisecond cache boundary let a bad draft pass its original public
+check; replay rejected it and stopped before the final batch. Lower recorded
+cost does not qualify this policy. The failure and fixed-clock diagnostic remain
+visible, with no replacement calls or default change.
+
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
