@@ -663,7 +663,7 @@ POST /v1/session/credentials/<credential-id>/revoke
 forces `principalId` to the signed-in email, binds the current policy generation,
 and rejects policies outside the session's effective user and group bindings.
 Credential ids use 4-128 alphanumeric or underscore characters. A principal may
-have at most ten enabled credentials, while rotating an existing owned id remains
+have at most 25 enabled credentials, while rotating an existing owned id remains
 allowed. To bound control-plane storage, old disabled self-service records are
 pruned once a principal reaches 100 retained ids. Existing ids owned by another principal cannot be claimed. Mutation
 requests require a same-origin browser request. The console generates 24 random

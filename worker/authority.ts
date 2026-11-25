@@ -57,7 +57,7 @@ function inspectVideoRecord(text: string, bound: AuthorityReadBound): void {
   }
 }
 
-export const selfServiceCredentialLimit = 10;
+export const selfServiceCredentialLimit = 25;
 const selfServiceCredentialRetentionLimit = 100;
 
 export type { AdmissionProvider, AdmissionPool, AdmissionResult } from "./authority-admission.ts";
