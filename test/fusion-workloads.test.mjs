@@ -755,6 +755,41 @@ test(${JSON.stringify(encodedPrefix + 'selected')}, () => assert.ok(true));
   } finally { await rm(fixture, { recursive: true, force: true }); }
 });
 
+test('garbage collection fixtures require an explicit runtime option and retain test failures', async () => {
+  const fixture = await mkdtemp(join(tmpdir(), 'fusion-gc-check-'));
+  try {
+    await writeFile(join(fixture, 'gc.test.mjs'), `import test from 'node:test'; import assert from 'node:assert/strict';
+test('requires explicit gc', () => { assert.equal(typeof globalThis.gc, 'function'); globalThis.gc(); });
+test('ordinary failure', () => assert.fail('real regression'));
+`);
+    const box = { exec: async (args, options) => {
+      assert.equal(args[0], 'timeout');
+      assert.equal(options.allowFailure, true);
+      const { NODE_TEST_CONTEXT: _context, NODE_OPTIONS: _options, ...env } = process.env;
+      const child = spawnSync(process.execPath, args.slice(4), { cwd: fixture, timeout: 10000, env });
+      assert.equal(child.error, undefined);
+      return { code: child.status, stdout: child.stdout, stderr: child.stderr };
+    } };
+    for (const exposeGc of [undefined, false]) {
+      const result = await check(box, ['gc.test.mjs'], 15000, { exposeGc, testNamePrefix: 'requires explicit gc' });
+      assert.equal(result.passed, false);
+    }
+    const pass = await check(box, ['gc.test.mjs'], 15000, { exposeGc: true, testNamePrefix: 'requires explicit gc' });
+    assert.equal(pass.passed, true, pass.feedback);
+    const failure = await check(box, ['gc.test.mjs'], 15000, { exposeGc: true });
+    assert.equal(failure.passed, false);
+    assert.match(failure.feedback, /real regression/);
+  } finally { await rm(fixture, { recursive: true, force: true }); }
+});
+
+test('invalid gc options fail before execution or acceptance snapshots', async () => {
+  const box = { exec: () => { throw Error('must not execute'); }, execUnprivileged: () => { throw Error('must not execute'); } };
+  for (const exposeGc of [null, 0, 1, 'true', [], {}]) {
+    await assert.rejects(check(box, ['fixture.test.mjs'], 1000, { exposeGc }), /invalid_gc_runtime_option/);
+    await assert.rejects(checkAcceptance(box, ['fixture.test.mjs'], [], 1000, { exposeGc }), /invalid_gc_runtime_option/);
+  }
+});
+
 test('invalid name prefixes fail before a test process or acceptance mutation', async () => {
   const box = { exec: () => { throw Error('must not execute'); }, execUnprivileged: () => { throw Error('must not execute'); } };
   for (const testNamePrefix of ['', ' ', '\nname', 'name\r', 123, 'x'.repeat(257)]) {
