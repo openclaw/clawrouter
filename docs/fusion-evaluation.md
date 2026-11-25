@@ -83,6 +83,21 @@ Choose a measured quality/cost tradeoff, subject to latency and worst-domain
 retention constraints. Never promote a configuration solely because a judge
 prefers its prose. Keep tuning data separate from the test split.
 
+### Related tasks
+
+For related repairs, assign `domain` to the source file or other predeclared
+independence group. Import `clusteredFusionIntervals` from
+`scripts/fusion-cluster-intervals.mjs` and call it with the same input and baseline.
+It resamples whole domains, keeps paired strategies together, and averages
+trials within each task. Tasks retain equal weight; large domains are not reduced
+to one equally weighted task. It reports the number of clusters alongside
+quality, cost and latency intervals. Fewer than two clusters produce null intervals.
+
+Read these intervals alongside the original task-level report. The grouping must
+be chosen before viewing model outcomes. Few clusters, selection bias and
+dependence between domains still limit generalization. A zero-loss bootstrap
+interval is not a bound on the probability of a future lost success.
+
 Related primary sources:
 [TRINITY](https://arxiv.org/abs/2512.04695),
 [Conductor](https://arxiv.org/abs/2512.04388),
