@@ -15,6 +15,24 @@ effects from precise edit feedback, two recovered failures from one extra strong
 repair, and an offline fresh-workflow replay. The latter is a candidate for fresh
 validation, not a live routing result.
 
+Clock-sensitive verification can prepare an explicit fixture with
+`freezeNodeTestClock` from `scripts/fusion-fixed-clock.mjs`. Supply the exact
+source SHA-256 and one test title. The helper returns a new file plus original
+and transformed hashes; it freezes `Date.now()` inside that test using Node's
+test-context mock, which is restored when the test ends. Other clocks and timer
+scheduling are unchanged. The helper accepts only one standalone
+`test('title', async () => {` registration with no existing callback parameters.
+Unsupported or ambiguous input fails instead of being guessed.
+
+Use this before freezing a new evaluation protocol. Keep the original file and
+qualify the transformed suite against both the unfixed baseline and the known
+reference fix. Give every compared model the same declared fixture, and bind
+its hashes into the protocol. Never silently change an existing study or reuse
+old results as proof for a new verifier. A frozen clock can expose strict
+`now > staleAt` boundary mistakes; it is unsuitable for tests that need time to
+advance. This is an opt-in preparation utility, not automatic verifier repair
+or evidence of improved model quality.
+
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
