@@ -105,6 +105,37 @@ test('passing tests with lingering handles still require the outer deadline', as
 });
 
 
+test('test deadlines turn a stalled promise into a trusted failure', async () => {
+  const result = await fixture("import {test} from 'node:test';setInterval(()=>{},10000);test('stalled',async()=>{await new Promise(()=>{});});", { testTimeoutMs: 100 });
+  assert.equal(result.passed, false);
+  assert.equal(result.valid, false);
+  assert.match(result.feedback, /timed out|testTimeoutFailure/);
+});
+
+test('explicit test deadlines preserve passing checks', async () => {
+  const result = await fixture("import {test} from 'node:test';test('pass',async()=>{await new Promise(resolve=>setTimeout(resolve,10));});", { testTimeoutMs: 500 });
+  assert.equal(result.passed, true);
+  assert.equal(result.valid, true);
+  assert.equal(result.tests, 1);
+});
+
+test('ordinary invocation forwards test deadlines and validates them before execution', async () => {
+  let command;
+  const box = { exec: async args => { command = args; return { code: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }; } };
+  await check(box, ['case.test.mjs'], 1000, { testTimeoutMs: 500, testNamePrefix: 'chosen', exposeGc: true });
+  assert.deepEqual(command.slice(3), ['node', '--expose-gc', '--test-reporter=tap', '--test-timeout=500', '--test-name-pattern=^chosen', '--test', 'case.test.mjs']);
+  for (const stopOnTestFailure of [false, true]) {
+    command = undefined;
+    await assert.rejects(check(box, ['case.test.mjs'], Number.MAX_SAFE_INTEGER, { testTimeoutMs: 2147483648, stopOnTestFailure }), /invalid_node_test_timeout/);
+    assert.equal(command, undefined);
+    for (const testTimeoutMs of [0, -1, 1.5, 900, 1000, Infinity, '100', null]) {
+      command = undefined;
+      await assert.rejects(check(box, ['case.test.mjs'], 1000, { testTimeoutMs, stopOnTestFailure }), /invalid_node_test_timeout/);
+      assert.equal(command, undefined);
+    }
+  }
+});
+
 test('failure-stop preserves CLI concurrency across test files', { skip: availableParallelism() < 3 }, async () => {
   const files = {
     'first.test.mjs': "import {test} from 'node:test';import {access} from 'node:fs/promises';test('wait for second file',async()=>{for(;;){try{await access('started.marker');return;}catch{await new Promise(resolve=>setTimeout(resolve,5));}}});",
