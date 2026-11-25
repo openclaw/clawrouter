@@ -26,19 +26,18 @@ function summarize(rows, normalized) {
   return result;
 }
 
-/** Summarize three fixed repeats without counting repeated tasks as new tasks. */
-export function summarizeRepeatability(records, taskIds, { expectedTasks = 6, costBasis = 'invoice-v1' } = {}) {
+function validateStudy(records, taskIds, expectedTasks, costBasis, draws, incompleteMessage) {
   assert.ok(Number.isSafeInteger(expectedTasks) && expectedTasks > 0 && expectedTasks <= 100, 'invalid_task_count');
   assert.ok(['invoice-v1', 'invoice-and-cache-neutral-v1'].includes(costBasis), 'invalid_cost_basis');
   const normalized = costBasis === 'invoice-and-cache-neutral-v1';
   assert.equal(taskIds.length, expectedTasks, 'declared_task_count_mismatch');
   assert.ok(taskIds.every(id => typeof id === 'string' && id.length > 0), 'invalid_task_id');
   assert.equal(new Set(taskIds).size, expectedTasks, 'duplicate_task');
-  assert.equal(records.length, expectedTasks * 9, 'complete_three_repeat_study_required');
+  assert.equal(records.length, expectedTasks * strategies.length * draws.length, incompleteMessage);
   const seen = new Set();
   for (const row of records) {
     assert.ok(taskIds.includes(row.caseId), 'unknown_task');
-    assert.ok([1, 2, 3].includes(row.repeat), 'unknown_repeat');
+    assert.ok(draws.includes(row.repeat), 'unknown_repeat');
     assert.ok(strategies.includes(row.strategy), 'unknown_strategy');
     const key = `${row.repeat}/${row.caseId}/${row.strategy}`;
     assert.ok(!seen.has(key), 'duplicate_outcome');
@@ -53,6 +52,13 @@ export function summarizeRepeatability(records, taskIds, { expectedTasks = 6, co
     }
     assert.equal(row.passed, row.publicPassed && row.fullValid && row.fullPassed, 'inconsistent_verdict');
   }
+  return normalized;
+}
+
+/** Summarize three fixed repeats without counting repeated tasks as new tasks. */
+export function summarizeRepeatability(records, taskIds, { expectedTasks = 6, costBasis = 'invoice-v1' } = {}) {
+  const normalized = validateStudy(records, taskIds, expectedTasks, costBasis, [1, 2, 3],
+    'complete_three_repeat_study_required');
   const repeats = [1, 2, 3].map(repeat => ({ repeat,
     ...summarize(records.filter(row => row.repeat === repeat), normalized) }));
   const aggregate = summarize(records, normalized);
@@ -69,6 +75,26 @@ export function summarizeRepeatability(records, taskIds, { expectedTasks = 6, co
     efficientRepeats,
     repeatabilityLead: safeEveryRepeat && aggregate.cascade.passed >= aggregate.strong.passed
       && aggregate.cascade.passed > aggregate.cheap.passed && aggregate.efficiencyGate && efficientRepeats >= 2,
+    qualifiedProductionGain: false,
+  };
+}
+
+/** Summarize one draw on every declared task, independent of accounting batches. */
+export function summarizeTransfer(records, taskIds, { expectedTasks = 30 } = {}) {
+  const costBasis = 'invoice-and-cache-neutral-v1';
+  validateStudy(records, taskIds, expectedTasks, costBasis, [undefined],
+    'complete_single_draw_study_required');
+  const aggregate = summarize(records, true);
+  return {
+    uniqueTasks: expectedTasks,
+    drawsPerTask: 1,
+    pairedSamples: expectedTasks,
+    outcomes: expectedTasks * strategies.length,
+    costBasis,
+    aggregate,
+    transferLead: aggregate.falseAccepts === 0 && aggregate.strongLosses === 0
+      && aggregate.cascade.passed >= aggregate.strong.passed
+      && aggregate.cascade.passed > aggregate.cheap.passed && aggregate.efficiencyGate,
     qualifiedProductionGain: false,
   };
 }
