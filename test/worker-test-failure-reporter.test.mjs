@@ -2408,6 +2408,16 @@ function feedRealtime(relay, e, rows, failed = true) {
   relay.observe("test:enqueue", e.enqueue); relay.observe(failed ? "test:fail" : "test:pass", e.terminal, failed ? e.failure : undefined);
   for (const row of rows) relay.observe("test:diagnostic", { ...e.location, message: realtimeDiagnosticText(row) });
 }
+test("inert realtime deadline durations survive the bounded failure relay", () => {
+  const rows = [], ledger = createRealtimeLedger("r09", text => rows.push(parseRealtimeDiagnostic(text)));
+  ledger.registered(); ledger.mark("assert_elapsed");
+  ledger.timing(12, 321, 300, 21); ledger.body(true, new Error("private error")); ledger.flush();
+  const relay = inertRealtimeRelay(); feedRealtime(relay, realtimeEvents(8), rows);
+  const result = relay.finish();
+  assert.deepEqual(result.records[0], { ...realtimeBoundary("r09", { reasonDefined: true }), mutationMs: 12, closeMs: 321, receiverMs: 300, clientCloseMs: 21 });
+  assert.equal(JSON.stringify(result.records).includes("private error"), false);
+  assert.ok(Buffer.byteLength(JSON.stringify(result.records[0])) < 640);
+});
 test("inert realtime all twelve pairs bind separately and select first native failure", () => {
   const relay = inertRealtimeRelay();
   for (let i = 0; i < 12; i++) {

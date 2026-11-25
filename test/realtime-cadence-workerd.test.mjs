@@ -431,6 +431,7 @@ async function authorityVariant(t, asr, kind, caseId) {
     witness.mark('send_loop');
     while (!c.q.closed && Date.now() - changed < 1000) { sentAt.push(Date.now()); append(c, sent++); await sleep(20); }
     const elapsed = Math.max(0, (c.q.closedAt ?? Date.now()) - changed), stats = await f.stats();
+    witness.timing(mutationMs, elapsed);
     if (diagnostic) {
       witness.mark('calls');
       const calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
@@ -438,6 +439,7 @@ async function authorityVariant(t, asr, kind, caseId) {
       // observations; diagnostics after the assertion lose the failing state.
       witness.mark('close_snapshot');
       const closeFrame = f.closeObservation.snapshot(changed, c.q.closedAt);
+      if (closeFrame.valid) witness.timing(mutationMs, elapsed, closeFrame.changedToConcludeMs, closeFrame.concludeToClientCloseMs);
       witness.mark('diagnostic');
       t.diagnostic(JSON.stringify({ kind, asr, clocks: { host: "Date.now; authority ACK to client close before stats RPC", router: "performance.now; isolate-local only" }, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
       witness.mark('assert_snapshot');
