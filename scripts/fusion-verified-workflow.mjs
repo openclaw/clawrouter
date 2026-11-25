@@ -23,10 +23,11 @@ async function bounded(signal, operation) {
  * the workflow; they never authorize another provider call or a model fallback.
  */
 export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () => {}, strategy = 'fusion',
-  fallbackMode = 'fresh', deadlineMs = 900000, signal: callerSignal }) {
+  fallbackMode = 'fresh', fallbackAttempts = 1, deadlineMs = 900000, signal: callerSignal }) {
   const requiredModels = strategy === 'cascade' ? ['draft', 'repair'] : ['draft', 'repair', 'compiler'];
   if (!['fusion', 'strong', 'cascade'].includes(strategy) || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 1800000
     || !['fresh', 'repair'].includes(fallbackMode) || (fallbackMode === 'repair' && strategy !== 'cascade')
+    || ![1, 2].includes(fallbackAttempts) || (fallbackAttempts !== 1 && strategy !== 'cascade')
     || typeof invoke !== 'function' || typeof verify !== 'function' || typeof onStep !== 'function'
     || !models || requiredModels.some(k => !validModel(models[k]))
     || (models.compiler !== undefined && !validModel(models.compiler))
@@ -37,8 +38,9 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
   const deadline = AbortSignal.timeout(deadlineMs);
   const signal = callerSignal ? AbortSignal.any([callerSignal, deadline]) : deadline;
   const started = performance.now(), steps = []; let totalCostMicros = 0;
+  const callLimit = strategy === 'fusion' ? 6 : strategy === 'cascade' ? 1 + fallbackAttempts : 2;
   async function attempt(stage, model, previous = null) {
-    if (steps.length >= (strategy === 'fusion' ? 6 : 2)) throw new Error('verified_workflow_call_limit');
+    if (steps.length >= callLimit) throw new Error('verified_workflow_call_limit');
     const before = performance.now();
     const generated = await bounded(signal, () => invoke({ stage, model, signal,
       draft: previous ? structuredClone(previous.artifact) : null,
@@ -65,8 +67,10 @@ export async function runVerifiedWorkflow({ models, invoke, verify, onStep = () 
     steps, costMicros: totalCostMicros, elapsedMs: performance.now() - started });
   if (strategy === 'cascade') {
     const first = await attempt('draft', models.draft);
-    return finish(isPassed(first) ? first : await attempt('strong-fallback', models.repair,
-      fallbackMode === 'repair' ? first : null));
+    if (isPassed(first)) return finish(first);
+    const fallback = await attempt('strong-fallback', models.repair, fallbackMode === 'repair' ? first : null);
+    return finish(isPassed(fallback) || fallbackAttempts === 1 ? fallback
+      : await attempt('strong-fallback-repair', models.repair, fallback));
   }
   if (strategy === 'strong') {
     const first = await attempt('strong-initial', models.repair);

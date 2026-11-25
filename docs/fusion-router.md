@@ -421,12 +421,27 @@ dependency coverage as well; passing exclusion checks alone is insufficient.
 For an informed fallback, set `fallbackMode: 'repair'` with `strategy: 'cascade'`.
 The second invocation receives a clone of the rejected artifact and its verifier
 receipt in `draft` and `feedback`. A missing artifact stays `null`. This mode still
-allows at most two calls, counts both costs, and verifies the fallback before
+allows at most two calls by default, counts both costs, and verifies the fallback before
 acceptance. The default `fallbackMode: 'fresh'` sends neither artifact nor feedback.
 Only include feedback that the fallback is allowed to see. Keep evaluation-only
 held-out cases outside this receipt, and treat generated artifacts as untrusted
 data in the provider adapter. No quality or cost improvement is implied by this
 option; validate it on the intended workload.
+
+Set `fallbackAttempts: 2` with `strategy: 'cascade'` to allow one repair of a
+failed strong fallback. The maximum then becomes three calls: cheap draft,
+strong fallback, and `strong-fallback-repair`. The third call receives the
+failed strong artifact and its verification feedback, regardless of whether
+the first fallback used fresh or repair mode. It runs only when the fallback
+fails at least one verification check; acceptance at either earlier stage stops the
+workflow. A missing artifact remains `null` and retains its adapter feedback.
+
+The default `fallbackAttempts: 1` keeps the two-call limit. Only values 1 and 2
+are accepted; other strategies cannot request a second fallback attempt.
+Reserve for all three possible calls when enabling the option. Each attempted
+call is charged and verified, and adapter errors, invalid receipts, cancellation
+or deadline expiry stop execution. This option changes no Worker defaults and
+does not establish a quality or cost gain.
 
 Optionally set `models.runtimeRepair` to a specialist model identifier. When
 the original draft fails runtime checks but passes compilation, the workflow
