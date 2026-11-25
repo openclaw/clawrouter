@@ -48,7 +48,7 @@ export function summarizeRepeatability(records, taskIds) {
   const safeEveryRepeat = repeats.every(row => row.falseAccepts === 0 && row.strongLosses === 0);
   const efficientRepeats = repeats.filter(row => row.efficiencyGate).length;
   return {
-    independentTasks: 6,
+    uniqueTasks: 6,
     repeatsPerTask: 3,
     pairedSamples: 18,
     outcomes: 54,

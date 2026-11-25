@@ -13,7 +13,7 @@ function fixture() {
 
 test('repeatability keeps six tasks distinct from eighteen paired samples', () => {
   const result = summarizeRepeatability(fixture(), ids);
-  assert.equal(result.independentTasks, 6);
+  assert.equal(result.uniqueTasks, 6);
   assert.equal(result.pairedSamples, 18);
   assert.equal(result.aggregate.cascade.passed, 18);
   assert.equal(result.repeatabilityLead, true);
