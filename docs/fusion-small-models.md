@@ -2588,3 +2588,13 @@ workflow time. All three draws pass the declared efficiency screen; these are
 twelve tasks, not thirty-six independent examples. The report includes the
 caller-side recipe, every outcome and the failed earlier policy for context.
 It does not change production routing or qualify the Worker ensemble endpoint.
+
+## Thirty-task development transfer
+
+The [complete thirty-task follow-up](fusion-transfer30-baseline.md) fails the
+quality-preservation and time gates despite 40.18% lower model cost. Cascade and
+strong each solve 27/30, but the cascade loses one strong-only success and solves
+a different task; workflow time rises 28.06%. Cheap-only solves 24/30. These are
+thirty exposed tasks in one repository, divided into accounting batches, not
+three repeated draws. The report retains every outcome and all three terminal replay audits; it does
+not qualify production routing.
