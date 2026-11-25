@@ -13,7 +13,7 @@ import { runDraftSampling } from './fusion-draft-sampling.mjs';
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
-const strategies = ['cheap', 'strong', 'architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling'];
+const strategies = ['cheap', 'strong', 'architect', 'cheap-plan', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling'];
 const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
@@ -42,7 +42,7 @@ export function pairModel(strategy, role, config) {
   if (strategy === 'probe-selection') return role === roles.strong ? config.strong : config.cheap;
   if (['contract-cheap', 'contract-provided-cheap'].includes(strategy)) return config.cheap;
   if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
-  if (contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
+  if (strategy === 'cheap-plan' || contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   if (['edit-handoff', 'completion-handoff'].includes(strategy)) return role === roles.critic ? config.cheap : config.strong;
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
@@ -51,8 +51,9 @@ export function pairModel(strategy, role, config) {
 // One planner call is deducted from the same total call allowance as each control.
 export function pairExecution(strategy, config) {
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
-  return { strategy: strategy === 'architect' ? 'planned' : ['edit-handoff', 'completion-handoff'].includes(strategy) ? 'handoff' : 'strong',
-    settings: { maxTurns: config.maxCalls - Number(strategy === 'architect'),
+  const planned = ['architect', 'cheap-plan'].includes(strategy);
+  return { strategy: planned ? 'planned' : ['edit-handoff', 'completion-handoff'].includes(strategy) ? 'handoff' : 'strong',
+    settings: { maxTurns: config.maxCalls - Number(planned),
       outputTokens: config.outputTokens, deadlineMs: config.deadlineMs } };
 }
 
@@ -80,7 +81,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const effectiveGrade = acceptance?.grade ?? grade;
   validateOpenAiApi(openAiApi);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'cheap-plan', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !controlsOnly && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   repositoryActionSchema(actionSchemaProfile);
   if (actionSchemaProfile !== 'legacy' && (executor !== 'interactive'
@@ -104,7 +105,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     || handoffMaxTurns >= config.maxCalls)) throw new Error('invalid_handoff_turn_limit');
   if (sourcePageLines !== null && (!Number.isSafeInteger(sourcePageLines) || sourcePageLines < 1 || sourcePageLines > 400)) throw new Error('invalid_source_page_lines');
   if (sourcePageLines !== null && (executor !== 'interactive' || !['edit-handoff', 'completion-handoff', 'matched-handoff'].includes(policy))) throw new Error('unsupported_source_paging');
-  if (policy !== 'architect') preloadSource = true;
+  if (!['architect', 'cheap-plan'].includes(policy)) preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   if (!controlsOnly && policy === 'probe-selection' && config.maxCalls < 4) throw new Error('probe_selection_requires_four_calls');
   if (!controlsOnly && policy === 'draft-sampling' && config.maxCalls < 3) throw new Error('sampling_requires_three_calls');

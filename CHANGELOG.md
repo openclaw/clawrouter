@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an opt-in Fusion benchmark policy that uses a cheap planner and strong executor within the existing shared budgets.
+
 - Report the frozen 30-task, three-arm Fusion confirmation, retaining all failures, costs, admission strata and source-clustered uncertainty.
 
 - Allow an opt-in third caller-side Fusion attempt to repair a rejected strong fallback, retaining verification, cancellation and complete cost accounting.
