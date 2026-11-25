@@ -18,6 +18,8 @@
 
 - Allow caller-side Fusion feedback to normalize Node warning process identifiers without changing test verdicts, warning messages, or default feedback.
 
+- Preserve explicit Node test deadlines in ordinary and failure-stop Fusion checks, while retaining the outer watchdog and unchanged defaults.
+
 - Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
 
 - Add explicit, source-bound clock fixtures for caller-side Fusion verification of same-millisecond boundaries.

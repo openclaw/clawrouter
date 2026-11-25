@@ -8,6 +8,7 @@ const marked = value => value === true || typeof value === 'string';
 const stream = run({
   files: config.paths,
   isolation: 'process',
+  ...(config.testTimeoutMs === undefined ? {} : { timeout: config.testTimeoutMs }),
   execArgv: config.exposeGc ? ['--expose-gc'] : [],
   ...(config.pattern === undefined ? {} : { testNamePatterns: config.pattern }),
   signal: controller.signal,
@@ -20,6 +21,6 @@ stream.on('test:fail', event => {
 stream.compose(tap).pipe(process.stdout);
 `;
 
-export function failureStopCommand(paths, { exposeGc, pattern }) {
-  return { args: ['node', '-', JSON.stringify({ paths, exposeGc, pattern })], input: program };
+export function failureStopCommand(paths, { exposeGc, testTimeoutMs, pattern }) {
+  return { args: ['node', '-', JSON.stringify({ paths, exposeGc, testTimeoutMs, pattern })], input: program };
 }

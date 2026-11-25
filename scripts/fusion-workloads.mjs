@@ -380,7 +380,7 @@ function nodeTestRuntimeArgs({ exposeGc = false }) {
   return exposeGc ? ['--expose-gc'] : [];
 }
 
-export async function check(box, paths, timeout = 120000, { testNamePrefix, exposeGc = false, normalizeFeedbackTimings = false, normalizeFeedbackProcessIds = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
+export async function check(box, paths, timeout = 120000, { testNamePrefix, testTimeoutMs, exposeGc = false, normalizeFeedbackTimings = false, normalizeFeedbackProcessIds = false, countTestTimeoutsAsFailures = false, stopOnTestFailure = false } = {}) {
   const runtimeArgs = nodeTestRuntimeArgs({ exposeGc });
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
   if (typeof normalizeFeedbackTimings !== 'boolean') throw new Error('invalid_feedback_timing_option');
@@ -390,11 +390,14 @@ export async function check(box, paths, timeout = 120000, { testNamePrefix, expo
   // Kill the in-container process group before the Docker client deadline.
   // A killed client alone leaves the test runner and its children alive.
   const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  if (testTimeoutMs !== undefined && (!Number.isSafeInteger(testTimeoutMs) || testTimeoutMs < 1
+    || testTimeoutMs > 2147483647 || testTimeoutMs >= limit)) throw new Error('invalid_node_test_timeout');
+  const deadline = testTimeoutMs === undefined ? [] : [`--test-timeout=${testTimeoutMs}`];
   const pattern = namedTestPattern(testNamePrefix);
   const selection = pattern === undefined ? [] : [`--test-name-pattern=^${pattern}`];
   const invocation = stopOnTestFailure
-    ? failureStopCommand(paths, { exposeGc, pattern: pattern === undefined ? undefined : `^${pattern}` })
-    : { args: ['node', ...runtimeArgs, '--test-reporter=tap', ...selection, '--test', ...paths] };
+    ? failureStopCommand(paths, { exposeGc, testTimeoutMs, pattern: pattern === undefined ? undefined : `^${pattern}` })
+    : { args: ['node', ...runtimeArgs, '--test-reporter=tap', ...deadline, ...selection, '--test', ...paths] };
   const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
     ...invocation.args], { allowFailure: true, timeout, ...(stopOnTestFailure ? { input: invocation.input } : {}) });
   const metrics = testResult(result, { countTestTimeoutsAsFailures });
