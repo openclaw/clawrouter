@@ -48,3 +48,20 @@ test("does not normalize similar prefixes or PID-like assertion values", () => {
     assert.throws(() => reconcileRecordedRepairRequest(a, b), /recorded_repair_request_mismatch/);
   }
 });
+
+test("literal placeholder text cannot impersonate a recognized warning", () => {
+  const withFeedback = feedback => {
+    const value = request(), payload = JSON.parse(value.body.input[2].content);
+    payload.acceptance.feedback = feedback;
+    value.body.input[2].content = JSON.stringify(payload);
+    return value;
+  };
+  assert.throws(() => reconcileRecordedRepairRequest(
+    withFeedback(`${warning(159)}\n${warning("<pid>")}`),
+    withFeedback(`${warning("<pid>")}\n${warning(160)}`),
+  ), /recorded_repair_request_mismatch/);
+  const literal = `\n${warning("<pid>")}`;
+  assert.equal(reconcileRecordedRepairRequest(
+    withFeedback(warning(159) + literal), withFeedback(warning(160) + literal),
+  ).substituted, true);
+});

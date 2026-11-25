@@ -12,11 +12,15 @@ function canonicalFeedbackRequest(request) {
   if (JSON.stringify(payload) !== input[2].content || typeof payload?.acceptance?.feedback !== "string") {
     throw new Error("recorded_repair_feedback_shape");
   }
-  let warnings = 0;
-  payload.acceptance.feedback = payload.acceptance.feedback.replace(warning, (_line, cr) => {
+  const feedback = payload.acceptance.feedback, parts = [];
+  let warnings = 0, offset = 0;
+  for (const match of feedback.matchAll(warning)) {
+    parts.push(feedback.slice(offset, match.index), { eventSourceWarning: true, cr: match[1] });
+    offset = match.index + match[0].length;
     warnings++;
-    return "# (node:<pid>) [UNDICI-ES] Warning: EventSource is experimental, expect them to change at any time." + cr;
-  });
+  }
+  parts.push(feedback.slice(offset));
+  payload.acceptance.feedback = parts;
   const normalized = structuredClone(request);
   normalized.body.input[2].content = JSON.stringify(payload);
   return { normalized, warnings };
