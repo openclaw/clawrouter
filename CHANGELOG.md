@@ -4,6 +4,8 @@
 
 - Allow an opt-in third caller-side Fusion attempt to repair a rejected strong fallback, retaining verification, cancellation and complete cost accounting.
 
+- Report mixed edit-feedback results, bounded fallback-repair recovery and an explicitly offline fresh-workflow cost replay.
+
 - Report complete predeclared Fusion strata alongside the full cohort, preserving paired trials, failures and source-clustered uncertainty.
 
 - Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.

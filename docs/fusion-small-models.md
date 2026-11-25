@@ -10,6 +10,11 @@ model charges but passed 81/90 versus strong-only's 85/90; cheap-only passed
 70/90. It failed quality preservation. The report includes both predeclared
 admission strata and source-clustered uncertainty; no default is promoted.
 
+The [fallback-repair follow-up](fusion-fallback-repair-study.md) records mixed
+effects from precise edit feedback, two recovered failures from one extra strong
+repair, and an offline fresh-workflow replay. The latter is a candidate for fresh
+validation, not a live routing result.
+
 The [adapted coding-cohort study](fusion-livecodebench-study.md) records a
 12-task development lead for strong review followed by small-model repair:
 12/12 versus 9/12 for small direct, at 33.7% less model cost than strong direct.
