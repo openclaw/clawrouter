@@ -1,5 +1,7 @@
 # Changelog
 
+- Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
+
 - Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
 
 - Add explicit, source-bound clock fixtures for caller-side Fusion verification of same-millisecond boundaries.
