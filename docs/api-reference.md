@@ -933,7 +933,7 @@ but remains available after group, binding, or policy access is removed. Revoke
 disables the latest record, preserves any intervening hash rotation, and is
 idempotent for an existing key. Local administrator disable or demotion is also
 rechecked before credential writes; Cloudflare administrator status comes from
-the verified Access configuration. Personal keys remain limited to 10 enabled
+the verified Access configuration. Personal keys are limited to 25 enabled
 and 100 retained records; creating another key can prune revoked records in ID
 order at the retention limit. Rotation and rename consume no additional slot.
 
