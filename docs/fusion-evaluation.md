@@ -104,6 +104,34 @@ Related primary sources:
 [inflation-aware routing](https://arxiv.org/abs/2608.13571), and
 [FusionEval](https://arxiv.org/abs/2610.30162).
 
+### Predeclared strata
+
+To inspect a frozen routing policy's admitted and bypassed tasks, import
+`stratifiedFusionEvaluation` from `scripts/fusion-stratified-evaluation.mjs`:
+
+```js
+const result = stratifiedFusionEvaluation(input, 'strong', {
+  revision: 'frozen-admission-v1',
+  assignments: [
+    { caseId: 'case-a', stratum: 'admitted' },
+    { caseId: 'case-b', stratum: 'bypass' },
+  ],
+});
+```
+
+Assign every case exactly once using metadata frozen before model outcomes.
+The helper rejects missing, duplicate and unknown cases. It returns the full
+cohort plus every stratum, with the same paired trials, equal-case weighting,
+loss counts and source-clustered intervals. Failures remain in their assigned
+group. Repeat with the cheap single-model baseline to expose gains that cheap
+execution alone can explain. Development data requires the explicit fourth
+argument `'development'`.
+
+The revision identifies externally retained partition evidence; the helper
+cannot establish when that evidence was frozen. Subgroup intervals do not
+adjust for multiple comparisons. Treat strata as diagnostics, retain the full
+cohort as the primary result, and test any newly selected policy on fresh tasks.
+
 
 For binary scores, `binaryTaskLoss` also counts each task that loses a baseline
 success in **any** paired trial. Another trial's gain cannot cancel this event.
