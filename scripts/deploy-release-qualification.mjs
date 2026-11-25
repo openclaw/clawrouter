@@ -16,7 +16,7 @@ import { uploadMessage } from './deploy-train-secrets.mjs';
 import { nativeControlDigest } from './deploy-native-qualification.mjs';
 import { verifyLargeHttpRelease } from './prepare-large-http-release.mjs';
 import { prepareNativeRehearsal } from './prepare-native-rehearsal.mjs';
-import { until } from './native-rehearsal-client.mjs';
+import { until, publicSetupDiagnostic } from './native-rehearsal-client.mjs';
 import { qualifyNativeCutover, verifyIsolatedOwners } from './qualify-native-cutover.mjs';
 import { command } from './deploy-command.mjs';
 const hash = x => createHash('sha256').update(x).digest('hex');
@@ -184,8 +184,11 @@ export async function qualifyRelease({ state, stage = 'release', env = process.e
     if(clientDirectory)try{receipt.functionalEvidence=JSON.parse(await readFile(join(clientDirectory,'evidence.json'),'utf8'));}catch{}
     if(clientDirectory)try{
       receipt.clientDiagnostics=[];
-      for(const name of await readdir(clientDirectory))if(/^(?:workload-(?:success|reject|max|overflow|lost)|seed|overlap-(?:forward|recovery)|followup-(?:forward|recovery))-diagnostic[.]json$/.test(name))
-        receipt.clientDiagnostics.push({name,...JSON.parse(await readFile(join(clientDirectory,name),'utf8'))});
+      for(const name of await readdir(clientDirectory))if(/^(?:workload-(?:success|reject|max|overflow|lost)|setup|seed|overlap-(?:forward|recovery)|followup-(?:forward|recovery))-diagnostic[.]json$/.test(name)){
+        const value=JSON.parse(await readFile(join(clientDirectory,name),'utf8'));
+        const diagnostic=name==='setup-diagnostic.json'?publicSetupDiagnostic(value):value;
+        if(diagnostic)receipt.clientDiagnostics.push({...diagnostic,name});
+      }
     }catch{}
     try{await outcome('cleanup',async()=>{
       const result=await resources.cleanup();if(!result.complete)throw new Error('Isolated resource cleanup incomplete');return result;

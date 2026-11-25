@@ -1,5 +1,7 @@
 # Changelog
 
+- Retain allowlisted native qualification setup stages, timing and failure codes without exposing raw errors, credentials or request content.
+
 - Add caller-side prompt compaction for unchanged test groups while preserving changed fixtures and original verification inputs.
 
 - Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
