@@ -10,6 +10,8 @@
 
 - Allow a bounded preliminary check to reject Fusion candidates before full public tests; accepted candidates still require the complete test and compiler gates.
 
+- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
+
 - Add opt-in caller-side Fusion verification that skips compilation after failed public tests while preserving compilation for accepted candidates.
 
 - Report selector-repair false accepts and qualify baseline preservation checks for caller-side Fusion verification.
