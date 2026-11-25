@@ -1,5 +1,7 @@
 # Changelog
 
+- Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
+
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
 - Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
 
