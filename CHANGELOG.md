@@ -10,6 +10,8 @@
 
 - Add opt-in caller-side Fusion source anchors for repeated snippets, retaining exact text, frozen source hashes, and atomic nonoverlapping edits.
 
+- Allow a bounded caller-declared Fusion source replacement budget up to 256 KiB, preserving the 64 KiB default.
+
 - Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
 
 - Report the complete thirty-task Fusion development cohort, retaining the lost strong-model success and failed workflow-time gate.
