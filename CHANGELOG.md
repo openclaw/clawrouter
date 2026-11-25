@@ -1,5 +1,7 @@
 # Changelog
 
+- Report a six-case Fusion pilot and uninterrupted repeat, preserving the interrupted draw and separating model-cost evidence from timing qualification.
+
 - Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
 
 - Add opt-in caller-side Fusion repair feedback normalization for temporary loopback URL ports, preserving distinct ports and assertion paths.
