@@ -1,5 +1,9 @@
 # Changelog
 
+- Give Fusion workload qualification time to finish its complete regression and sandbox checks before the job deadline.
+
+- Allow explicitly sized three-repeat Fusion reports and require cache-neutral costs when that comparison mode is selected.
+
 - Report the twelve-task Fusion routing pilot, retaining matched quality, the missed cost gate, and all three-arm outcomes.
 
 - Allow caller-side Fusion test checks to explicitly expose Node garbage collection for fixtures that require it, preserving default runtime behavior and acceptance guards.
