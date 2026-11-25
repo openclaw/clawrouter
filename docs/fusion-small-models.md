@@ -2515,3 +2515,11 @@ These identify private receipts, not a bundled independent reproduction suite.
 This single convenience-sampled historical task does not establish statistical
 reliability, independence from model training, production savings or a routing
 default. It also did not exercise the new invalid-edit preservation behavior.
+
+## Public repair repeatability
+
+The [three-repeat study](fusion-public-repair-repeats.md) keeps the first fresh
+six-task pilot separate and reports 54 new outcomes on those same six exposed
+tasks. Its aggregate passes the frozen cost, time and quality screen, with one
+failed repeat retained. This supports broader testing of the opt-in workflow;
+it does not change routing defaults or qualify a production gain.

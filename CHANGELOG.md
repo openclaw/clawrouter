@@ -1,5 +1,7 @@
 # Changelog
 
+- Report three fixed repeats of the public repair cascade, preserving all outcomes and the failed first repeat alongside the aggregate cost and quality screen.
+
 - Report the interrupted fresh-fallback Fusion study, retaining failed replay, the clock-boundary false acceptance and all recorded outcomes.
 
 - Report the frozen 30-task, three-arm Fusion confirmation, retaining all failures, costs, admission strata and source-clustered uncertainty.
