@@ -15,6 +15,13 @@ effects from precise edit feedback, two recovered failures from one extra strong
 repair, and an offline fresh-workflow replay. The latter is a candidate for fresh
 validation, not a live routing result.
 
+The [interrupted fresh-fallback study](fusion-fresh-workflow-study.md) records
+240 of 270 planned outcomes: 79/80 cascade successes versus 80/80 strong-only.
+A same-millisecond cache boundary let a bad draft pass its original public
+check; replay rejected it and stopped before the final batch. Lower recorded
+cost does not qualify this policy. The failure and fixed-clock diagnostic remain
+visible, with no replacement calls or default change.
+
 Clock-sensitive verification can prepare an explicit fixture with
 `freezeNodeTestClock` from `scripts/fusion-fixed-clock.mjs`. Supply the exact
 source SHA-256, one test title and a trusted JavaScript parser returning a
