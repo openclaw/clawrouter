@@ -1,5 +1,7 @@
 # Changelog
 
+- Add bounded caller-side retrieval of imported CommonJS function declarations for Fusion repair context.
+
 - Add a caller-side test partition helper that keeps new regression requirements visible when selecting holdouts from nested suites.
 
 - Allow caller-side Fusion tasks to opt into JavaScript library source artifacts while retaining path and test-file exclusions.
