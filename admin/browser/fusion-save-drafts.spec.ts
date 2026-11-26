@@ -1,8 +1,12 @@
 import { expect, test, type Route } from "@playwright/test";
+import type { AccessPolicy } from "../src/ui-types";
 
 test("Fusion keeps later edits through save acknowledgement and foreground refresh", async ({ page }) => {
   let fusion = { version: 1, modelId: "clawrouter/fusion", strategy: "single", enabled: true, adviserModels: [], aggregatorModel: "openai/original", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
-  const policies = ["policy_a", "policy_b"].map(policyId => ({ policyId, enabled: true, providers: [], retainRequestContent: false }));
+  const policies: AccessPolicy[] = ["policy_a", "policy_b"].map(policyId => ({
+    policyId, enabled: true, providers: [], retainRequestContent: false,
+    grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
+  }));
   const writes: Route[] = [], reads: Route[] = [];
   let holdRead = false;
   const bootstrap = () => ({ policies, fusion, credentials: [], connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: {} });
@@ -19,6 +23,7 @@ test("Fusion keeps later edits through save acknowledgement and foreground refre
     await route.fulfill({ status: path in body ? 200 : 404, json: body[path] ?? {} });
   });
   await page.goto("/dashboard/access?resource=fusion");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
   const model = page.getByRole("combobox", { name: "final synthesizer", exact: true });
   const policy = page.getByRole("combobox", { name: "readiness policy", exact: true });
   const save = page.getByRole("button", { name: "Save fusion model", exact: true });
