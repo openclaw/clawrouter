@@ -27,8 +27,9 @@ exact-commit push CI, runs `scripts/verify-release.sh` with Node.js 24.22.1, ass
 source archives, and independently verifies their inventory and SHA-256 checksums.
 It creates no tag, draft, release, or deployment. No secrets are needed.
 
-The local verification script only installs dependencies, builds, and tests. Run
-it with Node.js 24.22.1 and the repository's package manager. It does not publish.
+The local verification script fetches missing pinned test baselines, installs
+dependencies, builds, and tests. Run it with Node.js 24.22.1 and the repository's
+package manager. It does not publish.
 
 ## Publish an explicitly authorized release
 

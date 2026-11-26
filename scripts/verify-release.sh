@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+bash scripts/fetch-test-baselines.sh
 pnpm install --frozen-lockfile
 pnpm build
 pnpm --dir admin check
