@@ -288,13 +288,15 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, budgetAttempts, discardBudgetAttempt, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
   policies: AccessPolicy[];
   connections: ProviderConnection[];
   pendingProviderIds: ReadonlySet<string>;
+  budgetAttempts: ReadonlyMap<string, string>;
+  discardBudgetAttempt: (providerId: string) => void;
   query: string;
   setQuery: (value: string) => void;
   kind: string;
@@ -304,7 +306,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   onOpenPolicy: (policy: AccessPolicy) => void;
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
-  onSetProviderBudget: (providerId: string, monthlyBudgetMicros: number | null) => void;
+  onSetProviderBudget: SaveProviderBudget;
   onPlay: (service: ServiceItem) => void;
   onAdd: (service: ServiceItem) => void;
 }) {
@@ -380,7 +382,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
-            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} pending={connectionPending} onEdit={() => onSelect(selected)} onSave={onSetProviderBudget} /> : null}
+            {canAdminister ? <ProviderBudgetEditor key={selected.provider} connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} pending={connectionPending} attempt={budgetAttempts.get(selected.provider)} onEdit={() => { onSelect(selected); discardBudgetAttempt(selected.provider); }} onSave={onSetProviderBudget} /> : null}
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
@@ -404,20 +406,35 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   );
 }
 
-function ProviderBudgetEditor({ connection, pending, onEdit, onSave }: { connection: ProviderConnection; pending: boolean; onEdit: () => void; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
-  const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
+type SaveProviderBudget = (providerId: string, monthlyBudgetMicros: number | null, text: string) => boolean;
+
+function ProviderBudgetEditor({ connection, pending, attempt, onEdit, onSave }: { connection: ProviderConnection; pending: boolean; attempt?: string; onEdit: () => void; onSave: SaveProviderBudget }) {
+  const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const noteId = React.useId();
+  const reported = currencyInput(connection.monthlyBudgetMicros);
+  const value = draft ?? attempt ?? reported;
+  const editing = draft !== null || attempt !== undefined;
   const budget = presentProviderBudget(connection);
-  useEffect(() => { setValue(currencyInput(connection.monthlyBudgetMicros)); setError(""); }, [connection.providerId, connection.monthlyBudgetMicros]);
+
   return (
     <form className="providerBudgetEditor" onSubmit={(event) => {
       event.preventDefault();
       if (pending) return;
-      try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
-      catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
+      try {
+        if (onSave(connection.providerId, optionalCurrencyMicros(value) ?? null, value)) {
+          setDraft(null);
+          setError("");
+        }
+      } catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
     }}>
-      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => { onEdit(); setValue(event.target.value); }} placeholder="no provider cap" /></label>
+      <label><span>monthly provider budget ($)</span><input disabled={pending} aria-describedby={editing ? noteId : undefined} inputMode="decimal" value={value} onChange={(event) => {
+        onEdit();
+        setDraft(event.target.value === reported ? null : event.target.value);
+        setError("");
+      }} placeholder="no provider cap" /></label>
       <button type="submit" className="buttonSecondary" disabled={pending} aria-busy={pending}>{pending ? "Saving connection…" : "Save budget"}</button>
+      {editing ? <small id={noteId}>Draft amount{connection.monthlyBudgetMicros !== undefined ? ` · Last reported cap: ${reported ? `$${reported}` : "none"}` : ""}</small> : null}
       <small>{budget.used} · {budget.remaining}</small>
       <small>{budget.note}</small>
       {error ? <small className="providerBudgetError">{error}</small> : null}
