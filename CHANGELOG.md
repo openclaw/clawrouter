@@ -11,6 +11,7 @@
 Numbered releases publish source archives. Cloudflare deployment remains a separate operation.
 
 - Share pinned historical test setup between CI and release verification so shallow release checkouts can run upgrade and rollback tests.
+- Verify the configured Worker artifact and its exact bytes in release dry-runs.
 - Add opt-in exact unique-search relocation for caller-side Fusion edits with misplaced line anchors, preserving strict matching by default.
 
 ## 0.5.0 - 2026-10-22
