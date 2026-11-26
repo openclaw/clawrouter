@@ -37,7 +37,7 @@ import {
   Status,
   kindIcon,
 } from "../components";
-import { presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
+import { formatConfiguredLimit, presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart, UsageFreshness } from "../analytics-charts";
 import {
   effectiveProviderCount,
@@ -195,7 +195,7 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
           <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
             {rows.slice(0, 6).map((row) => {
-              const budget = presentPolicyBudget(row);
+              const budget = presentPolicyBudget(row, formatConfiguredLimit);
               return (
                 <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
                   <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{budget.scopeLabel} · {effectiveProviderCount(row.providers, services)} services</small></span>
@@ -257,7 +257,7 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
         <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast), name })}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysCreate"><label><span>Validity</span><select value={days} onChange={event => { onDraftChange(); setDays(Number(event.target.value)); }}>{[30, 90, 180].map(value => <option key={value} value={value}>{value} days</option>)}</select></label><KeyTierControls policy={limits} fast={fast} ultrafast={ultrafast} onFast={value => { onDraftChange(); setFast(value); }} onUltrafast={value => { onDraftChange(); setUltrafast(value); }} /></div>
-      {limits ? presentAllowanceWindows(limits.budget).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
+      {limits ? presentAllowanceWindows(limits.budget, formatConfiguredLimit).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
       {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>

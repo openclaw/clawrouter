@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMicros, parseBudgetUsd, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+import { formatConfiguredLimit, formatMicros, parseBudgetUsd, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
 
 test("cap USD input preserves micro precision and rejects invalid or unsafe values", () => {
   assert.equal(parseBudgetUsd("1.000001"), 1_000_001);
@@ -79,6 +79,25 @@ test("partial Fusion totals remain lower bounds, including mixed unavailable cal
 });
 
 const balance = { configured: true, ledger: "durable_object", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 };
+
+test("dashboard limit labels retain integer microdollars while usage amounts stay rounded", () => {
+  for (const [micros, expected] of [[0, "$0.00"], [1, "$0.000001"], [10_000, "$0.01"], [15_001, "$0.015001"], [150_000, "$0.15"], [1_200_000, "$1.20"], [Number.MAX_SAFE_INTEGER, "$9007199254.740991"]]) {
+    assert.equal(formatConfiguredLimit(micros), expected);
+    const budget = { ...balance, limitMicros: micros, spentMicros: null, remainingMicros: null };
+    const policy = presentPolicyBudget({ monthlyBudgetMicros: micros, budget: { ...budget, ledger: "unavailable", limitMicros: undefined } }, formatConfiguredLimit);
+    assert.equal(policy.limit, expected + " monthly limit");
+    assert.equal(policy.used, "Used amount unavailable"); assert.equal(policy.remaining, "Remaining unavailable");
+    assert.equal(presentAllowanceWindows(budget, formatConfiguredLimit)[0].text, "This month: Unknown used / " + expected + " limit · Unknown remaining");
+  }
+  assert.equal(presentBudget({ ...balance, ledger: "invalid_policy" }, "policy", true, formatConfiguredLimit).limit, "Limit unavailable");
+  assert.equal(presentBudget({ ...balance, limitMicros: null }, "policy", true, formatConfiguredLimit).limit, "No cap at this scope");
+  assert.equal(presentAllowanceWindows({ configured: false, override: true, ledger: "unmetered", limitMicros: null }, formatConfiguredLimit)[0].text, "This month: Unknown used / unlimited · no cap · member override");
+  assert.equal(formatConfiguredLimit(Number.MAX_SAFE_INTEGER + 1), "Unknown");
+  const windows = presentAllowanceWindows({ configured: false, daily: { ...balance, limitMicros: 1 }, weekly: { ...balance, limitMicros: 15_001 } }, formatConfiguredLimit);
+  assert.match(windows[0].text, /\$0\.000001 limit/); assert.match(windows[1].text, /\$0\.015001 limit/);
+  assert.equal(formatMicros(15_001), "$0.02");
+  assert.equal(presentAllowanceWindows({ ...balance, limitMicros: 15_001, spentMicros: 12_501, remainingMicros: 2_500 }, formatConfiguredLimit)[0].text, "This month: $0.01 used / $0.015001 limit · <$0.01 remaining");
+});
 
 test("budget usage includes reservations and stays separate from remaining capacity", () => {
   const budget = presentBudget(balance, "policy");

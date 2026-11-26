@@ -14,6 +14,16 @@ export function formatMicros(value: number | null | undefined): string {
   return `$${(value / 1_000_000).toFixed(2)}`;
 }
 
+/** Configured caps are exact microdollars, not rounded observations of spend. */
+export function formatConfiguredLimit(micros: number): string {
+  if (!Number.isSafeInteger(micros) || micros < 0) return "Unknown";
+  const digits = String(micros).padStart(7, "0");
+  const fraction = digits.slice(-6).replace(/0+$/, "").padEnd(2, "0");
+  return "$" + digits.slice(0, -6) + "." + fraction;
+}
+
+type LimitFormatter = (micros: number) => string;
+
 export function presentCost(micros: number, basis: string | null | undefined, reservation = false) {
   let label: string;
   let unavailable = false;
@@ -48,7 +58,7 @@ export function presentAccountedSpend(summary: Pick<UsageSummary, "requestCount"
 type BudgetScope = "policy" | "principal" | "provider";
 type BudgetView = Pick<BudgetStatus, "ledger" | "limitMicros" | "spentMicros" | "remainingMicros">;
 
-export function presentBudget(budget: BudgetView, scope: BudgetScope, enabled = true) {
+export function presentBudget(budget: BudgetView, scope: BudgetScope, enabled = true, formatLimit: LimitFormatter = formatMicros) {
   const { limitMicros: limit, spentMicros: used, remainingMicros: remaining, ledger } = budget;
   const perPrincipal = ledger === "per_principal";
   const noCap = limit == null;
@@ -56,7 +66,7 @@ export function presentBudget(budget: BudgetView, scope: BudgetScope, enabled = 
   const exhausted = ledger === "blocked" || limit === 0 || !perPrincipal && !noCap && remaining != null && remaining <= 0;
   const percent = unavailable || perPrincipal || noCap ? null : exhausted ? 100 : used == null ? null : Math.min(100, Math.max(0, used / limit * 100));
   const scopeLabel = scope === "provider" ? "Provider-wide" : scope === "principal" ? "Per principal" : "Shared policy pool";
-  const limitLabel = ledger === "invalid_policy" ? "Limit unavailable" : noCap ? "No cap at this scope" : `${formatMicros(limit)} monthly limit`;
+  const limitLabel = ledger === "invalid_policy" ? "Limit unavailable" : noCap ? "No cap at this scope" : `${formatLimit(limit)} monthly limit`;
   const usedLabel = perPrincipal ? "Separate balance per principal" : unavailable || used == null ? "Used amount unavailable" : `${formatMicros(used)} used`;
   const remainingLabel = unavailable ? "Remaining unavailable" : noCap ? "No cap at this scope" : perPrincipal ? "Per-principal balances" : remaining == null ? "Remaining unavailable" : `${formatMicros(remaining)} remaining`;
   let health: { label: string; tone: "active" | "neutral" | "revoked" };
@@ -71,15 +81,15 @@ export function presentBudget(budget: BudgetView, scope: BudgetScope, enabled = 
   return { limit: limitLabel, used: usedLabel, remaining: remainingLabel, percent, exhausted, health, note, scopeLabel };
 }
 
-export function presentPolicyBudget(row: AdminUsageRow) {
-  return presentBudget({ ...row.budget, limitMicros: row.budget.limitMicros ?? row.monthlyBudgetMicros }, row.budgetScope ?? "policy", row.enabled);
+export function presentPolicyBudget(row: AdminUsageRow, formatLimit: LimitFormatter = formatMicros) {
+  return presentBudget({ ...row.budget, limitMicros: row.budget.limitMicros ?? row.monthlyBudgetMicros }, row.budgetScope ?? "policy", row.enabled, formatLimit);
 }
 
-export function presentAllowanceWindows(budget: BudgetStatus) {
+export function presentAllowanceWindows(budget: BudgetStatus, formatLimit: LimitFormatter = formatMicros) {
   return ([
     ["Today", budget.daily], ["This week", budget.weekly], ["This month", budget],
   ] as const).filter((entry): entry is typeof entry & readonly [string, BudgetStatus] => (entry[1]?.configured === true || entry[1]?.override === true))
-    .map(([label, window]) => ({ label, text: `${label}: ${formatMicros(window.spentMicros)} used / ${window.limitMicros == null ? "unlimited" : `${formatMicros(window.limitMicros)} limit`} · ${window.limitMicros == null ? "no cap" : `${formatMicros(window.remainingMicros)} remaining`}${window.override ? " · member override" : ""}${window.resetsAt ? ` · resets ${window.resetsAt}` : ""}` }));
+    .map(([label, window]) => ({ label, text: `${label}: ${formatMicros(window.spentMicros)} used / ${window.limitMicros == null ? "unlimited" : `${formatLimit(window.limitMicros)} limit`} · ${window.limitMicros == null ? "no cap" : `${formatMicros(window.remainingMicros)} remaining`}${window.override ? " · member override" : ""}${window.resetsAt ? ` · resets ${window.resetsAt}` : ""}` }));
 }
 
 export function presentProviderBudget(connection: ProviderConnection) {
