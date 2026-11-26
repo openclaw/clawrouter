@@ -1,6 +1,6 @@
-import { grantQuotaExclusionReason, grantCoolingDown, grantQuotaExhausted, grantQuotaResetAt, grantRuntimeFresh } from "../shared/grant-quota.ts";
+import { grantQuotaExclusionReason, grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, grantQuotaResetAt, grantRuntimeFresh } from "../shared/grant-quota.ts";
 import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
-import { validGrantSegment } from "./grant-routing.ts";
+import { rankingStaleAfterMs, validGrantSegment } from "./grant-routing.ts";
 import { HttpError } from "./http-error.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
@@ -48,7 +48,9 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }> }
+// reserveDrain: no grant is above the policy reserve, so `available` holds the
+// grants only that reserve excludes. Choose among them with grantChoices.
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; recovering?: Array<{ entry: SelectedGrant; atMs: number }>; reserveDrain?: true }
 
 // Candidate metadata only. The private owner must still prove its original
 // device/account binding; this does not make generic materialization usable.
@@ -88,6 +90,7 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const recovering: Array<{ entry: SelectedGrant; atMs: number }> = [];
+  let reserveBand: SelectedGrant[] | undefined;
   const available = configured.filter((entry) => {
     // Keep configured-pool presence (and pinned owner error semantics) even
     // when refresh cannot currently produce a dispatchable access token.
@@ -103,7 +106,9 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
     const cooling = grantCoolingDown(entry.runtimeState, nowMs);
     const exhausted = grantQuotaExhausted(entry.runtimeState, requirement?.model, reserve, subscription, nowMs);
     if (!cooling && !exhausted) return true;
-    onExcluded?.(cooling ? entry.runtimeState!.lastSignal === "authentication" ? "authentication" : "cooldown" : grantQuotaExclusionReason(entry.runtimeState, requirement?.model, reserve, subscription, nowMs)!);
+    // The reserve is a soft floor: a grant it alone excludes still has capacity.
+    if (!cooling && !!reserve && !grantQuotaExhausted(entry.runtimeState, requirement?.model, 0, subscription, nowMs)) (reserveBand ??= []).push(entry);
+    else onExcluded?.(cooling ? entry.runtimeState!.lastSignal === "authentication" ? "authentication" : "cooldown" : grantQuotaExclusionReason(entry.runtimeState, requirement?.model, reserve, subscription, nowMs)!);
     // Only time-limited exclusions remain. Record when the last one lifts;
     // an exhausted window without a published reset has no known recovery.
     // A failed credential (401/403) is not repaired by waiting out its cooldown.
@@ -114,7 +119,34 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
     return false;
   });
   // Transport filtering must not reopen environment auth for a configured pool.
-  return { available, recovering, hasConfiguredGrant: configured.length > 0 || !!routing.sharedGrants?.[providerId]?.length || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
+  const hasConfiguredGrant = configured.length > 0 || !!routing.sharedGrants?.[providerId]?.length || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string";
+  // Drain only where the pool would otherwise be unavailable: any grant above
+  // the reserve, or a policy environment fallback, still comes first.
+  const drain = reserveBand && !available.length && (!routing.environmentFallback || typeof pinnedKey === "string") ? reserveBand : undefined;
+  if (!drain) for (const entry of reserveBand ?? []) onExcluded?.(grantQuotaExclusionReason(entry.runtimeState, requirement?.model, routing.includedQuotaReservePercent, true, nowMs)!);
+  // Drained grants keep their recovery: it bounds retry only if none is chosen.
+  return drain ? { available: drain, recovering, hasConfiguredGrant, reserveDrain: true } : { available, recovering, hasConfiguredGrant };
+}
+
+// Strategy input for the selected candidates. A reserve drain keeps only the
+// grants within the policy hysteresis, scaled to the reserve band, of the most
+// remaining, so the strategy spreads the drain instead of emptying one grant
+// first (a threshold cursor stays until another grant has that much more left).
+export function grantChoices(active: SelectedGrant[], routing: GrantRoutingPolicy, nowMs: number, model: string | null | undefined, reserveDrain?: boolean) {
+  const choices = active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, nowMs, rankingStaleAfterMs(routing), model) }));
+  if (!reserveDrain) return choices;
+  const best = Math.max(-1, ...choices.map(choice => choice.remainingRatio ?? -1)), margin = reserveDrainMargin(routing);
+  return choices.filter(choice => reserveDrainKeeps(choice.remainingRatio, best, margin));
+}
+
+export function reserveDrainMargin(routing: Pick<GrantRoutingPolicy, "hysteresisPercent" | "includedQuotaReservePercent">): number {
+  return routing.hysteresisPercent * (routing.includedQuotaReservePercent ?? 0) / 10_000;
+}
+
+// Unmeasured ranks below measured, as in the most-remaining strategy.
+export function reserveDrainKeeps(ratio: number | null | undefined, best: number, margin: number): boolean {
+  const value = ratio ?? -1;
+  return value >= best || value + margin > best + 1e-9;
 }
 
 export function currentGrantRuntime(grant: UpstreamGrant, state: GrantRuntimeState | null | undefined): GrantRuntimeState | null {
