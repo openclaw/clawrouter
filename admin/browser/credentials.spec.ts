@@ -44,6 +44,37 @@ test("personal creation sends a create-only request without selecting an owner",
   expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "expiresAt", "policyId", "secretSha256", "serviceTiers"]);
 });
 
+for (const surface of ["admin", "personal"] as const) {
+  test(`dismissing a pending ${surface} secret acknowledges dismissal without replaying the write`, async ({ page }) => {
+    const state = await fixture(page);
+    const pending = deferred();
+    state.holdMutation = pending.promise;
+    if (surface === "admin") {
+      await openAdmin(page);
+      await draft(page, "build_runner");
+    } else {
+      state.role = "user";
+      await page.goto("/");
+      await connected(page);
+    }
+    const panel = page.locator(surface === "admin" ? ".inspector" : ".myKeysPanel");
+    const submit = panel.getByRole("button", { name: surface === "admin" ? "Issue credential" : "Renew", exact: true });
+    await submit.click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    const dismiss = panel.getByRole("button", { name: "Dismiss pending secret" });
+    await dismiss.focus();
+    await page.keyboard.press("Enter");
+    await expect(dismiss).toHaveCount(0);
+    await expect(panel.getByRole("status")).toContainText("The one-time secret won’t be shown.");
+    await expect(submit).toBeDisabled();
+    pending.release();
+    await expect(panel).toContainText("The one-time secret was dismissed.");
+    await expect(submit).toBeEnabled();
+    await expect(panel.locator(".issuedKey")).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
 for (const operation of ["rotate", "revoke"] as const) {
   test(`admin ${operation} consumes the latest policy and evicts a reassigned personal key`, async ({ page }) => {
     const state = await fixture(page);
@@ -77,6 +108,8 @@ test("personal and admin screens share admission, rotate only the hash, and sync
   await page.getByRole("tab", { name: /Credentials/ }).click();
   await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
   await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
+  await expect(page.locator(".inspector")).not.toContainText("The one-time secret won’t be shown.");
+  await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
   pending.release();
   await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
   expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
@@ -169,6 +202,8 @@ for (const invalidate of ["dismiss", "leave-return", "resource-tabs"] as const) 
       await page.getByRole("button", { name: "Catalog", exact: true }).click();
       await page.getByRole("button", { name: "Access", exact: true }).click();
     }
+    await expect(page.getByRole("button", { name: "Dismiss pending secret" })).toHaveCount(0);
+    await expect(page.locator(".inspector").getByRole("status")).toContainText("The one-time secret won’t be shown.");
     await page.evaluate(() => (window as HashWindow).releaseHash!());
     await expect(page.getByRole("button", { name: "Issue credential", exact: true })).toBeEnabled();
     expect(state.writes).toHaveLength(0);

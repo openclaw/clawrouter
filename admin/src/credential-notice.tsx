@@ -8,8 +8,10 @@ export function CredentialNotice({ state }: { state: CredentialFeedback }) {
   return <>
     {state.error ? <><InlineError message={state.error} /><button type="button" className="buttonSecondary" onClick={() => void state.refresh()}>Refresh keys</button></> : null}
     {state.notice ? <InlineNote>{state.notice}</InlineNote> : null}
-    {state.busy ? <InlineNote>A credential change is still finishing. Key actions are temporarily unavailable.</InlineNote> : null}
-    {state.reveal ? <IssuedCredential key={state.reveal.key} reveal={state.reveal} onDismiss={state.dismiss} /> : state.pendingReveal ? <button type="button" className="buttonSecondary" onClick={state.dismiss}>Dismiss pending secret</button> : null}
+    {state.busy ? <div className="inlineNote" role="status">{state.pendingReveal === "dismissed"
+      ? "The one-time secret won’t be shown. Key actions are unavailable until this change finishes."
+      : "A credential change is still finishing. Key actions are temporarily unavailable."}</div> : null}
+    {state.reveal ? <IssuedCredential key={state.reveal.key} reveal={state.reveal} onDismiss={state.dismiss} /> : state.pendingReveal === "available" ? <button type="button" className="buttonSecondary" onClick={state.dismiss}>Dismiss pending secret</button> : null}
   </>;
 }
 
