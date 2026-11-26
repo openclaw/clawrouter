@@ -47,7 +47,7 @@ export function parseCompleteUsageRequest(request: Request, kind: Kind, audience
 function outcomeResponse(outcome: CompleteUsageOutcome<unknown>): Response {
   if (outcome.kind === 'complete' || outcome.kind === 'no_access' || outcome.kind === 'outside_retained_range') return privateJson(outcome);
   const status = outcome.kind === 'restart' ? (['expired','evicted'].includes(outcome.reason) ? 410 : 409) : outcome.reason === 'capacity' ? 422 : 503;
-  const message = outcome.kind === 'restart' ? 'Refresh required' : outcome.reason === 'capacity' ? 'Usage report exceeds per-request limits'
+  const message = outcome.kind === 'restart' ? 'Refresh required' : outcome.reason === 'capacity' ? 'Usage report exceeds per-request limits; choose a shorter range or narrower filters, or export in smaller ranges'
     : outcome.reason === 'migration' ? 'Usage reporting is still preparing; retry shortly' : 'Usage unavailable; no complete result';
   return privateJson({...outcome,error:{code:'usage_'+outcome.kind,message}}, status);
 }

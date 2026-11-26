@@ -9,6 +9,13 @@ function oldRows(shard,count,now,groups=1,padding=0){
  shard.sql.exec("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1<?) INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) SELECT 'bulk-'||i,?, ?,?,'openai','success',0,json_object('model','g'||(i % ?),'metadata',?), 'alice@example.com' FROM n",count,now-1000,shard.tenantId,shard.policyId,groups,'x'.repeat(padding));
 }
 
+test('day grain with no whole quarter-hour slot over the raw byte limit is capacity, not retryable',{timeout:60000},async t=>{
+ const f=await completeFixture(t,1),s=[...f.shards.values()][0];oldRows(s,1025,f.now,1,65536);
+ // Ten minutes cannot contain a whole cell slot, so folding can never shrink this read.
+ const query={...f.query,from:f.now-600000};
+ assert.deepEqual(await f.read({query}),{kind:'unavailable',reason:'capacity'});
+});
+
 // Minute grain always reads raw rows, so these exercise the raw (JSON-classified) limits directly.
 const minute=f=>({query:{...f.query,grain:'minute'}});
 test('250000 candidate boundary preflights lengths before parsing; 250001 fails whole',{timeout:60000},async t=>{

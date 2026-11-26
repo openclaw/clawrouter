@@ -334,15 +334,16 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
 }
 /** Capture/preflight choice: cells when usable and within limits (a large unfolded tail is not); otherwise today's raw path. */
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
-  const eligible = cut.source === 'retained_ledger' && x.query.grain === 'day', cells = eligible ? usableCells(sql) : null;
-  const viaCells = cells && cellLayout(x, q).blocks.length ? measurePlan(sql, x, q, cut, 'cells') : null;
+  const eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && cellLayout(x, q).blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  const viaCells = cells ? measurePlan(sql, x, q, cut, 'cells') : null;
   if (viaCells && fits(viaCells)) return viaCells;
   const raw = measurePlan(sql, x, q, cut, 'raw');
   if (fits(raw)) return raw;
   if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return viaCells;
-  // Cells are still being folded (or rebuilt): retryable, unlike a genuine work limit.
-  if (eligible && !cellsPaused(sql)) throw new UsageVisibilityError('unavailable', 'migration');
-  return raw;
+  // Retryable only while folding can still shrink the work: cells not yet built or a target still
+  // folding. Raw edges or a storage pause are limits the caller must narrow around.
+  if (eligible && !cellsPaused(sql) && (!cells || cells.folding)) throw new UsageVisibilityError('unavailable', 'migration');
+  return viaCells ?? raw;
 }
 function groupPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work: UsageCandidateSize): UsageGroupPage {
   const group = x.query.groupBy, folded = work.plan === 'cells' ? usableCells(sql)?.folded : undefined;

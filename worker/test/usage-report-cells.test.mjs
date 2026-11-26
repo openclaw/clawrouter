@@ -125,3 +125,16 @@ test('a retained shard over the raw limits reports 7 days through cells and a ke
  assert.equal(drill.metrics.calls,r.groups[0].metrics.calls);assert.ok(plans(f).every(p=>p==='cells'));
  t.diagnostic(JSON.stringify({rows:300000,cells:s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_cells')[0].n,foldMs:Math.round(foldMs),reportMs:Math.round(readMs)}));
 });
+
+test('a storage-paused shard stays on the ordinary alarm cadence and resumes folding when pressure clears',async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0],day=86_400_000;
+ const alarms=[];s.ledger.state.storage.setAlarm=async at=>{alarms.push(at-c.now);};
+ await f.ingest(0,event(f,'a',c.now-hour));retained(s);await fold(c,s);
+ const sql=s.ledger.sql;s.ledger.sql={exec:sql.exec,databaseSize:9*1024**3};
+ await s.ledger.alarm();assert.equal(cellCalls(s),0);
+ // Repeated ingest and report reads never pull a paused shard back to the 500 ms fold cadence.
+ alarms.length=0;for(let i=0;i<3;i++){await f.ingest(0,event(f,'p'+i,c.now-10));complete(await f.read(recent(f,c)));}
+ assert.ok(alarms.length>0);assert.ok(alarms.every(delay=>delay===day),JSON.stringify(alarms));
+ s.ledger.sql=sql;alarms.length=0;await f.ingest(0,event(f,'resume',c.now-10));assert.deepEqual(alarms,[500]);
+ await fold(c,s);assert.equal(cellCalls(s),5);
+});

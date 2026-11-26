@@ -5,6 +5,8 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,mkdtemp,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {completeFixture,complete} from './usage-complete-fixture.mjs';
+import {sqliteFixture} from './sqlite-storage.mjs';
+const {UsageLedgerObject}=await import('../ledgers.ts');
 import {requireBaselineCommit} from '../../test/helpers/personal-usage-baseline.mjs';
 
 // The deployed complete-usage engine before report cells; gradual rollout mixes it with this one.
@@ -76,4 +78,34 @@ test('rollback writer inserts and retention deletes keep folded cells exact; rol
  assert.ok(f.calls.filter(c=>c.body.action==='groups').every(c=>c.body.allowance.plan==='cells'));
  await step();assert.equal(cells(),folded+5-1,'roll-forward folds the rollback rows and prunes the expired cell');
  assert.equal(complete(await f.read({query:later})).metrics.calls,30);
+});
+
+test('upgrade from a previous-version shard keeps its rows, rollups and open continuation, then folds cells',{timeout:60000},async t=>{
+ if(!requireBaselineCommit(t,baseline))return;
+ let at=Date.now();t.mock.method(Date,'now',()=>at);
+ const old=await previous(t),f=await completeFixture(t,1),[name]=[...f.shards.keys()],prior=f.shards.get(name);
+ // The shard's schema and history are written by the previous ledger only.
+ const storage=sqliteFixture(t),durable={storage:{...storage,getAlarm:async()=>null,setAlarm:async()=>{}}};
+ const s={...storage,tenantId:prior.tenantId,policyId:prior.policyId,ledger:new old.Ledger(durable)};f.shards.set(name,s);
+ for(let i=0;i<12;i++)await f.ingest(0,f.event('old'+i,{occurred_at_ms:at-3600000+i*60000,model:'m'+i%3}));
+ s.sql.exec('UPDATE usage_report_events SET report_format_version = 1');
+ assert.equal(s.sql.exec("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'usage_report_cells'")[0].n,0);
+ const query={...f.query,from:at-2*3600000,to:at,groupBy:'model'};
+ const browse=complete(await old.read(f.env,f.verify,{kind:'report',intent:'browse',query}));assert.equal(browse.metrics.calls,12);
+ const ledger=()=>s.sql.exec('SELECT COUNT(*) AS n, TOTAL(json_extract(event_json, \'$.input_tokens\')) AS input FROM usage_events')[0];
+ const rollups=()=>s.sql.exec('SELECT TOTAL(request_count) AS n, TOTAL(input_tokens) AS input FROM usage_rollups')[0];
+ const [rows,rolled]=[ledger(),rollups()];
+ // Upgrade: the current ledger opens the same storage.
+ s.ledger=new UsageLedgerObject(durable);
+ assert.deepEqual([ledger(),rollups()],[rows,rolled]);
+ // The continuation opened before the upgrade still reads the same cut.
+ const continued=complete(await f.continuation({kind:'report',intent:'browse',cut:browse.cut,query}));
+ assert.deepEqual(strip(continued),strip(browse));
+ // New traffic and the alarm fold the old history; reports use cells and stay exact.
+ await f.ingest(0,f.event('new0',{occurred_at_ms:at-1000}));
+ for(let i=0;i<4;i++){await s.ledger.alarm();at+=ttl+1;}
+ assert.equal(s.sql.exec('SELECT COALESCE(SUM(calls),0) AS n FROM usage_report_cells')[0].n,13);
+ f.calls.length=0;const later={...query,to:at};const r=complete(await f.read({query:later}));
+ assert.equal(r.metrics.calls,13);assert.ok(f.calls.filter(c=>c.body.action==='groups').every(c=>c.body.allowance.plan==='cells'));
+ assert.equal(rollups().n,rolled.n+1);
 });
