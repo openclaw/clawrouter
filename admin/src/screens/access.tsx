@@ -1,4 +1,5 @@
 import { GrantRefreshHealth } from "../grant-health";
+import { isBindingDisableOnly } from "../hooks/access/use-principal-admin";
 import { fusionAdviserModels, fusionStrategy } from "../../../shared/fusion-strategy";
 import { GrantExpiry } from "../grant-expiry";
 import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
@@ -478,6 +479,7 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
 }) {
   const policiesById = new Map(policies.map((policy) => [policy.policyId, policy]));
   const target = policiesById.get(form.policyId);
+  const canSave = Boolean(target) || isBindingDisableOnly(form, selected);
   return (
     <div className="entityLayout">
       <section className="mainPane">
@@ -507,8 +509,8 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
             </select></label>
             <label className="full"><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          {form.policyId && !target ? <InlineNote>{selected ? "This binding can’t be saved while its policy is unavailable." : "Choose an available policy to save this binding."}</InlineNote> : null}
-          <div className="inspectorActions"><button type="submit" disabled={busy || !target || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
+          {form.policyId && !target ? <InlineNote>{!selected ? "Choose an available policy to save this binding." : selected.enabled ? `This policy isn’t listed. To ask the server to disable the binding, keep priority at ${selected.priority}.` : "This binding is disabled. Its policy must be available before you can change it."}</InlineNote> : null}
+          <div className="inspectorActions"><button type="submit" disabled={busy || !canSave || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
         </form>
       </aside>
     </div>

@@ -68,7 +68,7 @@ for (const surface of ["Catalog", "Users"] as const) {
   });
 }
 
-test("a binding to an unavailable policy shows its own target and cannot save", async ({ page }) => {
+test("a binding to an unavailable policy shows its own target and cannot save an enabled state", async ({ page }) => {
   const state = await open(page);
   await page.getByRole("tab", { name: /^Bindings/ }).click();
   const missing = page.getByRole("button", { name: /missing_policy/ });
