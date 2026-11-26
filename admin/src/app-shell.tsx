@@ -58,7 +58,7 @@ export function AppShell() {
           <div className="navGroup">
             <span className="navGroupLabel">Workspace</span>
             {navItems.filter((item) => item.section === "workspace" && (item.id !== "my-usage" || session.role !== "admin")).map(({ id, label, icon: Icon }) => (
-              <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+              <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                 <Icon className="navIcon" aria-hidden="true" />
                 <span>{label}</span>
               </button>
@@ -68,7 +68,7 @@ export function AppShell() {
             <div className="navGroup">
               <span className="navGroupLabel">Administration</span>
               {navItems.filter((item) => item.section === "admin").map(({ id, label, icon: Icon }) => (
-                <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+                <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                   <Icon className="navIcon" aria-hidden="true" />
                   <span>{label}</span>
                 </button>
