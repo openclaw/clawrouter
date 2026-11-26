@@ -165,6 +165,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const keySnapshot = credentialOwner.captureHydration();
     const policySnapshot = access.capturePolicyHydration();
     const upstreamSnapshot = access.captureUpstreamHydration();
+    const fusionSnapshot = access.captureFusionHydration();
     try {
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
@@ -204,7 +205,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       // Entitlement waits cannot adopt a credential scope invalidated by another read.
       if (!scope.isCurrent()) return;
       const result = sessionData.role === "admin"
-        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot, upstreamSnapshot)
+        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot, upstreamSnapshot, fusionSnapshot)
         : await loadUserData(sessionData, warnings, keySnapshot);
       if (!scope.isCurrent()) return;
       session.setRefreshError(result.warnings.join("; "));
@@ -221,7 +222,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number, policySnapshot: number | null, upstreamSnapshot: number | null) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number, policySnapshot: number | null, upstreamSnapshot: number | null, fusionSnapshot: number | null) {
     let warnings = initialWarnings;
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
@@ -237,7 +238,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       grants: data.grants,
       rules: data.rules,
       fusion: data.fusion,
-    }, background, sessionData, providerData.providers, keySnapshot, policySnapshot, upstreamSnapshot);
+    }, background, sessionData, providerData.providers, keySnapshot, policySnapshot, upstreamSnapshot, fusionSnapshot);
     setGatewayReadiness(readinessMap(data.providers));
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);

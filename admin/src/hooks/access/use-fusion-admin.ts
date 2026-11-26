@@ -23,61 +23,78 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
   const [readiness, setReadiness] = useState<FusionReadiness | null>(null);
   const [error, setError] = useState("");
   const draftGeneration = useRef(0);
+  // null means the initial authoritative config has not arrived yet.
+  const dirty = useRef<boolean | null>(allowDemo ? false : null);
+  const pending = useRef(false);
+
+  function captureHydration() { return pending.current ? null : draftGeneration.current; }
 
   function updateConfig(next: SetStateAction<FusionConfig>) {
     draftGeneration.current += 1;
+    if (dirty.current !== null) dirty.current = true;
     setReadiness(null);
     setConfig(next);
   }
 
   function selectPolicy(next: string) {
     draftGeneration.current += 1;
+    if (dirty.current !== null) dirty.current = true;
     setReadiness(null);
     setPolicyId(next);
   }
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (dirty.current === null || pending.current) return;
+    pending.current = true;
+    const generation = ++draftGeneration.current;
     try {
       setError("");
       setStatus("saving fusion model");
       const next = { ...config, adviserModels: cleanModels(config.adviserModels) };
-      const preview = await checkConfig(next, policyId);
+      const preview = await checkConfig(next, policyId, generation);
       if (next.enabled && !preview.executable) throw new Error("selected policy cannot execute the Fusion synthesizer");
-      if (demoMode) setConfig(next);
-      else {
-        const saved = await request<FusionConfig>(gatewayOrigin, "/v1/admin/fusion", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(next),
-        });
+      const saved = demoMode ? next : await request<FusionConfig>(gatewayOrigin, "/v1/admin/fusion", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      // The receipt acknowledges the submitted draft, never edits made after it.
+      if (generation === draftGeneration.current) {
         setConfig(saved);
-        await refresh();
+        dirty.current = false;
       }
-      setStatus("saved fusion model");
+      if (!demoMode) await refresh();
+      setStatus(generation === draftGeneration.current ? "saved fusion model" : "saved fusion model; newer draft is not saved");
     } catch (caught) {
       const message = errorMessage(caught);
-      setError(message);
+      if (generation === draftGeneration.current) setError(message);
       setStatus(message);
+    } finally {
+      pending.current = false;
     }
   }
 
   async function check() {
+    if (dirty.current === null || pending.current) return;
+    pending.current = true;
+    const generation = ++draftGeneration.current;
     try {
       setError("");
       setStatus("checking fusion readiness");
-      await checkConfig({ ...config, adviserModels: cleanModels(config.adviserModels) }, policyId);
+      await checkConfig({ ...config, adviserModels: cleanModels(config.adviserModels) }, policyId, generation);
       setStatus("checked fusion readiness");
     } catch (caught) {
       const message = errorMessage(caught);
-      setError(message);
+      if (generation === draftGeneration.current) setError(message);
       setStatus(message);
+    } finally {
+      pending.current = false;
     }
   }
 
-  async function checkConfig(next: FusionConfig, policyId: string) {
+  async function checkConfig(next: FusionConfig, policyId: string, generation: number) {
     if (!policyId) throw new Error("select a policy to check Fusion readiness");
-    const generation = ++draftGeneration.current;
     const value = demoMode
       ? demoReadiness(next, policies.find((policy) => policy.policyId === policyId))
       : await request<FusionReadiness>(gatewayOrigin, "/v1/admin/fusion/preview", {
@@ -92,9 +109,20 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
 
   return {
     fusion: { config, setConfig: updateConfig, policyId, setPolicyId: selectPolicy, readiness, error, save, check },
-    hydrate: (next: FusionConfig, background: boolean, nextPolicyId?: string, availablePolicyIds: string[] = []) => {
-      if (background) return;
+    captureHydration,
+    reset: (next: FusionConfig) => {
       draftGeneration.current += 1;
+      dirty.current = false;
+      setConfig(next);
+      setPolicyId("");
+      setReadiness(null);
+      setError("");
+    },
+    hydrate: (next: FusionConfig, background: boolean, nextPolicyId: string | undefined, availablePolicyIds: string[], snapshot: number | null) => {
+      // Refresh owns clean state only, at the generation where its read started.
+      if (background || pending.current || dirty.current === true || (dirty.current !== null && snapshot !== draftGeneration.current)) return;
+      draftGeneration.current += 1;
+      dirty.current = false;
       setConfig(next);
       setPolicyId((current) => availablePolicyIds.includes(current) ? current : nextPolicyId ?? availablePolicyIds[0] ?? "");
       setReadiness(null);

@@ -53,7 +53,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
   const assignment = useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError, setStatus, refresh });
   const fusion = useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setStatus, refresh });
 
-  function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[], credentialSnapshot: number, policySnapshot: number | null, upstreamSnapshot: number | null) {
+  function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[], credentialSnapshot: number, policySnapshot: number | null, upstreamSnapshot: number | null, fusionSnapshot: number | null) {
     policy.hydrate(records.policies, sessionData, policySnapshot);
     credentialOwner.hydrate("admin", records.credentials, credentialSnapshot);
     connection.hydrate(records.connections);
@@ -61,7 +61,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
     principal.hydrate(records.users, records.bindings, background, policyId);
     upstream.hydrate(records.grants, policyId, providerRows, upstreamSnapshot);
     assignment.hydrate(records.rules, background);
-    fusion.hydrate(records.fusion, background, policyId, records.policies.map((item) => item.policyId));
+    fusion.hydrate(records.fusion, background, policyId, records.policies.map((item) => item.policyId), fusionSnapshot);
     setLoaded(true);
   }
 
@@ -70,13 +70,13 @@ export function useAccessAdmin(dependencies: Dependencies) {
     connection.hydrate([]);
     upstream.hydrate([], "", [], upstream.captureHydration());
     assignment.hydrate([], false);
-    fusion.hydrate({ ...demo.fusion, enabled: false }, false);
+    fusion.reset({ ...demo.fusion, enabled: false });
     principal.hydrateUser(user);
     setLoaded(false);
   }
 
   function hydrateDemo() {
-    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers, credentialOwner.captureHydration(), policy.captureHydration(), upstream.captureHydration());
+    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers, credentialOwner.captureHydration(), policy.captureHydration(), upstream.captureHydration(), fusion.captureHydration());
   }
 
   return {
@@ -87,6 +87,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
     error,
     capturePolicyHydration: policy.captureHydration,
     captureUpstreamHydration: upstream.captureHydration,
+    captureFusionHydration: fusion.captureHydration,
     credentials,
     connections: connection.connections,
     bindings: principal.bindings,
