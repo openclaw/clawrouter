@@ -116,3 +116,66 @@ test('Saving one cap keeps unrelated member drafts until their own Save', async 
     { path: memberPath, body: { weeklyBudgetMicros: 65_000_000, dailyBudgetMicros: 20_000_000 }, ifMatch: '2026-10-18T00:00:01.000Z' },
   ]);
 });
+
+for (const scope of ['default', 'member'] as const) {
+  test(`Caps ${scope} Amount validates text without interpreting it as a mode`, async ({ page }) => {
+    const policy = { policyId: 'alpha', enabled: true, providers: [], budgetScope: 'principal', monthlyBudgetMicros: 10_000_000,
+      grantRouting: { strategy: 'priority', stickiness: 'none', failover: true, staleState: 'allow', staleAfterSeconds: 300, eligibleGrants: {} },
+    };
+    const updatedAt = '2026-10-17T00:00:00.000Z';
+    const user = { email: 'member@example.com', enabled: true, role: 'user', groups: [], budgetOverrides: {
+      alpha: { weeklyBudgetMicros: 9_000_000, monthlyBudgetMicros: 4_000_000, updatedAt, updatedBy: 'admin@example.com' },
+    } };
+    const responses: Record<string, unknown> = {
+      '/v1/session': { authenticated: true, auth: 'cloudflare_access', role: 'admin', email: 'admin@example.com', entitlements: { providers: [] } },
+      '/v1/providers': { providers: [] }, '/v1/routes': { openaiCompatible: [], manifestProxy: [] },
+      '/v1/session/credentials': { credentials: [] }, '/v1/session/usage': { policies: [] },
+      '/v1/admin/bootstrap': { policies: [policy], users: [user], credentials: [], bindings: [], grants: [], connections: [], rules: [], providers: [], tenants: [], overview: null, fusion: { enabled: false, adviserModels: [], aggregatorModel: '' } },
+      '/v1/admin/caps': { users: [user], rows: [{ policy, members: [{ email: user.email, budget: { spentMicros: 0 } }] }] },
+    };
+    await page.route('**/v1/**', route => route.fulfill({ json: responses[new URL(route.request().url()).pathname] ?? {} }));
+    await page.goto('/dashboard/users');
+    await page.getByRole('button', { name: 'Caps', exact: true }).click();
+    const label = `${scope === 'default' ? 'Default' : user.email} monthly cap`;
+    const mode = page.getByLabel(`${label} mode`, { exact: true });
+    const input = page.getByLabel(`${label} USD`, { exact: true });
+    const save = page.getByRole('button', { name: `Save ${label}`, exact: true });
+    await mode.selectOption('number');
+    const requests: import('@playwright/test').Request[] = [];
+    page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/v1/')) requests.push(request); });
+    for (const invalid of ['unlimited', 'inherit', '', '-1', '0.0000001']) {
+      await input.fill(invalid);
+      await save.click();
+      await expect(page.getByRole('alert')).toHaveText('Enter non-negative USD with at most six decimal places.');
+      await expect(mode).toHaveValue('number');
+      await expect(input).toHaveValue(invalid);
+      expect(requests).toHaveLength(0);
+    }
+
+    const member = scope === 'member';
+    const path = member ? '/v1/admin/access-users/member%40example.com/budget-overrides/alpha' : '/v1/admin/policies/alpha/budget-limits';
+    async function expectSave(monthlyBudgetMicros: number | null | undefined) {
+      const refresh = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/admin/caps');
+      await save.click();
+      await refresh;
+      await expect(save).toBeEnabled();
+      const writes = requests.splice(0).filter(request => request.method() !== 'GET');
+      expect(writes).toHaveLength(1);
+      const [write] = writes;
+      expect(write.method()).toBe('PUT');
+      expect(new URL(write.url()).pathname).toBe(path);
+      expect(await write.headerValue('if-match')).toBe(member ? updatedAt : null);
+      expect(write.postDataJSON()).toStrictEqual({ ...(member ? { weeklyBudgetMicros: 9_000_000 } : {}), ...(monthlyBudgetMicros === undefined ? {} : { monthlyBudgetMicros }) });
+    }
+    await input.fill('0');
+    await expectSave(0);
+    await input.fill('0.000001');
+    await expectSave(1);
+    await mode.selectOption('unlimited');
+    await expectSave(null);
+    if (member) {
+      await mode.selectOption('inherit');
+      await expectSave(undefined);
+    }
+  });
+}
