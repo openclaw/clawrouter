@@ -52,6 +52,46 @@ test("subscriptions show scoped headroom, currency and usage in both themes", as
   }
 });
 
+test("quota bars represent only current measured headroom under the selected policy", async ({ page }) => {
+  const short = { ...policy, grantRouting: { ...routing, includedQuotaReservePercent: 0 } };
+  const long = { ...short, policyId: "extended", grantRouting: { ...short.grantRouting, staleAfterSeconds: 3600 } };
+  const [fiveHour, weekly, scoped] = grant.quotaWindows;
+  const requests = await inventoryFixture(page, { policies: [short, long], grants: [scopedGrant(policy.tenantId, "Shared subscription", {
+    scope: "tenants", quotaWindows: [
+      { ...fiveHour, remaining: null }, { ...weekly, resetAt: grant.quotaObservedAt },
+      { ...scoped, remaining: 62, observedAt: "2029-12-31T23:50:00Z" },
+      { ...scoped, id: "opus", models: ["opus"], remaining: 0 },
+      { ...scoped, id: "sonnet", models: ["sonnet"], limit: 1000, remaining: 3 },
+    ],
+  })] });
+  await page.goto("/dashboard/subscriptions");
+  const quota = page.locator(".subscriptionQuota");
+  const bar = (name: string) => quota.getByRole("progressbar", { name: name + " percent free", exact: true });
+  const checkReadings = async (stale: boolean) => {
+    await expect(quota.getByText("Unknown", { exact: true })).toHaveCount(2);
+    await expect(quota.getByText(/Reset passed · awaiting observation/)).toBeVisible();
+    await expect(bar("5-hour")).toHaveCount(0);
+    await expect(bar("Weekly")).toHaveCount(0);
+    await expect(quota.getByText(stale ? "Stale · last reported 62% free" : "62% free", { exact: true })).toBeVisible();
+    if (stale) await expect(bar("Fable weekly")).toHaveCount(0);
+    else await expect(bar("Fable weekly")).toHaveAttribute("value", "62");
+    await expect(bar("Opus weekly")).toHaveAttribute("value", "0");
+    await expect(quota.getByText("0% free", { exact: true })).toHaveCount(1);
+    await expect(bar("Sonnet weekly")).toHaveAttribute("value", "0.3");
+    await expect(quota.getByText("<1% free", { exact: true })).toBeVisible();
+    await expect(page.getByText("Best <1% free", { exact: true })).toBeVisible();
+  };
+  await checkReadings(true);
+  await page.getByLabel("Usage range").press("ArrowDown");
+  await expect(page.getByLabel("Usage range")).toHaveValue("14");
+  await checkReadings(true);
+  await page.getByLabel("Subscription policy").press("End");
+  await expect(page.getByLabel("Subscription policy")).toHaveValue(long.policyId);
+  await checkReadings(false);
+  await expect.poll(() => requests.filter(row => row.path === "/v1/admin/upstream-grants/usage").map(row => row.policyId)).toEqual([short.policyId, short.policyId, long.policyId]);
+  expect(requests.filter(row => row.method !== "GET")).toEqual([]);
+});
+
 const retiredPolicy = { ...policy, policyId: "retired_pool", enabled: false };
 
 for (const staleState of ["deny", "allow"]) test("subscription cards explain exclusions without claiming stale headroom, staleState=" + staleState, async ({ page }) => {
