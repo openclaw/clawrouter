@@ -13,7 +13,7 @@ export function useCatalog(allowDemo: boolean) {
   );
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
-  const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const accessByProvider = useMemo(() => accessMap(entitlements), [entitlements]);
   const services = useMemo(
     () => serviceItems(providers, routes, providerReadiness, accessByProvider),
@@ -32,7 +32,8 @@ export function useCatalog(allowDemo: boolean) {
     () => services.filter((item) => (kind === "all" || item.kind === kind) && matchesServiceQuery(item, query)),
     [kind, query, services],
   );
-  const selectedService = services.find((item) => item.id === selectedServiceId) ?? services[0];
+  // Keep an explicit selection across filters; otherwise inspect the first visible result.
+  const selectedService = services.find((item) => item.id === selectedServiceId) ?? filteredServices[0];
 
   function setEntitlementsWithReadiness(next: EntitlementsResponse | null) {
     setEntitlements(next);
