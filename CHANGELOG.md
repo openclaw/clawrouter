@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve unsaved Fusion settings and readiness-policy selection when an earlier save or console refresh completes.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.
