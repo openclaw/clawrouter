@@ -364,6 +364,10 @@
   padding: 11px 16px 9px;
 }
 
+.catalogPane .status.neutral {
+  color: var(--text);
+}
+
 .catalogMeta {
   display: grid;
   align-content: end;
@@ -860,6 +864,11 @@
 }
 
 @media (max-width: 1180px) {
+  /* Short or empty Catalog results must not push the search away from the navigation. */
+  .appShell:has(.catalogPane) {
+    grid-template-rows: auto 1fr;
+  }
+
   .entityLayout,
   .grantsLayout {
     grid-template-columns: 1fr;

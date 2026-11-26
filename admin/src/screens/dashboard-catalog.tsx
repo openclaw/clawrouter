@@ -314,16 +314,18 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   const connectionByProvider = new Map(connections.map((connection) => [connection.providerId, connection]));
   const kindCounts = new Map(kinds.map((item) => [item, item === "all" ? queryMatchedServices.length : queryMatchedServices.filter((service) => service.kind === item).length]));
   const servicePolicies = (service: ServiceItem) => activePolicies.filter((policy) => policyCoversProvider(policy, service.provider));
-  const outcomes = allServices.map((service) => serviceOutcome(service));
+  const outcomes = services.map((service) => serviceOutcome(service));
   const usableCount = outcomes.filter((outcome) => outcome.playable).length;
-  const grantedCount = allServices.filter((service) => service.access?.allowed).length;
+  const grantedCount = services.filter((service) => service.access?.allowed).length;
+  const noMatches = allServices.length > 0 && services.length === 0;
+  const selectedOutsideFilters = selected && !services.some((service) => service.id === selected.id);
   const blockedCount = outcomes.filter((outcome) => outcome.blocked).length;
 
   return (
     <div className="entityLayout">
-      <section className="mainPane">
+      <section className="mainPane catalogPane">
         <div className="catalogControls">
-          <div className="catalogMeta"><strong>{services.length} services</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
+          <div className="catalogMeta"><strong>{services.length} {services.length === 1 ? "service" : "services"}</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
           <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
           <div className="kindTabs" role="group" aria-label="service kind">
             {kinds.map((item) => <button key={item} type="button" aria-pressed={kind === item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
@@ -348,8 +350,9 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             };
           })}
         />
+        {noMatches ? <div className="emptyTable">No matching services. Change the search or service kind.</div> : null}
       </section>
-      <aside className="inspector">
+      {selected || !noMatches ? <aside className="inspector">
         {selected ? (
           <>
             {(() => {
@@ -360,7 +363,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               const connectionPending = pendingProviderIds.has(selected.provider);
               return (
                 <>
-            <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
+            <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}${selectedOutsideFilters ? " · outside current filters" : ""}`} />
             <div className={`outcomeCallout ${outcome.tone}`}>
               <OutcomeStatus outcome={outcome} />
               <p>{outcome.detail}</p>
@@ -377,7 +380,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
-            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} pending={connectionPending} onSave={onSetProviderBudget} /> : null}
+            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} pending={connectionPending} onEdit={() => onSelect(selected)} onSave={onSetProviderBudget} /> : null}
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
@@ -396,12 +399,12 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             })()}
           </>
         ) : <p>Select a service.</p>}
-      </aside>
+      </aside> : null}
     </div>
   );
 }
 
-function ProviderBudgetEditor({ connection, pending, onSave }: { connection: ProviderConnection; pending: boolean; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
+function ProviderBudgetEditor({ connection, pending, onEdit, onSave }: { connection: ProviderConnection; pending: boolean; onEdit: () => void; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
   const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
   const [error, setError] = useState("");
   const budget = presentProviderBudget(connection);
@@ -413,7 +416,7 @@ function ProviderBudgetEditor({ connection, pending, onSave }: { connection: Pro
       try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
       catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
     }}>
-      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="no provider cap" /></label>
+      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => { onEdit(); setValue(event.target.value); }} placeholder="no provider cap" /></label>
       <button type="submit" className="buttonSecondary" disabled={pending} aria-busy={pending}>{pending ? "Saving connection…" : "Save budget"}</button>
       <small>{budget.used} · {budget.remaining}</small>
       <small>{budget.note}</small>
