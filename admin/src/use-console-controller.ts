@@ -1,8 +1,8 @@
 import { useAdminUsage } from "./hooks/use-admin-usage";
 import { usePersonalUsage } from "./hooks/use-personal-usage";
 import { useSubscriptions } from "./hooks/use-subscriptions";
-import { useCallback, useEffect, useRef } from "react";
-import { errorMessage } from "./domain";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { errorMessage, readinessMap } from "./domain";
 import { useAccessAdmin } from "./hooks/use-access-admin";
 import { useCatalog } from "./hooks/use-catalog";
 import { usePlayground } from "./hooks/use-playground";
@@ -14,13 +14,14 @@ import type { ConsoleRequest } from "./dashboard-fetch";
 import type { CapturedSessionScope } from "./session-scope";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
-import { projectUserDemo } from "./demo-data";
+import { demoReadiness, projectUserDemo } from "./demo-data";
 import { oauthCallbackStatus, settled, usagePolicyId } from "./ui-helpers";
 import type {
   AccessUser,
   AdminBootstrapResponse,
   AdminUsageRow,
   EntitlementsResponse,
+  ProviderReadiness,
   ProviderResponse,
   RefreshOptions,
   RouteCatalog,
@@ -36,6 +37,10 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   verifySession: () => Promise<SessionResponse | null>;
 }) {
   const catalog = useCatalog(session.demoMode);
+  // Gateway coverage has one live authority: /v1/admin/bootstrap, not session entitlements.
+  const [gatewayReadiness, setGatewayReadiness] = useState<Record<string, ProviderReadiness>>(() =>
+    session.demoMode && session.value.role === "admin" ? readinessMap(demo.providers.map((provider) => demoReadiness(provider, demo.routes))) : {},
+  );
   const usage = useUsage(session.demoMode, request);
   const personalUsage = usePersonalUsage({ request, scope, active: session.view === "my-usage" || (session.view === "home" && session.value.role !== "admin"), full: session.view === "my-usage" });
   const adminUsage = useAdminUsage({request,scope,active: session.view === "usage" && session.value.role === "admin",full:true});
@@ -64,7 +69,10 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     providers: catalog.providers,
     routes: catalog.routes,
     setStatus: session.setStatus,
-    setProviderReadiness: catalog.setProviderReadiness,
+    setProviderReadiness: (update) => {
+      catalog.setProviderReadiness(update);
+      if (session.demoMode) setGatewayReadiness(update);
+    },
     refresh: refreshCurrent,
     refreshUpstreamMetadata: refreshMetadataAfterMutation,
     refreshPolicyMetadata: async () => {
@@ -146,6 +154,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
 
   async function refreshData({ background = false }: RefreshOptions) {
     const publishStatus = background ? null : session.captureStatusPublisher();
+    if (!session.demoMode && session.value.role === "admin") setGatewayReadiness({});
     if (!background) {
       session.setRefreshing(true);
       access.setLoaded(false);
@@ -229,6 +238,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       rules: data.rules,
       fusion: data.fusion,
     }, background, sessionData, providerData.providers, keySnapshot, policySnapshot, upstreamSnapshot);
+    setGatewayReadiness(readinessMap(data.providers));
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);
@@ -311,7 +321,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog: { ...catalog, gatewayReadiness }, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
