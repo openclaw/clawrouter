@@ -2,6 +2,8 @@
 
 - Clarify that Fusion callers must compact rejected candidate context before request-size admission, with a large-source regression example.
 
+- Report a six-case Fusion pilot and uninterrupted repeat, preserving the interrupted draw and separating model-cost evidence from timing qualification.
+
 - Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
 
 - Add opt-in caller-side Fusion repair feedback normalization for temporary loopback URL ports, preserving distinct ports and assertion paths.
@@ -13,6 +15,8 @@
 - Report the complete first-failure Fusion cohort, with matched strong-model quality, lower model cost and a passed development time gate; production generalization remains unqualified.
 
 - Add opt-in caller-side Fusion source anchors for repeated snippets, retaining exact text, frozen source hashes, and atomic nonoverlapping edits.
+
+- Allow a bounded caller-declared Fusion source replacement budget up to 256 KiB, preserving the 64 KiB default.
 
 - Report three twelve-task Fusion draws with matched strong-model quality, complete cost accounting, and a caller-side fallback recipe.
 

@@ -18,6 +18,14 @@ returning new files. Unedited files remain in the output. Empty searches and
 standalone insertions are unsupported; replace a nonempty neighboring span to
 insert text. Callers must still run their full acceptance verifier.
 
+When passing reconstructed files through `normalizeReplacements`, the combined
+UTF-8 source limit is 65,536 bytes by default. A trusted caller can set
+`task.maxReplacementBytes` to a positive integer up to 262,144 bytes before
+generating the request. This lets a small edit to a larger original file reach
+verification. Include the limit in the frozen task definition; model output
+cannot select or raise it. The limit covers all returned files together,
+including unchanged files, and does not change test or acceptance requirements.
+
 This helper does not change the existing edit format or Worker routing. It has
 unit coverage for ambiguous snippets and edit integrity; it has no model-quality,
 cost, latency, or production qualification. Evaluate it in a separately frozen

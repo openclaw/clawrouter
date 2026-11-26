@@ -225,7 +225,8 @@ test("receipt publication waits for alarm completion", async (t) => {
   let release, entered, complete = false;
   const started = new Promise(resolve => { entered = resolve; });
   const held = new Promise(resolve => { release = resolve; });
-  f.storage.setAlarm = async at => { assert.equal(at, now + day); entered(); await held; };
+  // The first new row wakes the report-cell fold within the migration cadence.
+  f.storage.setAlarm = async at => { assert.equal(at, now + 500); entered(); await held; };
   const pending = f.call(event("held")).then(response => { complete = true; return response; });
   await started;
   assert.equal(complete, false);

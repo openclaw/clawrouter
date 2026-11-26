@@ -41,8 +41,9 @@ test("session issuance rejects policies outside the effective session bindings",
 });
 
 test("session issuance caps enabled principal credentials while allowing rotation", async t => {
-  const entries = Array.from({ length: 10 }, (_, index) => [`key_${index}`, credential(session.email)]);
+  const entries = Array.from({ length: 24 }, (_, index) => [`key_${index}`, credential(session.email)]);
   const env = await fixture(t, entries);
+assert.equal((await put(env, "key_25", { policyId: "maintainer_access", secretSha256: digest })).status, 200);
   const blocked = await put(env, "key_new", { policyId: "maintainer_access", secretSha256: digest });
   assert.equal(blocked.status, 409);
   assert.equal((await blocked.json()).error.code, "credential_limit_reached");

@@ -663,7 +663,7 @@ POST /v1/session/credentials/<credential-id>/revoke
 forces `principalId` to the signed-in email, binds the current policy generation,
 and rejects policies outside the session's effective user and group bindings.
 Credential ids use 4-128 alphanumeric or underscore characters. A principal may
-have at most ten enabled credentials, while rotating an existing owned id remains
+have at most 25 enabled credentials, while rotating an existing owned id remains
 allowed. To bound control-plane storage, old disabled self-service records are
 pruned once a principal reaches 100 retained ids. Existing ids owned by another principal cannot be claimed. Mutation
 requests require a same-origin browser request. The console generates 24 random
@@ -1186,11 +1186,18 @@ Configure the policy through Access or `PUT /v1/admin/policies/<policy-id>`:
 ```
 
 `includedQuotaReservePercent` is an integer from 0 through 50, default 0.
-Subscription requests stop using an account when any applicable live window has
-that percentage or less remaining. This also excludes fully used windows when
-Anthropic extra usage is enabled and would silently bill credits instead of
-returning 429. One in-flight request can cross the boundary; polling and provider
-observations are not an atomic upstream spending cap. Missing/reset-passed quota
+It is a soft floor. While any account in the pool is above it, subscription
+requests skip an account when any applicable live window has that percentage
+or less remaining. If every account that could serve is at or below the reserve,
+the policy has no environment fallback (or the request is pinned to a grant),
+the accounts that still have quota left in every applicable window serve instead.
+They are spread across the policy's strategy, within the policy hysteresis scaled
+to the reserve band. A fully used window (0%), a cooldown or a failed credential
+still excludes an account. Retry-After then waits only for empty windows and
+cooldowns, not for a window to climb back above the reserve. Draining to 0% can let in-flight requests cross
+into Anthropic extra usage on accounts that have it enabled; the next quota
+observation then excludes the account. Polling and provider observations are not
+an atomic upstream spending cap. Missing/reset-passed quota
 remains unknown. Choose `staleState: "deny"` if stale observations must block
 admission; the existing stale-state default is `allow`.
 

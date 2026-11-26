@@ -50,11 +50,14 @@ export class UsageLedgerObject extends Current {
   state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from,now-100));
   const savedClock=[...sql.exec('SELECT observed_clock FROM usage_report_visibility')][0].observed_clock;
   const sqlClockNumeric=typeof [...sql.exec("SELECT CAST(strftime('%s','now') AS INTEGER) AS now")][0].now==='number';
+  const held=state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from));
   sql.exec('UPDATE usage_report_visibility SET arrival_rows = 100000');
   const response=await super.fetch(new Request('https://ledger/ingest',{method:'POST',body:JSON.stringify(event('overflow'))}));
-  const receipt=await response.json();let overflow;try{openUsageReportCut(sql,query.range.from)}catch(e){overflow=e.reason}
+  // The overflowing ingest disables visibility (new epoch); its own post-commit drain reopens it.
+  const receipt=await response.json();let overflow;try{validateUsageVisibility(sql,held,query.range.from)}catch(e){overflow=e.kind+':'+e.reason}
+  const reopened=state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from)).epoch!==held.epoch;
   const triggerCount=[...sql.exec("SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'usage_visibility_%'")].length;
-  return Response.json({ids,beforeLate,afterLate,duplicateSeq,oldDelete,futureClock,savedClock,sqlClockNumeric,canonicalOverflowStored:receipt.outcome==='stored',overflow,triggerCount});
+  return Response.json({ids,beforeLate,afterLate,duplicateSeq,oldDelete,futureClock,savedClock,sqlClockNumeric,canonicalOverflowStored:receipt.outcome==='stored',overflow,reopened,triggerCount});
  }
 }
 export default {fetch(request,env){return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName('isolated')).fetch(request)}};
@@ -69,7 +72,7 @@ export default {fetch(request,env){return env.USAGE_LEDGER.get(env.USAGE_LEDGER.
     assert.equal(proof.futureClock,proof.savedClock);
     assert.equal(proof.sqlClockNumeric,true);
     assert.equal(proof.canonicalOverflowStored,true);
-    assert.equal(proof.overflow,'capacity');
+    assert.equal(proof.overflow,'restart:mutation');assert.equal(proof.reopened,true);
     assert.equal(proof.triggerCount,3);
   } finally {await worker?.dispose();await rm(temporary,{recursive:true,force:true});}
 });

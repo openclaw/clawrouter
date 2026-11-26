@@ -8,13 +8,13 @@ const {default:handler}=await import('../index.ts');
 const {exportRefreshedUsage}=await import('../../admin/src/complete-usage.ts');
 perRequestAuthority();
 const token='synthetic-report-token',hash=s=>createHash('sha256').update(s).digest('hex');
-async function fixture(t){
+async function fixture(t,policyIds){
  const f=await completeFixture(t),kv=new Map();
  Object.assign(f.env,{CLAWROUTER_LOCAL_AUTH:'enabled',CLAWROUTER_LOCAL_ADMIN_EMAIL:'alice@example.com',CLAWROUTER_ADMIN_TOKEN_SHA256:hash(token)});
  f.env.POLICY_KV={get:async(k,kind)=>{const v=kv.get(k);return v===undefined?null:kind==='json'?JSON.parse(v):v;},put:async(k,v)=>kv.set(k,v),delete:async k=>kv.delete(k),list:async()=>({keys:[],list_complete:true})};
  const http=async(path,headers={},method='GET',body)=>{const response=await handler.fetch(new Request('https://console.example'+path,{method,headers,body}),f.env,{waitUntil(){}});if(path.includes('/usage/')){assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('x-content-type-options'),'nosniff');}return response;};
  const login=async()=>{const r=await http('/v1/session/login',{origin:'https://console.example','content-type':'application/json'},'POST',JSON.stringify({token}));assert.equal(r.status,200,await r.clone().text());return r.headers.get('set-cookie').split(';')[0];};
- const cookie=await login();await f.personal();
+ const cookie=await login();await f.personal(policyIds);
  const p=new URLSearchParams({from:new Date(f.query.from).toISOString(),to:new Date(f.query.to).toISOString(),groupBy:'model',intent:'browse'});
  return {...f,set hook(value){f.hook=value;},kv,http,login,cookie,p,headers:{cookie},bearer:{authorization:'Bearer '+token}};
 }
@@ -219,4 +219,56 @@ test('calendar provenance is private disclosure, never authority to broaden effe
  }
  const outside=await f.http('/v1/session/usage/report?from=2025-10-10&to=2025-11-09&timezone=America/New_York&intent=export',f.headers);
  assert.equal(outside.status,200);assert.equal((await outside.json()).kind,'outside_retained_range');assert.equal(f.owner.usageCuts.roots.size,1,'outside range leaves only the existing browse root');
+});
+
+test('signed-in initial browse report and exact-cut activity at projected volume', {timeout:120000}, async t=>{
+ const {asOf,member,seedPersonalReportVolume}=await import('./usage-personal-report-volume-fixture.mjs');
+ const {completeQueryString}=await import('../../admin/src/complete-usage.ts');
+ let clock=asOf-900001;t.mock.method(Date,'now',()=>clock);
+ const f=await fixture(t,['p0','p1']);
+ assert.equal((await f.direct('/users/create',{email:member,record:{role:'user',tenantId:'tenant',enabled:true,groups:[]}})).status,200);
+ const data=await seedPersonalReportVolume(f);clock=asOf;
+ // Observe actual private dispatcher responses (never replace them or the shared allowance).
+ const reads=[];f.hook=async(call,response)=>{
+   if(call.kind!=='shard'||call.body.action==='validate')return;
+   const v=(await response.clone().json()).value;
+   reads.push({policy:call.body.policyId,action:call.body.action,source:(v?.cut??call.body.cut)?.source,work:v?.work??v});
+ };
+ const request=async (st,path,phase,days,fold,detailBytes)=>{
+   reads.length=0;const start=performance.now(),response=await f.http(path,f.headers),payload=await response.json();
+   st.diagnostic(JSON.stringify({fold,days,phase,status:response.status,outcome:payload.kind,reason:payload.reason,
+     ms:Math.round(performance.now()-start),detailBytes,reads}));
+   assert.equal(response.status,200,JSON.stringify(payload).slice(0,200));assert.equal(payload.kind,'complete');
+   assert.ok(reads.every(r=>r.source==='projection'));return payload.value;
+ };
+ for(const fold of ['unfolded','partly folded']){
+   if(fold==='partly folded')await data.partlyFold();
+   for(const days of [7,30])await t.test(fold+' / '+days+' days',async st=>{
+     const expected=data.truth.get(days),detailBytes=data.bytesFor(expected.from),oldLimit=64*1024*1024;
+     assert.ok(detailBytes.every(n=>n>0&&n<=oldLimit)&&detailBytes.reduce((a,b)=>a+b,0)>oldLimit,JSON.stringify(detailBytes));
+     const report=await request(st,'/v1/session/usage/report?days='+days+'&groupBy=model&intent=browse','report',days,fold,detailBytes);
+     const captures=reads.filter(r=>r.action==='capture'),groups=reads.filter(r=>r.action==='groups');
+     for(const page of [captures,groups])assert.deepEqual(page.map(r=>r.policy).sort(),['p0','p1']);
+     if(fold==='partly folded')assert.ok(captures.reduce((n,r)=>n+r.work.probe.rows,0)<expected.total.metrics.calls,
+       'choosing cells must not first scan the complete owner range');
+     assert.ok(groups.every(r=>r.work.plan===(fold==='unfolded'?'raw':'cells')));
+     assert.ok(groups.reduce((sum,r)=>sum+r.work.bytes,0)<=oldLimit);
+     assert.equal(report.query.from,expected.from);assert.equal(report.query.to,asOf);assert.deepEqual(report.query.filters,{user:member});
+     for(const key of ['metrics','costs','recordedChargeMicros','chargeReportedCalls'])assert.deepEqual(report[key],expected.total[key],key);
+     assert.deepEqual(report.buckets,expected.buckets);
+     assert.deepEqual(report.groups,[...expected.groups.values()].sort((a,b)=>b.metrics.calls-a.metrics.calls||a.identity.value.localeCompare(b.identity.value)));
+     assert.deepEqual(report.rank,{exact:true,distinctGroups:5,offset:0,hasMore:false});assert.equal(report.remainder.metrics.calls,0);
+     assert.match(report.cut,/^[A-Za-z0-9_-]{43}$/);
+     const q=completeQueryString(report.query,'personal');q.set('cut',report.cut);q.set('limit','100');
+     for(const n of [0,1]){
+       const page=await request(st,'/v1/session/usage/events?'+q,'events-'+(n+1),days,fold);
+       assert.deepEqual(page.events.map(e=>e.id),data.latest.slice(100*n,100*(n+1)));
+       assert.ok(page.events.every(e=>e.user===member));assert.deepEqual(page.coverage,report.coverage);
+       const events=reads.filter(r=>r.action==='events');assert.deepEqual(events.map(r=>r.policy).sort(),['p0','p1']);
+       assert.ok(events.every(r=>r.work.plan==='events'&&r.work.rows===101 && r.work.bytes>0));
+       assert.match(page.nextCursor,/^[A-Za-z0-9_-]{43}$/);q.set('cursor',page.nextCursor);
+     }
+     await value(await f.http('/v1/session/usage/report?cut='+report.cut,f.headers,'DELETE'));
+   });
+ }
 });
