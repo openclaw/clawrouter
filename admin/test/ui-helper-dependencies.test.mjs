@@ -31,6 +31,17 @@ test("plain UI helpers load without React components or browser initialization",
   assert.deepEqual(helpers.groupedProviders(providers, "").map((group) => group.kind), ["gateway_platform", "model_provider", "search"]);
 });
 
+test("Catalog only hands off an exact proxy model the Playground preset can represent", async () => {
+  const { catalogPlaygroundTarget } = await loadHeadlessModule("ui-helpers");
+  const id = "fixture/embedding", service = { provider: "fixture", modelIds: [] };
+  const route = { provider: "fixture", route: "/v1/proxy/fixture/embed", endpoint: "embed", methods: ["POST"], models: [{ id }] };
+  const target = catalogPlaygroundTarget(service, id, [], [{ ...route, requestFormat: "openai.embeddings" }]);
+  assert.equal(target.matchedModel, id);
+  assert.equal(target.preset.mode, "service");
+  assert.equal(JSON.parse(target.preset.servicePayload).model, id);
+  assert.equal(catalogPlaygroundTarget(service, id, [], [route]).preset, null);
+});
+
 test("demo data owns its configuration without importing browser initialization", async () => {
   const { demoData } = await loadHeadlessModule("demo-data");
   const data = demoData();
