@@ -23,13 +23,14 @@ export function AppShell() {
   const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
+  const usageLabel = session.role === "admin" ? "Usage" : "Quota";
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
   const statusTone = statusPresentation.tone;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential, setExpiry: setCredentialExpiry } = credentialState;
-  const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
+  const { items: connections, pendingProviderIds, budgetAttempts, discardBudgetAttempt, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
@@ -58,7 +59,7 @@ export function AppShell() {
           <div className="navGroup">
             <span className="navGroupLabel">Workspace</span>
             {navItems.filter((item) => item.section === "workspace" && (item.id !== "my-usage" || session.role !== "admin")).map(({ id, label, icon: Icon }) => (
-              <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+              <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                 <Icon className="navIcon" aria-hidden="true" />
                 <span>{label}</span>
               </button>
@@ -68,7 +69,7 @@ export function AppShell() {
             <div className="navGroup">
               <span className="navGroupLabel">Administration</span>
               {navItems.filter((item) => item.section === "admin").map(({ id, label, icon: Icon }) => (
-                <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+                <button key={id} data-console-view={id} aria-current={view === id ? "page" : undefined} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
                   <Icon className="navIcon" aria-hidden="true" />
                   <span>{label}</span>
                 </button>
@@ -106,7 +107,26 @@ export function AppShell() {
           </div>
         </header>
 
-        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{shell.refreshing ? "Refreshing console data" : status}</span>{refreshError ? <><span>{refreshError} Displayed data may be out of date.</span><button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button></> : null}{demoMode ? <em>demo</em> : null}</div> : null}
+        {statusPresentation.showBar ? (
+          <div className={`statusBar statusBar-${statusTone}${refreshError ? " refreshNotice" : ""}`} role="status" aria-live="polite">
+            {refreshError ? <>
+              <div className="refreshNoticeCopy">
+                <strong className="refreshNoticeCaption">Refresh failed</strong>
+                {shell.refreshError ? <p className="refreshNoticeImpact">{lastUpdatedAt === null ? "Some console data is unavailable." : "Displayed data may be out of date."}</p> : null}
+                {usage.error ? <p className="refreshNoticeImpact">{usageLabel} data {usage.loaded ? "may be out of date." : "is unavailable."}</p> : null}
+              </div>
+              <button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button>
+              <div className="refreshNoticeDetail">
+                {shell.refreshing ? <p>Refreshing console data</p> : status !== "connected" ? <p>{status}</p> : null}
+                <p>{refreshError}</p>
+              </div>
+            </> : <>
+              <strong>{statusPresentation.label}</strong>
+              <span>{shell.refreshing ? "Refreshing console data" : status}</span>
+            </>}
+            {demoMode ? <em>demo</em> : null}
+          </div>
+        ) : null}
 
         {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (
@@ -158,6 +178,8 @@ export function AppShell() {
             policies={keys}
             connections={connections}
             pendingProviderIds={pendingProviderIds}
+            budgetAttempts={budgetAttempts}
+            discardBudgetAttempt={discardBudgetAttempt}
             query={query}
             setQuery={setQuery}
             kind={kind}
