@@ -138,6 +138,7 @@ export function AppShell() {
             grantsError={shell.refreshError}
             onOpenGrant={(grant) => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }}
             services={services}
+            gatewayReadiness={catalog.gatewayReadiness}
             policies={keys}
             credentials={credentials}
             users={users}

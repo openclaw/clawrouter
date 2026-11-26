@@ -58,6 +58,7 @@ import type {
   AdminTenantSummary,
   AdminUsageRow,
   ProviderConnection,
+  ProviderReadiness,
   ProxyCredential,
   PlaygroundForm,
   RouteCatalog,
@@ -81,7 +82,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ personalUsageSummary, grants, grantsReady, grantsError, onOpenGrant, session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ personalUsageSummary, grants, grantsReady, grantsError, onOpenGrant, session, services, gatewayReadiness, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   personalUsageSummary?: React.ReactNode;
   grants: UpstreamGrant[];
   grantsReady: boolean;
@@ -89,6 +90,7 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
   onOpenGrant: (grant: UpstreamGrant) => void;
   session: SessionResponse;
   services: ServiceItem[];
+  gatewayReadiness: Readonly<Record<string, ProviderReadiness>>;
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   users: AccessUser[];
@@ -116,16 +118,21 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
   onOpenAccess: () => void;
 }) {
   const isAdmin = session.role === "admin";
-  const grantedServices = services.filter((service) => service.access?.allowed);
-  const visibleServices = isAdmin ? services : grantedServices;
-  const usableServices = grantedServices.filter((service) => serviceOutcome(service).playable);
-  const configuredServices = services.filter((service) => service.readiness?.executable);
-  const attentionServices = visibleServices.filter((service) => !serviceOutcome(service).playable);
+  // Admin bootstrap can replace catalog readiness, but not this identity's eligible routes.
+  const serviceAccess = services.map((service) => ({ service, outcome: serviceOutcome({ ...service, readiness: service.access?.readiness }) }));
+  const grantedServices = serviceAccess.filter(({ service }) => service.access?.allowed);
+  const visibleServices = isAdmin ? serviceAccess : grantedServices;
+  const usableCount = grantedServices.filter(({ outcome }) => outcome.playable).length;
+  const accessIncomplete = services.some((service) => !service.access);
+  const unknownAccess = accessIncomplete && grantedServices.length === 0;
+  const executableCount = services.filter((service) => gatewayReadiness[service.provider]?.executable).length;
+  const blockedCount = services.filter((service) => gatewayReadiness[service.provider]?.executable === false).length;
+  const catalogReadinessKnown = executableCount + blockedCount > 0;
+  const unknownReadinessCount = services.length - executableCount - blockedCount;
+  const scopeNote = accessIncomplete ? " · partial" : "";
+  const accessMeta = isAdmin ? `${services.length} in catalog` : unknownAccess ? "Access unknown" : `${usableCount} of ${grantedServices.length} usable${scopeNote}`;
   const rows = (usageRows.length ? usageRows : isAdmin ? policies.map(policyUsageFallback) : []).filter((row) => row.enabled);
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
-  const servicePercent = isAdmin
-    ? services.length ? Math.round((configuredServices.length / services.length) * 100) : 0
-    : grantedServices.length ? Math.round((usableServices.length / grantedServices.length) * 100) : 0;
   const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
   const activePolicies = policies.filter((policy) => policy.enabled).length;
   const activeCredentials = credentials.filter((credential) => credential.enabled && credential.active !== false).length;
@@ -149,7 +156,7 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
       {isAdmin ? <>
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="dashboardStats" aria-label="access overview">
-        <DashboardStat label="catalog coverage" value={`${configuredServices.length}/${services.length}`} note={`${services.length - configuredServices.length} need attention`} />
+        <DashboardStat label="Catalog readiness" value={catalogReadinessKnown ? `${executableCount}/${services.length}` : "—"} note={!catalogReadinessKnown ? "Readiness unavailable" : unknownReadinessCount ? `Executable services · ${unknownReadinessCount} unknown` : "Executable services in the catalog"} />
         <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label="active policies" value={String(overview?.policiesActive ?? activePolicies)} note={`${overview?.tenantsTotal ?? tenants.length} tenants`} />
@@ -172,23 +179,24 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
       <div className="dashboardGrid">
         <MyKeysCard policies={myPolicyLimits ?? session.entitlements?.policies} key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} onRename={onRenameMyKey} />
         <section className="dashboardPanel servicePanel">
-          <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
-          <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
-            <span className="serviceSpectrumReady" style={{ width: `${servicePercent}%` }} />
-            <span className="serviceSpectrumBlocked" style={{ width: `${100 - servicePercent}%` }} />
-          </div>
+          <DashboardPanelHeader eyebrow={isAdmin ? "Gateway catalog" : "Your access"} title={isAdmin ? "Service access" : "Granted services"} meta={accessMeta} action="View catalog" onAction={onOpenCatalog} />
+          {isAdmin && services.length > 0 ? <dl className="dashboardAccessSummary">
+            <div><dt>Catalog readiness</dt><dd>{catalogReadinessKnown ? `${executableCount} executable` : "Unknown"}</dd></div>
+            <div><dt>Your policy access</dt><dd>{unknownAccess ? "Unknown" : <><strong>{usableCount} usable</strong> <small>of {grantedServices.length} granted{scopeNote}</small></>}</dd></div>
+          </dl> : null}
           <div className="dashboardServiceGrid">
-            {visibleServices.slice(0, isAdmin ? 10 : 8).map((service, index) => {
-              const outcome = serviceOutcome(service);
-              return (
-                <article className={`dashboardService ${outcome.playable ? "ready" : "attention"}`} key={service.id} style={{ "--reveal": `${index * 35}ms` } as React.CSSProperties}>
-                  <span className="dashboardServiceMark"><BrandMark brandIcon={service.brandIcon} fallback={kindIcon(service.kind)} /></span>
-                  <span><strong>{service.name}</strong><small>{kindLabel(service.kind)} · {outcome.detail}</small></span>
-                  <Status label={outcome.label} tone={outcome.tone} />
-                </article>
-              );
-            })}
-            {!visibleServices.length ? <div className="dashboardEmpty"><CircleSlash2 aria-hidden="true" /><strong>No services assigned</strong><p>Ask an administrator to bind a service policy to your identity or group.</p></div> : null}
+            {visibleServices.slice(0, isAdmin ? 10 : 8).map(({ service, outcome }, index) => (
+              <article className="dashboardService" key={service.id} style={{ "--reveal": `${index * 35}ms` } as React.CSSProperties}>
+                <span className="dashboardServiceMark"><BrandMark brandIcon={service.brandIcon} fallback={kindIcon(service.kind)} /></span>
+                <span><strong>{service.name}</strong><small>{kindLabel(service.kind)} · {outcome.detail}</small></span>
+                <Status label={outcome.label} tone={outcome.tone} />
+              </article>
+            ))}
+            {!visibleServices.length ? <div className="dashboardEmpty">
+              <CircleSlash2 aria-hidden="true" />
+              <strong>{isAdmin ? "No services in the catalog" : unknownAccess ? "Service access unavailable" : "No services assigned"}</strong>
+              {!isAdmin && !unknownAccess ? <p>Ask an administrator to bind a service policy to your identity or group.</p> : null}
+            </div> : null}
           </div>
           {visibleServices.length > (isAdmin ? 10 : 8) ? <button className="dashboardTextAction" type="button" onClick={onOpenCatalog}>Show {visibleServices.length - (isAdmin ? 10 : 8)} more services <ChevronRight aria-hidden="true" /></button> : null}
         </section>
@@ -216,12 +224,12 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
 
         {isAdmin ? (
           <section className="dashboardPanel operationsPanel">
-            <DashboardPanelHeader eyebrow="administration" title="Control plane" meta={`${attentionServices.length} signals`} action="Manage access" onAction={onOpenAccess} />
+            <DashboardPanelHeader eyebrow="administration" title="Control plane" meta="Gateway-wide" action="Manage access" onAction={onOpenAccess} />
             <div className="operationsDiagram">
               <div><span>identities</span><strong>{users.length}</strong><small>{users.filter((user) => user.enabled).length} enabled</small></div>
               <div><span>credentials</span><strong>{activeCredentials}</strong><small>{credentials.length} provisioned</small></div>
               <div><span>tenants</span><strong>{overview?.tenantsTotal ?? tenants.length}</strong><small>{overview?.policiesTotal ?? policies.length} policies</small></div>
-              <div className={attentionServices.length ? "needsAttention" : "healthy"}><span>service alerts</span><strong>{attentionServices.length}</strong><small>{attentionServices.length ? "configuration required" : "all clear"}</small></div>
+              <div className={catalogReadinessKnown && blockedCount ? "needsAttention" : undefined}><span>Not executable</span><strong>{catalogReadinessKnown ? blockedCount : "—"}</strong><small>{!catalogReadinessKnown ? "Readiness unavailable" : unknownReadinessCount ? `${unknownReadinessCount} unknown` : "Catalog services"}</small></div>
             </div>
             <div className="operationsFooter"><ShieldCheck aria-hidden="true" /><span><strong>Access boundary active</strong><small>Identity, policy, quota, then provider</small></span></div>
           </section>

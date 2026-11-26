@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { fixtureResponses as memberResponses } from "./fixtures/personal-usage";
 import { expect, test, type Page } from "@playwright/test";
 import type { AccessPolicy, AdminUsageRow, FusionConfig, FusionReadiness, ProviderReadiness, ProviderRow, UsageSnapshot } from "../src/ui-types";
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -33,6 +34,138 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
   await expect(page.locator(".catalogMeta strong")).toHaveText(`${count} services`);
   await expect.poll(async () => (await page.locator(".mainPane .entityTitle").allTextContents()).sort())
     .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
+});
+
+for (const [name, granted] of [["Anthropic", true], ["Abliteration", false]] as const) {
+  test(`demo connection changes update readiness without changing the ${granted ? "grant" : "denial"} for ${name}`, async ({ page }) => {
+    await openDemo(page);
+    const nav = page.getByRole("navigation", { name: "console" });
+    const summary = page.locator(".dashboardAccessSummary");
+    const gateway = summary.locator("dd").first();
+    const personal = summary.locator("dd").last();
+    const row = page.locator(".dashboardService").filter({ has: page.getByText(name, { exact: true }) });
+    const gatewayCount = Number.parseInt(await gateway.innerText(), 10);
+    const usableCount = Number.parseInt(await personal.locator("strong").innerText(), 10);
+    const grants = await personal.locator("small").innerText();
+    await expect(row.locator(".status")).toHaveText(granted ? "usable" : "denied");
+
+    for (const enabled of [false, true]) {
+      await nav.getByRole("button", { name: "Catalog", exact: true }).click();
+      await page.getByRole("textbox", { name: "search catalog" }).fill(name);
+      await page.locator(".tableRow").filter({ has: page.getByText(name, { exact: true }) }).click();
+      await page.getByRole("button", { name: enabled ? "Enable connection" : "Disable connection", exact: true }).click();
+      await expect(page.getByRole("button", { name: enabled ? "Disable connection" : "Enable connection", exact: true })).toBeEnabled();
+      await nav.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect(gateway).toHaveText(`${gatewayCount - Number(!enabled)} executable`);
+      await expect(row.locator(".status")).toHaveText(!granted ? "denied" : enabled ? "usable" : "disabled");
+      if (granted && !enabled) await expect(row).toContainText("Provider connection is disabled by an administrator.");
+      await expect(personal.locator("strong")).toHaveText(`${usableCount - Number(granted && !enabled)} usable`);
+      await expect(personal.locator("small")).toHaveText(grants);
+    }
+  });
+}
+
+test("catalog readiness does not grant the administrator a usable service", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  const access = session.entitlements.providers.find((provider) => provider.provider === "anthropic")!;
+  access.readiness = { ...access.readiness, executable: false, status: "unavailable", verified: false, reasons: ["No eligible route under this policy."] };
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const panel = page.locator(".servicePanel");
+  const anthropic = panel.locator("article").filter({ has: page.getByText("Anthropic", { exact: true }) });
+  await expect(anthropic.locator(".status")).toHaveText("unavailable");
+  await expect(panel.getByText("8 executable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("6 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("of 10 granted", { exact: true })).toBeVisible();
+  const denied = panel.locator("article").filter({ has: page.getByText("Perplexity", { exact: true }) });
+  await expect(denied.locator(".status")).toHaveText("denied");
+  await expect(page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" }).locator("strong")).toHaveText("3");
+  await page.getByRole("switch", { name: "Light mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const a11y = await new AxeBuilder({ page }).include(".servicePanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+  expect(a11y.violations).toEqual([]);
+});
+
+test("gateway counts stay unknown during a held or failed bootstrap, never borrowing personal readiness", async ({ page }) => {
+  const { responses, readiness, session } = dashboardFixture();
+  let failBootstrap = false;
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/bootstrap" && failBootstrap) {
+      await hold;
+      await route.fulfill({ status: 503, body: "catalog readiness unavailable" });
+      return;
+    }
+    const body = responses[path];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const coverage = page.locator(".dashboardStats > div").filter({ hasText: "Catalog readiness" });
+  const blocked = page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" });
+  const panel = page.locator(".servicePanel");
+  await expect(coverage.locator("strong")).toHaveText("8/11");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  // The next session read observes one eligible route; gateway configuration has not changed.
+  for (const access of session.entitlements.providers) {
+    access.allowed = access.provider === "anthropic";
+    if (!access.allowed) {
+      access.policies = [];
+      access.readiness = { ...access.readiness, executable: false, verified: false, status: "unavailable" };
+    }
+  }
+  failBootstrap = true;
+  const pending = page.waitForRequest("**/v1/admin/bootstrap");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await pending;
+  try {
+    await expect(panel.getByText("of 1 granted", { exact: true })).toBeVisible();
+    await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+    await expect(coverage.locator("strong")).toHaveText("—");
+    await expect(panel.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(blocked.locator("strong")).toHaveText("—");
+  } finally {
+    release();
+  }
+  await expect(page.locator(".statusBar")).toContainText("catalog readiness unavailable");
+  await expect(coverage.locator("strong")).toHaveText("—");
+  await expect(blocked.locator("strong")).toHaveText("—");
+  // Missing from the next gateway inventory does not mean blocked or personally executable.
+  readiness.splice(readiness.findIndex((item) => item.id === "anthropic"), 1);
+  failBootstrap = false;
+  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  await expect(coverage.locator("strong")).toHaveText("7/11");
+  await expect(coverage.locator("small")).toContainText("1 unknown");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+});
+
+test("members see only their granted services, not gateway coverage", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  session.role = "user";
+  responses["/v1/session/usage"] = memberResponses["/v1/session/usage"];
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const panel = page.locator(".servicePanel");
+  await expect(panel.getByRole("heading", { name: "Granted services" })).toBeVisible();
+  await expect(panel.getByText("7 of 10 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Perplexity", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Catalog readiness", { exact: true })).toHaveCount(0);
+
+  session.entitlements.providers = [];
+  await page.reload();
+  await expect(panel.getByText("Service access unavailable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No services assigned", { exact: true })).toHaveCount(0);
 });
 
 test("admin dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
@@ -344,7 +477,7 @@ function dashboardFixture() {
       overview: { policiesActive: 2, tenantsTotal: 1 },
     },
   };
-  return { providers, responses };
+  return { providers, readiness, responses, session };
 }
 
 function fusionFixture(adviserModels: string[] = []) {
