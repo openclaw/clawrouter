@@ -2,6 +2,51 @@ import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
+for (const theme of ["light", "dark"] as const) {
+  test(`policy budgets reject inexact dollars before a keyboard save (${theme})`, async ({ page }) => {
+    const state = await fixture(page);
+    await page.emulateMedia({ colorScheme: theme });
+    await open(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const budget = (period: string) => page.getByRole("textbox", { name: new RegExp(`^${period} budget`) });
+    const alert = page.getByRole("tabpanel", { name: /^Policies/ }).getByRole("alert");
+    await budget("daily").fill("0.000001");
+    await budget("monthly").fill("0.0000004");
+    await save(page).press("Enter");
+    await expect(alert).toContainText(/Monthly budget.*\$0\.000001/);
+    await expect(alert).toBeInViewport();
+    await expect(budget("monthly")).toBeFocused();
+    await expect(budget("monthly")).toHaveAttribute("aria-invalid", "true");
+    await expect(budget("monthly")).toHaveAccessibleDescription(/Monthly budget.*\$0\.000001/);
+    await expect(budget("monthly")).toHaveValue("0.0000004");
+    await expect(budget("daily")).toHaveValue("0.000001");
+    await expect(budget("weekly")).toHaveValue("");
+    expect(state.writes).toHaveLength(0);
+
+    await budget("monthly").fill(".00000100");
+    await budget("daily").fill("1.00000100000000001");
+    await budget("daily").press("Enter");
+    await expect(alert).toContainText(/Daily budget.*\$0\.000001/);
+    await expect(budget("daily")).toHaveValue("1.00000100000000001");
+    expect(state.writes).toHaveLength(0);
+
+    await budget("daily").fill("0");
+    await budget("weekly").fill("9007199254.740992");
+    await save(page).press("Enter");
+    await expect(alert).toContainText(/Weekly budget.*9,007,199,254\.740991/);
+    await expect(budget("weekly")).toBeFocused();
+    expect(state.writes).toHaveLength(0);
+
+    await budget("weekly").fill("");
+    await budget("weekly").press("Enter");
+    await expect.poll(() => state.writes.length).toBe(1);
+    expect(state.writes[0].request().postDataJSON()).toMatchObject({ monthlyBudgetMicros: 1, dailyBudgetMicros: 0, weeklyBudgetMicros: null });
+    await state.commit(0);
+    await expect(alert).toHaveCount(0);
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  });
+}
+
 test("request prices display dollars and save existing and edited values as microdollars", async ({ page }) => {
   const state = await fixture(page);
   Object.assign(state.policies[0], { requestCostMicros: 1000, requestCostsMicros: { "search.web": 1000, "llm.responses": 0 } });

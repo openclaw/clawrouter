@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { optionalRequestPriceMicros, requestPriceInput, requestPricesInput, requestPricesMicros } from "../src/request-price-input.ts";
+import { optionalRequestPriceMicros, dollarInputFromMicros, requestPricesInput, requestPricesMicros } from "../src/request-price-input.ts";
 
 test("dollar request prices convert exactly without rounding balances", () => {
   for (const [dollars, micros] of [["0.001", 1000], [".000001", 1], ["$1.234567", 1234567], ["1e-6", 1], ["0.0010000", 1000], ["0", 0], ["1.000001", 1000001], ["9007199254.740991", Number.MAX_SAFE_INTEGER]]) {
     assert.equal(optionalRequestPriceMicros(dollars), micros, dollars);
-    assert.equal(optionalRequestPriceMicros(requestPriceInput(micros)), micros, dollars);
+    assert.equal(optionalRequestPriceMicros(dollarInputFromMicros(micros)), micros, dollars);
   }
   assert.equal(optionalRequestPriceMicros(" "), undefined);
-  assert.equal(requestPriceInput(null), "");
-  assert.equal(requestPriceInput(undefined), "");
-  assert.equal(requestPriceInput(1000), "0.001");
-  assert.equal(requestPriceInput(1), "0.000001");
+  assert.equal(dollarInputFromMicros(null), "");
+  assert.equal(dollarInputFromMicros(undefined), "");
+  assert.equal(dollarInputFromMicros(1000), "0.001");
+  assert.equal(dollarInputFromMicros(1), "0.000001");
 });
 
 test("request prices reject fractional microdollars, invalid numbers and overflow", () => {

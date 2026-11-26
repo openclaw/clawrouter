@@ -9,6 +9,7 @@ import { bindingKey, kindLabel, type CatalogModel } from "../domain";
 import { EntityTable, Metric, EntityName, InlineError, InlineNote, InspectorHeader, Status } from "../components";
 import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { rolePresets } from "../ui-config";
+import { parsePolicyBudget, type PolicyBudgetPeriod } from "../request-price-input";
 import { credentialOutcome, groupedProviders } from "../ui-helpers";
 import { formatMicros, presentCost } from "../cost-presentation";
 import type {
@@ -580,17 +581,17 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
           <div className="editorSectionHeader"><strong>Policy template</strong><span>Apply a starting scope</span></div>
           <div className="presetRow" aria-label="policy templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
           <div className="editorSectionHeader"><strong>Policy details</strong><span>Tenant, role, and limits</span></div>
-          <div className="formGrid compact">
+          <div className="formGrid compact" style={{ alignItems: "start" }}>
             <label><span>policy id</span><input value={form.policyId} readOnly={Boolean(selected) || missing} onChange={(event) => setForm({ policyId: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
-            <label><span>daily budget ($, UTC)</span><input inputMode="decimal" value={form.dailyBudgetMicros} onChange={event => setForm({ dailyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
-            <label><span>weekly budget ($, Monday UTC)</span><input inputMode="decimal" value={form.weeklyBudgetMicros} onChange={event => setForm({ weeklyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <PolicyBudgetField period="Daily" label="daily budget ($, UTC)" value={form.dailyBudgetMicros} onChange={value => setForm({ dailyBudgetMicros: value })} />
+            <PolicyBudgetField period="Weekly" label="weekly budget ($, Monday UTC)" value={form.weeklyBudgetMicros} onChange={value => setForm({ weeklyBudgetMicros: value })} />
             <label className="full"><span>Allowed service tiers · comma separated</span><input value={form.serviceTierAllowed} onChange={event => setForm({ serviceTierAllowed: event.target.value })} /></label>
             <label className="full"><span>Per-model service tiers · JSON object</span><textarea value={form.serviceTierModels} onChange={event => setForm({ serviceTierModels: event.target.value })} placeholder='{"openai/gpt-6.1-sol":["default","flex","priority","ultrafast"]}' /></label>
             <label className="full"><span>Limit hint</span><textarea maxLength={300} value={form.limitHint} onChange={event => setForm({ limitHint: event.target.value })} /></label>
-            <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <PolicyBudgetField period="Monthly" label="monthly budget ($)" value={form.monthlyBudgetMicros} onChange={value => setForm({ monthlyBudgetMicros: value })} />
             <label><span>Fixed request cost ($)</span><input inputMode="decimal" value={form.requestCostDollars} onChange={(event) => setForm({ requestCostDollars: event.target.value })} placeholder="blank = manifest-priced routes only" title="Price in US dollars, using up to six decimal places. Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
             <label className="full"><span>Price per request by capability ($) · JSON object</span><textarea value={form.requestCostsDollars} onChange={(event) => setForm({ requestCostsDollars: event.target.value })} placeholder={'{"search.web":0.001}'} title="Enter a JSON object with prices in US dollars, using up to six decimal places. Overrides the fixed request cost for each listed capability. Blank uses the policy-wide cost or manifest pricing." /></label>
             <label className="full"><span>model access</span><select value={form.allModels ? "all" : "selected"} onChange={event => setForm({ allModels: event.target.value === "all" })}><option value="all">all models of allowed services</option><option value="selected">selected catalog models only</option></select></label>
@@ -640,6 +641,29 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
       </aside>
     </div>
   );
+}
+
+function PolicyBudgetField({ period, label, value, onChange }: {
+  period: PolicyBudgetPeriod; label: string; value: string; onChange: (value: string) => void;
+}) {
+  const id = useId();
+  const [reported, setReported] = useState(false);
+  const result = parsePolicyBudget(value, period);
+  const message = "error" in result ? result.error : "";
+  const showError = reported && Boolean(message);
+  return <label>
+    <span id={id}>{label}</span>
+    <input inputMode="decimal" value={value} placeholder="unlimited" aria-labelledby={id}
+      aria-invalid={showError || undefined} aria-describedby={showError ? id + "-error" : undefined}
+      ref={input => { input?.setCustomValidity(message); }}
+      onInvalid={event => {
+        event.preventDefault(); // Explain the error next to the field instead of showing a transient popup.
+        setReported(true);
+        if (event.currentTarget === event.currentTarget.form?.querySelector("input:invalid, select:invalid, textarea:invalid")) event.currentTarget.focus();
+      }}
+      onChange={event => { setReported(false); onChange(event.target.value); }} />
+    {showError ? <small className="inlineError" id={id + "-error"} role="alert">{message}</small> : null}
+  </label>;
 }
 
 function CredentialExpiryEditor({ credential, busy, onSave }: { credential: ProxyCredential; busy: boolean; onSave: (credential: ProxyCredential, expiresAt: string) => Promise<void> }) {
