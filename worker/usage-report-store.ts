@@ -332,18 +332,25 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
   const raw = gross(sql, parts.raw.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), parts.raw.flatMap(p => p.bindings));
   exact(cellRows); return { ...raw, cellRows, plan };
 }
-/** Capture/preflight choice: cells when usable and within limits (a large unfolded tail is not); otherwise today's raw path. */
+/** Capture/preflight choice: cells when usable and within limits (a large unfolded tail is not); otherwise today's raw path.
+ * The result carries every row and cell its measurements visited, so the service charges rejected probes too. */
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
-  const eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && cellLayout(x, q).blocks.length > 0, cells = eligible ? usableCells(sql) : null;
-  const viaCells = cells ? measurePlan(sql, x, q, cut, 'cells') : null;
-  if (viaCells && fits(viaCells)) return viaCells;
-  const raw = measurePlan(sql, x, q, cut, 'raw');
-  if (fits(raw)) return raw;
-  if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return viaCells;
+  const probe = { rows: 0, bytes: 0 }, charge = (w: UsageCandidateSize) => { probe.rows += w.rows + (w.cellRows ?? 0); probe.bytes += w.bytes; return w; };
+  const done = (w: UsageCandidateSize): UsageCandidateSize => ({ ...w, probe });
+  const layout = cellLayout(x, q), eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null;
+  if (viaCells && fits(viaCells)) return done(viaCells);
+  const raw = charge(measurePlan(sql, x, q, cut, 'raw'));
+  if (fits(raw)) return done(raw);
+  if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return done(viaCells);
   // Retryable only while folding can still shrink the work: cells not yet built or a target still
-  // folding. Raw edges or a storage pause are limits the caller must narrow around.
-  if (eligible && !cellsPaused(sql) && (!cells || cells.folding)) throw new UsageVisibilityError('unavailable', 'migration');
-  return viaCells ?? raw;
+  // folding, and the partial-slot edges that always stay raw fit on their own. A storage pause or
+  // oversized edges are limits the caller must narrow around.
+  if (eligible && !cellsPaused(sql) && (!cells || cells.folding)) {
+    const edges = cellParts(q, layout, 0).raw.slice(1), edgeWork = charge(gross(sql, edges.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), edges.flatMap(p => p.bindings)));
+    if (fits(edgeWork)) throw new UsageVisibilityError('unavailable', 'migration');
+  }
+  return done(viaCells ?? raw);
 }
 function groupPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work: UsageCandidateSize): UsageGroupPage {
   const group = x.query.groupBy, folded = work.plan === 'cells' ? usableCells(sql)?.folded : undefined;

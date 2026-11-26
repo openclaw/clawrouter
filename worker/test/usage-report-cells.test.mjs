@@ -138,3 +138,28 @@ test('a storage-paused shard stays on the ordinary alarm cadence and resumes fol
  s.ledger.sql=sql;alarms.length=0;await f.ingest(0,event(f,'resume',c.now-10));assert.deepEqual(alarms,[500]);
  await fold(c,s);assert.equal(cellCalls(s),5);
 });
+
+/** Bulk canonical rows outside the arrival log (as ingest does after an overflow drains). */
+function bulk(s,count,at,padding=0){
+ s.sql.exec('UPDATE usage_report_visibility SET usable=0');
+ s.sql.exec("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1<?) INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) SELECT 'bulk-'||i,?,?,?,'openai','success',0,json_object('model','g','metadata',?),'alice@example.com' FROM n",count,at,s.tenantId,s.policyId,'x'.repeat(padding));
+}
+test('a rejected cells probe is charged to the report even when the raw plan is chosen',{timeout:60000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0];
+ await f.ingest(0,event(f,'a',c.now-hour/2));retained(s);await fold(c,s);
+ // A 250,001-row unfolded tail outside the requested hour makes the cells plan too large to run.
+ bulk(s,250001,c.now-3*hour);
+ const captured=[];f.hook=async(call,response)=>{if(call.body.action==='capture')captured.push((await response.clone().json()).value.work);return response;};
+ f.calls.length=0;const r=complete(await f.read({query:{...f.query,from:c.now-hour,to:c.now}}));
+ assert.equal(r.metrics.calls,1);assert.deepEqual(plans(f),['raw']);
+ assert.equal(captured[0].plan,'raw');assert.ok(captured[0].probe.rows>250000,JSON.stringify(captured[0]));
+});
+
+test('raw edges that alone exceed the limits are capacity even while a fold target is pending',{timeout:60000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0];
+ await f.ingest(0,event(f,'a',c.now-hour/2));retained(s);await fold(c,s);
+ // 1,025 rows of 64 KiB in the range's trailing partial slot, which always stays raw.
+ bulk(s,1025,c.now-1000,65536);await s.ledger.alarm();
+ assert.ok(cellState(s).folded<cellState(s).target,'a new fold target is pending');
+ assert.deepEqual(await f.read({query:{...f.query,from:c.now-hour,to:c.now}}),{kind:'unavailable',reason:'capacity'});
+});

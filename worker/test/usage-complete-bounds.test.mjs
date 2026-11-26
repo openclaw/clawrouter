@@ -23,8 +23,11 @@ test('250000 candidate boundary preflights lengths before parsing; 250001 fails 
  const r=complete(await f.read(minute(f)));assert.equal(r.metrics.calls,250000);assert.equal(r.chargeReportedCalls,0);
  s.sql.exec("INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) VALUES('over',?,'tenant','p0','openai','success',0,'{}','alice@example.com')",f.now-1000);
  const before=f.calls.length;assert.deepEqual(await f.read(minute(f)),{kind:'unavailable',reason:'capacity'});assert.equal(f.calls.slice(before).some(c=>c.body.action==='groups'),false);
- // Day grain over the same raw limit is retryable while report cells have not been folded yet.
- assert.deepEqual(await f.read(),{kind:'unavailable',reason:'migration'});
+ // Day grain: these rows sit in the range's trailing partial slot, which always stays raw, so no fold helps.
+ assert.deepEqual(await f.read(),{kind:'unavailable',reason:'capacity'});
+ // Ending the range on that slot's boundary puts them in a whole slot: retryable until cells are folded.
+ const slot=900000,to=Math.floor((f.now-1000)/slot)*slot+slot;
+ assert.deepEqual(await f.read({query:{...f.query,to}}),{kind:'unavailable',reason:'migration'});
  t.diagnostic(JSON.stringify({rows:250000,source:'retained',elapsedMs:Math.round(performance.now()-start),heapUsed:process.memoryUsage().heapUsed}));
 });
 
@@ -51,10 +54,10 @@ test('cumulative classified bytes are charged again on each group page',{timeout
  const f=await completeFixture(t,1),s=[...f.shards.values()][0];oldRows(s,9000,f.now,9000,1900);
  const size=s.sql.exec('SELECT SUM(length(CAST(event_json AS BLOB))) AS n FROM usage_events')[0].n,start=performance.now();
  const r=await f.read(),groups=f.calls.filter(c=>c.body.action==='groups'),pages=groups.length;
- // The measurement is charged once; every page charges its allowance (measured bytes plus late headroom).
- const allowance=groups[0].body.allowance.bytes,charged=size+pages*allowance;assert.ok(allowance>=size);
- assert.deepEqual(r,{kind:'unavailable',reason:'capacity'});assert.ok(pages<Math.ceil(9000/256));assert.ok(charged<=512*1024*1024);assert.ok(charged+allowance>512*1024*1024);
- t.diagnostic(JSON.stringify({classifiedBytesPerPage:allowance,issuedPages:pages,chargedBytes:charged,elapsedMs:Math.round(performance.now()-start)}));
+ // The measurement is charged once; every page charges the measured bytes (allowance headroom is an execution bound only).
+ assert.ok(groups[0].body.allowance.bytes>size);const charged=size+pages*size;
+ assert.deepEqual(r,{kind:'unavailable',reason:'capacity'});assert.ok(pages<Math.ceil(9000/256));assert.ok(charged<=512*1024*1024);assert.ok(charged+size>512*1024*1024);
+ t.diagnostic(JSON.stringify({classifiedBytesPerPage:size,issuedPages:pages,chargedBytes:charged,elapsedMs:Math.round(performance.now()-start)}));
 });
 
 test('cumulative row visits do not reset at identity page boundaries',{timeout:60000},async t=>{
@@ -62,11 +65,11 @@ test('cumulative row visits do not reset at identity page boundaries',{timeout:6
  // Freeze only this operation's elapsed clock to isolate the row-work guard;
  // ordinary deadlines are exercised independently, not claimed waived in production.
  const elapsed=performance.now.bind(performance),start=elapsed();t.mock.timers.enable({apis:['setTimeout']});t.mock.method(performance,'now',()=>0);
- const result=await f.read(),groups=f.calls.filter(c=>c.body.action==='groups'),pages=groups.length,allowance=groups[0].body.allowance.rows;
- assert.deepEqual(result,{kind:'unavailable',reason:'capacity'});assert.ok(allowance>=100001);
- // One measurement charge, then whole-allowance charges until the 8M visit budget is exceeded.
- assert.equal(pages,Math.floor((8000000-100001)/allowance));assert.ok(pages>30);
- t.diagnostic(JSON.stringify({rows:100001,pages,visits:100001+allowance*pages,elapsedMs:Math.round(elapsed()-start),elapsedClockFrozen:true}));
+ const result=await f.read(),groups=f.calls.filter(c=>c.body.action==='groups'),pages=groups.length;
+ assert.deepEqual(result,{kind:'unavailable',reason:'capacity'});assert.ok(groups[0].body.allowance.rows>100001);
+ // One measurement charge, then the measured rows per page (not the larger allowance) until the 8M visit budget is exceeded.
+ assert.equal(pages,Math.floor((8000000-100001)/100001));
+ t.diagnostic(JSON.stringify({rows:100001,pages,visits:100001*(pages+1),elapsedMs:Math.round(elapsed()-start),elapsedClockFrozen:true}));
 });
 
 test('actual projection/retained owner and all-principal SQL plans are time-bounded and fence-indexed',async t=>{
