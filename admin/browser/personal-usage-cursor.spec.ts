@@ -31,6 +31,10 @@ test('members compare keys, inspect one and return to all keys in the same perio
  const f = await cursorUsage(page);
  try {
   await f.ingest('build-call', { credential_id: 'build-key', model: 'build-model', input_tokens: 12, output_tokens: 4, total_tokens: 16, actual_cost_micros: 15, cost_basis: 'unpriced_usage' });
+  await page.route('**/v1/session/credentials', route => route.fulfill({ json: { credentials: [
+   { credentialId: 'build-key', name: 'Renamed build runner', policyId: 'p', principalId: 'member@example.com', enabled: true },
+   { credentialId: 'retained-key', name: 'Retired laptop', policyId: 'p', principalId: 'member@example.com', enabled: false },
+  ] } }));
   await f.ingest('session-call', { credential_id: null });
   await f.ingest('another-member', { principal_id: 'other@example.test', credential_id: 'another-members-key' });
   await page.goto('/dashboard/my-usage');
@@ -53,6 +57,11 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await expect(page.getByRole('button', { name: 'Comparing keys' })).toBeFocused();
   await expect(ranks.getByRole('listitem').filter({ hasText: 'retained-key' })).toContainText('426');
   await expect(ranks.getByRole('listitem').filter({ hasText: 'build-key' })).toContainText('16');
+  const inventory = page.getByRole('combobox', { name: 'Current own-key selector' });
+  await expect(inventory).toContainText('Current name: Renamed build runner — build-key');
+  await expect(inventory).toContainText('Current name: Retired laptop — retained-key (revoked)');
+  await expect(ranks).not.toContainText('Renamed build runner');
+  await expect(ranks).not.toContainText('Retired laptop');
   await expect(ranks).not.toContainText('another-members-key');
   const cut = reads(f, 'report').at(-1)!.searchParams.get('cut');
   expect(cut).toBeTruthy();
@@ -61,7 +70,7 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await expect(calls).toHaveText('1');
   await expect(ranks.getByRole('heading', { name: 'Selected key usage' })).toBeVisible();
   const scope = summary.locator('.personalActiveFilters');
-  await expect(scope).toContainText('build-key');
+  await expect(scope.locator('strong')).toHaveText('Selected key = build-key');
   await expect(scope.locator('time').first()).toHaveAttribute('datetime', from);
   await expect(scope.locator('time').last()).toHaveAttribute('datetime', to);
   await expect(summary).toContainText('12 input · 4 output');
@@ -71,6 +80,8 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page)).toContainText('build-model');
   await expect(rows(page)).toContainText('Price unknown');
+  await rows(page).getByText('Call details', { exact: true }).click();
+  await expect(rows(page).locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toHaveText('Key IDbuild-key');
   const events = reads(f, 'events').at(-1)!.searchParams;
   expect([events.get('key'), events.get('from'), events.get('to'), events.get('cut')]).toEqual(['build-key', from, to, cut]);
   const download = page.waitForEvent('download');
@@ -108,6 +119,10 @@ test('members compare keys, inspect one and return to all keys in the same perio
   await expect(summary).toContainText('provider = openai');
   const reset = reads(f, 'report').at(-1)!.searchParams;
   expect([reset.get('provider'), reset.get('keyKind'), reset.get('from'), reset.get('to')]).toEqual(['openai', null, from, to]);
+  await inventory.selectOption('key:retained-key');
+  await expect(calls).toHaveText('142');
+  await expect(summary.getByText('Selected key = retained-key', { exact: true })).toBeVisible();
+  await expect(summary).not.toContainText('Retired laptop');
   expect(f.queries.some(url => url.pathname.startsWith('/v1/admin/'))).toBe(false);
   expect(f.invalid).toEqual([]);
  } finally { f.close(); }

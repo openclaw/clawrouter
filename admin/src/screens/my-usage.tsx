@@ -100,7 +100,7 @@ function MoneyValue({ label, micros }: { label: string; micros: number | null })
   return <dd title={usageMoney(micros)} aria-label={micros === null ? label + ' unavailable' : label + ' ' + usageMoney(micros)}>{personalGlanceMoney(micros)}</dd>;
 }
 
-export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: PersonalUsageData; onOpen?: () => void; keys?: readonly UsageKeyName[] }) {
+export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData; onOpen?: () => void; keys?: readonly UsageKeyName[] }) {
   const { report, reload } = data, value = report.value;
   const complete = value ? personalHistoryComplete(value) : false;
   const tokens = value ? tokenTotal(value.metrics, complete) : null;
@@ -124,7 +124,7 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
     {report.error ? <div role="alert"><p>{report.error}</p>{value ? <p>Old displayed report; Refresh required before continuing.</p> : null}<button type="button" onClick={reload}>Retry report</button></div> : null}
     {value && tokens && api && subscription ? <>
       {rangeFormat ? <p className="personalActiveFilters">
-        <strong>{scopedKey?.kind === 'session' ? 'Dashboard session' : scopedKey ? 'Selected key = ' + usageKeyLabel(scopedKey.id, keys) : 'All keys and dashboard sessions'}</strong>
+        <strong>{scopedKey?.kind === 'session' ? 'Dashboard session' : scopedKey ? 'Selected key = ' + scopedKey.id : 'All keys and dashboard sessions'}</strong>
         {' · '}<time dateTime={iso(value.query.from)}>{rangeFormat.format(value.query.from)}</time>
         {' – '}<time dateTime={iso(value.query.to)}>{rangeFormat.format(value.query.to)}</time> ({value.query.timezone}, end exclusive)
       </p> : null}
@@ -231,7 +231,7 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, onBack, 
   </form>;
 }
 
-function EventDetails({ event, peers, page, index }: { event: PersonalUsageEvent; peers: PersonalUsageEvent[]; keys: readonly UsageKeyName[]; page: number; index: number }) {
+function EventDetails({ event, peers, page, index }: { event: PersonalUsageEvent; peers: PersonalUsageEvent[]; page: number; index: number }) {
   const fields = {
     'Event ID': event.id,
     'Key ID': usageKeyLabel(event.keyId),
@@ -343,7 +343,7 @@ function UsageOverview({ value, query, setQuery, onKey, metric, onMetricChange }
   </>;
 }
 
-function UsageActivity({ data, timezone, keys }: { data: PersonalUsageData; timezone: string; keys: readonly UsageKeyName[] }) {
+function UsageActivity({ data, timezone }: { data: PersonalUsageData; timezone: string }) {
   const { events } = data, page = events.value;
   const time = (at: number) => new Date(at).toLocaleString('en-US', { timeZone: timezone, month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   return <section className="dashboardPanel personalSection" aria-label="Recent model calls">
@@ -361,7 +361,7 @@ function UsageActivity({ data, timezone, keys }: { data: PersonalUsageData; time
               <th scope="row">
                 <strong>{event.model ?? 'Unattributed model'}</strong>
                 <small>{event.provider} · {event.callKind}</small>
-                <EventDetails event={event} peers={page.events} keys={keys} page={data.page} index={index} />
+                <EventDetails event={event} peers={page.events} page={data.page} index={index} />
               </th>
               <td>{event.status}</td>
               <td>{count(event.inputTokens)} / {count(event.outputTokens)}</td>
@@ -419,9 +419,10 @@ function UsageDetails({ value, data }: { value: CompleteUsageReport; data: Perso
 const panels = ['overview', 'activity', 'details'] as const;
 type Panel = typeof panels[number];
 
-export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: PersonalUsageData; keys?: readonly UsageKeyName[] }) {
+type CurrentKey = UsageKeyName & { enabled?: boolean };
+
+export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: PersonalUsageData; keys?: readonly CurrentKey[] }) {
   const { report, controls: query, setControls: setQuery, showEvents } = data, value = report.value;
-  const keys: readonly UsageKeyName[] = []; // Current names do not rename retained history.
   const [panel, setPanel] = useState<Panel>('overview');
   const [metric, setMetric] = useState<PersonalUsageMetric>('tokens');
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -446,7 +447,7 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     data.refine({ ...q, filters, rankOffset: 0 });
   }
   function panelContent(name: Panel) {
-    if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.query.timezone} keys={keys} />;
+    if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.query.timezone} />;
     if (!value) return <p className="personalNote">{report.loading ? 'Loading report…' : 'A usage report is needed for this view. Use Retry report above if the read failed.'}</p>;
     if (name === 'overview') return <UsageOverview value={value} query={query} setQuery={setQuery} onKey={selectKey} metric={metric} onMetricChange={setMetric} />;
     return <UsageDetails value={value} data={data} />;
@@ -471,11 +472,11 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
         }}>
           <option value="">All keys</option><option value="session">Dashboard session</option>
           {selectedKey?.kind === 'credential' && !currentKeys.some(key => key.credentialId === selectedKey.id) ? <option value={'key:' + selectedKey.id}>Retained key: {selectedKey.id}</option> : null}
-          {currentKeys.map(key => <option key={key.credentialId} value={'key:' + key.credentialId}>{key.name ? 'Current name: ' + key.name + ' — ' : ''}{key.credentialId}</option>)}
+          {currentKeys.map(key => <option key={key.credentialId} value={'key:' + key.credentialId}>{key.name ? 'Current name: ' + key.name + ' — ' : ''}{key.credentialId}{key.enabled === false ? ' (revoked)' : ''}</option>)}
         </select></label>
       </> : null}
     </UsageControls>
-    <PersonalUsageSummary data={data} keys={keys} />
+    <PersonalUsageSummary data={data} />
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>
       {panels.map((name, index) => <button type="button" role="tab" key={name} id={id + '-tab-' + name} aria-controls={id + '-panel-' + name} aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} ref={element => { tabs.current[index] = element; }} onClick={() => setPanel(name)}>
         {name[0].toUpperCase() + name.slice(1)}{name === 'activity' && data.events.error ? ' · unavailable' : ''}
