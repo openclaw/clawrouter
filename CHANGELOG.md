@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve binding editor drafts across pending saves and refreshes, and retain acknowledged bindings when refresh fails.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.

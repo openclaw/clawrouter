@@ -23,6 +23,11 @@ function sameUserForm(left: AccessForm, right: AccessForm) {
     left.policyIds.length === right.policyIds.length && left.policyIds.every((id, i) => id === right.policyIds[i]);
 }
 
+function sameBindingForm(left: BindingForm, right: BindingForm) {
+  return left.policyId === right.policyId && left.principalType === right.principalType &&
+    left.principalId === right.principalId && left.enabled === right.enabled && left.priority === right.priority;
+}
+
 // A stale policy list must not prevent disabling the exact binding we loaded.
 export function isBindingDisableOnly(form: BindingForm, selected: PolicyBinding | undefined) {
   return selected?.enabled === true && !form.enabled && form.policyId === selected.policyId &&
@@ -42,7 +47,20 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
   const selectedUser = selectedUserEmail ? users.find((user) => user.email === selectedUserEmail) : undefined;
   const selectedBinding = bindings.find((binding) => bindingKey(binding) === selectedBindingKey);
   const editor = useRef({ email: selectedUserEmail, revision: 0, form: accessForm, baseline: accessForm });
+  const bindingEditor = useRef({ key: selectedBindingKey || null, revision: 0, form: bindingForm, baseline: bindingForm });
   const pendingUser = useRef(false);
+
+  function showBinding(key: string | null, form: BindingForm) {
+    bindingEditor.current = { key, revision: bindingEditor.current.revision + 1, form, baseline: form };
+    setSelectedBindingKey(key ?? "");
+    setBindingForm(form);
+  }
+
+  function editBindingForm(form: BindingForm) {
+    bindingEditor.current.form = form;
+    bindingEditor.current.revision++;
+    setBindingForm(form);
+  }
 
   function showUser(email: string, form: AccessForm) {
     editor.current = { email, revision: editor.current.revision + 1, form, baseline: form };
@@ -66,9 +84,11 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
     setUsers(nextUsers);
     setBindings(nextBindings);
     if (background) return;
-    const refreshedBinding = nextBindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? nextBindings[0];
-    setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
-    setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId });
+    const currentBinding = bindingEditor.current;
+    if (!bindingPending.current && currentBinding.key !== "" && sameBindingForm(currentBinding.form, currentBinding.baseline)) {
+      const refreshedBinding = nextBindings.find((binding) => bindingKey(binding) === currentBinding.key) ?? nextBindings[0];
+      showBinding(refreshedBinding ? bindingKey(refreshedBinding) : null, refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId });
+    }
     // Hydrate the list, not a draft owned by a save, a newly selected identity or unsaved edits.
     const current = editor.current;
     if (pendingUser.current || (!current.email && current.revision > 0)) return;
@@ -87,24 +107,31 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
   async function saveBinding(event: FormEvent) {
     event.preventDefault();
     if (bindingPending.current) return;
+    const { form, revision } = bindingEditor.current;
+    const ownsDraft = () => bindingEditor.current.revision === revision;
     bindingPending.current = true;
     try {
       setPolicyError("");
-      const principalId = bindingForm.principalId.trim().toLowerCase();
+      const principalId = form.principalId.trim().toLowerCase();
       if (!principalId) throw new Error("principal is required");
-      if (!policies.some((policy) => policy.policyId === bindingForm.policyId) && !isBindingDisableOnly(bindingForm, selectedBinding)) throw new Error("Select an available policy before saving this binding.");
-      const next: PolicyBinding = { policyId: bindingForm.policyId, principalType: bindingForm.principalType, principalId, enabled: bindingForm.enabled, priority: optionalNumber(bindingForm.priority) ?? 100 };
+      if (!policies.some((policy) => policy.policyId === form.policyId) && !isBindingDisableOnly(form, selectedBinding)) throw new Error("Select an available policy before saving this binding.");
+      const next: PolicyBinding = { policyId: form.policyId, principalType: form.principalType, principalId, enabled: form.enabled, priority: optionalNumber(form.priority) ?? 100 };
       setStatus("saving binding");
       const saved = demoMode ? next : await request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+      // Reconcile first so a read started before the PUT cannot replace its receipt.
+      let refreshError = "";
+      if (!demoMode) await refresh().catch(error => { refreshError = errorMessage(error); });
       setBindings((current) => [saved, ...current.filter((binding) => bindingKey(binding) !== bindingKey(saved))]);
-      if (!demoMode) await refresh();
-      setSelectedBindingKey(bindingKey(saved));
-      setBindingForm(bindingFormFromBinding(saved));
-      setStatus("saved binding");
+      const canonical = bindingFormFromBinding(saved);
+      if (ownsDraft()) {
+        showBinding(bindingKey(saved), canonical);
+        if (refreshError) setPolicyError("saved binding, but refresh failed: " + refreshError);
+      } else if (bindingEditor.current.key === bindingKey(saved)) bindingEditor.current.baseline = canonical;
+      setStatus(refreshError ? "saved binding; refresh failed" : "saved binding");
     } catch (caught) {
       const message = errorMessage(caught);
-      setPolicyError(message);
-      setStatus(message);
+      if (ownsDraft()) setPolicyError(message);
+      setStatus(ownsDraft() ? message : "Binding save failed: " + message);
     } finally {
       bindingPending.current = false;
     }
@@ -155,13 +182,13 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
   }
 
   function editBinding(binding: PolicyBinding) {
-    setSelectedBindingKey(bindingKey(binding));
-    setBindingForm(bindingFormFromBinding(binding));
+    showBinding(bindingKey(binding), bindingFormFromBinding(binding));
+    setPolicyError("");
   }
 
   function startNewBinding() {
-    setSelectedBindingKey("");
-    setBindingForm({ ...defaultBinding, policyId: selectedPolicyId || policies[0]?.policyId || "" });
+    showBinding("", { ...defaultBinding, policyId: selectedPolicyId || policies[0]?.policyId || "" });
+    setPolicyError("");
   }
 
   function startNewUser() {
@@ -170,7 +197,7 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
   }
 
   return {
-    bindings: { items: bindings, setItems: setBindings, selected: selectedBinding, selectedKey: selectedBindingKey, setSelectedKey: setSelectedBindingKey, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding },
+    bindings: { items: bindings, setItems: setBindings, selected: selectedBinding, selectedKey: selectedBindingKey, form: bindingForm, setForm: editBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding },
     users: { items: users, setItems: setUsers, selected: selectedUser, selectedEmail: selectedUserEmail, setSelectedEmail: selectUser, form: accessForm, setForm: editUserForm, error: userError, setError: setUserError, save: saveUser, startNew: startNewUser },
     hydrate,
     hydrateUser,
