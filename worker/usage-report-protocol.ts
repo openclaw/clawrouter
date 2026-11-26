@@ -36,7 +36,7 @@ export interface UsageShardInput {
 }
 /** `plan` is an opt-in extension: absent means the legacy raw measurement and execution.
  * `probe` is what a negotiated measurement itself scanned, including rejected plans. */
-export interface UsageCandidateSize { rows: number; bytes: number; plan?: 'cells' | 'raw'; cellRows?: number; probe?: { rows: number; bytes: number } }
+export interface UsageCandidateSize { rows: number; bytes: number; plan?: 'cells' | 'raw' | 'events'; cellRows?: number; probe?: { rows: number; bytes: number } }
 export interface CompleteAggregateRow extends UsageAggregateRow { owner: string | null }
 export interface UsageGroupPage { rows: CompleteAggregateRow[]; next: UsageGroupIdentity | null; work: UsageCandidateSize }
 export type UsageShardResult = { kind: 'complete'; value: { cut: UsageVisibilityCut; work: UsageCandidateSize } | UsageCandidateSize | UsageGroupPage | { events: CompleteUsageEvent[]; hasMore: boolean; work: UsageCandidateSize } | { valid: true } }

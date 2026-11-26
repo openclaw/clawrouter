@@ -399,17 +399,44 @@ function groupPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work
   return { rows: more ? rows.filter(r => r.dimension !== 'group' || !sameIdentity({owner:r.owner,value:r.value as string | null},identities[256])) : rows, next:last, work };
 }
 const detailKeys = ['id','occurredAt','provider','model','keyId','capability','callKind','status','statusCode','durationMs','inputTokens','outputTokens','cachedInputTokens','cacheWriteInputTokens','reasoningOutputTokens','lane','costClass','reportingCostMicros','estimateReason','recordedChargeMicros','costBasis','pricingRef','requestedTier','servedTier','compoundRequestId','compoundStage'] as const;
-function eventPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work: UsageCandidateSize) {
-  const n = sourceNames(q,x.cut!), before = x.before;
-  const keyset = before ? ' AND (occurred_at_ms < ? OR (occurred_at_ms = ? AND id ' + (x.includeEqualId ? '<=' : '<') + ' ? COLLATE BINARY))' : '';
-  const positions = before ? [before.at,before.at,before.id] : [];
-  const direct = x.cut!.source === 'projection' || Object.values(q.filters).every(v => v === undefined);
-  const range = reportWhere(q), source = direct ? null : sourceCte(q,x.cut!,keyset,positions);
-  // Common pages are a true indexed lookahead. Only filtered retained reads
-  // classify the candidate range; their full work is charged on EVERY request.
-  // Preflight selected metadata lengths before fetching/parsing any detail JSON.
-  const page = source ? [...sql.exec('WITH ' + source.cte + ', page AS (SELECT id,occurred_at_ms,principal_key,provider,status FROM filtered ORDER BY occurred_at_ms DESC,id COLLATE BINARY DESC LIMIT ?) SELECT p.id,p.occurred_at_ms,p.principal_key,p.provider,p.status,length(CAST(d.' + n.detail + ' AS BLOB)) AS bytes FROM page p JOIN ' + n.table + ' d ON p.id=d.id ORDER BY p.occurred_at_ms DESC,p.id COLLATE BINARY DESC', ...source.bindings,x.limit!+1)]
-    : [...sql.exec('SELECT id,occurred_at_ms,principal_key,provider,status,length(CAST(' + n.detail + ' AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + range.where + visibilityWhere(x.cut,n.table) + keyset + ' ORDER BY occurred_at_ms DESC,id COLLATE BINARY DESC LIMIT ?',...range.bindings,...positions,x.limit!+1)];
+// Walk the owner/time index in order. Count candidates *before* visibility
+// and exact filters, and check lengths before asking SQLite to classify JSON.
+// A full matching lookahead or exhaustion proves the answer; a budget limit
+// never masquerades as end-of-history.
+function seekEventPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, allowance: UsageCandidateSize) {
+  const cut=x.cut!, n=sourceNames(q,cut), filters=reportFilters(q), filtered=filters.where!=='1';
+  const needed=x.limit!+1, page: Record<string, unknown>[]=[];
+  const work: UsageCandidateSize={plan:'events',rows:0,bytes:0};
+  let before=x.before, inclusive=x.includeEqualId;
+  while(page.length<needed){
+    // Use just one upper bound so SQLite seeks the entire tuple even when
+    // many events share a timestamp. Both cut bounds still apply.
+    const anchored=before && before.at<q.range.to ? before : undefined;
+    const seek=anchored?'(occurred_at_ms,id) '+(inclusive?'<=':'<')+' (?,?)':'occurred_at_ms < ?';
+    const projected=cut.source==='projection';
+    const scope=(projected?'tenant_id = ? AND ':'')+'policy_id = ?'+(q.principal===undefined?'':' AND principal_key = ?');
+    const bounds=[...(projected?[q.tenantId]:[]),q.policyId,...(q.principal===undefined?[]:[q.principal]),q.range.from,...(anchored?[anchored.at,anchored.id]:[q.range.to])];
+    const count=Math.min(filtered?512:needed-page.length, allowance.rows-work.rows+1);
+    const batch=[...sql.exec('SELECT id,occurred_at_ms,principal_key,provider,status,length(CAST('+n.detail+' AS BLOB)) AS bytes, (tenant_id = ?'+visibilityWhere(cut,n.table)+') AS visible FROM '+n.table+' INDEXED BY '+n.index+' WHERE '+scope+' AND occurred_at_ms >= ? AND '+seek+' ORDER BY occurred_at_ms DESC,id DESC LIMIT ?', q.tenantId,...bounds,count)];
+    work.rows+=batch.length;
+    for(const row of batch){exact(row.bytes);work.bytes+=row.bytes;}
+    if(work.rows>allowance.rows||work.bytes>allowance.bytes)capacity();
+    let visible=batch.filter(r=>r.visible===1);
+    if(filtered && visible.length){
+      const byId=' FROM '+n.table+' WHERE id IN (SELECT value FROM json_each(?))';
+      const match=cut.source==='projection'?'SELECT id'+byId+' AND '+filters.where
+        :'WITH '+twinCte('SELECT '+twinOwnedColumns()+byId)+' SELECT id FROM source WHERE '+filters.where;
+      const ids=new Set([...sql.exec(match,JSON.stringify(visible.map(r=>r.id)),...filters.bindings)].map(r=>r.id));
+      visible=visible.filter(r=>ids.has(r.id));
+    }
+    page.push(...visible.slice(0,needed-page.length));
+    if(batch.length<count)break;
+    const last=batch.at(-1)!;before={at:Number(last.occurred_at_ms),id:String(last.id)};inclusive=false;
+  }
+  return {page,work};
+}
+function materializeEvents(sql: ReportSql,x: UsageShardInput,q: UsageReportQuery,work: UsageCandidateSize,page: Record<string, unknown>[]) {
+  const n=sourceNames(q,x.cut!);
   let bytes = 0;
   for (const row of page) { exact(row.bytes); bytes += row.bytes; if (bytes > completeUsageLimits.pageBytes) capacity(); }
   const events = page.slice(0,x.limit).map(row => {
@@ -443,7 +470,18 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (negotiate && !['capture','preflight'].includes(x.action)) invalidSource();
     if (x.action === 'capture') {
       const cut = openUsageReportCut(sql,x.query.from,now);
+      // A new day-grain cut may pin the canonical ledger even on a fully
+      // projected shard: its healthy folded cells have the same v2 counters.
+      // Never change the source of an existing cut or a legacy request.
       const at = {...x,query:{...x.query,from:Math.min(x.query.to,cut.floor)}}, q = shardQuery(at);
+      if(negotiate && cut.source==='projection' && x.query.grain==='day' && x.query.to-cut.floor>=2*reportCellSlotMs && usableCells(sql)){
+        const canonical:UsageVisibilityCut={...cut,source:'retained_ledger'};
+        const cells=measurePlan(sql,at,q,canonical,'cells');
+        const probe={rows:cells.rows+(cells.cellRows??0),bytes:cells.bytes};
+        if(fits(cells) && cells.rows<=completeUsageLimits.candidateRows/10)return {kind:'complete',value:{cut:canonical,work:{...cells,probe}}};
+        const raw=measurePlan(sql,at,q,cut,'raw');
+        return {kind:'complete',value:{cut,work:{...raw,probe:{rows:probe.rows+raw.rows,bytes:probe.bytes+raw.bytes}}}};
+      }
       return { kind:'complete',value:{cut,work:negotiate ? measureReport(sql,at,q,cut) : candidateSize(sql,q,cut)} };
     }
     if (!x.cut) invalidSource();
@@ -452,17 +490,23 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (x.after) { for (const key of ['owner','value'] as const) if (x.after[key] !== null) boundedText(x.after[key],8192); }
     if (x.before) { exact(x.before.at); boundedText(x.before.id,8192); }
     if (x.includeEqualId !== undefined && typeof x.includeEqualId !== 'boolean') invalidSource();
-    if (x.action === 'events' && (!Number.isInteger(x.limit) || x.limit! < 1 || x.limit! > 100)) invalidSource();
+    if ((x.action === 'events' || x.action === 'preflight' && x.limit !== undefined) && (!Number.isInteger(x.limit) || x.limit! < 1 || x.limit! > 100)) invalidSource();
     const q = shardQuery(x);
+    const eventMax={rows:completeUsageLimits.candidateRows,bytes:completeUsageLimits.inputBytes};
+    if(x.action==='preflight' && x.limit!==undefined){
+      const max=x.allowance??eventMax;exact(max.rows);exact(max.bytes);
+      return {kind:'complete',value:seekEventPage(sql,x,q,{rows:Math.min(max.rows,eventMax.rows),bytes:Math.min(max.bytes,eventMax.bytes)}).work};
+    }
     if (x.action === 'preflight') return {kind:'complete',value:negotiate ? measureReport(sql,x,q,x.cut) : candidateSize(sql,q,x.cut)};
     const allowance = x.allowance as UsageCandidateSize | undefined;
     if (!allowance) invalidSource(); exact(allowance.rows); exact(allowance.bytes);
-    // A negotiated plan executes exactly as measured (groups only); its page echoes the plan.
-    if (allowance.plan !== undefined && (x.action !== 'groups' || !['cells','raw'].includes(allowance.plan))) invalidSource();
+    if (allowance.plan !== undefined && !(allowance.plan==='events' && x.action==='events') && !(x.action==='groups' && ['cells','raw'].includes(allowance.plan))) invalidSource();
     if (allowance.cellRows !== undefined) exact(allowance.cellRows);
-    const work = allowance.plan ? measurePlan(sql,x,q,x.cut,allowance.plan) : candidateSize(sql,q,x.cut);
+    if (!fits(allowance)) capacity();
+    const selected = x.action === 'events' ? seekEventPage(sql,x,q,allowance) : undefined;
+    const work = allowance.plan === 'events' ? selected!.work : allowance.plan === 'raw' || allowance.plan === 'cells' ? measurePlan(sql,x,q,x.cut,allowance.plan) : candidateSize(sql,q,x.cut);
     if (work.rows > allowance.rows || work.bytes > allowance.bytes || (work.cellRows ?? 0) > (allowance.cellRows ?? 0) || !fits(work)) capacity();
-    const result = x.action === 'groups' ? groupPage(sql,x,q,work) : eventPage(sql,x,q,work);
+    const result = selected ? materializeEvents(sql,x,q,work,selected.page) : groupPage(sql,x,q,work);
     // Same transaction; requalification also covers empty pages and empty shards.
     validateUsageVisibility(sql,x.cut,x.query.from,now); reportHistory(sql,x.cut);
     if (usageJsonBytes(result) > completeUsageLimits.pageBytes - 128) capacity();

@@ -240,7 +240,7 @@ const negotiate={rows:0,bytes:0,plan:'report' as const};
 function allowances(sizes:UsageCandidateSize[]):UsageCandidateSize[]{
   checkSize(sizes);let rows=0,bytes=0;for(const size of sizes){rows+=size.rows;bytes+=size.bytes;}
   const share=(spare:number)=>Math.floor(spare/Math.max(1,sizes.length));
-  return sizes.map(({probe:_,...size})=>{if(size.plan!=='cells'&&size.plan!=='raw'){if(size.plan!==undefined)failComplete('unavailable','source');return size;}
+  return sizes.map(({probe:_,...size})=>{if(size.plan!=='cells'&&size.plan!=='raw'&&size.plan!=='events'){if(size.plan!==undefined)failComplete('unavailable','source');return size;}
     return {...size,rows:size.rows+Math.min(limits.lateRows,share(limits.totalRows-rows),limits.candidateRows-size.rows),
       bytes:size.bytes+Math.min(limits.lateBytes,share(limits.inputBytes-bytes),limits.inputBytes-size.bytes),...(size.plan==='cells'?{cellRows:Math.min(limits.cellRows,(size.cellRows??0)+limits.lateCells)}:{})};});
 }
@@ -320,7 +320,7 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const root=await registry<{purpose:'browse'|'export';base:CompleteUsageQuery;capture:PrivateCapture}>('read',{binding,cut:input.cut,query});
       capture=root.capture;base=root.base;purpose=root.purpose;
       if(!capture||!Array.isArray(capture.vector)||stable(capture.vector.map(({tenantId,policyId})=>({tenantId,policyId})))!==stable(resolved.addresses))failComplete('restart','authority');
-      sizes=input.kind==='validate'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,...(input.kind==='report'?{allowance:negotiate}:{})}).then(probed));
+      sizes=input.kind!=='report'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,allowance:negotiate}).then(probed));
     }else{
       if(intent!=='summary'){const reserved=await registry<{operation:string}>('reserve',{binding,purpose:intent,base:query});operation=reserved.operation;}
       const from=Date.now();
@@ -338,9 +338,24 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
     let value:CompleteUsageReport|CompleteUsageEvents|{valid:true};const coverage=coverageFor(resolved,capture,base);
     if(input.kind==='validate')value={valid:true};
     else if(input.kind==='events'){
-      const limit=input.pageSize??25;if(!Number.isInteger(limit)||limit<1||limit>100)invalid('page size must be 1..100');checkSize(sizes);
+      const limit=input.pageSize??25;if(!Number.isInteger(limit)||limit<1||limit>100)invalid('page size must be 1..100');
       const before=input.cursor?await registry<{at:number;id:string;shard:number}>('cursor',{binding,cut:input.cut,query,pageSize:limit,cursor:input.cursor}):undefined;
-      const pages=await op.map(capture.vector,async(p,i)=>{op.work(sizes[i]);return shardCall<{events:CompleteUsageEvent[];hasMore:boolean}>(env,op,p,{action:'events',query,cut:p.cut,limit,before:before?{at:before.at,id:before.id}:undefined,includeEqualId:before?i<before.shard:false,allowance:sizes[i]});});
+      // Measure the exact keyset page, not the complete range. Older shards ignore
+      // the page fields in preflight and retain their full-range allowance.
+      const pageArgs=(i:number)=>({limit,before:before?{at:before.at,id:before.id}:undefined,includeEqualId:before?i<before.shard:false});
+      const measure=(p:PrivateCapture['vector'][number],i:number,allowance?:UsageCandidateSize)=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,...pageArgs(i),allowance}).then(probed);
+      if(Object.keys(query.filters).some(key=>key!=='user')){
+        // Filtering retained metadata classifies JSON during measurement. Hand the
+        // remaining shared budget to each shard before it can do that work.
+        sizes=[];let rows:number=limits.totalRows,bytes:number=limits.inputBytes;
+        for(const [i,p] of capture.vector.entries()){
+          const size=await measure(p,i,{rows:Math.min(rows,limits.candidateRows),bytes});checkSize([size]);
+          rows-=size.rows;bytes-=size.bytes;if(rows<0||bytes<0)failComplete('unavailable','capacity');sizes.push(size);
+        }
+      }else sizes=await op.map(capture.vector,(p,i)=>measure(p,i));
+      const permitted=allowances(sizes);
+      const pages=await op.map(capture.vector,async(p,i)=>{op.work(permitted[i]);const page=await shardCall<{events:CompleteUsageEvent[];hasMore:boolean;work:UsageCandidateSize}>(env,op,p,{action:'events',query,cut:p.cut,...pageArgs(i),allowance:permitted[i]});
+        if(page.work?.plan!==sizes[i].plan)failComplete('unavailable','source');return page;});
       const ordered=pages.flatMap((p,shard)=>{if(!Array.isArray(p.events)||p.events.length>limit||typeof p.hasMore!=='boolean')failComplete('unavailable','source');return p.events.map(event=>({event,shard}));}).sort(eventOrder);
       for(let i=0;i<ordered.length;i++){const row=ordered[i];nonnegative(row.event.occurredAt);if(typeof row.event.id!=='string'||row.event.occurredAt<query.from||row.event.occurredAt>=query.to||i&&eventOrder(ordered[i-1],row)>=0||before&&eventOrder({event:{occurredAt:before.at,id:before.id} as CompleteUsageEvent,shard:before.shard},row)>=0)failComplete('unavailable','source');}
       const selected=ordered.slice(0,limit),last=selected.at(-1),more=ordered.length>limit||pages.some(p=>p.hasMore);
