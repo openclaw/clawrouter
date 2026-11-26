@@ -61,6 +61,63 @@ test("catalog readiness does not grant the administrator a usable service", asyn
   expect(a11y.violations).toEqual([]);
 });
 
+test("gateway counts stay unknown during a held or failed bootstrap, never borrowing personal readiness", async ({ page }) => {
+  const { responses, readiness, session } = dashboardFixture();
+  let failBootstrap = false;
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/bootstrap" && failBootstrap) {
+      await hold;
+      await route.fulfill({ status: 503, body: "catalog readiness unavailable" });
+      return;
+    }
+    const body = responses[path];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const coverage = page.locator(".dashboardStats > div").filter({ hasText: "Catalog readiness" });
+  const blocked = page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" });
+  const panel = page.locator(".servicePanel");
+  await expect(coverage.locator("strong")).toHaveText("8/11");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  // The next session read observes one eligible route; gateway configuration has not changed.
+  for (const access of session.entitlements.providers) {
+    access.allowed = access.provider === "anthropic";
+    if (!access.allowed) {
+      access.policies = [];
+      access.readiness = { ...access.readiness, executable: false, verified: false, status: "unavailable" };
+    }
+  }
+  failBootstrap = true;
+  const pending = page.waitForRequest("**/v1/admin/bootstrap");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await pending;
+  try {
+    await expect(panel.getByText("of 1 granted", { exact: true })).toBeVisible();
+    await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+    await expect(coverage.locator("strong")).toHaveText("—");
+    await expect(panel.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(blocked.locator("strong")).toHaveText("—");
+  } finally {
+    release();
+  }
+  await expect(page.locator(".statusBar")).toContainText("catalog readiness unavailable");
+  await expect(coverage.locator("strong")).toHaveText("—");
+  await expect(blocked.locator("strong")).toHaveText("—");
+  // Missing from the next gateway inventory does not mean blocked or personally executable.
+  readiness.splice(readiness.findIndex((item) => item.id === "anthropic"), 1);
+  failBootstrap = false;
+  await page.getByRole("button", { name: "Retry refresh" }).click();
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  await expect(coverage.locator("strong")).toHaveText("7/11");
+  await expect(coverage.locator("small")).toContainText("1 unknown");
+  await expect(blocked.locator("strong")).toHaveText("3");
+  await expect(panel.getByText("1 usable", { exact: true })).toBeVisible();
+});
+
 test("members see only their granted services, not gateway coverage", async ({ page }) => {
   const { responses, session } = dashboardFixture();
   session.role = "user";
@@ -391,7 +448,7 @@ function dashboardFixture() {
       overview: { policiesActive: 2, tenantsTotal: 1 },
     },
   };
-  return { providers, responses, session };
+  return { providers, readiness, responses, session };
 }
 
 function fusionFixture(adviserModels: string[] = []) {

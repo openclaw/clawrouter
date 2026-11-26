@@ -56,6 +56,7 @@ import type {
   AdminTenantSummary,
   AdminUsageRow,
   ProviderConnection,
+  ProviderReadiness,
   ProxyCredential,
   ServiceItem,
   SessionResponse,
@@ -77,7 +78,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ personalUsageSummary, grants, grantsReady, grantsError, onOpenGrant, session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ personalUsageSummary, grants, grantsReady, grantsError, onOpenGrant, session, services, gatewayReadiness, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   personalUsageSummary?: React.ReactNode;
   grants: UpstreamGrant[];
   grantsReady: boolean;
@@ -85,6 +86,7 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
   onOpenGrant: (grant: UpstreamGrant) => void;
   session: SessionResponse;
   services: ServiceItem[];
+  gatewayReadiness: Readonly<Record<string, ProviderReadiness>>;
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   users: AccessUser[];
@@ -119,9 +121,9 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
   const usableCount = grantedServices.filter(({ outcome }) => outcome.playable).length;
   const accessIncomplete = services.some((service) => !service.access);
   const unknownAccess = accessIncomplete && grantedServices.length === 0;
-  const executableCount = services.filter((service) => service.readiness?.executable).length;
-  const blockedCount = services.filter((service) => service.readiness?.executable === false).length;
-  const catalogReadinessKnown = overview !== null && executableCount + blockedCount > 0;
+  const executableCount = services.filter((service) => gatewayReadiness[service.provider]?.executable).length;
+  const blockedCount = services.filter((service) => gatewayReadiness[service.provider]?.executable === false).length;
+  const catalogReadinessKnown = executableCount + blockedCount > 0;
   const unknownReadinessCount = services.length - executableCount - blockedCount;
   const scopeNote = accessIncomplete ? " · partial" : "";
   const accessMeta = isAdmin ? `${services.length} in catalog` : unknownAccess ? "Access unknown" : `${usableCount} of ${grantedServices.length} usable${scopeNote}`;
