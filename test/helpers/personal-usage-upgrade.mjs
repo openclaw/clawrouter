@@ -123,7 +123,8 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const afterRead = await json("/_proof/state"); assert.equal(afterRead.rawDigest,before.rawDigest); assert.equal(afterRead.projection,0); assert.deepEqual(afterRead.config,before.config); assert.equal(afterRead.settingsDigest,before.settingsDigest); assert.equal(afterRead.budget.spentMicros,before.budget.spentMicros);
   await send("owner"); await send("other");
   const withNew = await until(()=>json("/_proof/state"),s=>s.rawCount===(eventsPerOwner+1)*2 && s.budget.spentMicros===(eventsPerOwner+1)*17);
-  assert.equal(withNew.projection,2);
+  // The upgraded history predates the projection, so nothing reads it: new writes no longer extend that copy.
+  assert.equal(withNew.projection,0);
   const beforeProjection = await samples("/v1/session/usage/report?days=7&intent=summary"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:false})});
   const revoked = await json("/v1/session/usage/report?days=7&intent=summary"); assert.equal(revoked.kind,"no_access");
@@ -139,7 +140,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const release = await read("/v1/session/usage/report?" + new URLSearchParams({ cut: browse.cut }), { method: "DELETE", headers: { origin: "https://router.example" } });
   assert.equal(release.status,200,await release.clone().text());
   const migrate = async opts => {const r=await read("/_proof/migrate",{method:"POST",body:JSON.stringify(opts)});assert.equal(r.status,200,await r.clone().text());return r.json();};
-  const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,2);
+  const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,0);
   let applied; do { applied=await migrate({apply:true,batchSize:200}); } while(!applied.complete);
   const indexed=await samples("/v1/session/usage/report?days=7&intent=summary"), final=await json("/_proof/state");
   assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(final.projectionComplete,true); assert.equal(indexed.body.coverage.allDiscoveredSourcesAnswered,true); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);

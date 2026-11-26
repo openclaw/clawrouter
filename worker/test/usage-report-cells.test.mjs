@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {completeFixture,complete} from './usage-complete-fixture.mjs';
 import {withUsageRetention} from '../usage-report-visibility.ts';
+import {withUsageReportPair} from '../usage-report-store.ts';
 import {maintainUsageReportCells} from '../usage-report-cells.ts';
+import {completeUsageLimits as limits} from '../usage-report-protocol.ts';
 
 const ttl=15*60000,hour=3600000;
 const cellState=s=>s.sql.exec('SELECT folded_rowid AS folded, target_rowid AS target, target_at AS at, healthy FROM usage_report_cell_state')[0];
@@ -10,6 +12,8 @@ const maxRowid=s=>s.sql.exec('SELECT COALESCE(MAX(rowid),0) AS n FROM usage_even
 const cellCalls=s=>s.sql.exec('SELECT COALESCE(SUM(calls),0) AS n FROM usage_report_cells')[0].n;
 // Production's large shards predate the typed projection, so their cuts read the retained ledger.
 const retained=s=>s.sql.exec('UPDATE usage_report_events SET report_format_version = 1');
+/** The ledger's own retention cleanup: canonical and projection deletes paired in one transaction. */
+const expire=(s,cutoff,query,...bindings)=>s.transactionSync(()=>withUsageReportPair(s.sql,()=>withUsageRetention(s.sql,cutoff,()=>s.sql.exec(query,...bindings))));
 const plans=f=>f.calls.filter(c=>c.body.action==='groups').map(c=>c.body.allowance.plan);
 const strip=({coverage,cut,...rest})=>rest;
 /** Movable wall clock for the real alarm handler; the fold fence opens only after a cut TTL. */
@@ -75,13 +79,16 @@ test('canonical deletes, updates and reused rowids only flag cells; the alarm re
  await f.ingest(0,event(f,'expiring',oldest));for(let i=0;i<10;i++)await f.ingest(0,event(f,'r'+i,c.now-hour+i));
  retained(s);await fold(c,s);assert.equal(cellCalls(s),11);
  // A retention delete is below every cut floor: no flag, and expired cells are pruned later.
- s.transactionSync(()=>withUsageRetention(s.sql,oldest+1,()=>s.sql.exec('DELETE FROM usage_events WHERE occurred_at_ms < ?',oldest+1)));
+ expire(s,oldest+1,'DELETE FROM usage_events WHERE occurred_at_ms < ?',oldest+1);
  assert.equal(cellState(s).healthy,1);
  // A late row with an old timestamp takes the max rowid; retention deletes it and its rowid is reused.
  await f.ingest(0,event(f,'old-late',oldest+hour));await s.ledger.alarm();c.now=cellState(s).at+ttl+1;await fold(c,s);
- const reused=maxRowid(s);s.transactionSync(()=>withUsageRetention(s.sql,oldest+hour+1,()=>s.sql.exec('DELETE FROM usage_events WHERE id = ?','old-late')));
+ const reused=maxRowid(s);expire(s,oldest+hour+1,'DELETE FROM usage_events WHERE id = ?','old-late');
+ const alarms=[];s.ledger.state.storage.setAlarm=async at=>{alarms.push(at-c.now);};
  assert.equal(cellState(s).healthy,1);await f.ingest(0,event(f,'reuses-rowid',c.now-1000));
  assert.equal(s.sql.exec("SELECT rowid FROM usage_events WHERE id = 'reuses-rowid'")[0].rowid,reused);assert.equal(cellState(s).healthy,0);
+ // Nothing is past the folded target, yet the flagged cells get the 500 ms fold wake, not the daily alarm.
+ assert.deepEqual(alarms,[500]);
  f.calls.length=0;assert.equal(complete(await f.read(recent(f,c))).metrics.calls,11);assert.deepEqual(plans(f),['raw']);
  // The next alarm drops the cells and restarts the fold from rowid 0 behind a fresh fence.
  await s.ledger.alarm();assert.deepEqual({...cellState(s),at:0},{folded:0,target:maxRowid(s),at:0,healthy:1});assert.equal(cellCalls(s),0);
@@ -155,19 +162,21 @@ test('a storage-paused shard stays on the ordinary alarm cadence and resumes fol
 });
 
 /** Bulk canonical rows outside the arrival log (as ingest does after an overflow drains). */
-function bulk(s,count,at,padding=0,principal='alice@example.com'){
+function bulk(s,count,at,padding=0,principal='alice@example.com',prefix='bulk-'){
  s.sql.exec('UPDATE usage_report_visibility SET usable=0');
- s.sql.exec("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1<?) INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) SELECT 'bulk-'||i,?,?,?,'openai','success',0,json_object('model','g','metadata',?),? FROM n",count,at,s.tenantId,s.policyId,'x'.repeat(padding),principal);
+ s.sql.exec("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1<?) INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) SELECT ?||i,?,?,?,'openai','success',0,json_object('model','g','metadata',?),? FROM n",count,prefix,at,s.tenantId,s.policyId,'x'.repeat(padding),principal);
 }
+const capturedWork=f=>{const captured=[];f.hook=async(call,response)=>{if(call.body.action==='capture')captured.push((await response.clone().json()).value.work);return response;};return captured;};
 test('a rejected cells probe is charged to the report even when the raw plan is chosen',{timeout:60000},async t=>{
  const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0];
  await f.ingest(0,event(f,'a',c.now-hour/2));retained(s);await fold(c,s);
- // A 250,001-row unfolded tail outside the requested hour makes the cells plan too large to run.
- bulk(s,250001,c.now-3*hour);
- const captured=[];f.hook=async(call,response)=>{if(call.body.action==='capture')captured.push((await response.clone().json()).value.work);return response;};
+ // 30,000 in-range rows (over the steady-state budget, so the raw plan does not settle it alone), then a 250,001-row
+ // unfolded tail outside the requested hour that makes the cells plan too large to run.
+ bulk(s,30000,c.now-hour/2,0,'alice@example.com','in-range-');bulk(s,250001,c.now-3*hour);
+ const captured=capturedWork(f);
  f.calls.length=0;const r=complete(await f.read({query:{...f.query,from:c.now-hour,to:c.now}}));
- assert.equal(r.metrics.calls,1);assert.deepEqual(plans(f),['raw']);
- assert.equal(captured[0].plan,'raw');assert.ok(captured[0].probe.rows>250000,JSON.stringify(captured[0]));
+ assert.equal(r.metrics.calls,30001);assert.deepEqual(plans(f),['raw']);
+ assert.equal(captured[0].plan,'raw');assert.equal(captured[0].rows,30001);assert.ok(captured[0].probe.rows>250000+30001,JSON.stringify(captured[0]));
 });
 
 test('an unfolded backlog no target covers yet is retryable, then reports through cells',{timeout:120000},async t=>{
@@ -186,12 +195,12 @@ test('a narrow personal read while cells catch up takes the indexed raw plan, no
  for(const s of shards){await f.ingest(s,event(f,'a-'+s.policyId,c.now-10*60000));retained(s);await fold(c,s);}
  // 210,000 unfolded rows of another user per shard: each cells plan fits alone, all five exceed the 1,000,000 shared rows.
  for(const s of shards)bulk(s,210000,c.now-5*60000,0,'bob@example.com');
- const captured=[];f.hook=async(call,response)=>{if(call.body.action==='capture')captured.push((await response.clone().json()).value.work);return response;};
+ const captured=capturedWork(f);
  await f.personal(shards.map(s=>s.policyId));f.calls.length=0;
  const r=complete(await f.read(recent(f,c)));
  assert.equal(r.metrics.calls,5);assert.deepEqual(plans(f),Array(5).fill('raw'));
- // Each shard is charged its rejected cells probe (the whole tail) and the raw plan it runs.
- for(const w of captured){assert.equal(w.plan,'raw');assert.equal(w.rows,1);assert.ok(w.probe.rows>210000+w.rows,JSON.stringify(w));}
+ // The scoped raw range is measured first; a short prefix of each 210,000-row tail already reads more rows and bytes.
+ for(const w of captured){assert.equal(w.plan,'raw');assert.equal(w.rows,1);assert.ok(w.probe.rows<100,JSON.stringify(w));}
 });
 
 test('while cells catch up, the raw plan never runs when it would read more raw rows than the cells plan',{timeout:60000},async t=>{
@@ -203,6 +212,40 @@ test('while cells catch up, the raw plan never runs when it would read more raw 
  retained(s);await fold(c,s);bulk(s,30000,c.now-3*hour);
  f.calls.length=0;const r=complete(await f.read({query:{...recent(f,c).query,groupBy:'user'}}));
  assert.equal(r.metrics.calls,40000);assert.deepEqual(plans(f),['cells']);
+});
+
+test('while cells catch up, a raw plan with fewer rows but more bytes never displaces cells that fit the shared limit',{timeout:120000},async t=>{
+ const c=clock(t),f=await completeFixture(t,2),shards=[...f.shards.values()],slot=900000,inRange=Math.floor((c.now-hour)/slot)*slot+1000;
+ // Each shard: 24,000 folded in-range rows of about 1.6 KB, then a 25,001-row unfolded tail of about 1 KB outside the range.
+ // Alone, either plan fits a shard; together the two raw plans exceed the shared 64 MiB, the two cells plans do not.
+ for(const s of shards){bulk(s,24000,inRange,1600,'alice@example.com','in-');retained(s);await fold(c,s);bulk(s,25001,c.now-3*hour,1000,'bob@example.com','tail-');}
+ f.calls.length=0;const r=complete(await f.read({query:{...f.query,from:Math.floor((c.now-2*hour)/slot)*slot,to:Math.floor(c.now/slot)*slot,groupBy:'user'}}));
+ assert.equal(r.metrics.calls,48000);assert.deepEqual(plans(f),['cells','cells']);
+});
+
+test('a cells plan chosen while cells catch up is charged no more than measuring each plan once',{timeout:60000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0],slot=900000,inRange=Math.floor((c.now-hour)/slot)*slot+1000;
+ // 1,000 folded in-range rows of about 1.7 KB, then a 26,000-row unfolded tail of small rows outside the range:
+ // the raw plan reads fewer rows but more bytes, so cells run.
+ bulk(s,1000,inRange,1700,'alice@example.com','in-');retained(s);await fold(c,s);bulk(s,26000,c.now-3*hour,0,'bob@example.com','tail-');
+ const from=Math.floor((c.now-2*hour)/slot)*slot,to=Math.floor(c.now/slot)*slot,captured=capturedWork(f);
+ f.calls.length=0;assert.equal(complete(await f.read({query:{...f.query,from,to,groupBy:'user'}})).metrics.calls,1000);assert.deepEqual(plans(f),['cells']);
+ const raw=s.sql.exec('SELECT COUNT(*) AS rows, TOTAL(length(CAST(event_json AS BLOB))) AS bytes FROM usage_events WHERE occurred_at_ms >= ? AND occurred_at_ms < ?',from,to)[0],w=captured[0];
+ assert.equal(w.plan,'cells');assert.deepEqual(w.probe,{rows:raw.rows+w.rows+w.cellRows,bytes:raw.bytes+w.bytes});
+});
+
+test('a sparse unfolded tail keeps the cells shortcut: the speculative raw probe stops at a shard share of the byte budget',{timeout:120000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0],slot=900000,inRange=Math.floor((c.now-hour)/slot)*slot+1000;
+ // 26,000 folded in-range rows of about 2 KiB, then 10,001 small unfolded rows outside the range. One survives at a high
+ // rowid (as after deletes), so the tail spans more than the 25,000-row lag while it is small enough for the cells shortcut.
+ bulk(s,26000,inRange,2048,'alice@example.com','in-');retained(s);await fold(c,s);bulk(s,10000,c.now-3*hour,0,'bob@example.com','tail-');
+ s.sql.exec("INSERT INTO usage_events(rowid,id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) VALUES (?,'gap',?,?,?,'openai','success',0,json_object('model','g'),'bob@example.com')",cellState(s).folded+25001,c.now-3*hour,s.tenantId,s.policyId);
+ const from=Math.floor((c.now-2*hour)/slot)*slot,to=Math.floor(c.now/slot)*slot,captured=capturedWork(f);
+ f.calls.length=0;assert.equal(complete(await f.read({query:{...f.query,from,to,groupBy:'user'}})).metrics.calls,26000);assert.deepEqual(plans(f),['cells']);
+ // Beyond the cells measurement, the abandoned raw probe is charged at most one shard's share plus the row that crossed it,
+ // not the 25,001 rows (about 52 MB) a row-bounded probe visits.
+ const w=captured[0],[{max}]=s.sql.exec('SELECT MAX(length(CAST(event_json AS BLOB))) AS max FROM usage_events');
+ assert.equal(w.plan,'cells');assert.ok(w.probe.bytes-w.bytes<=limits.classifiedBytes/limits.shards+max,JSON.stringify(w));
 });
 
 test('raw edges that alone exceed the limits are capacity even while a fold target is pending',{timeout:60000},async t=>{

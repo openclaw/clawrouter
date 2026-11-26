@@ -85,6 +85,23 @@ export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boole
 /** Projection progress is not retained-history coverage. No read mutates either watermark. */
 export function usageReportProjectionComplete(sql: ReportSql): boolean { return [...sql.exec("SELECT migration.complete FROM usage_report_migration AS migration JOIN usage_report_coverage AS coverage ON coverage.id = migration.id WHERE migration.id = 1 AND coverage.verified_generation = coverage.generation")][0]?.complete === 1; }
 export function usageReportHistoryComplete(sql: ReportSql): boolean { return reportHistory(sql).historyComplete; }
+/** Reads trust the projection only once its coverage is verified, and a migration round re-projects every row it pins
+ * (a new round starts from rowid 0). A projection neither verified nor in a current round is never read: writers skip
+ * it and the alarm reclaims it, so history that predates it does not keep a second, unread copy of the ledger. */
+export function usageReportProjectionLive(sql: ReportSql): boolean {
+  return [...sql.exec("SELECT 1 FROM usage_report_coverage WHERE id = 1 AND (verified_generation = generation OR round_generation = generation)")].length > 0;
+}
+/** Scheduling check (no writes): an unread projection still holds rows. */
+export function usageReportProjectionReclaimDue(sql: ReportSql): boolean {
+  return !usageReportProjectionLive(sql) && [...sql.exec("SELECT 1 FROM usage_report_events LIMIT 1")].length > 0;
+}
+/** One bounded alarm step; caller owns the transaction. Deletes up to 2,000 rows of an unread projection.
+ * Returns 'idle' (nothing to reclaim), 'more' (rows remain) or 'done' (this step removed the last rows). */
+export function reclaimUsageReportProjection(sql: ReportSql): 'idle' | 'more' | 'done' {
+  if (!usageReportProjectionReclaimDue(sql)) return 'idle';
+  sql.exec("DELETE FROM usage_report_events WHERE rowid IN (SELECT rowid FROM usage_report_events ORDER BY rowid LIMIT 2000)");
+  return [...sql.exec("SELECT 1 FROM usage_report_events LIMIT 1")].length ? 'more' : 'done';
+}
 function reportHistory(sql: ReportSql, cut?: UsageVisibilityCut) {
   const qualified = usageReportProjectionComplete(sql) && ![...sql.exec("SELECT 1 FROM usage_report_events INDEXED BY usage_report_old_format WHERE report_format_version IS NULL OR report_format_version != 2 LIMIT 1")].length;
   if (cut?.source === "projection" && !qualified) throw new UsageVisibilityError("restart", "source");
@@ -336,17 +353,52 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
   }
   const cells = x.query.grain === 'day' ? usableCells(sql) : null;
   if (!cells) throw new UsageVisibilityError('unavailable', 'migration');
-  const layout = cellLayout(x, q), parts = cellParts(q, layout, cells.folded);
-  const cellRows = layout.blocks.length ? Number([...sql.exec('WITH ' + parts.blocks + ' SELECT COUNT(*) AS n FROM (SELECT 1 FROM ' + parts.cells + ' LIMIT ' + (completeUsageLimits.cellRows + 1) + ')', ...parts.scope)][0].n) : 0;
-  // The rowid tail visits all owners, but SQLite evaluates the scope/time
-  // predicates *before* passing owned rows to the JSON normalizer. Charge
-  // every visit and the scalar predicate inputs even for a rejected row. The
-  // enclosing time span conservatively includes any gaps between whole slots.
+  const layout = cellLayout(x, q), parts = cellParts(q, layout, cells.folded), cellRows = countCells(sql, layout, parts), tail = tailCharge(q, layout, parts);
+  const raw = gross(sql, parts.raw.map(p => 'SELECT '+(p.scoped ? tail.bytes : 'length(CAST(event_json AS BLOB))')+' AS bytes FROM '+p.from),
+    parts.raw.flatMap(p => p.scoped ? [...tail.bindings,...p.bindings] : p.bindings));
+  return { ...raw, cellRows, plan };
+}
+function countCells(sql: ReportSql, layout: ReturnType<typeof cellLayout>, parts: ReturnType<typeof cellParts>): number {
+  const n = layout.blocks.length ? Number([...sql.exec('WITH ' + parts.blocks + ' SELECT COUNT(*) AS n FROM (SELECT 1 FROM ' + parts.cells + ' LIMIT ' + (completeUsageLimits.cellRows + 1) + ')', ...parts.scope)][0].n) : 0;
+  exact(n); return n;
+}
+/** Bytes charged per unfolded-tail row. The rowid tail visits all owners, but SQLite evaluates the scope/time
+ * predicates *before* passing owned rows to the JSON normalizer. Charge every visit and the scalar predicate inputs
+ * even for a rejected row. The enclosing time span conservatively includes any gaps between whole slots. */
+function tailCharge(q: UsageReportQuery, layout: ReturnType<typeof cellLayout>, parts: ReturnType<typeof cellParts>) {
   const tailScope = 'tenant_id = ? AND policy_id = ?' + (q.principal === undefined ? '' : ' AND principal_key = ?') + ' AND occurred_at_ms >= ? AND occurred_at_ms < ?';
-  const tailBytes = '32 + '+byteLengths(['tenant_id','policy_id','principal_key'])+' + CASE WHEN '+tailScope+' THEN length(CAST(event_json AS BLOB)) ELSE 0 END';
-  const raw = gross(sql, parts.raw.map(p => 'SELECT '+(p.scoped ? tailBytes : 'length(CAST(event_json AS BLOB))')+' AS bytes FROM '+p.from),
-    parts.raw.flatMap(p => p.scoped ? [...parts.scope,layout.blocks[0]?.[0] ?? q.range.to,layout.blocks.at(-1)?.[1] ?? q.range.to,...p.bindings] : p.bindings));
-  exact(cellRows); return { ...raw, cellRows, plan };
+  return { bytes: '32 + '+byteLengths(['tenant_id','policy_id','principal_key'])+' + CASE WHEN '+tailScope+' THEN length(CAST(event_json AS BLOB)) ELSE 0 END',
+    bindings: [...parts.scope, layout.blocks[0]?.[0] ?? q.range.to, layout.blocks.at(-1)?.[1] ?? q.range.to] };
+}
+/** A retained cut's raw plan, measured in index order only while it stays within `rows` rows and `bytes` bytes: what
+ * measurePlan(raw) measures, or null once it passes either bound. `charge` receives what it visited either way. */
+function rawWithin(sql: ReportSql, q: UsageReportQuery, cut: UsageVisibilityCut, rows: number, bytes: number, charge: (w: UsageCandidateSize) => UsageCandidateSize): UsageCandidateSize | null {
+  const n = sourceNames(q, cut), r = reportWhere({ ...q, filters: {} }), seen = { rows: 0, bytes: 0 };
+  let within = true;
+  for (const row of sql.exec('SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where, ...r.bindings)) {
+    exact(row.bytes); seen.rows++; seen.bytes += Number(row.bytes);
+    if (seen.rows > rows || seen.bytes > bytes) { within = false; break; }
+  }
+  charge(seen); return within ? { ...seen, plan: 'raw' } : null;
+}
+/** The cells plan measured against a fitting raw plan without rescanning: its edges, then the unfolded tail in rowid
+ * chunks growing from the raw plan's row count. Returns `raw` as soon as that raw part reads more rows and at least as
+ * many bytes; otherwise what measurePlan(cells) measures, having visited no more. `charge` receives every scan. */
+function cellsUnlessRawCheaper(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, folded: number, raw: UsageCandidateSize, charge: (w: UsageCandidateSize) => UsageCandidateSize): UsageCandidateSize {
+  const layout = cellLayout(x, q), parts = cellParts(q, layout, folded), tail = tailCharge(q, layout, parts), edges = parts.raw.filter(p => !p.scoped);
+  const seen = { ...charge(gross(sql, edges.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), edges.flatMap(p => p.bindings))) };
+  const cheaper = () => seen.rows > raw.rows && seen.bytes >= raw.bytes;
+  for (let after = folded, chunk = raw.rows + 1; !cheaper() && seen.rows < cap; chunk *= 2) {
+    const want = Math.min(chunk, cap - seen.rows), page = [...sql.exec('SELECT COUNT(*) AS rows, COALESCE(SUM(b), 0) AS bytes, MAX(r) AS last FROM (SELECT rowid AS r, ' + tail.bytes + ' AS b FROM usage_events NOT INDEXED WHERE rowid > ? ORDER BY rowid LIMIT ?)', ...tail.bindings, after, want)][0];
+    exact(page.rows); exact(page.bytes); charge({ rows: page.rows, bytes: page.bytes });
+    seen.rows += page.rows; seen.bytes += page.bytes;
+    if (page.rows < want) break;
+    after = Number(page.last);
+  }
+  if (cheaper()) return raw;
+  const cellRows = countCells(sql, layout, parts);
+  charge({ rows: 0, bytes: 0, cellRows });
+  return { rows: seen.rows, bytes: seen.bytes, cellRows, plan: 'cells' };
 }
 /** Capture/preflight choice: cells when usable and within limits; otherwise today's raw path. A large raw part (the
  * unfolded tail while cells catch up) is visited whatever the owner or range, so the raw plan runs instead when it
@@ -378,12 +430,20 @@ function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, 
     if (prefix) raw = charge(measurePlan(sql, x, q, cut, 'raw'));
     return done(fits(folded) && (!fits(raw) || cheaper()) ? folded : raw);
   }
-  const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null, cellsFit = viaCells && fits(viaCells) ? viaCells : null;
+  const lag = completeUsageLimits.candidateRows / 10, share = completeUsageLimits.classifiedBytes / completeUsageLimits.shards;
+  // While a tail wider than the fold lag catches up, the scoped raw range is measured first, while it stays within that
+  // lag and one shard's share of the classified-byte budget: rowid gaps can make the span wide while the real tail is
+  // small, and a discarded probe must not exhaust the budget. A raw plan within both is set against the cells plan
+  // without rescanning, which stops once raw provably reads fewer rows and no more bytes; otherwise the steps below decide.
+  let raw = cells && cells.tailUpperBound > lag ? rawWithin(sql, q, cut, lag, share, charge) : null;
+  const viaCells = !cells ? null : raw ? cellsUnlessRawCheaper(sql, x, q, cells.folded, raw, charge) : charge(measurePlan(sql, x, q, cut, 'cells'));
+  if (viaCells?.plan === 'raw') return done(viaCells);
+  const cellsFit = viaCells && fits(viaCells) ? viaCells : null;
   // A steady-state tail (the fold lag) is small: no raw probe.
   if (cellsFit && cellsFit.rows <= completeUsageLimits.totalRows / completeUsageLimits.shards && cellsFit.bytes <= completeUsageLimits.inputBytes / completeUsageLimits.shards) return done(cellsFit);
   // Raw wins only on strictly fewer rows and no more bytes. Reaching
   // the cells row count proves it cannot win; never execute that prefix.
-  const raw = charge(measurePlan(sql, x, q, cut, 'raw', cellsFit ? cellsFit.rows : cap));
+  raw ??= charge(measurePlan(sql, x, q, cut, 'raw', cellsFit ? cellsFit.rows : cap));
   if (fits(raw) && (!cellsFit || raw.rows < cellsFit.rows && raw.bytes <= cellsFit.bytes)) return done(raw);
   if (cellsFit) return done(cellsFit);
   if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return done(viaCells);
