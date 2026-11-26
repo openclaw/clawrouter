@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Add opt-in exact unique-search relocation for caller-side Fusion edits with misplaced line anchors, preserving strict matching by default.
-
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.
@@ -13,6 +11,7 @@
 Numbered releases publish source archives. Cloudflare deployment remains a separate operation.
 
 - Share pinned historical test setup between CI and release verification so shallow release checkouts can run upgrade and rollback tests.
+- Add opt-in exact unique-search relocation for caller-side Fusion edits with misplaced line anchors, preserving strict matching by default.
 
 ## 0.5.0 - 2026-10-22
 

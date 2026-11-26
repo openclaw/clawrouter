@@ -10,9 +10,9 @@ const cookie = "clawrouter_session=" + "a".repeat(64);
 /**
  * Persisted candidate -> released baseline writer -> candidate, twice, on the
  * same workerd resources. The baseline writes only canonical usage rows; the
- * candidate must notice that gap, serve full history through read-through and
- * let an explicit bounded migration restore the projection, without changing
- * raw events, settings or debits.
+ * candidate must notice that gap, reclaim the stale projection and serve full
+ * canonical history. Explicit bounded migration restores the projection without
+ * changing raw events, settings or debits.
  */
 export async function provePersonalUsageRollback() {
   const scratch = resolve(".openclaw/tmp");
@@ -120,15 +120,23 @@ export async function provePersonalUsageRollback() {
         const before = await until(expected);
         assert.equal(before.projection, expected - 1, "baseline writes only the canonical ledger");
         await start("current");
+        // Normal maintenance can reclaim the stale projection between requests.
+        // Drive that same alarm before checking reads and explicit migration.
+        const alarm = await read("/_proof/alarm", { method: "POST" });
+        assert.equal(alarm.status, 200, await alarm.clone().text());
+        const reclaimed = await state();
+        assertUnchanged(before, reclaimed);
+        assert.equal(reclaimed.projection, 0);
+        assert.equal(reclaimed.projectionComplete, false);
         const fallback = await owned(expected);
         assert.equal(fallback.projectionComplete, false);
         const afterRead = await state();
         assertUnchanged(before, afterRead);
-        assert.equal(afterRead.projection, before.projection, "reads must not backfill");
+        assert.equal(afterRead.projection, 0, "reads must not backfill");
         assert.equal((await migrate(false)).dryRun, true);
         const afterPreview = await state();
         assertUnchanged(before, afterPreview);
-        assert.equal(afterPreview.projection, before.projection);
+        assert.equal(afterPreview.projection, 0);
         const applyBatches = await repair();
         const indexed = await owned(expected);
         assert.equal(indexed.projectionComplete, true);

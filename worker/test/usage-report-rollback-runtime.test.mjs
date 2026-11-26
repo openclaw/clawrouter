@@ -4,7 +4,7 @@ import { requireBaselineCommit } from "../../test/helpers/personal-usage-baselin
 import { personalUsageBaseline } from "../../test/helpers/personal-usage-upgrade.mjs";
 import { provePersonalUsageRollback } from "../../test/helpers/personal-usage-rollback-runtime.mjs";
 
-test("persisted candidate/baseline/candidate keeps empty and completed projection history after old-writer gaps", { timeout: 120000 }, async t => {
+test("persisted candidate/baseline/candidate preserves canonical history while reclaiming stale projections", { timeout: 120000 }, async t => {
   if (!requireBaselineCommit(t, personalUsageBaseline)) return;
   const proof = await provePersonalUsageRollback();
   assert.equal(proof.cases.length, 2);
