@@ -77,7 +77,7 @@ function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName
           onClick={() => report && report.groupBy !== group && data.refine({...report, groupBy: group, rankOffset: 0})}>By {group}</button>)}</div>
       </div>
       <div className="personalActions">
-        <button type="button" className="buttonSecondary" onClick={()=>data.preset(7,draft)}>Last 7 days</button><button type="button" className="buttonSecondary" onClick={()=>data.preset(30,draft)}>Last 30 days</button><button type="button" className="buttonSecondary" onClick={data.reload}>Refresh report</button><button type="button" className="buttonSecondary" disabled={!q} onClick={data.back}>Back to base</button>
+        <button type="button" className="buttonSecondary" onClick={()=>data.preset(7,draft)}>Last 7 days</button><button type="button" className="buttonSecondary" onClick={()=>data.preset(30,draft)}>Last 30 days</button><button type="button" className="buttonSecondary" onClick={data.reload}>Refresh report</button><button type="button" className="buttonSecondary" disabled={!report || !!data.report.error} onClick={data.back}>Back to base</button>
       </div>
     </div>
     {data.report.value ? <ReportScope report={data.report.value} onClearKey={data.report.error ? undefined : clearKey}/> : null}
@@ -91,7 +91,7 @@ function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName
   </div><button type="submit">Apply refinement</button><button type="button" onClick={event=>apply(event,true)}>Open as new base</button></details>:null}</form>;
 }
 function selectGroup(data:PersonalUsageData,group:CompleteUsageGroup) {
-  const q=data.query;if(!q)return;const filters={...q.filters};
+  const q=data.query;if(!q || data.report.error)return;const filters={...q.filters};
   if(q.groupBy==='user'){if(group.identity.value===null)return;filters.user=group.identity.value;data.refine({...q,filters,groupBy:'key',rankOffset:0});}
   else if(q.groupBy==='key'){if(data.audience==='admin'){if(group.identity.owner===null)return;filters.user=group.identity.owner;}filters.key=group.identity.value===null?{kind:'session'}:{kind:'credential',id:group.identity.value};data.refine({...q,filters,rankOffset:0});data.showEvents(true);}
   else if(group.identity.value!==null){filters[q.groupBy]=group.identity.value;data.refine({...q,filters,rankOffset:0});}
@@ -99,20 +99,21 @@ function selectGroup(data:PersonalUsageData,group:CompleteUsageGroup) {
 function DetailTotals({value}:{value:UsageAdditives}) {return <><dl className="personalTokenStats">{usageTokenFields.map(([k,presenceKey])=>{const present=value.metrics[presenceKey];return <div key={k}><dt>{k}</dt><dd>{present?count(value.metrics[k]):'Not reported'}</dd><dd>{count(present)}/{count(value.metrics.calls)} calls with field</dd></div>;})}</dl><ul>{value.costs.map(c=><li key={c.lane+':'+c.costClass}>{c.lane} · {c.costClass}: {c.costClass==='unknown'?'Price unknown':usageMoney(c.amountMicros)} · {count(c.calls)} calls</li>)}</ul><p>{usageCaveats.missingness} Subscription amounts are usage equivalents, not additional charges.</p></>;}
 export function ExactRanking({data}:{data:PersonalUsageData}) {
   const value=data.report.value,q=value?.query;if(!value||!q)return null;
+  const stale = Boolean(data.report.error);
   return (<section className="dashboardPanel personalSection">
       <header className="personalSectionHeader">
         <div><h2>Exact ranking by {q.groupBy}</h2><p>{count(value.rank.distinctGroups)} retained {value.rank.distinctGroups === 1 ? 'identity' : 'identities'}. Historical keys use retained IDs, not current names.</p></div>
         <div className="personalControlRow">
-          <label>Rank&nbsp;by<select value={q.rankBy} onChange={e => data.refine({...q, rankBy: e.target.value as CompleteUsageQuery['rankBy'], rankOffset: 0})}>
+          <label>Rank&nbsp;by<select disabled={stale} value={q.rankBy} onChange={e => data.refine({...q, rankBy: e.target.value as CompleteUsageQuery['rankBy'], rankOffset: 0})}>
             <option value="calls">Calls</option><option value="tokens">Reported input + output tokens</option><option value="recordedAmount">Recorded accounting amount</option>
           </select></label>
-          <button type="button" className="buttonSecondary" onClick={() => downloadUsageFile(prepareUsageGroupsFile(value,data.audience))}>Export current rank page CSV</button>
+          <button type="button" className="buttonSecondary" disabled={stale} onClick={() => downloadUsageFile(prepareUsageGroupsFile(value,data.audience))}>Export current rank page CSV</button>
         </div>
       </header>
-      <p className="personalNote">{filterDescription(q.filters)}{q.groupBy === 'key' && !q.filters.key ? ' · Select a key to filter the report and its events.' : ''}</p>
-      <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Retained usage ranking"><table className="personalTable"><thead><tr><th>Retained identity</th><th>Model calls</th><th>Input / output tokens</th><th>Recorded accounting amount</th></tr></thead><tbody>{value.groups.map(g=><tr key={JSON.stringify(g.identity)}><th scope="row"><button type="button" disabled={q.groupBy==='user'&&g.identity.value===null||q.groupBy==='key'&&data.audience==='admin'&&g.identity.owner===null} onClick={()=>selectGroup(data,g)}>{q.groupBy==='key'?(g.identity.owner??'Unavailable owner')+' · '+(g.identity.value??'Dashboard session'):(g.identity.value??'Unavailable identity')}</button></th><td>{count(g.metrics.calls)}</td><td>{g.metrics.inputReportedCalls?count(g.metrics.inputTokens):'Not reported'} / {g.metrics.outputReportedCalls?count(g.metrics.outputTokens):'Not reported'}</td><td><Recorded value={g}/></td></tr>)}</tbody></table></div>
+      <p className="personalNote">{filterDescription(q.filters)}{stale ? ' · Last successful report. Retry the report to use this ranking.' : q.groupBy === 'key' && !q.filters.key ? ' · Select a key to filter the report and its events.' : ''}</p>
+      <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Retained usage ranking"><table className="personalTable"><thead><tr><th>Retained identity</th><th>Model calls</th><th>Input / output tokens</th><th>Recorded accounting amount</th></tr></thead><tbody>{value.groups.map(g=><tr key={JSON.stringify(g.identity)}><th scope="row"><button type="button" disabled={stale || g.identity.value===null && q.groupBy!=='key' || q.groupBy==='key'&&data.audience==='admin'&&g.identity.owner===null} onClick={()=>selectGroup(data,g)}>{q.groupBy==='key'?(g.identity.owner??'Unavailable owner')+' · '+(g.identity.value??'Dashboard session'):(g.identity.value??'Unavailable identity')}</button></th><td>{count(g.metrics.calls)}</td><td>{g.metrics.inputReportedCalls?count(g.metrics.inputTokens):'Not reported'} / {g.metrics.outputReportedCalls?count(g.metrics.outputTokens):'Not reported'}</td><td><Recorded value={g}/></td></tr>)}</tbody></table></div>
       <p>Exact remainder outside this rank page: {count(value.remainder.metrics.calls)} calls.</p><details><summary>Remainder field and money coverage</summary><Recorded value={value.remainder}/><DetailTotals value={value.remainder}/></details>
-      <div className="personalActions"><button type="button" disabled={!value.rank.offset} onClick={()=>data.refine({...q,rankOffset:Math.max(0,value.rank.offset-100)})}>Previous ranks</button><button type="button" disabled={!value.rank.hasMore} onClick={()=>data.refine({...q,rankOffset:value.rank.offset+100})}>Next ranks</button><button type="button" onClick={()=>data.showEvents(!data.eventsShown)}>{data.eventsShown?'Hide':'Show'} events</button></div>
+      <div className="personalActions"><button type="button" disabled={stale || !value.rank.offset} onClick={()=>data.refine({...q,rankOffset:Math.max(0,value.rank.offset-100)})}>Previous ranks</button><button type="button" disabled={stale || !value.rank.hasMore} onClick={()=>data.refine({...q,rankOffset:value.rank.offset+100})}>Next ranks</button><button type="button" disabled={stale && !data.eventsShown} onClick={()=>data.showEvents(!data.eventsShown)}>{data.eventsShown?'Hide':'Show'} events</button></div>
     </section>);
 }
 export function CompleteUsageScreen({data,keys=[]}:{data:PersonalUsageData;keys?:readonly UsageKeyName[]}) {
@@ -128,4 +129,22 @@ export function CompleteUsageScreen({data,keys=[]}:{data:PersonalUsageData;keys?
   </div>;
 }
 
-export function CompleteExport({data}:{data:PersonalUsageData}) { return (<section className="dashboardPanel personalSection"><h2>Export refreshed snapshot</h2><p>Same selected range and filters; captures current usage again. Every matching retained event in the disclosed discovered scope, not all global history. Totals may differ from the displayed report. Up to 50,000 events / 16 MiB.</p><div className="personalActions"><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('csv')}>Export refreshed snapshot CSV</button><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('json')}>Export refreshed snapshot JSON</button>{data.exportState.busy?<button type="button" onClick={data.cancelExport}>Cancel export</button>:null}</div><p role="status">{data.exportState.message}</p>{data.exportState.report?<><h3>Fresh export snapshot</h3><ReportScope report={data.exportState.report} label="Export snapshot scope"/><p>{count(data.exportState.report.metrics.calls)} calls · <Recorded value={data.exportState.report}/></p><p>{usageCaveats[data.audience]}</p><UsageCoverage value={data.exportState.report}/></>:null}</section>); }
+export function CompleteExport({data}: {data: PersonalUsageData}) {
+  const {busy, message, report: exported} = data.exportState;
+  const stale = Boolean(data.report.error && data.report.value);
+  const disabled = busy || !data.query || Boolean(data.report.error);
+  return <section className="dashboardPanel personalSection">
+    <h2>Export refreshed snapshot</h2>
+    {stale ? <p className="personalNote">Last successful report. Retry the report before starting another export.</p>
+      : <p>Same selected range and filters; captures current usage again. Every matching retained event in the disclosed discovered scope, not all global history. Totals may differ from the displayed report. Up to 50,000 events / 16 MiB.</p>}
+    <div className="personalActions">
+      <button type="button" disabled={disabled} onClick={() => void data.startExport('csv')}>Export refreshed snapshot CSV</button>
+      <button type="button" disabled={disabled} onClick={() => void data.startExport('json')}>Export refreshed snapshot JSON</button>
+      {busy ? <button type="button" onClick={data.cancelExport}>Cancel export</button> : null}
+    </div>
+    <p role="status">{message}</p>
+    {exported ? <><h3>Fresh export snapshot</h3><ReportScope report={exported} label="Export snapshot scope"/>
+      <p>{count(exported.metrics.calls)} calls · <Recorded value={exported}/></p>
+      <p>{usageCaveats[data.audience]}</p><UsageCoverage value={exported}/></> : null}
+  </section>;
+}

@@ -215,3 +215,49 @@ test('displayed key report uses retained bounds and never labels pending results
   expect(f.queries.filter((u: URL) => u.pathname === '/v1/admin/usage/events').at(-1)!.searchParams.get('from')).toBe(new Date(value.query.from).toISOString());
  } finally { release.resolve(); f.close(); }
 });
+
+for (const role of ['admin','user'] as const) test(role + ' keeps a completed export receipt but locks stale ranking and export actions until retry succeeds', async ({page}) => {
+ const f = await serve(page, role);
+ try {
+  await page.goto(role === 'admin' ? '/dashboard/usage' : '/dashboard/my-usage');
+  if (role === 'user') await page.getByRole('tab', {name:'Details',exact:true}).click();
+  const section = (heading: RegExp) => page.locator('section').filter({has:page.getByRole('heading', {name:heading})}).last();
+  const ranking = section(/^Exact ranking by /), exports = section(/^Export refreshed snapshot$/);
+  const row = ranking.getByRole('button', {name:role === 'admin' ? 'bob@example.test' : 'cursor-model',exact:true});
+  const json = exports.getByRole('button', {name:'Export refreshed snapshot JSON'});
+  const csv = exports.getByRole('button', {name:'Export refreshed snapshot CSV'});
+  const rankCsv = ranking.getByRole('button', {name:'Export current rank page CSV'});
+  const order = ranking.getByRole('combobox');
+  await expect(row).toBeEnabled();
+  const original = page.waitForEvent('download');
+  await json.click(); await original;
+  const receipt = exports.getByRole('group', {name:'Export snapshot scope'});
+  const originalScope = (await receipt.textContent())!;
+
+  const path = '/v1/' + (role === 'admin' ? 'admin' : 'session') + '/usage/report';
+  await page.route('**' + path + '?**', async route => {
+   if (route.request().method() === 'GET' && new URL(route.request().url()).searchParams.get('intent') === 'browse') {
+    await route.fulfill({status:503,json:{error:{message:'Report temporarily unavailable'}}});
+   } else await route.fallback();
+  });
+  await page.getByRole('button', {name:'Refresh report',exact:true}).click();
+  await expect(page.getByRole('alert')).toContainText('Report temporarily unavailable');
+  await expect(row).toBeVisible();
+  await expect(receipt).toHaveText(originalScope);
+  for (const control of [row, order, rankCsv, json, csv]) await expect(control).toBeDisabled();
+  await expect(exports).toContainText('Retry the report');
+  await expect(ranking).toContainText('Retry the report');
+
+  await page.unroute('**' + path + '?**');
+  await page.getByRole('alert').getByRole('button', {name:/^(Retry|Refresh) report$/}).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  for (const control of [row, order, rankCsv, json, csv]) await expect(control).toBeEnabled();
+  await expect(receipt).toHaveText(originalScope);
+  await row.click();
+  if (role === 'admin') await expect(page.getByRole('heading', {name:'Exact ranking by key'})).toBeVisible();
+  else await expect(ranking).toContainText('Model: cursor-model');
+  const recovered = page.waitForEvent('download');
+  await json.click(); await recovered;
+  await expect(receipt).toContainText(role === 'admin' ? 'User: bob@example.test' : 'Model: cursor-model');
+ } finally { f.close(); }
+});
