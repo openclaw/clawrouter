@@ -23,28 +23,29 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
   const [readiness, setReadiness] = useState<FusionReadiness | null>(null);
   const [error, setError] = useState("");
   const draftGeneration = useRef(0);
-  const dirty = useRef(false);
+  // null means the initial authoritative config has not arrived yet.
+  const dirty = useRef<boolean | null>(allowDemo ? false : null);
   const pending = useRef(false);
 
   function captureHydration() { return pending.current ? null : draftGeneration.current; }
 
   function updateConfig(next: SetStateAction<FusionConfig>) {
     draftGeneration.current += 1;
-    dirty.current = true;
+    if (dirty.current !== null) dirty.current = true;
     setReadiness(null);
     setConfig(next);
   }
 
   function selectPolicy(next: string) {
     draftGeneration.current += 1;
-    dirty.current = true;
+    if (dirty.current !== null) dirty.current = true;
     setReadiness(null);
     setPolicyId(next);
   }
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (pending.current) return;
+    if (dirty.current === null || pending.current) return;
     pending.current = true;
     const generation = ++draftGeneration.current;
     try {
@@ -75,7 +76,7 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
   }
 
   async function check() {
-    if (pending.current) return;
+    if (dirty.current === null || pending.current) return;
     pending.current = true;
     const generation = ++draftGeneration.current;
     try {
@@ -119,8 +120,9 @@ export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, po
     },
     hydrate: (next: FusionConfig, background: boolean, nextPolicyId: string | undefined, availablePolicyIds: string[], snapshot: number | null) => {
       // Refresh owns clean state only, at the generation where its read started.
-      if (background || pending.current || dirty.current || snapshot !== draftGeneration.current) return;
+      if (background || pending.current || dirty.current === true || (dirty.current !== null && snapshot !== draftGeneration.current)) return;
       draftGeneration.current += 1;
+      dirty.current = false;
       setConfig(next);
       setPolicyId((current) => availablePolicyIds.includes(current) ? current : nextPolicyId ?? availablePolicyIds[0] ?? "");
       setReadiness(null);

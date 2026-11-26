@@ -13,7 +13,7 @@ const config = { enabled: true, modelId: "fusion", strategy: "single", adviserMo
 const event = { preventDefault() {} };
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-function mount() {
+function mount(initialize = true) {
   const cells = [], requests = [], statuses = [];
   let index = 0, owner;
   const useState = initial => {
@@ -38,8 +38,19 @@ function mount() {
   };
   function render() { index = 0; owner = hook(dependencies); return owner; }
   render();
+  if (initialize) owner.hydrate(config, false, "policy_a", ["policy_a", "policy_b"], owner.captureHydration());
   return { render, requests, statuses, dependencies };
 }
+
+test("the first bootstrap supplies authoritative config before Fusion can write", async () => {
+  const f = mount(false), snapshot = f.render().captureHydration();
+  f.render().fusion.setConfig(current => ({ ...current, aggregatorModel: "openai/early" }));
+  await f.render().fusion.save(event);
+  await f.render().fusion.check();
+  assert.equal(f.requests.length, 0);
+  f.render().hydrate({ ...config, aggregatorModel: "openai/authoritative" }, false, "policy_a", ["policy_a"], snapshot);
+  assert.equal(f.render().fusion.config.aggregatorModel, "openai/authoritative");
+});
 
 for (const edit of ["config", "policy"]) {
   test(`a pending Fusion save and its refresh preserve a newer ${edit} draft`, async () => {
