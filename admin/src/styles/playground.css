@@ -254,7 +254,9 @@
 }
 
 .composerDock > .inlineNote,
-.composerDock > .inlineError { border-radius: 6px; }
+.composerDock .inlineError { border-radius: var(--radius); }
+
+.playgroundSettingPair input[aria-invalid="true"] { border-color: var(--bad); }
 
 .composerShell {
   overflow: hidden;

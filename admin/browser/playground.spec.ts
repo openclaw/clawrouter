@@ -95,6 +95,76 @@ test("service requests share admission without clearing their editable payload",
   await expect(payload).toHaveValue('{"query":"next"}');
 });
 
+test("malformed service JSON stays in the composer instead of becoming a gateway turn", async ({ page }) => {
+  await page.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(1);
+  await complete(page, 0, "First reply");
+  await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("test-service");
+  const body = page.getByRole("textbox", { name: "JSON request body" });
+  await body.fill('{"query": "trail conditions",}');
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(body).toHaveAccessibleDescription("Not sent. Check the JSON syntax at line 1, column 30.");
+  await expect(body).toBeFocused();
+  await expect(body).toHaveValue('{"query": "trail conditions",}');
+  await expect(page.locator(".chatExchange")).toHaveCount(1);
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  expect(await requestCount(page)).toBe(1);
+
+  await body.fill('{"query": "trail conditions"}');
+  await expect(body).not.toHaveAttribute("aria-invalid", "true");
+  expect(await requestCount(page)).toBe(1);
+  await body.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(2);
+  await complete(page, 1, "Service reply");
+  await expect(page.locator(".chatMessageAssistant .messageBody")).toHaveText(["First reply", "Service reply"]);
+});
+
+test("invalid model settings return focus to the editable field and keep the message", async ({ page }) => {
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  const maxTokens = page.getByRole("textbox", { name: "Max tokens", exact: true });
+  await message.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(1);
+  await complete(page, 0, "First reply");
+  await page.getByRole("button", { name: "Close turn inspector" }).click();
+  await maxTokens.fill("-12");
+  await page.getByRole("button", { name: "Inspect assistant response" }).click();
+  await message.fill("Summarize the weather.");
+  await message.press("Enter");
+  await expect(maxTokens).toBeFocused();
+  await expect(maxTokens).toHaveAccessibleDescription(/Not sent.*whole number/);
+  await expect(message).toHaveValue("Summarize the weather.");
+  expect(await requestCount(page)).toBe(1);
+  await maxTokens.fill("128");
+  const temperature = page.getByRole("textbox", { name: "Temperature", exact: true });
+  await temperature.fill("warm");
+  await message.press("Enter");
+  await expect(temperature).toBeFocused();
+  await expect(temperature).toHaveAccessibleDescription(/Not sent.*number/);
+  await expect(page.locator(".chatExchange")).toHaveCount(1);
+  await temperature.fill("0.5");
+  await message.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(2);
+  await complete(page, 1, "Next reply");
+  await expect(page.locator(".chatMessageAssistant .messageBody")).toHaveText(["First reply", "Next reply"]);
+
+  // An empty follow-up needs an explanation even when a previous turn is selected.
+  await message.press("Enter");
+  await expect(message).toHaveAccessibleDescription("Not sent. Enter a message.");
+  expect(await requestCount(page)).toBe(2);
+});
+
+test("a sent request with a gateway error remains inspectable", async ({ page }) => {
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill("Check route availability.");
+  await message.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(1);
+  await page.evaluate(() => (window as TestWindow).playgroundRequests[0].resolve(new Response("Temporarily unavailable", { status: 503 })));
+  await expect(page.locator(".chatMessageAssistant")).toContainText("Gateway error");
+  await expect(page.locator(".chatMessageAssistant")).toContainText("Temporarily unavailable");
+  await expect(page.locator(".inspectorTopline")).toContainText("503");
+  await expect(page.locator(".composerDock [role=alert]")).toHaveCount(0);
+});
+
 function requestCount(page: Page) {
   return page.evaluate(() => (window as TestWindow).playgroundRequests.length);
 }

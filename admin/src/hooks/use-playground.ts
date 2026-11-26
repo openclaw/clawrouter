@@ -1,10 +1,11 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, type SetStateAction, useEffect, useRef, useState } from "react";
 import {
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
   playgroundResponseText,
   playgroundServicePreset,
+  optionalNumber,
   routeKey,
   errorMessage,
 } from "../domain";
@@ -21,6 +22,27 @@ interface PlaygroundDependencies {
   serviceRoutes: RouteCatalog["manifestProxy"];
   accessByProvider: Map<string, ProviderAccess>;
   providerReadiness: Record<string, ProviderReadiness>;
+}
+
+export interface PlaygroundDraftError {
+  field: "composer" | "maxTokens" | "temperature";
+  message: string;
+}
+
+function payloadError(form: PlaygroundForm, cause: unknown): PlaygroundDraftError {
+  if (form.mode === "service") {
+    // Keep the parser's location when available, not engine-specific text that may echo the body.
+    if (!(cause instanceof SyntaxError)) return { field: "composer", message: "Not sent. Simplify the JSON body and try again." };
+    const location = /[(]line ([0-9]+) column ([0-9]+)[)]$/.exec(cause.message);
+    return { field: "composer", message: location
+      ? `Not sent. Check the JSON syntax at line ${location[1]}, column ${location[2]}.`
+      : "Not sent. Enter valid JSON in the request body." };
+  }
+  // Use the same parser as playgroundPayload to distinguish the two numeric settings.
+  try { optionalNumber(form.maxTokens); } catch {
+    return { field: "maxTokens", message: "Not sent. Enter a non-negative whole number for Max tokens, such as 128." };
+  }
+  return { field: "temperature", message: "Not sent. Enter a number for Temperature." };
 }
 
 export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
@@ -40,7 +62,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const [turns, setTurns] = useState<PlaygroundTurn[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState("");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<PlaygroundDraftError | null>(null);
   const selectedModel = models.find((model) => model.id === form.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
 
@@ -69,11 +91,13 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   async function run(event: FormEvent) {
     event.preventDefault();
     if (operationRef.current) return;
-    const operation = new AbortController();
-    operationRef.current = operation;
-    setRunning(true);
-    const startedAt = performance.now();
+    // The composer already shows the current access/readiness blocker.
+    if (playgroundBlocker(form, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness)) return;
     const prompt = form.mode === "model" ? form.prompt.trim() : form.servicePayload.trim();
+    if (!prompt) {
+      setError({ field: "composer", message: form.mode === "model" ? "Not sent. Enter a message." : "Not sent. Enter a JSON request body." });
+      return;
+    }
     const conversation = form.mode === "model"
       ? turns.filter((turn) => turn.mode === "model" && !turn.error).flatMap((turn) => [
         { role: "user" as const, content: turn.prompt },
@@ -83,15 +107,25 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     const provider = form.mode === "model" ? selectedModel?.provider ?? "unknown" : selectedServiceRoute?.provider ?? "unknown";
     const model = form.mode === "model" ? selectedModel?.id ?? form.model : selectedServiceRoute?.endpoint ?? form.serviceRoute;
     const endpoint = playgroundAccessEndpoint(form, selectedServiceRoute);
-    let requestPreview = "";
+    let payload: ReturnType<typeof playgroundPayload>;
+    let requestPreview: string;
     try {
-      if (!prompt) throw new Error(form.mode === "model" ? "Enter a message." : "Enter a JSON request body.");
-      setError("");
-      setStatus("running playground");
-      const guard = playgroundBlocker(form, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness);
-      if (guard) throw new Error(guard);
-      const payload = playgroundPayload(form, selectedServiceRoute, conversation);
+      payload = playgroundPayload(form, selectedServiceRoute, conversation);
       requestPreview = JSON.stringify(payload, null, 2);
+    } catch (cause) {
+      const issue = payloadError(form, cause);
+      if (issue.field !== "composer") setSelectedTurnId(""); // Reveal the invalid setting.
+      setError(issue);
+      return;
+    }
+
+    const operation = new AbortController();
+    operationRef.current = operation;
+    const startedAt = performance.now();
+    setError(null);
+    setRunning(true);
+    try {
+      setStatus("running playground");
       // Clear the submitted draft now; a later reply must not erase newly typed text.
       if (form.mode === "model") setForm((current) => ({ ...current, prompt: "" }));
       if (demoMode) {
@@ -112,7 +146,6 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       const responseError = result.ok ? undefined : playgroundResponseText(result.raw) || `Request failed with HTTP ${result.status}`;
       appendTurn({ prompt, raw: result.raw, requestPreview, provider, model, endpoint, status: result.status, startedAt, retention: result.retention, error: responseError });
       if (responseError) {
-        setError(responseError);
         setStatus(responseError);
         return;
       }
@@ -120,8 +153,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     } catch (caught) {
       if (operationRef.current !== operation) return;
       const message = errorMessage(caught);
-      if (prompt) appendTurn({ prompt, raw: message, requestPreview, provider, model, endpoint, status: null, startedAt, retention: "unknown", error: message });
-      setError(message);
+      appendTurn({ prompt, raw: message, requestPreview, provider, model, endpoint, status: null, startedAt, retention: "unknown", error: message });
       setStatus(message);
     } finally {
       if (operationRef.current === operation) {
@@ -169,13 +201,13 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     if (operation) setStatus("playground ready");
     setTurns([]);
     setSelectedTurnId("");
-    setError("");
+    setError(null);
     setForm((current) => ({ ...current, prompt: "" }));
   }
 
   return {
     form,
-    setForm,
+    setForm: (next: SetStateAction<PlaygroundForm>) => { setError(null); setForm(next); },
     turns,
     setTurns,
     selectedTurnId,
@@ -183,7 +215,6 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     requestMode,
     setRequestMode,
     error,
-    setError,
     selectedModel,
     selectedServiceRoute,
     running,
