@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in exact unique-search relocation for caller-side Fusion edits with misplaced line anchors, preserving strict matching by default.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.
