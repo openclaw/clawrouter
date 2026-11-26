@@ -132,6 +132,45 @@ test('invalid original calendar input remains visible as an alert with no report
  html=renderToStaticMarkup(createElement(MyUsageScreen,{data:p}));assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
  assert.ok(html.includes('<button type="button" disabled="">Export refreshed snapshot JSON</button>'));
 });
+// Fixed instants: the displayed wall clocks repeat or run backwards while elapsed time remains positive.
+for (const [timezone, start, end, startSuffix, endSuffix] of [
+  ['America/Los_Angeles', '2026-11-01T08:30:00Z', '2026-11-01T09:30:00Z', '1:30 AM UTC-07:00', '1:30 AM UTC-08:00'],
+  ['America/Los_Angeles', '2026-11-01T08:45:00Z', '2026-11-01T09:15:00Z', '1:45 AM UTC-07:00', '1:15 AM UTC-08:00'],
+  ['Europe/London', '2026-10-25T00:30:00Z', '2026-10-25T01:30:00Z', '1:30 AM UTC+01:00', '1:30 AM UTC+00:00'],
+  ['Australia/Lord_Howe', '2026-04-04T14:45:00Z', '2026-04-04T15:15:00Z', '1:45 AM UTC+11:00', '1:45 AM UTC+10:30'],
+  ['Australia/Lord_Howe', '2026-10-03T15:20:00Z', '2026-10-03T15:40:00Z', '1:50 AM UTC+10:30', '2:40 AM UTC+11:00'],
+]) test('usage period disambiguates offset changes in '+timezone+' at '+start, () => {
+  const d = completeData({}, 'admin');
+  Object.assign(d.query, { from: Date.parse(start), to: Date.parse(end), timezone, filters: { key: { kind: 'credential', id: 'laptop' } } });
+  d.exportState.report = d.report.value;
+  const memberData = data(d.report.value);
+  memberData.exportState.report = d.report.value;
+  const member = renderToStaticMarkup(createElement(MyUsageScreen, { data: memberData }));
+  const admin = renderToStaticMarkup(createElement(CompleteUsageScreen, { data: d }));
+  for (const [iso, suffix] of [[start, startSuffix], [end, endSuffix]]) {
+    for (const html of [member, admin]) {
+      const instant = '<time dateTime="'+new Date(iso).toISOString()+'">';
+      const endpoints = html.split(instant).slice(1).map(rest => rest.split('</time>')[0]);
+      assert.deepEqual(endpoints.map(text => text.endsWith(suffix)), [true, true], 'report and receipt: '+suffix);
+    }
+  }
+  assert.ok(member.includes(timezone+', end exclusive'));
+  assert.ok(admin.includes(timezone+' (end exclusive)'));
+});
+
+test('ordinary usage periods retain their compact and member labels without redundant offsets', () => {
+  const d = completeData({}, 'admin');
+  const from = Date.parse('2026-11-10T06:00Z'), to = Date.parse('2026-11-10T10:00Z'), timezone = 'Asia/Kathmandu';
+  Object.assign(d.query, { from, to, timezone, filters: { key: { kind: 'credential', id: 'laptop' } } });
+  d.exportState.report = d.report.value;
+  const dates = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone });
+  const member = summary(d.report.value), admin = renderToStaticMarkup(createElement(CompleteUsageScreen, { data: d }));
+  assert.ok(member.includes(dates.format(from)+'</time>'));
+  assert.ok(member.includes(dates.format(to)+'</time>'));
+  assert.equal(admin.split(dates.formatRange(from, to)+' · '+timezone+' (end exclusive)').length - 1, 2);
+  assert.doesNotMatch(member + admin, /(?:UTC|GMT)[+-]/);
+});
+
 test('admin selected controls are distinct from disclosed effective retention bounds',()=>{
  const d=completeData({},'admin');d.selectedQuery={...d.query,from:500};d.report.value.coverage.clippedFrom=500;
  const html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));

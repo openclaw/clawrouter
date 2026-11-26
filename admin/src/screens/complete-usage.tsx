@@ -1,5 +1,6 @@
 import { usageTokenFields } from '../../../shared/usage-report';
 import { useEffect, useState, type FormEvent } from 'react';
+import { UsagePeriod } from '../usage-period';
 import type { CompleteUsageReport, CompleteUsageQuery, CompleteUsageGroup, UsageAdditives } from '../../../shared/usage-report';
 import type { CompleteUsageData as PersonalUsageData } from '../hooks/use-personal-usage';
 import { usageCaveats, eventFields, prepareUsageFile, prepareUsageGroupsFile, downloadUsageFile, usageQueryTemplate } from '../complete-usage';
@@ -20,10 +21,9 @@ function filterDescription({key, ...filters}: CompleteUsageQuery['filters']) {
 function ReportScope({report, label = 'Displayed report scope', onClearKey}: {report: CompleteUsageReport; label?: string; onClearKey?: (button: HTMLButtonElement) => void}) {
   const {query, coverage} = report;
   const clipped = coverage.clippedFrom !== null && query.from === coverage.effectiveFrom;
-  const dates = new Intl.DateTimeFormat('en', {dateStyle: 'medium', timeStyle: 'short', timeZone: query.timezone});
   return <div className="personalActions personalActiveFilters" role="group" aria-label={label}>
     <strong>{filterDescription(query.filters)}</strong>
-    <span>{clipped ? 'Retained interval: ' : ''}{dates.formatRange(query.from, query.to)} · {query.timezone} (end exclusive)</span>
+    <span>{clipped ? 'Retained interval: ' : ''}<UsagePeriod query={query} compact /> · {query.timezone} (end exclusive)</span>
     {query.filters.key && onClearKey ? <button type="button" className="buttonSecondary" onClick={event => onClearKey(event.currentTarget)}>Clear key filter</button> : null}
   </div>;
 }

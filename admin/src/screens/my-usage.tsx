@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type Keybo
 import { Info } from 'lucide-react';
 import type { PersonalUsageEvent, UsageCostSummary, UsageMetrics } from '../../../shared/usage-report';
 import { UsageCoverage, CompleteExport, ExactRanking } from './complete-usage';
+import { UsagePeriod } from '../usage-period';
 import { usageCaveats, prepareUsageFile, downloadUsageFile } from '../complete-usage';
 import type { CompleteUsageQuery, CompleteUsageReport } from '../../../shared/usage-report';
 import type { PersonalUsageData } from '../hooks/use-personal-usage';
@@ -109,8 +110,6 @@ export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData
   const subscription = value ? knownLaneCost(value.costs, 'subscription') : null;
   const filters = Object.entries(data.controls.filters).filter(([field, filter]) => field !== 'key' && filter);
   const scopedKey = value?.query.filters.key;
-  const rangeFormat = value && (scopedKey || value.query.groupBy === 'key')
-    ? new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: value.query.timezone }) : null;
   return <section className="dashboardPanel personalUsageSummary" aria-label="Your personal usage">
     <header className="personalSectionHeader">
       <div className="personalSummaryHeading">
@@ -123,10 +122,9 @@ export function PersonalUsageSummary({ data, onOpen }: { data: PersonalUsageData
     {report.loading ? <p role="status">Loading your usage report…</p> : null}
     {report.error ? <div role="alert"><p>{report.error}</p>{value ? <p>Old displayed report; Refresh required before continuing.</p> : null}<button type="button" onClick={reload}>Retry report</button></div> : null}
     {value && tokens && api && subscription ? <>
-      {rangeFormat ? <p className="personalActiveFilters">
+      {scopedKey || value.query.groupBy === 'key' ? <p className="personalActiveFilters">
         <strong>{scopedKey?.kind === 'session' ? 'Dashboard session' : scopedKey ? 'Selected key = ' + scopedKey.id : 'All keys and dashboard sessions'}</strong>
-        {' · '}<time dateTime={iso(value.query.from)}>{rangeFormat.format(value.query.from)}</time>
-        {' – '}<time dateTime={iso(value.query.to)}>{rangeFormat.format(value.query.to)}</time> ({value.query.timezone}, end exclusive)
+        {' · '}<UsagePeriod query={value.query} /> ({value.query.timezone}, end exclusive)
       </p> : null}
       {filters.length ? <p className="personalActiveFilters">Exact filters: {filters.map(([key, filter]) => key + ' = ' + filter).join(' · ')}</p> : null}
       <dl className={'personalGlance' + (subscription.present ? ' withSubscription' : '')}>
