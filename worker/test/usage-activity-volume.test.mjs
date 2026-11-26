@@ -41,7 +41,7 @@ test('7/30 day personal browse, filtered activity and export at volume',{timeout
 test('new day reports on fully projected shards can use cells; existing cuts keep their source',async t=>{
  let clock=Date.now();t.mock.method(Date,'now',()=>clock);
  const f=await completeFixture(t,1),s=[...f.shards.values()][0];await f.personal();
- for(let i=0;i<50;i++)await f.ingest(s,f.event('paired-'+i,{occurred_at_ms:clock-3600000+i,model:'m'+i%3,principal_id:i%5?'alice@example.com':'bob@example.com'}));
+ for(let i=0;i<750;i++)await f.ingest(s,f.event('paired-'+i,{occurred_at_ms:clock-3600000+i,model:i===749?'rare':'m'+i%3,principal_id:i%5?'alice@example.com':'bob@example.com'}));
  await s.ledger.alarm();clock+=899000;
  const query={...f.query,from:f.now-7*86400000,to:clock};
  const first=complete(await f.read({query,intent:'browse'}));
@@ -53,6 +53,14 @@ test('new day reports on fully projected shards can use cells; existing cuts kee
  for(const report of [first,fresh]){
   const q={...report.query,filters:{...report.query.filters,model:'m1'}};
   const page=complete(await f.continuation({kind:'events',query:q,cut:report.cut,pageSize:100}));
-  assert.equal(page.events.length,14);assert.equal(page.nextCursor,null);assert.ok(page.events.every(e=>e.model==='m1'&&e.user==='alice@example.com'));
+  assert.equal(f.calls.filter(c=>c.body.action==='events').at(-1).body.cut.source,'projection');assert.equal(page.events.length,100);assert.ok(page.nextCursor);assert.ok(page.events.every(e=>e.model==='m1'&&e.user==='alice@example.com'));
+  complete(await f.continuation({kind:'release',cut:report.cut,query:report.query}));
  }
+ const exported=complete(await f.export({...query,filters:{model:'rare'}}));
+ assert.equal(exported.events.length,1);assert.equal(exported.events[0].id,'paired-749');
+ assert.equal(f.calls.filter(c=>c.body.action==='events').at(-1).body.cut.source,'projection');
+ // A second owner's unfolded tail cannot make a small owner report choose cells.
+ for(let i=0;i<32;i++)await f.ingest(s,f.event('tail-'+i,{principal_id:'bob@example.com',occurred_at_ms:query.to-1}));
+ f.calls.length=0;const tail=complete(await f.read({query}));assert.deepEqual(tail.metrics,first.metrics);
+ assert.equal(f.calls.find(c=>c.body.action==='groups').body.allowance.plan,'raw');
 });

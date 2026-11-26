@@ -325,7 +325,7 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
     const n = sourceNames(q, cut), r = reportWhere({ ...q, filters: {} });
     return { ...gross(sql, ['SELECT length(CAST(' + n.detail + ' AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where], r.bindings), plan };
   }
-  const cells = cut.source === 'retained_ledger' && x.query.grain === 'day' ? usableCells(sql) : null;
+  const cells = x.query.grain === 'day' ? usableCells(sql) : null;
   if (!cells) throw new UsageVisibilityError('unavailable', 'migration');
   const layout = cellLayout(x, q), parts = cellParts(q, layout, cells.folded);
   const cellRows = layout.blocks.length ? Number([...sql.exec('WITH ' + parts.blocks + ' SELECT COUNT(*) AS n FROM (SELECT 1 FROM ' + parts.cells + ' LIMIT ' + (completeUsageLimits.cellRows + 1) + ')', ...parts.scope)][0].n) : 0;
@@ -339,7 +339,15 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
   const probe = { rows: 0, bytes: 0 }, charge = (w: UsageCandidateSize) => { probe.rows += w.rows + (w.cellRows ?? 0); probe.bytes += w.bytes; return w; };
   const done = (w: UsageCandidateSize): UsageCandidateSize => ({ ...w, probe });
-  const layout = cellLayout(x, q), eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  const layout = cellLayout(x, q), eligible = x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  if (cut.source === 'projection') {
+    // Select the aggregation plan independently of the pinned detail source.
+    // Do not probe an unrelated unfolded tail for a small personal range.
+    const raw = charge(measurePlan(sql, x, q, cut, 'raw'));
+    if (!cells || (fits(raw) && (cells.folding || raw.rows <= 512 && raw.bytes <= 1024 * 1024))) return done(raw);
+    const folded = charge(measurePlan(sql, x, q, cut, 'cells'));
+    return done(fits(folded) && (!fits(raw) || folded.rows + (folded.cellRows ?? 0) <= raw.rows && folded.bytes <= raw.bytes) ? folded : raw);
+  }
   const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null, cellsFit = viaCells && fits(viaCells) ? viaCells : null;
   // A steady-state tail (the fold lag) is small: no raw probe.
   if (cellsFit && cellsFit.rows <= completeUsageLimits.candidateRows / 10) return done(cellsFit);
@@ -470,18 +478,7 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (negotiate && !['capture','preflight'].includes(x.action)) invalidSource();
     if (x.action === 'capture') {
       const cut = openUsageReportCut(sql,x.query.from,now);
-      // A new day-grain cut may pin the canonical ledger even on a fully
-      // projected shard: its healthy folded cells have the same v2 counters.
-      // Never change the source of an existing cut or a legacy request.
       const at = {...x,query:{...x.query,from:Math.min(x.query.to,cut.floor)}}, q = shardQuery(at);
-      if(negotiate && cut.source==='projection' && x.query.grain==='day' && x.query.to-cut.floor>=2*reportCellSlotMs && usableCells(sql)){
-        const canonical:UsageVisibilityCut={...cut,source:'retained_ledger'};
-        const cells=measurePlan(sql,at,q,canonical,'cells');
-        const probe={rows:cells.rows+(cells.cellRows??0),bytes:cells.bytes};
-        if(fits(cells) && cells.rows<=completeUsageLimits.candidateRows/10)return {kind:'complete',value:{cut:canonical,work:{...cells,probe}}};
-        const raw=measurePlan(sql,at,q,cut,'raw');
-        return {kind:'complete',value:{cut,work:{...raw,probe:{rows:probe.rows+raw.rows,bytes:probe.bytes+raw.bytes}}}};
-      }
       return { kind:'complete',value:{cut,work:negotiate ? measureReport(sql,at,q,cut) : candidateSize(sql,q,cut)} };
     }
     if (!x.cut) invalidSource();
