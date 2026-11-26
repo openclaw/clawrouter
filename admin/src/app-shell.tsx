@@ -23,6 +23,7 @@ export function AppShell() {
   const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
+  const usageLabel = session.role === "admin" ? "Usage" : "Quota";
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
   const statusTone = statusPresentation.tone;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
@@ -106,7 +107,26 @@ export function AppShell() {
           </div>
         </header>
 
-        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{shell.refreshing ? "Refreshing console data" : status}</span>{refreshError ? <><span>{refreshError} Displayed data may be out of date.</span><button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button></> : null}{demoMode ? <em>demo</em> : null}</div> : null}
+        {statusPresentation.showBar ? (
+          <div className={`statusBar statusBar-${statusTone}${refreshError ? " refreshNotice" : ""}`} role="status" aria-live="polite">
+            {refreshError ? <>
+              <div className="refreshNoticeCopy">
+                <strong className="refreshNoticeCaption">Refresh failed</strong>
+                {shell.refreshError ? <p className="refreshNoticeImpact">{lastUpdatedAt === null ? "Some console data is unavailable." : "Displayed data may be out of date."}</p> : null}
+                {usage.error ? <p className="refreshNoticeImpact">{usageLabel} data {usage.loaded ? "may be out of date." : "is unavailable."}</p> : null}
+              </div>
+              <button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button>
+              <div className="refreshNoticeDetail">
+                {shell.refreshing ? <p>Refreshing console data</p> : status !== "connected" ? <p>{status}</p> : null}
+                <p>{refreshError}</p>
+              </div>
+            </> : <>
+              <strong>{statusPresentation.label}</strong>
+              <span>{shell.refreshing ? "Refreshing console data" : status}</span>
+            </>}
+            {demoMode ? <em>demo</em> : null}
+          </div>
+        ) : null}
 
         {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (
