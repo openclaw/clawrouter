@@ -1186,11 +1186,18 @@ Configure the policy through Access or `PUT /v1/admin/policies/<policy-id>`:
 ```
 
 `includedQuotaReservePercent` is an integer from 0 through 50, default 0.
-Subscription requests stop using an account when any applicable live window has
-that percentage or less remaining. This also excludes fully used windows when
-Anthropic extra usage is enabled and would silently bill credits instead of
-returning 429. One in-flight request can cross the boundary; polling and provider
-observations are not an atomic upstream spending cap. Missing/reset-passed quota
+It is a soft floor. While any account in the pool is above it, subscription
+requests skip an account when any applicable live window has that percentage
+or less remaining. If every account that could serve is at or below the reserve,
+the policy has no environment fallback (or the request is pinned to a grant),
+the accounts that still have quota left in every applicable window serve instead.
+They are spread across the policy's strategy, within the policy hysteresis scaled
+to the reserve band. A fully used window (0%), a cooldown or a failed credential
+still excludes an account. Retry-After then waits only for empty windows and
+cooldowns, not for a window to climb back above the reserve. Draining to 0% can let in-flight requests cross
+into Anthropic extra usage on accounts that have it enabled; the next quota
+observation then excludes the account. Polling and provider observations are not
+an atomic upstream spending cap. Missing/reset-passed quota
 remains unknown. Choose `staleState: "deny"` if stale observations must block
 admission; the existing stale-state default is `allow`.
 
