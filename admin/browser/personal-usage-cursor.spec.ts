@@ -27,6 +27,139 @@ async function custom(page:Page,from:string,to:string,timezone='UTC'){
  await page.getByLabel('Start',{exact:true}).fill(from);await page.getByLabel('End (exclusive)',{exact:true}).fill(to);await page.getByLabel('Timezone',{exact:true}).fill(timezone);await page.getByRole('button',{name:'Apply filters',exact:true}).click();
 }
 
+test('members compare keys, inspect one and return to all keys in the same period', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('build-call', { credential_id: 'build-key', model: 'build-model', input_tokens: 12, output_tokens: 4, total_tokens: 16, actual_cost_micros: 15, cost_basis: 'unpriced_usage' });
+  await page.route('**/v1/session/credentials', route => route.fulfill({ json: { credentials: [
+   { credentialId: 'build-key', name: 'Renamed build runner', policyId: 'p', principalId: 'member@example.com', enabled: true },
+   { credentialId: 'retained-key', name: 'Retired laptop', policyId: 'p', principalId: 'member@example.com', enabled: false },
+  ] } }));
+  await f.ingest('session-call', { credential_id: null });
+  await f.ingest('another-member', { principal_id: 'other@example.test', credential_id: 'another-members-key' });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const calls = summary.locator('.personalGlance > div').filter({ has: page.getByText('Model calls', { exact: true }) }).locator('dd').first();
+  await expect(calls).toHaveText('144');
+  const from = new Date(f.now - 3600000).toISOString(), to = f.end();
+  await custom(page, from, to);
+  await expect(summary.locator('.personalRange')).toContainText(from);
+  await expect(calls).toHaveText('144');
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  const compare = page.getByRole('button', { name: 'Compare keys', exact: true });
+  await page.getByRole('combobox', { name: 'Group by', exact: true }).focus();
+  await page.keyboard.press('Tab');
+  await expect(compare).toBeFocused();
+  await expect(compare).toHaveCSS('outline-style', 'solid');
+  await page.keyboard.press('Enter');
+  await expect(ranks.getByRole('heading', { name: 'Top keys' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Comparing keys' })).toBeFocused();
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'retained-key' })).toContainText('426');
+  await expect(ranks.getByRole('listitem').filter({ hasText: 'build-key' })).toContainText('16');
+  const inventory = page.getByRole('combobox', { name: 'Current own-key selector' });
+  await expect(inventory).toContainText('Current name: Renamed build runner — build-key');
+  await expect(inventory).toContainText('Current name: Retired laptop — retained-key (revoked)');
+  await expect(ranks).not.toContainText('Renamed build runner');
+  await expect(ranks).not.toContainText('Retired laptop');
+  await expect(ranks).not.toContainText('another-members-key');
+  const cut = reads(f, 'report').at(-1)!.searchParams.get('cut');
+  expect(cut).toBeTruthy();
+
+  await ranks.getByRole('button', { name: 'build-key', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(ranks.getByRole('heading', { name: 'Selected key usage' })).toBeVisible();
+  const scope = summary.locator('.personalActiveFilters');
+  await expect(scope.locator('strong')).toHaveText('Selected key = build-key');
+  await expect(scope.locator('time').first()).toHaveAttribute('datetime', from);
+  await expect(scope.locator('time').last()).toHaveAttribute('datetime', to);
+  await expect(summary).toContainText('12 input · 4 output');
+  await expect(summary).toContainText('Recorded accounting amount: $0.000015');
+  await expect(summary.getByLabel('Known API cost unavailable')).toBeVisible();
+  await activity(page);
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page)).toContainText('build-model');
+  await expect(rows(page)).toContainText('Price unknown');
+  await rows(page).getByText('Call details', { exact: true }).click();
+  await expect(rows(page).locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toHaveText('Key IDbuild-key');
+  const events = reads(f, 'events').at(-1)!.searchParams;
+  expect([events.get('key'), events.get('from'), events.get('to'), events.get('cut')]).toEqual(['build-key', from, to, cut]);
+  const download = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await download).createReadStream();
+  let json = '';
+  for await (const chunk of stream!) json += chunk.toString();
+  const file = JSON.parse(json);
+  expect(file.metadata.filters.key).toEqual({ kind: 'credential', id: 'build-key' });
+  expect(file.metadata.range).toMatchObject({ from: Date.parse(from), to: Date.parse(to) });
+  expect(file.events).toHaveLength(1);
+  expect(file.events[0]).toMatchObject({ user: 'member@example.com', keyId: 'build-key', reportingCostMicros: null, recordedChargeMicros: 15 });
+
+  await page.getByRole('button', { name: 'Show all keys', exact: true }).click();
+  await expect(calls).toHaveText('144');
+  await expect(rows(page)).toHaveCount(100);
+  const restored = reads(f, 'events').at(-1)!.searchParams;
+  expect([restored.get('groupBy'), restored.get('keyKind'), restored.get('from'), restored.get('to'), restored.get('cut')]).toEqual(['key', null, from, to, cut]);
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await ranks.getByRole('button', { name: 'Dashboard session', exact: true }).click();
+  await expect(calls).toHaveText('1');
+  await expect(scope).toContainText('Dashboard session');
+  expect(reads(f, 'report').at(-1)!.searchParams.get('keyKind')).toBe('session');
+
+  // A key with no matching rows is a valid filter. Clearing only that key
+  // keeps the member's applied provider and the original period.
+  await page.getByText('Custom dates & exact filters', { exact: true }).click();
+  await page.getByLabel('Key ID (exact)', { exact: true }).fill('unused-key');
+  await page.getByLabel('Provider (exact)', { exact: true }).fill('openai');
+  await page.getByRole('button', { name: 'Apply filters' }).click();
+  await expect(calls).toHaveText('0');
+  await expect(summary).toContainText('No calls in discovered locations for this range for your current access.');
+  await page.getByRole('button', { name: 'Show all keys' }).click();
+  await expect(calls).toHaveText('144');
+  await expect(summary).toContainText('provider = openai');
+  const reset = reads(f, 'report').at(-1)!.searchParams;
+  expect([reset.get('provider'), reset.get('keyKind'), reset.get('from'), reset.get('to')]).toEqual(['openai', null, from, to]);
+  await inventory.selectOption('key:retained-key');
+  await expect(calls).toHaveText('142');
+  await expect(summary.getByText('Selected key = retained-key', { exact: true })).toBeVisible();
+  await expect(summary).not.toContainText('Retired laptop');
+  expect(f.queries.some(url => url.pathname.startsWith('/v1/admin/'))).toBe(false);
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
+test('a failed refresh keeps key ranks readable but not actionable until Retry succeeds', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('session-call', { credential_id: null });
+  await page.goto('/dashboard/my-usage');
+  await page.getByRole('button', { name: 'Compare keys', exact: true }).click();
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const keys = ['retained-key', 'Dashboard session'];
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  f.failReport();
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Old displayed report');
+  for (const name of keys) {
+   await expect(ranks.getByText(name, { exact: true })).toBeVisible();
+   await expect(ranks.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await ranks.getByLabel('Group ranking scope and coverage').click();
+  await expect(ranks).not.toContainText('Select a named group');
+  await expect(ranks).not.toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  const exact = page.getByRole('region', { name: 'Retained usage ranking' });
+  for (const name of keys) await expect(exact.getByRole('button', { name: 'member@example.com · ' + name, exact: true })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Retry report' }).click();
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(ranks).toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeEnabled();
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
 test('same-root retries preserve exact cursor; navigation retires roots and reentry starts page one',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
