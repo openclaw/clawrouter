@@ -106,7 +106,23 @@ export function AppShell() {
           </div>
         </header>
 
-        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{shell.refreshing ? "Refreshing console data" : status}</span>{refreshError ? <><span>{refreshError} Displayed data may be out of date.</span><button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button></> : null}{demoMode ? <em>demo</em> : null}</div> : null}
+        {statusPresentation.showBar ? (
+          <div className={`statusBar statusBar-${statusTone}${refreshError ? " refreshNotice" : ""}`} role="status" aria-live="polite">
+            {refreshError ? <>
+              <div className="refreshNoticeCopy">
+                <strong className="refreshNoticeCaption">Refresh failed</strong>
+                <p className="refreshNoticeImpact">{lastUpdatedAt === null ? "Some console data is unavailable." : "Displayed data may be out of date."}</p>
+                {shell.refreshing ? <p>Refreshing console data</p> : status !== "connected" ? <p>{status}</p> : null}
+                <p>{refreshError}</p>
+              </div>
+              <button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button>
+            </> : <>
+              <strong>{statusPresentation.label}</strong>
+              <span>{shell.refreshing ? "Refreshing console data" : status}</span>
+            </>}
+            {demoMode ? <em>demo</em> : null}
+          </div>
+        ) : null}
 
         {view === "home" && session.role === "admin" ? <GrantExpiryPools policies={keys} grants={upstreamGrants} ready={upstream.ready} error={shell.refreshError} onOpenGrant={grant => { editUpstreamGrant(grant); setAccessTab("upstream"); navigateTo("policies"); }} /> : null}
         {view === "home" ? (

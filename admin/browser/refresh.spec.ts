@@ -109,6 +109,29 @@ test("policy and principal budget views show used reservations separately from r
   await expect(page.locator(".quotaPercent").nth(1)).toHaveText("—");
 });
 
+for (const phase of ["initial", "background"] as const) {
+  test(`${phase} refresh failure leads with its impact and keeps Retry available`, async ({ page }) => {
+    const state = await fixture(page);
+    state.failBootstrap = phase === "initial";
+    await page.goto("/dashboard/catalog");
+    if (phase === "background") {
+      await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+      state.failBootstrap = true;
+      await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    }
+    const bar = page.locator(".statusBar");
+    const impact = phase === "initial" ? "Some console data is unavailable." : "Displayed data may be out of date.";
+    await expect(bar.getByText(impact, { exact: true })).toBeVisible();
+    const message = await bar.innerText();
+    expect(message.indexOf(impact)).toBeLessThan(message.indexOf("reporting offline"));
+    await expect(bar.getByText("connected", { exact: true })).toHaveCount(0);
+    state.failBootstrap = false;
+    await bar.getByRole("button", { name: "Retry refresh" }).click();
+    await expect(bar).toHaveCount(0);
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  });
+}
+
 for (const principal of ["initial", "changed"] as const) {
   test(`bootstrap failure shows unknown usage for the ${principal} principal`, async ({ page }) => {
     const state = await fixture(page);

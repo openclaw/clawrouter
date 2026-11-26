@@ -405,6 +405,34 @@
 .statusBar-error { border-bottom-color: var(--bad); flex-wrap: wrap; }
 .statusBar-error span { white-space: normal; overflow-wrap: anywhere; }
 
+.refreshNotice {
+  align-items: flex-start;
+  gap: 8px 16px;
+  padding-block: 10px;
+}
+
+.refreshNoticeCopy {
+  display: grid;
+  flex: 1 1 36ch;
+  gap: 3px;
+  min-width: 0;
+}
+
+.refreshNotice .refreshNoticeCaption {
+  justify-self: start;
+  font-size: 11px;
+}
+
+.refreshNoticeCopy p {
+  font-size: 12px;
+}
+
+.refreshNoticeCopy .refreshNoticeImpact {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 660;
+}
+
 @media (max-width: 1180px) {
   .appShell {
     grid-template-columns: 1fr;
