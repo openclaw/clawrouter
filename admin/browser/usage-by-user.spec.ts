@@ -160,3 +160,58 @@ test('By key compares retained keys; selecting and clearing one preserves the re
   await expect(ranking.locator('tbody tr')).toHaveCount(0);
  } finally { f.close(); }
 });
+
+test('displayed key report uses retained bounds and never labels pending results', async ({page}) => {
+ const f = await serve(page, 'admin'), release = Promise.withResolvers<void>();
+ try {
+  // On November 26 this requests October 20–November 18; retention starts October 27.
+  // Relative dates keep that seven-day gap under the fixture's real retention clock.
+  const day = 86400000, from = f.now - 37 * day, to = f.now - 8 * day;
+  for (const [id, at, key] of [
+   ['before-cut', from + 1000, 'clipped-key'],
+   ['inside-cut', f.now - 20 * day, 'clipped-key'],
+   ['another-key', f.now - 20 * day, 'other-key'],
+  ] as const) await f.ingest(id, {occurred_at_ms: at, credential_id: key});
+  const scope = page.getByRole('group', {name:'Displayed report scope'});
+  const calls = page.locator('.personalUsageSummary .personalGlance > div').filter({has:page.getByText('Model calls',{exact:true})}).locator('dd').first();
+  await page.goto('/dashboard/usage');
+  await page.getByRole('button', {name:'By key', exact:true}).click();
+  await expect(page.getByRole('heading', {name:'Exact ranking by key', exact:true})).toBeVisible();
+  await page.getByText('Custom interval and exact filters', {exact:true}).click();
+  const start = page.getByLabel('Start', {exact:true});
+  await start.fill(new Date(from).toISOString());
+  await page.getByLabel('End', {exact:true}).fill(new Date(to).toISOString());
+  const response = page.waitForResponse(r => new URL(r.url()).searchParams.get('from') === new Date(from).toISOString() && new URL(r.url()).pathname === '/v1/admin/usage/report');
+  await page.getByRole('button', {name:'Apply refinement', exact:true}).click();
+  const {value} = await (await response).json();
+  expect(value.coverage.clippedFrom).toBe(from);
+  expect(value.query.from).toBe(value.coverage.effectiveFrom);
+  expect(value.query.from - from).toBeGreaterThanOrEqual(7 * day);
+  expect(value.query.from - from).toBeLessThan(8 * day);
+  expect(value.query.to).toBe(to);
+  const retained = await page.evaluate(({from,to,timezone}) => new Intl.DateTimeFormat('en', {dateStyle:'medium',timeStyle:'short',timeZone:timezone}).formatRange(from,to), value.query);
+  await expect(calls).toHaveText('2');
+  await expect(start).toHaveValue(new Date(from).toISOString());
+  await expect(scope).toContainText('Retained interval:');
+  await expect(scope).toContainText(retained);
+
+  const keyRead = (url: URL) => url.pathname === '/v1/admin/usage/report' && url.searchParams.get('key') === 'clipped-key';
+  await page.route('**/v1/admin/usage/report?**', async route => {
+   if (keyRead(new URL(route.request().url()))) await release.promise;
+   await route.fallback();
+  });
+  const pending = page.waitForRequest(r => keyRead(new URL(r.url())));
+  await page.getByRole('button', {name:'member@example.com · clipped-key'}).click();
+  await pending;
+  await expect(page.getByText('Loading complete usage…', {exact:true})).toBeVisible();
+  await expect(scope).toHaveCount(0);
+  await expect(calls).toHaveCount(0);
+  release.resolve();
+  await expect(scope).toContainText('Key: clipped-key');
+  await expect(scope).toContainText(retained);
+  await expect(calls).toHaveText('1');
+  const events = page.getByRole('region', {name:'Retained events', exact:true});
+  await expect(events.locator('tbody tr')).toHaveCount(1);
+  expect(f.queries.filter((u: URL) => u.pathname === '/v1/admin/usage/events').at(-1)!.searchParams.get('from')).toBe(new Date(value.query.from).toISOString());
+ } finally { release.resolve(); f.close(); }
+});

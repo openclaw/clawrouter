@@ -17,11 +17,13 @@ function filterDescription({key, ...filters}: CompleteUsageQuery['filters']) {
   return parts.join(' · ');
 }
 
-function ReportScope({query, label = 'Displayed report scope', onClearKey}: {query: CompleteUsageQuery; label?: string; onClearKey?: (button: HTMLButtonElement) => void}) {
+function ReportScope({report, label = 'Displayed report scope', onClearKey}: {report: CompleteUsageReport; label?: string; onClearKey?: (button: HTMLButtonElement) => void}) {
+  const {query, coverage} = report;
+  const clipped = coverage.clippedFrom !== null && query.from === coverage.effectiveFrom;
   const dates = new Intl.DateTimeFormat('en', {dateStyle: 'medium', timeStyle: 'short', timeZone: query.timezone});
   return <div className="personalActions personalActiveFilters" role="group" aria-label={label}>
     <strong>{filterDescription(query.filters)}</strong>
-    <span>{dates.formatRange(query.from, query.to)} · {query.timezone} (end exclusive)</span>
+    <span>{clipped ? 'Retained interval: ' : ''}{dates.formatRange(query.from, query.to)} · {query.timezone} (end exclusive)</span>
     {query.filters.key && onClearKey ? <button type="button" className="buttonSecondary" onClick={event => onClearKey(event.currentTarget)}>Clear key filter</button> : null}
   </div>;
 }
@@ -29,7 +31,7 @@ function Recorded({value}:{value:UsageAdditives}) {return <><strong>{value.charg
 export function UsageCoverage({value}:{value:CompleteUsageReport}) {
   const c=value.coverage;
   return <><details className="personalNote personalRange"><summary>Report scope and capture dates</summary>
-    <p>Selected interval: {iso(value.query.from)} → {iso(value.query.to)} (end exclusive) · {value.query.timezone}</p>
+    <p>Reported interval: {iso(value.query.from)} → {iso(value.query.to)} (end exclusive) · {value.query.timezone}</p>
     <p>Captured between {iso(c.capturedBetween.from)} and {iso(c.capturedBetween.to)}. This is a read boundary, not settlement freshness.</p>
     {c.clippedFrom!==null?<p>Start clipped from {iso(c.clippedFrom)} to retained data at {iso(c.effectiveFrom)}.</p>:null}
     <p>Location tracking started {iso(c.captureAudit.startedAt)}; verified since {iso(c.captureAudit.verifiedSince)}.</p>
@@ -78,7 +80,7 @@ function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName
         <button type="button" className="buttonSecondary" onClick={()=>data.preset(7,draft)}>Last 7 days</button><button type="button" className="buttonSecondary" onClick={()=>data.preset(30,draft)}>Last 30 days</button><button type="button" className="buttonSecondary" onClick={data.reload}>Refresh report</button><button type="button" className="buttonSecondary" disabled={!q} onClick={data.back}>Back to base</button>
       </div>
     </div>
-    {report ? <ReportScope query={(!data.report.error && data.selectedQuery) || report} onClearKey={data.report.error ? undefined : clearKey}/> : null}
+    {data.report.value ? <ReportScope report={data.report.value} onClearKey={data.report.error ? undefined : clearKey}/> : null}
     {draft?<details className="personalAdvanced"><summary>Custom interval and exact filters</summary><p>Calendar dates in the chosen IANA timezone or RFC3339 instants; end exclusive. Widening opens a new base. Maximum 30 days; minute grain requires at most 24 hours.</p><div className="personalFilterGrid">
     <label>Group by<select value={draft.groupBy} onChange={e=>refine({...draft,groupBy:e.target.value as CompleteUsageQuery['groupBy'],rankOffset:0})}>{groups.map(k=><option key={k}>{k}</option>)}</select></label>
     <label>Rank by<select value={draft.rankBy} onChange={e=>refine({...draft,rankBy:e.target.value as CompleteUsageQuery['rankBy'],rankOffset:0})}><option value="calls">Calls</option><option value="tokens">Reported input + output tokens</option><option value="recordedAmount">Recorded accounting amount</option></select></label>
@@ -126,4 +128,4 @@ export function CompleteUsageScreen({data,keys=[]}:{data:PersonalUsageData;keys?
   </div>;
 }
 
-export function CompleteExport({data}:{data:PersonalUsageData}) { return (<section className="dashboardPanel personalSection"><h2>Export refreshed snapshot</h2><p>Same selected range and filters; captures current usage again. Every matching retained event in the disclosed discovered scope, not all global history. Totals may differ from the displayed report. Up to 50,000 events / 16 MiB.</p><div className="personalActions"><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('csv')}>Export refreshed snapshot CSV</button><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('json')}>Export refreshed snapshot JSON</button>{data.exportState.busy?<button type="button" onClick={data.cancelExport}>Cancel export</button>:null}</div><p role="status">{data.exportState.message}</p>{data.exportState.report?<><h3>Fresh export snapshot</h3><ReportScope query={data.exportState.report.query} label="Export snapshot scope"/><p>{count(data.exportState.report.metrics.calls)} calls · <Recorded value={data.exportState.report}/></p><p>{usageCaveats[data.audience]}</p><UsageCoverage value={data.exportState.report}/></>:null}</section>); }
+export function CompleteExport({data}:{data:PersonalUsageData}) { return (<section className="dashboardPanel personalSection"><h2>Export refreshed snapshot</h2><p>Same selected range and filters; captures current usage again. Every matching retained event in the disclosed discovered scope, not all global history. Totals may differ from the displayed report. Up to 50,000 events / 16 MiB.</p><div className="personalActions"><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('csv')}>Export refreshed snapshot CSV</button><button type="button" disabled={data.exportState.busy||!data.query} onClick={()=>void data.startExport('json')}>Export refreshed snapshot JSON</button>{data.exportState.busy?<button type="button" onClick={data.cancelExport}>Cancel export</button>:null}</div><p role="status">{data.exportState.message}</p>{data.exportState.report?<><h3>Fresh export snapshot</h3><ReportScope report={data.exportState.report} label="Export snapshot scope"/><p>{count(data.exportState.report.metrics.calls)} calls · <Recorded value={data.exportState.report}/></p><p>{usageCaveats[data.audience]}</p><UsageCoverage value={data.exportState.report}/></>:null}</section>); }
