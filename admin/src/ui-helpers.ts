@@ -10,6 +10,8 @@ import {
   parseGroups,
   playgroundAccessEndpoint,
   playgroundPayload,
+  playgroundServicePreset,
+  preferredPlaygroundEndpoint,
   playgroundResponseText,
   routeKey,
   tenantSummaryFallback,
@@ -293,7 +295,7 @@ export function serviceRouteRank(route: RouteCatalog["manifestProxy"][number]) {
   return 1;
 }
 
-export function serviceModelFromForm(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+export function serviceModelFromForm(form: Pick<PlaygroundForm, "servicePath" | "servicePayload">, route?: RouteCatalog["manifestProxy"][number]) {
   if (route?.pathParams?.includes("model")) return form.servicePath;
   try {
     const body = JSON.parse(form.servicePayload) as { model?: unknown };
@@ -411,6 +413,31 @@ export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, rea
       brandIcon: providerBrandIcon(providerId),
     };
   });
+}
+
+export function catalogPlaygroundTarget(service: ServiceItem, query: string, models: CatalogModel[], routes: RouteCatalog["manifestProxy"]) {
+  const needle = query.trim();
+  const providerModels = models.filter((model) => model.provider === service.provider);
+  const providerRoutes = routes.filter((route) => route.provider === service.provider);
+  // The Playground picker offers proxy models only when there are no conversation models.
+  const proxyModels = needle && !providerModels.length ? serviceModelOptions(providerRoutes) : [];
+  const ids = new Set([...service.modelIds, ...proxyModels.map((item) => item.model)]);
+  const folded = needle.toLowerCase();
+  const matches = needle ? [...ids].filter((id) => id.toLowerCase() === folded) : [];
+  const matchedModel = ids.has(needle) ? needle : matches.length === 1 ? matches[0] : undefined;
+  const model = matchedModel ? providerModels.find((item) => item.id === matchedModel) : providerModels[0];
+  if (model) {
+    const endpoint = matchedModel ? { endpoint: preferredPlaygroundEndpoint(model) } : {};
+    return { matchedModel, preset: { mode: "model" as const, model: model.id, ...endpoint } };
+  }
+
+  const proxy = proxyModels.find((item) => item.model === matchedModel);
+  const route = matchedModel ? proxy?.route : providerRoutes[0];
+  if (route) {
+    const preset = playgroundServicePreset(route, proxy?.model);
+    if (!matchedModel || serviceModelFromForm(preset, route) === matchedModel) return { matchedModel, preset: { mode: "service" as const, ...preset } };
+  }
+  return { matchedModel, preset: null };
 }
 
 export function matchesServiceQuery(item: ServiceItem, query: string) {

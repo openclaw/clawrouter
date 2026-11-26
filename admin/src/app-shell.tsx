@@ -3,7 +3,7 @@ import { GrantExpiryPools } from "./grant-expiry";
 import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
 import { Route } from "lucide-react";
-import { accessFormFromUser, playgroundServicePreset } from "./domain";
+import { accessFormFromUser } from "./domain";
 import { ThemeToggle, navItems, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
@@ -173,6 +173,8 @@ export function AppShell() {
             services={filteredServices}
             allServices={services}
             selected={selectedService}
+            models={models}
+            serviceRoutes={serviceRoutes}
             policies={keys}
             connections={connections}
             pendingProviderIds={pendingProviderIds}
@@ -188,12 +190,8 @@ export function AppShell() {
             onSelect={(service) => setSelectedServiceId(service.id)}
             onSetConnection={setProviderConnection}
             onSetProviderBudget={setProviderBudget}
-            onPlay={(service) => {
-              const model = models.find((item) => item.provider === service.provider);
-              const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
-              setPlayground((current) => model
-                ? { ...current, mode: "model", model: model.id }
-                : proxyRoute ? { ...current, mode: "service", ...playgroundServicePreset(proxyRoute) } : current);
+            onPlay={(preset) => {
+              setPlayground((current) => ({ ...current, ...preset }));
               navigateTo("playground");
             }}
             onAdd={(service) => {

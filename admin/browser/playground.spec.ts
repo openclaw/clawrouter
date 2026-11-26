@@ -32,6 +32,68 @@ test.beforeEach(async ({ page }) => {
   await expect(page.getByRole("combobox", { name: "Provider", exact: true })).toHaveValue("test-model");
 });
 
+async function catalogSelection(page: Page, query: string, provider: string) {
+  await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Catalog", exact: true }).press("Enter");
+  const search = page.getByRole("textbox", { name: "search catalog" });
+  await search.fill(query);
+  const row = page.getByRole("button").filter({ has: page.getByText(provider, { exact: true }) });
+  await row.press("Enter");
+  await expect(page.locator(".inspectorHeader h2")).toHaveText(provider);
+  return { search, play: page.getByRole("button", { name: "Try in playground" }) };
+}
+
+test("Catalog opens the exact selected model with its supported endpoint, without sending", async ({ page }) => {
+  const { play } = await catalogSelection(page, "  TEST-MODEL/REPLY-PRO  ", "test-model");
+  await expect(page.locator(".inspector").getByText("test-model/reply-pro", { exact: true })).toBeVisible();
+  await play.press("Enter");
+  await expect(page.getByRole("combobox", { name: "Model or route" })).toHaveValue("model:test-model/reply-pro");
+  await expect(page.locator(".chatHeader strong")).toHaveText("test-model/reply-pro");
+  await expect(page.getByText("/v1/playground/v1/responses", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Model or route" }).selectOption("model:test-model/reply-lite");
+  await expect(page.locator(".chatHeader strong")).toHaveText("test-model/reply-lite");
+  expect(await requestCount(page)).toBe(0);
+});
+
+test("Catalog does not turn an ambiguous model fragment into a model choice", async ({ page }) => {
+  const { play } = await catalogSelection(page, "reply", "test-model");
+  await play.press("Enter");
+  await expect(page.getByRole("combobox", { name: "Model or route" })).toHaveValue("model:test-model/example");
+  expect(await requestCount(page)).toBe(0);
+});
+
+test("Catalog honors a pinned service when the search names another provider's exact model", async ({ page }) => {
+  const { play, search } = await catalogSelection(page, "test-service", "test-service");
+  await search.fill("test-model/reply-pro");
+  await expect(page.locator(".inspectorHeader h2")).toHaveText("test-service");
+  await play.press("Enter");
+  await expect(page.getByRole("combobox", { name: "Provider", exact: true })).toHaveValue("test-service");
+  await expect(page.getByRole("textbox", { name: "JSON request body" })).toBeVisible();
+  expect(await requestCount(page)).toBe(0);
+});
+
+test("Catalog does not substitute a chat model for an exact unavailable model", async ({ page }) => {
+  const { play } = await catalogSelection(page, "test-model/image", "test-model");
+  await expect(play).toBeDisabled();
+  await expect(page.locator(".inspector")).toContainText("Not available in Playground");
+  expect(await requestCount(page)).toBe(0);
+});
+
+for (const blocked of ["denied", "not ready"] as const) {
+  test(`Catalog keeps an exact match blocked when the service is ${blocked}`, async ({ page }) => {
+    await page.route("**/v1/session", (route) => route.fulfill({ json: {
+      authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com",
+      entitlements: { providers: entitlements.map((entry) => entry.provider !== "test-model" ? entry : {
+        ...entry, allowed: blocked !== "denied", readiness: { ...entry.readiness, executable: blocked !== "not ready", reasons: ["Unavailable in this fixture."] },
+      }) },
+    } }));
+    await page.reload();
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    const { play } = await catalogSelection(page, "test-model/reply-pro", "test-model");
+    await expect(play).toBeDisabled();
+    expect(await requestCount(page)).toBe(0);
+  });
+}
+
 test("playground admits one request and preserves the next draft", async ({ page }) => {
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill("First message");
@@ -310,15 +372,21 @@ const entitlements = providers.map((provider) => ({
     id: provider.id, displayName: provider.id, class: "test", serviceKind: provider.service_kind,
     requiredConfig: [], optionalConfig: [], missingConfig: [], configPresent: true,
     oauthGrantRequired: false, oauthGrantCount: 0, openaiCompatible: provider.id === "test-model",
-    manifestRoutes: 0, modelCount: 1, executable: true, verified: true, status: "verified", reasons: [],
+    manifestRoutes: provider.id === "test-service" ? 1 : 0, modelCount: provider.id === "test-model" ? 4 : 0,
+    executable: true, verified: true, status: "verified", reasons: [],
   },
 }));
 const bootstrap: Record<string, unknown> = {
   "/v1/providers": { providers },
   "/v1/routes": {
     openaiCompatible: [{
-      provider: "test-model", endpoints: ["/v1/chat/completions"],
-      models: [{ id: "test-model/example", capabilities: ["llm.chat"], endpoints: ["/v1/chat/completions"] }],
+      provider: "test-model", endpoints: ["/v1/chat/completions", "/v1/responses", "/v1/images/generations"],
+      models: [
+        { id: "test-model/example", capabilities: ["llm.chat"], endpoints: ["/v1/chat/completions"] },
+        { id: "test-model/reply-lite", capabilities: ["llm.chat"], endpoints: ["/v1/chat/completions"] },
+        { id: "test-model/reply-pro", capabilities: ["llm.responses"], endpoints: ["/v1/responses"] },
+        { id: "test-model/image", capabilities: ["image.generation"], endpoints: ["/v1/images/generations"] },
+      ],
     }],
     manifestProxy: [{ provider: "test-service", endpoint: "search", route: "/v1/proxy/test-service/search", methods: ["POST"] }],
   },

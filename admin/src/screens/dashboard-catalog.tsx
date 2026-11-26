@@ -40,6 +40,8 @@ import {
 import { formatConfiguredLimit, presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart, UsageFreshness } from "../analytics-charts";
 import {
+  catalogPlaygroundTarget,
+  type CatalogModel,
   effectiveProviderCount,
   formatCount,
   formatDuration,
@@ -57,6 +59,8 @@ import type {
   AdminUsageRow,
   ProviderConnection,
   ProxyCredential,
+  PlaygroundForm,
+  RouteCatalog,
   ServiceItem,
   SessionResponse,
   UsageSnapshot,
@@ -288,10 +292,12 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, budgetAttempts, discardBudgetAttempt, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, models, serviceRoutes, policies, connections, pendingProviderIds, budgetAttempts, discardBudgetAttempt, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
+  models: CatalogModel[];
+  serviceRoutes: RouteCatalog["manifestProxy"];
   policies: AccessPolicy[];
   connections: ProviderConnection[];
   pendingProviderIds: ReadonlySet<string>;
@@ -307,7 +313,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
   onSetProviderBudget: SaveProviderBudget;
-  onPlay: (service: ServiceItem) => void;
+  onPlay: (preset: Partial<PlaygroundForm>) => void;
   onAdd: (service: ServiceItem) => void;
 }) {
   const activePolicies = policies.filter((policy) => policy.enabled);
@@ -359,7 +365,8 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
           <>
             {(() => {
               const outcome = serviceOutcome(selected);
-              const playBlocker = playgroundBlockedForService(selected);
+              const target = catalogPlaygroundTarget(selected, query, models, serviceRoutes);
+              const playBlocker = playgroundBlockedForService(selected) ?? (!target.preset ? "No Playground target available" : null);
               const connection = connectionByProvider.get(selected.provider);
               const connectionEnabled = connection?.enabled ?? selected.readiness?.connectionEnabled;
               const connectionPending = pendingProviderIds.has(selected.provider);
@@ -372,6 +379,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             </div>
             <dl className="facts">
               <dt>provider</dt><dd>{selected.provider}</dd>
+              {target.matchedModel ? <><dt>matched model</dt><dd>{target.matchedModel}{target.preset ? "" : " · Not available in Playground"}</dd></> : null}
               <dt>kind</dt><dd>{kindLabel(selected.kind)}</dd>
               <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
@@ -392,7 +400,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               }) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
-              <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" disabled={playBlocker !== null} onClick={() => { if (target.preset) onPlay(target.preset); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
               {canAdminister ? <button type="button" disabled={connectionPending} aria-busy={connectionPending} className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
