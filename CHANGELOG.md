@@ -1,5 +1,7 @@
 # Changelog
 
+- Clarify that Fusion callers must compact rejected candidate context before request-size admission, with a large-source regression example.
+
 - Report a six-case Fusion pilot and uninterrupted repeat, preserving the interrupted draw and separating model-cost evidence from timing qualification.
 
 - Retain bounded realtime deadline and socket-close durations in sanitized CI failure diagnostics.
