@@ -26,6 +26,7 @@ export function router(source, candidate, proofOffset) { return `
  export class UsageLedgerObject extends Ledger {
   async fetch(request) {
    ${candidate ? costEvidenceLedgerRoute : ""}
+   ${candidate ? 'if (request.method === "POST" && new URL(request.url).pathname === "/_proof/alarm") { await super.alarm(); return Response.json({ ok: true }); }' : ''}
    if (new URL(request.url).pathname !== "/_proof/state") return super.fetch(request);
    const rows = [...this.sql.exec("SELECT id, event_json FROM usage_events ORDER BY id")];
    const exists = [...this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_report_events'")].length > 0;
@@ -37,6 +38,7 @@ export function router(source, candidate, proofOffset) { return `
   env = { ...env, CLAWROUTER_LOCAL_AUTH: "enabled" };
   const url = new URL(request.url);
   ${candidate ? costRouterRoutes : ""}
+  ${candidate ? 'if (request.method === "POST" && url.pathname === "/_proof/alarm") return usageStub(env, "proof-tenant", "proof").fetch("https://ledger/_proof/alarm", { method: "POST" });' : ''}
   if (url.pathname === "/_proof/setup") {
    await authorityCall(env, "/policies/initialize-all", [{ policyId: "proof", policy }]);
    await authorityCall(env, "/connections/initialize-all", [{ providerId: "openai", enabled: true, monthlyBudgetMicros: null }]);
@@ -79,7 +81,7 @@ export const upstream = `export default { async fetch(request) {
 }};`;
 const summarize = values => { const sorted = [...values].sort((a,b)=>a-b); return { samplesMs: values, medianMs: sorted[Math.floor(sorted.length/2)], p95Ms: sorted[Math.ceil(sorted.length*.95)-1] }; };
 
-/** All authority/report/proxy/queue/ledger code is shipped code. Only setup/state inspection and upstream are fixture adapters. */
+/** All authority/report/proxy/queue/ledger code is shipped code. Setup/state inspection, alarm invocation and upstream are fixture adapters. */
 export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactPath } = {}) {
  const root = resolve(".openclaw/tmp"); await mkdir(root, { recursive: true });
  const temporary = await mkdtemp(join(root, "authenticated-upgrade-")), baseline = join(temporary, "baseline");
