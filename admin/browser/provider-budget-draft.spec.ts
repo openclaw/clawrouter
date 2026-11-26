@@ -1,18 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
 
 // Local fixture: no provider traffic; only an explicit connection PATCH may change the cap.
-async function openCatalog(page: Page) {
+async function openCatalog(page: Page, capMicros = 10_000_000) {
   const providers = ['harbor', 'reef'].map(id => ({ id, display_name: id, service_kind: 'model_provider', capabilities: [] }));
-  const model = { email: 'first@example.test', cap: 10, used: 1 };
+  const model = { email: 'first@example.test', capMicros, used: 1 };
   const writes: Array<{ path: string; method: string; payload: unknown }> = [];
-  const connection = (providerId: string) => ({ providerId, enabled: true, monthlyBudgetMicros: (providerId === 'harbor' ? model.cap : 70) * 1e6, spentMicros: model.used * 1e6 });
+  const connection = (providerId: string) => ({ providerId, enabled: true, monthlyBudgetMicros: providerId === 'harbor' ? model.capMicros : 70_000_000, spentMicros: model.used * 1e6 });
   await page.route('**/v1/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
     if (req.method() !== 'GET') {
       const payload = req.postDataJSON();
       writes.push({ path, method: req.method(), payload });
       if (req.method() === 'PATCH' && path === '/v1/admin/connections/harbor') {
-        model.cap = payload.monthlyBudgetMicros / 1e6;
+        model.capMicros = payload.monthlyBudgetMicros;
         await route.fulfill({ json: connection('harbor') });
       } else await route.fulfill({ status: 405 });
       return;
@@ -28,9 +28,9 @@ async function openCatalog(page: Page) {
   });
   await page.goto('/dashboard/catalog');
   const budget = page.getByRole('textbox', { name: 'monthly provider budget ($)' });
-  await expect(budget).toHaveValue('10');
+  await expect(budget).toBeVisible();
   async function refresh(cap: number) {
-    model.cap = cap;
+    model.capMicros = cap * 1e6;
     model.used++;
     const response = page.waitForResponse(r => new URL(r.url()).pathname === '/v1/admin/bootstrap');
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -39,6 +39,33 @@ async function openCatalog(page: Page) {
   }
   return { budget, model, refresh, writes };
 }
+
+test('provider caps preserve exact microdollars and reject inexact amounts before PATCH', async ({ page }) => {
+  const { budget, writes } = await openCatalog(page, Number.MAX_SAFE_INTEGER);
+  const save = page.getByRole('button', { name: 'Save budget' });
+  await expect(budget).toHaveValue('9007199254.740991');
+  await save.click();
+  await expect.poll(() => writes).toEqual([{ path: '/v1/admin/connections/harbor', method: 'PATCH', payload: { monthlyBudgetMicros: Number.MAX_SAFE_INTEGER } }]);
+  await expect(save).toBeEnabled();
+  await expect(budget).toHaveValue('9007199254.740991');
+
+  for (const invalid of ['0.0000009', '9007199254.740992', '1,2', '-1']) {
+    await budget.fill(invalid);
+    await save.click();
+    await expect(page.locator('.providerBudgetError')).toContainText('Monthly budget:');
+    await expect(budget).toHaveValue(invalid);
+    expect(writes).toHaveLength(1);
+  }
+
+  for (const [text, micros] of [['$1,234.567891', 1_234_567_891], ['0.000001', 1], ['0', 0], ['', null]] as const) {
+    const count = writes.length;
+    await budget.fill(text);
+    await save.click();
+    await expect.poll(() => writes.length).toBe(count + 1);
+    expect(writes[count]).toEqual({ path: '/v1/admin/connections/harbor', method: 'PATCH', payload: { monthlyBudgetMicros: micros } });
+    await expect(save).toBeEnabled();
+  }
+});
 
 test('untouched caps follow refresh; a dirty provider budget survives refresh until explicitly saved', async ({ page }) => {
   const { budget, refresh, writes } = await openCatalog(page);
