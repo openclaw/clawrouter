@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
-import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../src/domain.ts";
+import { errorMessage, knownPolicyProviders, optionalNumber, parseEligibleGrants, unique } from "../src/domain.ts";
 import { consoleStatusPresentation } from "../src/status-display.ts";
-import { optionalRequestPriceMicros, requestPriceInput, requestPricesInput, requestPricesMicros } from "../src/request-price-input.ts";
+import { policyBudgetMicros, optionalRequestPriceMicros, dollarInputFromMicros, requestPricesInput, requestPricesMicros } from "../src/request-price-input.ts";
 
 // Run the actual owner without installing React; browser journeys cover rendering and events.
 const hookSource = stripTypeScriptTypes(await readFile(new URL("../src/hooks/access/use-policy-admin.ts", import.meta.url), "utf8"))
@@ -14,11 +14,58 @@ const config = await readFile(new URL("../src/ui-config.ts", import.meta.url), "
 const defaultPolicy = evaluate(config.slice(config.indexOf("export const defaultPolicy"), config.indexOf("export const defaultAccess")), "defaultPolicy");
 const rolePresets = evaluate(config.slice(config.indexOf("export const rolePresets"), config.indexOf("export const adminViews")), "rolePresets");
 const helpers = await readFile(new URL("../src/ui-helpers.ts", import.meta.url), "utf8");
-const policyFormFromPolicy = new Function("currencyInput", "requestPriceInput", "requestPricesInput", `${stripTypeScriptTypes(helpers.slice(helpers.indexOf("export function policyFormFromPolicy"), helpers.indexOf("export function adminOverviewFromPolicies"))).replace("export function", "function")}\nreturn policyFormFromPolicy;`)(currencyInput, requestPriceInput, requestPricesInput);
+const policyFormFromPolicy = new Function("dollarInputFromMicros", "requestPricesInput", `${stripTypeScriptTypes(helpers.slice(helpers.indexOf("export function policyFormFromPolicy"), helpers.indexOf("export function adminOverviewFromPolicies"))).replace("export function", "function")}\nreturn policyFormFromPolicy;`)(dollarInputFromMicros, requestPricesInput);
 
 const shell = await readFile(new URL("../src/app-shell.tsx", import.meta.url), "utf8");
 const addStart = shell.indexOf("onAdd={(service) => {") + "onAdd={(service) => {".length;
 const catalogAdd = new Function("setPolicyForm", "setAccessTab", "navigateTo", "service", shell.slice(addStart, shell.indexOf("\n            }}", addStart)));
+
+test("policy budgets reject values that would round, overflow or turn a malformed amount into zero", async () => {
+  const fixture = ready();
+  for (const [field, value, feedback] of [
+    ["dailyBudgetMicros", "1.00000100000000001", /Daily budget.*0\.000001/],
+    ["weeklyBudgetMicros", "9007199254.740992", /Weekly budget.*9,007,199,254\.740991/],
+    ["monthlyBudgetMicros", "4e-7", /Monthly budget.*0\.000001/],
+    ["monthlyBudgetMicros", "-0.01", /Monthly budget.*non-negative/],
+    ["monthlyBudgetMicros", "$", /Monthly budget.*non-negative/],
+    ["monthlyBudgetMicros", "1,2", /Monthly budget.*non-negative/],
+  ]) {
+    change(fixture, { dailyBudgetMicros: "", weeklyBudgetMicros: "", monthlyBudgetMicros: "", [field]: value });
+    const save = fixture.render().policies.save(event);
+    assert.equal(fixture.requests.length, 0);
+    await save;
+    assert.match(fixture.render().policies.error, feedback);
+    assert.equal(fixture.render().policies.form[field], value);
+  }
+});
+
+test("an unrelated edit preserves stored budgets through the last safe microdollar", async () => {
+  const fixture = mount();
+  const budgets = { dailyBudgetMicros: Number.MAX_SAFE_INTEGER - 2, weeklyBudgetMicros: Number.MAX_SAFE_INTEGER - 8, monthlyBudgetMicros: Number.MAX_SAFE_INTEGER };
+  hydrate(fixture, [{ ...policy("policy_a"), ...budgets }]);
+  const form = fixture.render().policies.form;
+  assert.equal(form.dailyBudgetMicros, "9007199254.740989");
+  assert.equal(form.weeklyBudgetMicros, "9007199254.740983");
+  assert.equal(form.monthlyBudgetMicros, "9007199254.740991");
+  change(fixture, { tenantId: "new-tenant" });
+  const save = fixture.render().policies.save(event);
+  const submitted = JSON.parse(fixture.requests[0].init.body);
+  for (const [field, micros] of Object.entries(budgets)) assert.equal(submitted[field], micros);
+  fixture.requests[0].resolve(submitted);
+  await save;
+});
+
+test("policy budgets accept grouped dollars, scientific notation and redundant precision exactly", async () => {
+  const fixture = ready();
+  change(fixture, { dailyBudgetMicros: "  $ 1,234.5678900 ", weeklyBudgetMicros: ".2000e-5", monthlyBudgetMicros: "+.00000100" });
+  const save = fixture.render().policies.save(event);
+  const submitted = JSON.parse(fixture.requests[0].init.body);
+  assert.equal(submitted.dailyBudgetMicros, 1_234_567_890);
+  assert.equal(submitted.weeklyBudgetMicros, 2);
+  assert.equal(submitted.monthlyBudgetMicros, 1);
+  fixture.requests[0].resolve(submitted);
+  await save;
+});
 
 test("bootstrap initializes once, preserves an early New draft, and clean selected rows reconcile", () => {
   const fixture = mount();
@@ -833,7 +880,7 @@ function mount(demoMode = false) {
   const fixture = { requests, statuses, refreshes: 0, confirmations: 0, acceptDiscard: true, demoRows: [], providers: [] };
   const window = { confirm: () => { fixture.confirmations += 1; return fixture.acceptDiscard; } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
-  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", "normalizeRequestCosts", "optionalRequestPriceMicros", "requestPriceInput", "requestPricesMicros", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique, normalizeRequestCosts, optionalRequestPriceMicros, requestPriceInput, requestPricesMicros);
+  const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "errorMessage", "knownPolicyProviders", "policyBudgetMicros", "optionalNumber", "parseEligibleGrants", "unique", "normalizeRequestCosts", "optionalRequestPriceMicros", "dollarInputFromMicros", "requestPricesMicros", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, errorMessage, knownPolicyProviders, policyBudgetMicros, optionalNumber, parseEligibleGrants, unique, normalizeRequestCosts, optionalRequestPriceMicros, dollarInputFromMicros, requestPricesMicros);
   fixture.render = () => {
     cursor = 0;
     return usePolicyAdmin({ request, allowDemo: demoMode, gatewayOrigin: "https://console.example", session, demoMode, providers: fixture.providers, credentials: [], routes: {}, setStatus: (status) => statuses.push(status), refresh: () => { fixture.refreshes += 1; return new Promise(() => {}); }, syncDemoAdmin: (rows) => { fixture.demoRows = rows; } });

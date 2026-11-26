@@ -1,9 +1,9 @@
 import { normalizeRequestCosts } from "../../../../shared/request-pricing";
 import { type FormEvent, useRef, useState } from "react";
-import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
+import { errorMessage, knownPolicyProviders, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
 import { policyFormFromPolicy } from "../../ui-helpers";
-import { optionalRequestPriceMicros, requestPriceInput, requestPricesMicros } from "../../request-price-input";
+import { optionalRequestPriceMicros, policyBudgetMicros, dollarInputFromMicros, requestPricesMicros } from "../../request-price-input";
 import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, PolicyForm, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse } from "../../ui-types";
 
@@ -76,9 +76,9 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         poolStatus: policyForm.poolStatus,
         tenantId: policyForm.tenantId || "default",
         tokenRole: policyForm.tokenRole || null,
-        monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
-        dailyBudgetMicros: optionalCurrencyMicros(policyForm.dailyBudgetMicros) ?? null,
-        weeklyBudgetMicros: optionalCurrencyMicros(policyForm.weeklyBudgetMicros) ?? null,
+        monthlyBudgetMicros: policyBudgetMicros(policyForm.monthlyBudgetMicros, "Monthly"),
+        dailyBudgetMicros: policyBudgetMicros(policyForm.dailyBudgetMicros, "Daily"),
+        weeklyBudgetMicros: policyBudgetMicros(policyForm.weeklyBudgetMicros, "Weekly"),
         serviceTiers: { allowed: unique(policyForm.serviceTierAllowed.split(",").map(tier => tier.trim()).filter(Boolean)), models: policyForm.serviceTierModels.trim() ? JSON.parse(policyForm.serviceTierModels) : {} },
         limitHint: policyForm.limitHint.trim() || null,
         requestCostMicros: optionalRequestPriceMicros(policyForm.requestCostDollars) ?? null,
@@ -217,7 +217,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
 
   function applyPreset(role: keyof typeof rolePresets) {
     const preset = rolePresets[role], available = new Set(providers.map((provider) => provider.id));
-    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostDollars: requestPriceInput(optionalNumber(preset.request)), providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
+    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: dollarInputFromMicros(optionalNumber(preset.budget)), requestCostDollars: dollarInputFromMicros(optionalNumber(preset.request)), providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
   }
 
   function toggleProvider(providerId: string) {

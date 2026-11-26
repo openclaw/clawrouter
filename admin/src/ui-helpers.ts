@@ -1,9 +1,8 @@
 import providerIconManifest from "./provider-icons.json";
-import { requestPriceInput, requestPricesInput } from "./request-price-input";
+import { dollarInputFromMicros, requestPricesInput } from "./request-price-input";
 import {
   catalogProviderIds,
   kindLabel,
-  currencyInput,
   credentialOutcome,
   errorMessage,
   optionalNumber,
@@ -325,13 +324,13 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     tokenRole: key.tokenRole ?? "",
     tenantId: key.tenantId ?? "default",
     enabled: key.enabled,
-    monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
-    dailyBudgetMicros: currencyInput(key.dailyBudgetMicros),
-    weeklyBudgetMicros: currencyInput(key.weeklyBudgetMicros),
+    monthlyBudgetMicros: dollarInputFromMicros(key.monthlyBudgetMicros),
+    dailyBudgetMicros: dollarInputFromMicros(key.dailyBudgetMicros),
+    weeklyBudgetMicros: dollarInputFromMicros(key.weeklyBudgetMicros),
     serviceTierAllowed: (key.serviceTiers?.allowed ?? ["default", "flex", "priority"]).join(", "),
     serviceTierModels: key.serviceTiers?.models ? JSON.stringify(key.serviceTiers.models, null, 2) : "",
     limitHint: key.limitHint ?? "",
-    requestCostDollars: requestPriceInput(key.requestCostMicros),
+    requestCostDollars: dollarInputFromMicros(key.requestCostMicros),
     requestCostsDollars: requestPricesInput(key.requestCostsMicros),
     budgetScope: key.budgetScope ?? "policy",
     budgetMode: key.budgetMode ?? "reserve",
