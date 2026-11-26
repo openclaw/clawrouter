@@ -23,7 +23,8 @@ export function createAnchoredEditSchema(task) {
   } };
 }
 
-export function applyAnchoredEdits(task, files, expectedDigests, edits) {
+export function applyAnchoredEdits(task, files, expectedDigests, edits, { relocateUniqueSearch = false } = {}) {
+  assert.equal(typeof relocateUniqueSearch, 'boolean', 'invalid_anchor_relocation_option');
   validateEdits(task, files);
   assert.ok(expectedDigests && typeof expectedDigests === 'object' && !Array.isArray(expectedDigests), 'invalid_source_digests');
   assert.deepEqual(Object.keys(expectedDigests).sort(), files.map(file => file.path).sort(), 'source_digest_inventory');
@@ -43,7 +44,14 @@ export function applyAnchoredEdits(task, files, expectedDigests, edits) {
     const original = originals.get(edit.path);
     assert.ok(original && Number.isSafeInteger(edit.startLine) && edit.startLine >= 1
       && edit.startLine <= original.starts.length, 'invalid_source_anchor');
-    const start = original.starts[edit.startLine - 1], end = start + edit.search.length;
+    let start = original.starts[edit.startLine - 1], end = start + edit.search.length;
+    if (relocateUniqueSearch && original.content.slice(start, end) !== edit.search) {
+      const found = original.content.indexOf(edit.search);
+      assert.ok(found >= 0 && original.content.indexOf(edit.search, found + 1) < 0
+        && (found === 0 || original.content[found - 1] === '\n'), 'source_anchor_not_unique');
+      start = found;
+      end = start + edit.search.length;
+    }
     assert.equal(original.content.slice(start, end), edit.search, 'source_anchor_mismatch');
     const group = grouped.get(edit.path) ?? [];
     group.push({ start, end, replace: edit.replace }); grouped.set(edit.path, group);

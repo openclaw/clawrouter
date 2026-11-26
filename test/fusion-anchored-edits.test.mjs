@@ -59,3 +59,33 @@ test('enforces declared paths and bounded structured output', () => {
   assert.equal(schema.properties.edits.items.additionalProperties, false);
   assert.throws(() => anchoredSources(task, [{ path: 'test/a.js', content: '' }]));
 });
+
+test('opt-in relocation requires a unique exact search at a line boundary', () => {
+  const edits = [edit(1, 'keep();\n')];
+  assert.throws(() => applyAnchoredEdits(task, files, digests(files), edits), /source_anchor_mismatch/);
+  const result = applyAnchoredEdits(task, files, digests(files), edits, { relocateUniqueSearch: true });
+  assert.equal(result[0].content, 'same();\nfixed();\nsame();\n');
+  assert.equal(edits[0].startLine, 1);
+  for (const search of ['same();\n', 'eep();\n', 'missing();\n']) {
+    assert.throws(() => applyAnchoredEdits(task, files, digests(files), [edit(2, search)],
+      { relocateUniqueSearch: true }), /source_anchor_not_unique/);
+  }
+});
+
+test('relocation retains hash, overlap and explicit duplicate-anchor protections', () => {
+  const options = { relocateUniqueSearch: true };
+  assert.throws(() => applyAnchoredEdits(task, files, { ...digests(files), 'src/a.js': hash('stale') },
+    [edit(1, 'keep();\n')], options), /source_digest_mismatch/);
+  assert.throws(() => applyAnchoredEdits(task, files, digests(files),
+    [edit(1, 'keep();\n'), edit(2, 'keep();\n')], options), /overlapping_anchored_edits/);
+  assert.equal(applyAnchoredEdits(task, files, digests(files), [edit(3, 'same();\n')], options)[0].content,
+    'same();\nkeep();\nfixed();\n');
+  assert.throws(() => applyAnchoredEdits(task, files, digests(files), [], { relocateUniqueSearch: 'yes' }), /invalid_anchor_relocation_option/);
+});
+
+test('relocation preserves unicode, CRLF and an unterminated final line', () => {
+  const source = [{ path: 'src/a.js', content: '😀();\r\nkeep();\r\nlast();' }];
+  const result = applyAnchoredEdits(task, source, digests(source),
+    [edit(1, 'last();', 'done();')], { relocateUniqueSearch: true });
+  assert.equal(result[0].content, '😀();\r\nkeep();\r\ndone();');
+});
