@@ -118,8 +118,10 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
     // an exhausted window without a published reset has no known recovery.
     // A failed credential (401/403) is not repaired by waiting out its cooldown.
     if (cooling && entry.runtimeState!.lastSignal === "authentication") return false;
-    // A cooling grant the soft floor can drain recovers when its cooldown ends.
-    const resetAt = exhausted && !(cooling && drainable && softFloor) ? grantQuotaResetAt(entry.runtimeState, requirement?.model, reserve, subscription, nowMs) : 0;
+    // Under the soft floor only empty windows wait for their reset, so a cooling
+    // grant the floor can drain recovers when its cooldown ends.
+    const floor = softFloor && (cooling || !drainable) ? 0 : reserve;
+    const resetAt = exhausted && !(cooling && drainable && softFloor) ? grantQuotaResetAt(entry.runtimeState, requirement?.model, floor, subscription, nowMs) : 0;
     const atMs = resetAt == null ? null : Math.max(resetAt, cooling ? Date.parse(entry.runtimeState!.cooldownUntil!) : 0);
     if (atMs != null && (routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, atMs, requirement?.model))) recovering.push({ entry, atMs });
     return false;

@@ -129,6 +129,14 @@ for (const legacy of [false, true]) {
     assert.equal(f.upstream.mock.callCount(), 0);
   });
 
+  test(`${path}: an empty five-hour window is retried at its own reset, not a reserve-band weekly reset`, async t => {
+    const f = await fixture(t, { legacy, grants: { josh: { state: state([window('subscription-five-hour', 0, 600, { window: 'five_hour' }), weekly(5, 86_400)]) } } });
+    const response = await f.send();
+    assert.equal(response.status, 429, response.body);
+    assert.equal(response.retryAfter, '600', 'once the five-hour window resets, 5% weekly drains');
+    assert.equal(f.upstream.mock.callCount(), 0);
+  });
+
   test(`${path}: an aged reading still ranks in the drain, so most_remaining spreads instead of emptying one account`, async t => {
     // staleState "allow" admits both on 10-minute-old readings; only the served one is refreshed.
     const aged = revision => ({ ...state([weekly(8)])(revision), observedAt: at(-600), windows: [{ ...weekly(8), observedAt: at(-600) }] });

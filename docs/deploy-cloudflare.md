@@ -1193,8 +1193,8 @@ the policy has no environment fallback (or the request is pinned to a grant),
 the accounts that still have quota left in every applicable window serve instead.
 They are spread across the policy's strategy, within the policy hysteresis scaled
 to the reserve band. A fully used window (0%), a cooldown or a failed credential
-still excludes an account. Retry-After for a cooling account in that band is its
-cooldown, not its quota reset. Draining to 0% can let in-flight requests cross
+still excludes an account. Retry-After then waits only for empty windows and
+cooldowns, not for a window to climb back above the reserve. Draining to 0% can let in-flight requests cross
 into Anthropic extra usage on accounts that have it enabled; the next quota
 observation then excludes the account. Polling and provider observations are not
 an atomic upstream spending cap. Missing/reset-passed quota
