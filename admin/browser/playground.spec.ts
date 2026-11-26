@@ -197,6 +197,97 @@ test("a sent request with a gateway error remains inspectable", async ({ page })
   await expect(page.locator(".composerDock [role=alert]")).toHaveCount(0);
 });
 
+for (const action of ["earlier turn", "same turn", "Request", "Response", "select text", "close", "none"] as const) {
+  test(`completion after inspector action: ${action}`, async ({ page }) => {
+    const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+    const message = page.getByRole("textbox", { name: "Message", exact: true });
+    const inspector = page.locator(".playgroundInspector");
+    const serviceReply = "Garden inventory: " + "basil, mint, parsley; ".repeat(120) + "end of inventory";
+
+    await message.fill("First model question");
+    await message.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(1);
+    await complete(page, 0, "First model answer");
+    await provider.selectOption("test-service");
+    const body = page.getByRole("textbox", { name: "JSON request body" });
+    await body.fill('{"query":"garden inventory"}');
+    await body.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(2);
+    await complete(page, 1, serviceReply);
+    await expect(inspector.locator(".debugPayload")).toContainText("garden inventory");
+
+    await provider.selectOption("test-model");
+    await message.fill("Pending model question");
+    await message.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(3);
+    if (action === "earlier turn" || action === "same turn") {
+      await page.getByRole("button", { name: "Inspect user message" }).nth(action === "earlier turn" ? 0 : 1).press("Enter");
+    } else if (action === "select text") {
+      await inspector.locator(".debugPayload").dblclick();
+    } else if (action === "close") {
+      await inspector.getByRole("button", { name: "Close turn inspector" }).press("Enter");
+    } else if (action !== "none") {
+      // Request is already active: activating it is still an explicit choice.
+      await inspector.getByRole("button", { name: action, exact: true }).press("Enter");
+    }
+
+    if (action === "Response") {
+      // Select the actual text a native Copy would use; a reply must not replace it.
+      await inspector.locator(".debugPayload").evaluate((payload) => {
+        const selection = window.getSelection()!;
+        const range = document.createRange();
+        range.selectNodeContents(payload);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      });
+    }
+
+    if (action === "close") {
+      // Real request failures still belong in the transcript, not a reopened inspector.
+      await page.evaluate(() => (window as TestWindow).playgroundRequests[2].resolve(new Response("Route unavailable", { status: 503 })));
+      await expect(page.locator(".chatMessageAssistant").last()).toContainText("Gateway error");
+      await expect(inspector.getByRole("heading", { name: "Conversation controls" })).toBeVisible();
+      await expect(inspector.locator(".debugPayload")).toHaveCount(0);
+    } else {
+      await complete(page, 2, "Pending model answer");
+      await expect(page.locator(".chatMessageAssistant").last()).toContainText("Pending model answer");
+      const displayed = JSON.parse(await inspector.locator(".debugPayload").innerText());
+      if (action === "Response") {
+        expect(displayed).toEqual({ output_text: serviceReply });
+        expect(JSON.parse(await page.evaluate(() => window.getSelection()!.toString()))).toEqual(displayed);
+      }
+      else if (action === "none" || action === "earlier turn") {
+        expect(displayed.messages.at(-1).content).toBe(action === "none" ? "Pending model question" : "First model question");
+      } else expect(displayed.body).toEqual({ query: "garden inventory" });
+    }
+    await expect(page.locator(".chatExchange")).toHaveCount(3);
+    expect(await requestCount(page)).toBe(3);
+    if (action === "close") {
+      // Dismissal applied to the in-flight turn, not every future send.
+      await message.fill("Next model question");
+      await message.press("Enter");
+      await expect.poll(() => requestCount(page)).toBe(4);
+      await complete(page, 3, "Next model answer");
+      await expect(inspector.locator(".debugPayload")).toContainText("Next model question");
+    }
+  });
+}
+
+test("opening the draft request preview during a send keeps it open", async ({ page }) => {
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill("Sent draft");
+  await message.press("Enter");
+  await expect.poll(() => requestCount(page)).toBe(1);
+  await message.fill("Next draft");
+  await page.locator(".requestDrawer summary").press("Space");
+  const preview = page.locator(".requestDrawer pre");
+  await expect(preview).toContainText("Next draft");
+  await complete(page, 0, "Sent draft reply");
+  await expect(page.locator(".chatMessageAssistant")).toContainText("Sent draft reply");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("Next draft");
+});
+
 function requestCount(page: Page) {
   return page.evaluate(() => (window as TestWindow).playgroundRequests.length);
 }

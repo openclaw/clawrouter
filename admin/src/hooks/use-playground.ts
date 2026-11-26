@@ -55,7 +55,7 @@ function payloadError(form: PlaygroundForm, cause: unknown): PlaygroundDraftErro
 
 export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
   const initializedModelsRef = useRef(false);
-  const operationRef = useRef<AbortController | null>(null);
+  const operationRef = useRef<{ controller: AbortController; followResult: boolean } | null>(null);
   const [running, setRunning] = useState(false);
   const [{ form, error }, setDraft] = useState<{ form: PlaygroundForm; error: PlaygroundDraftError | null }>(() => ({
     form: {
@@ -88,7 +88,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   useEffect(() => () => {
     const operation = operationRef.current;
     operationRef.current = null;
-    operation?.abort();
+    operation?.controller.abort();
   }, []);
 
   useEffect(() => {
@@ -138,7 +138,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       return;
     }
 
-    const operation = new AbortController();
+    const operation = { controller: new AbortController(), followResult: true };
     operationRef.current = operation;
     const startedAt = performance.now();
     setError(null);
@@ -159,7 +159,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
-        signal: operation.signal,
+        signal: operation.controller.signal,
       });
       if (operationRef.current !== operation) return;
       const responseError = result.ok ? undefined : playgroundResponseText(result.raw) || `Request failed with HTTP ${result.status}`;
@@ -208,14 +208,19 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       error: input.error,
     });
     setTurns((current) => [...current, turn]);
-    setSelectedTurnId(turn.id);
+    if (operationRef.current?.followResult) setSelectedTurnId(turn.id);
+  }
+
+  // The action matters even when the operator selects the already-active turn or side.
+  function holdInspector() {
+    if (operationRef.current) operationRef.current.followResult = false;
   }
 
   function resetConversation() {
     const operation = operationRef.current;
     // Invalidate before aborting: an old completion must not own the new chat.
     operationRef.current = null;
-    operation?.abort();
+    operation?.controller.abort();
     setRunning(false);
     if (operation) setStatus("playground ready");
     setTurns([]);
@@ -230,9 +235,9 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     turns,
     setTurns,
     selectedTurnId,
-    setSelectedTurnId,
+    setSelectedTurnId: (id: string) => { holdInspector(); setSelectedTurnId(id); },
     requestMode,
-    setRequestMode,
+    setRequestMode: (mode: typeof requestMode) => { holdInspector(); setRequestMode(mode); },
     error,
     selectedModel,
     selectedServiceRoute,

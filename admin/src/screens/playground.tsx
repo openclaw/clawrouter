@@ -201,7 +201,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>Request</button>
               <button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>Response</button>
             </div>
-            <pre className="debugPayload">{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
+            <pre className="debugPayload" onPointerDown={() => setSelectedTurnId(selectedTurn.id)} onCopy={() => setSelectedTurnId(selectedTurn.id)}>{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
           </>
         ) : (
           <>
@@ -231,7 +231,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
             </dl>
             <details className="requestDrawer">
-              <summary><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
+              <summary onClick={() => setSelectedTurnId("setup")}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
               <pre>{currentRequest}</pre>
             </details>
           </>
