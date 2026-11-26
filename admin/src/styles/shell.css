@@ -423,7 +423,12 @@
   font-size: 11px;
 }
 
-.refreshNoticeCopy p {
+.refreshNoticeDetail {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.refreshNoticeDetail p {
   font-size: 12px;
 }
 
