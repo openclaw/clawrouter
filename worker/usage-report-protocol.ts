@@ -18,17 +18,25 @@ export interface UsageEventPosition { at: number; id: string }
 
 // Complete-query private transport. Only the service constructs these requests;
 // no public HTTP caller can choose a shard, source, clock, fence or work budget.
+// candidateRows/totalRows/inputBytes bound raw (JSON-classified) rows; cellRows bounds
+// pre-aggregated cells per shard. lateRows/lateBytes/lateCells are per-request headroom for
+// ingest between measurement and execution, and for fold batches (<= 2,000 cells each, at most
+// 40 at the 500 ms alarm cadence within the 20 s deadline) landing meanwhile.
 export const completeUsageLimits = Object.freeze({ shards: 64, fanout: 8, calls: 256, groups: 32768,
   groupBytes: 16 * 1024 * 1024, candidateRows: 250000, totalRows: 1000000,
   inputBytes: 64 * 1024 * 1024, visits: 8000000, classifiedBytes: 512 * 1024 * 1024,
-  pageBytes: 1024 * 1024, groupPage: 256, eventPage: 100 });
+  pageBytes: 1024 * 1024, groupPage: 256, eventPage: 100, cellRows: 1000000, lateRows: 2048, lateBytes: 2 * 1024 * 1024, lateCells: 80000 });
+/** Quarter-hour report cells: every current IANA local midnight falls on this grid. */
+export const reportCellSlotMs = 900_000;
 export interface UsageShardInput {
   action: 'capture' | 'preflight' | 'groups' | 'events' | 'validate'; tenantId: string; policyId: string;
   query: CompleteUsageQuery; cut?: UsageVisibilityCut;
   after?: UsageGroupIdentity; before?: UsageEventPosition; includeEqualId?: boolean; limit?: number;
-  allowance?: { rows: number; bytes: number };
+  allowance?: UsageCandidateSize | { rows: number; bytes: number; plan: 'report' };
 }
-export interface UsageCandidateSize { rows: number; bytes: number }
+/** `plan` is an opt-in extension: absent means the legacy raw measurement and execution.
+ * `probe` is what a negotiated measurement itself scanned, including rejected plans. */
+export interface UsageCandidateSize { rows: number; bytes: number; plan?: 'cells' | 'raw'; cellRows?: number; probe?: { rows: number; bytes: number } }
 export interface CompleteAggregateRow extends UsageAggregateRow { owner: string | null }
 export interface UsageGroupPage { rows: CompleteAggregateRow[]; next: UsageGroupIdentity | null; work: UsageCandidateSize }
 export type UsageShardResult = { kind: 'complete'; value: { cut: UsageVisibilityCut; work: UsageCandidateSize } | UsageCandidateSize | UsageGroupPage | { events: CompleteUsageEvent[]; hasMore: boolean; work: UsageCandidateSize } | { valid: true } }

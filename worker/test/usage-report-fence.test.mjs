@@ -78,7 +78,8 @@ for(const assignment of ['arrival_rows = 100000','arrival_bytes = 16777216','seq
   f.db.exec('UPDATE usage_report_visibility SET '+assignment);
   assert.doesNotThrow(()=>f.insert(f.event(2)));
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM usage_events').get().n,2);
-  assert.throws(()=>open(f),outcome('unavailable','capacity'));
+  assert.throws(()=>open(f),outcome('unavailable','migration'));
+  assert.throws(()=>page(f,cut),outcome('restart','mutation'));
   assert.doesNotThrow(()=>f.insert(f.event(3)));
   maintainUsageVisibility(sql(f),now);
   assert.equal(state(f).arrival_rows,0);assert.equal(state(f).arrival_bytes,0);
@@ -100,7 +101,7 @@ test('drain is bounded at 1000; migration and trigger continuity reject cuts',t=
   f.db.exec('UPDATE usage_attribution_migration SET complete=1');
   f.db.exec('DROP TRIGGER usage_visibility_insert_v1');
   assert.throws(()=>page(f,cut),outcome('restart','source'));
-  ensureUsageReportSchema(sql(f));assert.throws(()=>open(f),outcome('unavailable','capacity'));
+  ensureUsageReportSchema(sql(f));assert.throws(()=>open(f),outcome('unavailable','migration'));
   maintainUsageVisibility(sql(f),now);assert.throws(()=>page(f,cut),outcome('restart','mutation'));
 });
 

@@ -40,6 +40,8 @@ export function ensureUsageVisibility(sql: ReportSql): void {
     for (const def of definitions) { sql.exec('DROP TRIGGER IF EXISTS ' + def.name); sql.exec(def.sql); }
   }
 }
+/** Persisted monotonic shard clock shared by cut expiry and the report-cell fold fence. */
+export function observeUsageClock(sql: ReportSql, now = Date.now()): number { return observe(sql, now).observed_clock; }
 function observe(sql: ReportSql, now: number): VisibilityState {
   if (!Number.isSafeInteger(now) || now < 0 || now > maximum - reportCutTtlMs) throw new UsageVisibilityError('unavailable', 'source');
   sql.exec('UPDATE usage_report_visibility SET observed_clock = MAX(observed_clock, ?) WHERE id = 1', now);
@@ -65,7 +67,9 @@ export function captureUsageVisibility(sql: ReportSql, source: UsageVisibilityCu
   if (!manifestMatches(sql)) throw new UsageVisibilityError('unavailable', 'source');
   if ([...sql.exec('SELECT complete FROM usage_attribution_migration WHERE id = 1')][0]?.complete !== 1) throw new UsageVisibilityError('unavailable', 'migration');
   const s = observe(sql, now);
-  if (s.usable !== 1) throw new UsageVisibilityError('unavailable', 'capacity');
+  // Disabled only while the arrival log drains after overflow or trigger repair: transient and
+  // independent of the requested range, so retryable rather than a work limit.
+  if (s.usable !== 1) throw new UsageVisibilityError('unavailable', 'migration');
   if (!Number.isSafeInteger(s.seq) || s.seq < 0) throw new UsageVisibilityError('unavailable', 'source');
   return { seq: s.seq, epoch: s.epoch, createdAt: s.observed_clock, expiresAt: s.observed_clock + reportCutTtlMs,
     floor: Math.max(from, s.retention_cutoff, s.observed_clock - reportRetentionMs + reportCutTtlMs), source, normalizer: 2 };
@@ -74,8 +78,8 @@ export function validateUsageVisibility(sql: ReportSql, cut: UsageVisibilityCut,
   if (!cut || !Number.isSafeInteger(cut.seq) || cut.seq < 0 || !Number.isSafeInteger(cut.expiresAt) || !Number.isSafeInteger(cut.floor) || !['projection', 'retained_ledger'].includes(cut.source) || !manifestMatches(sql) || cut.normalizer !== 2) throw new UsageVisibilityError('restart', 'source');
   const s = observe(sql, now);
   if ([...sql.exec('SELECT complete FROM usage_attribution_migration WHERE id = 1')][0]?.complete !== 1) throw new UsageVisibilityError('unavailable', 'migration');
-  if (s.usable !== 1) throw new UsageVisibilityError('unavailable', 'capacity');
-  if (s.epoch !== cut.epoch) throw new UsageVisibilityError('restart', 'mutation');
+  // Disabling bumped the epoch, so an existing cut can only restart.
+  if (s.usable !== 1 || s.epoch !== cut.epoch) throw new UsageVisibilityError('restart', 'mutation');
   if (s.observed_clock >= cut.expiresAt) throw new UsageVisibilityError('restart', 'expired');
   if (floor < cut.floor || s.retention_cutoff > floor || now - reportRetentionMs > floor) throw new UsageVisibilityError('restart', 'mutation');
 }
