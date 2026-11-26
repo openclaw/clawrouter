@@ -191,7 +191,15 @@ export function reportWhere(query: UsageReportQuery) {
   };
 }
 
-const scalarColumns = "model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros, recorded_charge_micros";
+// The aggregate never fetches detail_json. Bound the width of the typed row
+// it actually visits, including the scope/fence columns. Reserve 8 bytes per
+// value for record overhead plus 8 for each numeric value (including NULL).
+const aggregateText = ['model','provider','key_id','status','call_kind','lane','cost_class'];
+const projectedText = ['id','tenant_id','policy_id','principal_key',...aggregateText];
+const projectedNumbers = ['occurred_at_ms','input_tokens','output_tokens','cached_input_tokens','cache_write_input_tokens','reasoning_output_tokens','reporting_cost_micros','recorded_charge_micros'];
+const byteLengths = (names: string[]) => names.map(name=>'COALESCE(length(CAST('+name+' AS BLOB)),0)').join(' + ');
+const projectedAggregateBytes = 8 * (projectedText.length + 2 * projectedNumbers.length) + ' + ' + byteLengths(projectedText);
+const scalarColumns = [...aggregateText,...projectedNumbers].join(', ');
 /** The same exact filters against cells, whose nullable dimensions are stored as x''. */
 function cellFilters(query: UsageReportQuery) {
   const terms: string[] = [], bindings: Array<string | number | null> = [];
@@ -285,7 +293,7 @@ function candidateSize(sql: ReportSql, q: UsageReportQuery, cut: UsageVisibility
 }
 function sourceCte(q: UsageReportQuery, cut: UsageVisibilityCut, keyset = '', positions: Array<string | number> = []) {
   const n = sourceNames(q,cut), r = reportWhere(q);
-  if (cut.source === 'projection') return { cte: 'filtered AS MATERIALIZED (SELECT id, principal_key, ' + scalarColumns + ' FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where + visibilityWhere(cut,n.table) + keyset + ')', bindings: [...r.bindings,...positions] };
+  if (cut.source === 'projection') return { cte: 'filtered AS NOT MATERIALIZED (SELECT id, principal_key, ' + scalarColumns + ' FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where + visibilityWhere(cut,n.table) + keyset + ')', bindings: [...r.bindings,...positions] };
   // Reuse the v2 scalar normalizer; only the access path differs from the legacy reader.
   const retained = retainedSource(q,keyset,positions,cut), filters = reportFilters(q);
   return { cte: retained.cte.replace('INDEXED BY ' + (q.principal === undefined ? 'usage_events_policy' : 'usage_events_policy_principal'), 'INDEXED BY ' + n.index) + ', filtered AS MATERIALIZED (SELECT * FROM source WHERE ' + filters.where + ')', bindings: [...retained.bindings,...filters.bindings] };
@@ -294,9 +302,9 @@ const identityOrder = '(owner IS NOT NULL), owner COLLATE BINARY, (value IS NOT 
 function sameIdentity(a: UsageGroupIdentity, b: UsageGroupIdentity): boolean { return a.owner === b.owner && a.value === b.value; }
 const cap = completeUsageLimits.candidateRows + 1;
 /** Rows/bytes a scan visits, capped at the limit + 1, including rows later rejected by filters or the cut. */
-function gross(sql: ReportSql, selects: string[], bindings: Array<string | number | null>) {
+function gross(sql: ReportSql, selects: string[], bindings: Array<string | number | null>, limit = cap) {
   if (!selects.length) return { rows: 0, bytes: 0 };
-  const row = [...sql.exec('SELECT COUNT(*) AS rows, COALESCE(SUM(bytes), 0) AS bytes FROM (' + selects.join(' UNION ALL ') + ' LIMIT ' + cap + ')', ...bindings)][0];
+  const row = [...sql.exec('SELECT COUNT(*) AS rows, COALESCE(SUM(bytes), 0) AS bytes FROM (' + selects.join(' UNION ALL ') + ' LIMIT ' + limit + ')', ...bindings)][0];
   exact(row.rows); exact(row.bytes); return { rows: Number(row.rows), bytes: Number(row.bytes) };
 }
 /** Per local bucket: whole quarter-hour slots come from cells, the remainder (range edges,
@@ -320,16 +328,24 @@ function cellParts(q: UsageReportQuery, layout: ReturnType<typeof cellLayout>, f
 }
 const fits = (w: UsageCandidateSize) => w.rows <= completeUsageLimits.candidateRows && w.bytes <= completeUsageLimits.inputBytes && (w.cellRows ?? 0) <= completeUsageLimits.cellRows;
 /** Gross physical work of one negotiated report plan, measured in the caller's transaction. */
-function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut, plan: 'cells' | 'raw'): UsageCandidateSize {
+function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut, plan: 'cells' | 'raw', rawLimit = cap): UsageCandidateSize {
   if (plan === 'raw') {
     const n = sourceNames(q, cut), r = reportWhere({ ...q, filters: {} });
-    return { ...gross(sql, ['SELECT length(CAST(' + n.detail + ' AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where], r.bindings), plan };
+    const bytes = cut.source === 'projection' ? projectedAggregateBytes : 'length(CAST(event_json AS BLOB))';
+    return { ...gross(sql, ['SELECT ' + bytes + ' AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where], r.bindings, rawLimit), plan };
   }
-  const cells = cut.source === 'retained_ledger' && x.query.grain === 'day' ? usableCells(sql) : null;
+  const cells = x.query.grain === 'day' ? usableCells(sql) : null;
   if (!cells) throw new UsageVisibilityError('unavailable', 'migration');
   const layout = cellLayout(x, q), parts = cellParts(q, layout, cells.folded);
   const cellRows = layout.blocks.length ? Number([...sql.exec('WITH ' + parts.blocks + ' SELECT COUNT(*) AS n FROM (SELECT 1 FROM ' + parts.cells + ' LIMIT ' + (completeUsageLimits.cellRows + 1) + ')', ...parts.scope)][0].n) : 0;
-  const raw = gross(sql, parts.raw.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), parts.raw.flatMap(p => p.bindings));
+  // The rowid tail visits all owners, but SQLite evaluates the scope/time
+  // predicates *before* passing owned rows to the JSON normalizer. Charge
+  // every visit and the scalar predicate inputs even for a rejected row. The
+  // enclosing time span conservatively includes any gaps between whole slots.
+  const tailScope = 'tenant_id = ? AND policy_id = ?' + (q.principal === undefined ? '' : ' AND principal_key = ?') + ' AND occurred_at_ms >= ? AND occurred_at_ms < ?';
+  const tailBytes = '32 + '+byteLengths(['tenant_id','policy_id','principal_key'])+' + CASE WHEN '+tailScope+' THEN length(CAST(event_json AS BLOB)) ELSE 0 END';
+  const raw = gross(sql, parts.raw.map(p => 'SELECT '+(p.scoped ? tailBytes : 'length(CAST(event_json AS BLOB))')+' AS bytes FROM '+p.from),
+    parts.raw.flatMap(p => p.scoped ? [...parts.scope,layout.blocks[0]?.[0] ?? q.range.to,layout.blocks.at(-1)?.[1] ?? q.range.to,...p.bindings] : p.bindings));
   exact(cellRows); return { ...raw, cellRows, plan };
 }
 /** Capture/preflight choice: cells when usable and within limits; otherwise today's raw path. A large raw part (the
@@ -339,11 +355,35 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
   const probe = { rows: 0, bytes: 0 }, charge = (w: UsageCandidateSize) => { probe.rows += w.rows + (w.cellRows ?? 0); probe.bytes += w.bytes; return w; };
   const done = (w: UsageCandidateSize): UsageCandidateSize => ({ ...w, probe });
-  const layout = cellLayout(x, q), eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  const layout = cellLayout(x, q), eligible = x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
+  if (cut.source === 'projection') {
+    // Select the aggregation plan independently of the pinned detail source.
+    // Do not probe an unrelated unfolded tail for a small personal range.
+    // An indexed prefix gives a lower bound for the alternative: if even
+    // that prefix costs more than the complete cells plan, stop probing. It
+    // never supplies totals or authorizes execution of a truncated raw plan.
+    const limit = cells && cells.tailUpperBound < 8192 ? 8192 : cap;
+    let raw = charge(measurePlan(sql, x, q, cut, 'raw', limit));
+    const prefix = limit < cap && raw.rows === limit;
+    if (!cells || (!prefix && fits(raw) && raw.rows <= 512 && raw.bytes <= 1024 * 1024)) return done(raw);
+    // Rowid gaps can make the span much larger than the actual tail. Prove
+    // the tail really visits at least as many rows before dismissing cells.
+    if (!prefix && fits(raw) && cells.tailUpperBound >= raw.rows) {
+      const tail = charge(gross(sql, ['SELECT 8 AS bytes FROM usage_events NOT INDEXED WHERE rowid > ?'], [cells.folded], raw.rows));
+      if (tail.rows === raw.rows) return done(raw);
+    }
+    const folded = charge(measurePlan(sql, x, q, cut, 'cells'));
+    const cheaper = () => folded.rows + (folded.cellRows ?? 0) <= raw.rows && folded.bytes <= raw.bytes;
+    if (fits(folded) && cheaper()) return done(folded);
+    if (prefix) raw = charge(measurePlan(sql, x, q, cut, 'raw'));
+    return done(fits(folded) && (!fits(raw) || cheaper()) ? folded : raw);
+  }
   const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null, cellsFit = viaCells && fits(viaCells) ? viaCells : null;
   // A steady-state tail (the fold lag) is small: no raw probe.
-  if (cellsFit && cellsFit.rows <= completeUsageLimits.candidateRows / 10) return done(cellsFit);
-  const raw = charge(measurePlan(sql, x, q, cut, 'raw'));
+  if (cellsFit && cellsFit.rows <= completeUsageLimits.totalRows / completeUsageLimits.shards && cellsFit.bytes <= completeUsageLimits.inputBytes / completeUsageLimits.shards) return done(cellsFit);
+  // Raw wins only on strictly fewer rows and no more bytes. Reaching
+  // the cells row count proves it cannot win; never execute that prefix.
+  const raw = charge(measurePlan(sql, x, q, cut, 'raw', cellsFit ? cellsFit.rows : cap));
   if (fits(raw) && (!cellsFit || raw.rows < cellsFit.rows && raw.bytes <= cellsFit.bytes)) return done(raw);
   if (cellsFit) return done(cellsFit);
   if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return done(viaCells);
@@ -399,17 +439,44 @@ function groupPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work
   return { rows: more ? rows.filter(r => r.dimension !== 'group' || !sameIdentity({owner:r.owner,value:r.value as string | null},identities[256])) : rows, next:last, work };
 }
 const detailKeys = ['id','occurredAt','provider','model','keyId','capability','callKind','status','statusCode','durationMs','inputTokens','outputTokens','cachedInputTokens','cacheWriteInputTokens','reasoningOutputTokens','lane','costClass','reportingCostMicros','estimateReason','recordedChargeMicros','costBasis','pricingRef','requestedTier','servedTier','compoundRequestId','compoundStage'] as const;
-function eventPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work: UsageCandidateSize) {
-  const n = sourceNames(q,x.cut!), before = x.before;
-  const keyset = before ? ' AND (occurred_at_ms < ? OR (occurred_at_ms = ? AND id ' + (x.includeEqualId ? '<=' : '<') + ' ? COLLATE BINARY))' : '';
-  const positions = before ? [before.at,before.at,before.id] : [];
-  const direct = x.cut!.source === 'projection' || Object.values(q.filters).every(v => v === undefined);
-  const range = reportWhere(q), source = direct ? null : sourceCte(q,x.cut!,keyset,positions);
-  // Common pages are a true indexed lookahead. Only filtered retained reads
-  // classify the candidate range; their full work is charged on EVERY request.
-  // Preflight selected metadata lengths before fetching/parsing any detail JSON.
-  const page = source ? [...sql.exec('WITH ' + source.cte + ', page AS (SELECT id,occurred_at_ms,principal_key,provider,status FROM filtered ORDER BY occurred_at_ms DESC,id COLLATE BINARY DESC LIMIT ?) SELECT p.id,p.occurred_at_ms,p.principal_key,p.provider,p.status,length(CAST(d.' + n.detail + ' AS BLOB)) AS bytes FROM page p JOIN ' + n.table + ' d ON p.id=d.id ORDER BY p.occurred_at_ms DESC,p.id COLLATE BINARY DESC', ...source.bindings,x.limit!+1)]
-    : [...sql.exec('SELECT id,occurred_at_ms,principal_key,provider,status,length(CAST(' + n.detail + ' AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + range.where + visibilityWhere(x.cut,n.table) + keyset + ' ORDER BY occurred_at_ms DESC,id COLLATE BINARY DESC LIMIT ?',...range.bindings,...positions,x.limit!+1)];
+// Walk the owner/time index in order. Count candidates *before* visibility
+// and exact filters, and check lengths before asking SQLite to classify JSON.
+// A full matching lookahead or exhaustion proves the answer; a budget limit
+// never masquerades as end-of-history.
+function seekEventPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, allowance: UsageCandidateSize) {
+  const cut=x.cut!, n=sourceNames(q,cut), filters=reportFilters(q), filtered=filters.where!=='1';
+  const needed=x.limit!+1, page: Record<string, unknown>[]=[];
+  const work: UsageCandidateSize={plan:'events',rows:0,bytes:0};
+  let before=x.before, inclusive=x.includeEqualId;
+  while(page.length<needed){
+    // Use just one upper bound so SQLite seeks the entire tuple even when
+    // many events share a timestamp. Both cut bounds still apply.
+    const anchored=before && before.at<q.range.to ? before : undefined;
+    const seek=anchored?'(occurred_at_ms,id) '+(inclusive?'<=':'<')+' (?,?)':'occurred_at_ms < ?';
+    const projected=cut.source==='projection';
+    const scope=(projected?'tenant_id = ? AND ':'')+'policy_id = ?'+(q.principal===undefined?'':' AND principal_key = ?');
+    const bounds=[...(projected?[q.tenantId]:[]),q.policyId,...(q.principal===undefined?[]:[q.principal]),q.range.from,...(anchored?[anchored.at,anchored.id]:[q.range.to])];
+    const count=Math.min(filtered?512:needed-page.length, allowance.rows-work.rows+1);
+    const batch=[...sql.exec('SELECT id,occurred_at_ms,principal_key,provider,status,length(CAST('+n.detail+' AS BLOB)) AS bytes, (tenant_id = ?'+visibilityWhere(cut,n.table)+') AS visible FROM '+n.table+' INDEXED BY '+n.index+' WHERE '+scope+' AND occurred_at_ms >= ? AND '+seek+' ORDER BY occurred_at_ms DESC,id DESC LIMIT ?', q.tenantId,...bounds,count)];
+    work.rows+=batch.length;
+    for(const row of batch){exact(row.bytes);work.bytes+=row.bytes;}
+    if(work.rows>allowance.rows||work.bytes>allowance.bytes)capacity();
+    let visible=batch.filter(r=>r.visible===1);
+    if(filtered && visible.length){
+      const byId=' FROM '+n.table+' WHERE id IN (SELECT value FROM json_each(?))';
+      const match=cut.source==='projection'?'SELECT id'+byId+' AND '+filters.where
+        :'WITH '+twinCte('SELECT '+twinOwnedColumns()+byId)+' SELECT id FROM source WHERE '+filters.where;
+      const ids=new Set([...sql.exec(match,JSON.stringify(visible.map(r=>r.id)),...filters.bindings)].map(r=>r.id));
+      visible=visible.filter(r=>ids.has(r.id));
+    }
+    page.push(...visible.slice(0,needed-page.length));
+    if(batch.length<count)break;
+    const last=batch.at(-1)!;before={at:Number(last.occurred_at_ms),id:String(last.id)};inclusive=false;
+  }
+  return {page,work};
+}
+function materializeEvents(sql: ReportSql,x: UsageShardInput,q: UsageReportQuery,work: UsageCandidateSize,page: Record<string, unknown>[]) {
+  const n=sourceNames(q,x.cut!);
   let bytes = 0;
   for (const row of page) { exact(row.bytes); bytes += row.bytes; if (bytes > completeUsageLimits.pageBytes) capacity(); }
   const events = page.slice(0,x.limit).map(row => {
@@ -452,17 +519,23 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (x.after) { for (const key of ['owner','value'] as const) if (x.after[key] !== null) boundedText(x.after[key],8192); }
     if (x.before) { exact(x.before.at); boundedText(x.before.id,8192); }
     if (x.includeEqualId !== undefined && typeof x.includeEqualId !== 'boolean') invalidSource();
-    if (x.action === 'events' && (!Number.isInteger(x.limit) || x.limit! < 1 || x.limit! > 100)) invalidSource();
+    if ((x.action === 'events' || x.action === 'preflight' && x.limit !== undefined) && (!Number.isInteger(x.limit) || x.limit! < 1 || x.limit! > 100)) invalidSource();
     const q = shardQuery(x);
+    const eventMax={rows:completeUsageLimits.candidateRows,bytes:completeUsageLimits.inputBytes};
+    if(x.action==='preflight' && x.limit!==undefined){
+      const max=x.allowance??eventMax;exact(max.rows);exact(max.bytes);
+      return {kind:'complete',value:seekEventPage(sql,x,q,{rows:Math.min(max.rows,eventMax.rows),bytes:Math.min(max.bytes,eventMax.bytes)}).work};
+    }
     if (x.action === 'preflight') return {kind:'complete',value:negotiate ? measureReport(sql,x,q,x.cut) : candidateSize(sql,q,x.cut)};
     const allowance = x.allowance as UsageCandidateSize | undefined;
     if (!allowance) invalidSource(); exact(allowance.rows); exact(allowance.bytes);
-    // A negotiated plan executes exactly as measured (groups only); its page echoes the plan.
-    if (allowance.plan !== undefined && (x.action !== 'groups' || !['cells','raw'].includes(allowance.plan))) invalidSource();
+    if (allowance.plan !== undefined && !(allowance.plan==='events' && x.action==='events') && !(x.action==='groups' && ['cells','raw'].includes(allowance.plan))) invalidSource();
     if (allowance.cellRows !== undefined) exact(allowance.cellRows);
-    const work = allowance.plan ? measurePlan(sql,x,q,x.cut,allowance.plan) : candidateSize(sql,q,x.cut);
+    if (!fits(allowance)) capacity();
+    const selected = x.action === 'events' ? seekEventPage(sql,x,q,allowance) : undefined;
+    const work = allowance.plan === 'events' ? selected!.work : allowance.plan === 'raw' || allowance.plan === 'cells' ? measurePlan(sql,x,q,x.cut,allowance.plan) : candidateSize(sql,q,x.cut);
     if (work.rows > allowance.rows || work.bytes > allowance.bytes || (work.cellRows ?? 0) > (allowance.cellRows ?? 0) || !fits(work)) capacity();
-    const result = x.action === 'groups' ? groupPage(sql,x,q,work) : eventPage(sql,x,q,work);
+    const result = selected ? materializeEvents(sql,x,q,work,selected.page) : groupPage(sql,x,q,work);
     // Same transaction; requalification also covers empty pages and empty shards.
     validateUsageVisibility(sql,x.cut,x.query.from,now); reportHistory(sql,x.cut);
     if (usageJsonBytes(result) > completeUsageLimits.pageBytes - 128) capacity();
