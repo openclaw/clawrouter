@@ -158,19 +158,6 @@ export function optionalNumber(value: string) {
   return parsed;
 }
 
-export function optionalCurrencyMicros(value: string) {
-  if (!value.trim()) return undefined;
-  const normalized = value.replace(/[$,\s]/g, "");
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${value} is not a valid budget`);
-  return Math.round(parsed * 1_000_000);
-}
-
-export function currencyInput(value: number | null | undefined) {
-  if (value === undefined || value === null) return "";
-  return String(value / 1_000_000);
-}
-
 export function optionalDecimal(value: string) {
   if (!value.trim()) return undefined;
   const parsed = Number(value);

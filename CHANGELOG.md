@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve exact microdollar amounts when editing provider budgets; reject fractional microdollars and out-of-range caps before saving.
+
 ## 0.6.0 - 2026-11-26
 
 **Highlights:** Expand provider and model support, strengthen routing and usage accounting, improve native session continuity, and add bounded caller-side Fusion workflows with explicit qualification evidence.

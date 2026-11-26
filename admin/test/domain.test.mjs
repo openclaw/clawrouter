@@ -5,7 +5,6 @@ import {
   credentialOutcome,
   effectiveAccess,
   knownPolicyProviders,
-  optionalCurrencyMicros,
   optionalNumber,
   parseEligibleGrants,
   playgroundAccessEndpoint,
@@ -246,7 +245,6 @@ test("service route presets cover every bundled request format family", () => {
 });
 
 test("budget parsing and fallback summaries keep blocked and wildcard states explicit", () => {
-  assert.equal(optionalCurrencyMicros("$1.25"), 1_250_000);
   assert.equal(optionalNumber("0"), 0);
   assert.throws(() => optionalNumber("-1"), /non-negative/);
 
