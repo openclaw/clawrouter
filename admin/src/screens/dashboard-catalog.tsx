@@ -15,10 +15,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import {
-  currencyInput,
   grantNamesForService,
   kindLabel,
-  optionalCurrencyMicros,
   playgroundBlockedForService,
   policyCoversProvider,
   policyUsageFallback,
@@ -38,6 +36,7 @@ import {
   kindIcon,
 } from "../components";
 import { formatConfiguredLimit, presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
+import { dollarInputFromMicros, policyBudgetMicros } from "../request-price-input";
 import { ProviderUsageChart, TrafficAreaChart, UsageFreshness } from "../analytics-charts";
 import {
   catalogPlaygroundTarget,
@@ -428,7 +427,7 @@ function ProviderBudgetEditor({ connection, pending, attempt, onEdit, onSave }: 
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState("");
   const noteId = React.useId();
-  const reported = currencyInput(connection.monthlyBudgetMicros);
+  const reported = dollarInputFromMicros(connection.monthlyBudgetMicros);
   const value = draft ?? attempt ?? reported;
   const editing = draft !== null || attempt !== undefined;
   const budget = presentProviderBudget(connection);
@@ -438,7 +437,7 @@ function ProviderBudgetEditor({ connection, pending, attempt, onEdit, onSave }: 
       event.preventDefault();
       if (pending) return;
       try {
-        if (onSave(connection.providerId, optionalCurrencyMicros(value) ?? null, value)) {
+        if (onSave(connection.providerId, policyBudgetMicros(value, "Monthly"), value)) {
           setDraft(null);
           setError("");
         }

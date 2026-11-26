@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Preserve unsaved Fusion settings and readiness-policy selection when an earlier save or console refresh completes.
+- Preserve exact microdollar amounts when editing provider budgets; reject fractional microdollars and out-of-range caps before saving.
 
 ## 0.6.0 - 2026-11-26
 
