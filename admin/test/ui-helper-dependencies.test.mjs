@@ -88,3 +88,17 @@ test("default configuration loads without browser globals or theme initializatio
   assert.ok(config.demo.providers.length > 0);
   assert.equal(config.viewPaths.home, "/dashboard/home");
 });
+
+test("service search matches published routes but not the route-less display fallback", async () => {
+  const { serviceItems, matchesServiceQuery } = await loadHeadlessModule("ui-helpers");
+  const providers = ["first", "second", "unrouted"].map((id) => ({ id, display_name: id, capabilities: [] }));
+  const services = serviceItems(providers, {
+    openaiCompatible: [{ provider: "first", endpoints: ["/v1/embeddings"], models: [] }],
+    manifestProxy: ["first", "second"].map((id) => ({ provider: id, route: `/v1/proxy/${id}/extract`, methods: ["POST"] })),
+  });
+  const matches = (query) => services.filter((service) => matchesServiceQuery(service, query)).map((service) => service.provider);
+  assert.deepEqual(matches("  /V1/PROXY/SECOND/EXTRACT  "), ["second"]);
+  assert.deepEqual(matches("/v1/embeddings"), ["first"]);
+  assert.deepEqual(matches("/v1/proxy"), ["first", "second"]);
+  assert.deepEqual(matches("/v1/proxy/unrouted/extract"), []);
+});

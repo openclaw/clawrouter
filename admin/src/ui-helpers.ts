@@ -416,6 +416,8 @@ export function serviceItems(providers: ProviderRow[], routes: RouteCatalog, rea
 export function matchesServiceQuery(item: ServiceItem, query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
+  // A service with no published routes uses a display-only /v1/proxy fallback.
+  if (item.routeCount > 0 && item.route.toLowerCase().includes(needle)) return true;
   return [item.id, item.name, item.provider, item.kind, item.category, item.capabilities.join(" "), item.modelIds.join(" ")]
     .join(" ")
     .toLowerCase()
