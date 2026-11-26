@@ -104,6 +104,8 @@ export function usageReportCellsDue(sql: ReportSql, latestRowid: number): number
   const s = read(sql);
   // A paused shard cannot fold; leave it on the ordinary maintenance cadence.
   if (!s || cellsPaused(sql)) return null;
+  // Flagged by a canonical rewrite or reused rowid: the next step drops and refolds them.
+  if (s.healthy !== 1) return 0;
   if (s.folded_rowid < s.target_rowid) return s.target_at + reportCutTtlMs;
   return latestRowid > s.target_rowid ? 0 : null;
 }

@@ -100,19 +100,12 @@ test("coverage check is constant-size singleton indexed lookup; dirty reports ke
 
 test("ignored raw duplicates and failed paired writes cannot acknowledge or erase a previous gap", async () => {
   const f = usageReportFixture(now), ledger = f.open(); f.insert(f.event(1));
-  const dirty = coverage(f), raw = stored(f);
+  const dirty = coverage(f), raw = stored(f), projected = () => f.db.prepare("SELECT COUNT(*) AS n FROM usage_report_events").get().n;
   f.db.exec("INSERT OR IGNORE INTO usage_events SELECT * FROM usage_events");
   assert.deepEqual(coverage(f), dirty); assert.deepEqual(stored(f), raw);
-  const original = f.state.storage.sql.exec;
-  f.state.storage.sql.exec = (sql, ...bindings) => {
-    if (sql.startsWith("INSERT OR IGNORE INTO usage_report_events")) throw new Error("projection interrupted");
-    return original(sql, ...bindings);
-  };
-  await assert.rejects(f.ingest(ledger, f.event(2)), /projection interrupted/);
-  assert.deepEqual(coverage(f), dirty); assert.deepEqual(stored(f), raw);
-  f.state.storage.sql.exec = original;
-  await f.ingest(ledger, f.event(2)); assert.equal(f.report().projectionComplete, false);
-  const before = coverage(f), progress = f.db.prepare("SELECT * FROM usage_report_migration").get();
+  // Outside a migration round nothing reads the projection: ingest keeps the canonical row only, and the gap stays.
+  await f.ingest(ledger, f.event(2)); assert.equal(f.report().projectionComplete, false); assert.equal(projected(), 0);
+  const before = coverage(f), progress = f.db.prepare("SELECT * FROM usage_report_migration").get(), original = f.state.storage.sql.exec;
   f.state.storage.sql.exec = (sql, ...bindings) => {
     if (sql.startsWith("UPDATE usage_report_coverage SET round_generation")) throw new Error("checkpoint interrupted");
     return original(sql, ...bindings);
@@ -120,7 +113,18 @@ test("ignored raw duplicates and failed paired writes cannot acknowledge or eras
   assert.throws(() => f.migrate({ apply: true, batchSize: 1 }), /checkpoint interrupted/);
   assert.deepEqual(coverage(f), before); assert.deepEqual(f.db.prepare("SELECT * FROM usage_report_migration").get(), progress);
   assert.equal(f.db.prepare("SELECT id FROM usage_report_events WHERE id = 'event-1'").get(), undefined);
-  f.state.storage.sql.exec = original; applyAll(f, 1); assert.equal(f.report().projectionComplete, true);
+  f.state.storage.sql.exec = original;
+  // Inside a round the paired write resumes, and a failed one rolls back without acknowledging the round.
+  assert.equal(f.migrate({ apply: true, batchSize: 1 }).complete, false);
+  const round = coverage(f), rows = stored(f);
+  f.state.storage.sql.exec = (sql, ...bindings) => {
+    if (sql.startsWith("INSERT OR IGNORE INTO usage_report_events")) throw new Error("projection interrupted");
+    return original(sql, ...bindings);
+  };
+  await assert.rejects(f.ingest(ledger, f.event(3)), /projection interrupted/);
+  assert.deepEqual(coverage(f), round); assert.deepEqual(stored(f), rows);
+  f.state.storage.sql.exec = original; await f.ingest(ledger, f.event(3));
+  applyAll(f, 1); assert.equal(f.report().projectionComplete, true); assert.equal(projected(), 3);
 });
 
 test("paired retention preserves clean coverage, never clears dirty coverage, and does not project history", async t => {
