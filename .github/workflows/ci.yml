@@ -264,8 +264,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Fetch pinned release upgrade baseline
-        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 080831563e0adfcdc1b79cad14613249694d60c9
+      - name: Fetch pinned test baselines
+        run: bash scripts/fetch-test-baselines.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
@@ -301,24 +301,6 @@ jobs:
             process.exitCode = 1;
           }
           NODE
-      # Native personal-usage upgrade/rollback tests run the released baseline
-      # and fail (not skip) in CI when it is missing.
-      - name: Fetch personal-usage baseline
-        run: |
-          baseline="$(sed -n 's/^export const personalUsageBaseline = "\([0-9a-f]\{40\}\)";$/\1/p' test/helpers/personal-usage-upgrade.mjs)"
-          test -n "$baseline"
-          git fetch --no-tags --depth=1 origin "$baseline"
-          git cat-file -e "$baseline^{commit}"
-      - name: Fetch pinned inventory upgrade baseline
-        run: |
-          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin df8c3800fbb413fbe7db6833387a1e885d1379cb
-          git cat-file -e 'df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}'
-      - name: Fetch pinned complete-usage skew baseline
-        run: |
-          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin fcdf6900c94ca71fa29411c3b239da8029c98321
-          git cat-file -e 'fcdf6900c94ca71fa29411c3b239da8029c98321^{commit}'
-          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin ee02a155e0c3dbec3769ec5beb52fd792745aefc
-          git cat-file -e 'ee02a155e0c3dbec3769ec5beb52fd792745aefc^{commit}'
       - name: Worker typecheck
         run: pnpm exec tsc -p worker/tsconfig.json --noEmit
       - name: Worker tests with bounded failure identities

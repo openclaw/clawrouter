@@ -10,6 +10,8 @@
 
 Numbered releases publish source archives. Cloudflare deployment remains a separate operation.
 
+- Share pinned historical test setup between CI and release verification so shallow release checkouts can run upgrade and rollback tests.
+
 ## 0.5.0 - 2026-10-22
 
 - Reject redirected Responses retrieve/cancel controls with a nonbillable 502 and prevent grant-owner transport replay; preserve pending-generation accounting and report only the numeric HTTP status for OAuth redirects.
