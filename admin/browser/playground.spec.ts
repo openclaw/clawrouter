@@ -153,6 +153,38 @@ test("invalid model settings return focus to the editable field and keep the mes
   expect(await requestCount(page)).toBe(2);
 });
 
+test("editing the message keeps validation on the unchanged model setting", async ({ page }) => {
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  const maxTokens = page.getByRole("textbox", { name: "Max tokens" });
+  const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+  await maxTokens.fill("-1");
+  await message.fill("Check the route");
+  await message.press("Enter");
+  await expect(maxTokens).toBeFocused();
+  await message.press("End");
+  await page.keyboard.type(" again.");
+  await expect(message).toBeFocused();
+  await expect(message).toHaveValue("Check the route again.");
+  await expect(maxTokens).toHaveAttribute("aria-invalid", "true");
+  await expect(maxTokens).toHaveAccessibleDescription(/Not sent.*whole number/);
+  await expect(page.getByRole("alert")).toBeVisible();
+  await maxTokens.fill("128");
+  await expect(maxTokens).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  // Switching away from model requests retires a model-only error, even on return.
+  await maxTokens.fill("-1");
+  await message.press("Enter");
+  await expect(maxTokens).toHaveAttribute("aria-invalid", "true");
+  await provider.selectOption("test-service");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await provider.selectOption("test-model");
+  await expect(maxTokens).toHaveValue("-1");
+  await expect(maxTokens).not.toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator(".chatExchange")).toHaveCount(0);
+  expect(await requestCount(page)).toBe(0);
+});
+
 test("a sent request with a gateway error remains inspectable", async ({ page }) => {
   const message = page.getByRole("textbox", { name: "Message", exact: true });
   await message.fill("Check route availability.");

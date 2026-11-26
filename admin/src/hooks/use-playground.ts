@@ -1,10 +1,11 @@
-import { type FormEvent, type SetStateAction, useEffect, useRef, useState } from "react";
+import { type FormEvent, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
   playgroundResponseText,
   playgroundServicePreset,
+  playgroundSupportsTemperature,
   optionalNumber,
   routeKey,
   errorMessage,
@@ -29,6 +30,13 @@ export interface PlaygroundDraftError {
   message: string;
 }
 
+function keepDraftError(error: PlaygroundDraftError | null, previous: PlaygroundForm, next: PlaygroundForm) {
+  if (!error || next.mode !== previous.mode) return null;
+  if (error.field === "temperature" && !playgroundSupportsTemperature(next.model)) return null;
+  const field = error.field === "composer" ? (next.mode === "model" ? "prompt" : "servicePayload") : error.field;
+  return previous[field] === next[field] ? error : null;
+}
+
 function payloadError(form: PlaygroundForm, cause: unknown): PlaygroundDraftError {
   if (form.mode === "service") {
     // Keep the parser's location when available, not engine-specific text that may echo the body.
@@ -49,20 +57,31 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const initializedModelsRef = useRef(false);
   const operationRef = useRef<AbortController | null>(null);
   const [running, setRunning] = useState(false);
-  const [form, setForm] = useState<PlaygroundForm>({
-    mode: "model",
-    model: catalogModels(demo.routes)[0]?.id ?? "",
-    endpoint: "/v1/chat/completions",
-    ...demoServicePreset,
-    system: "You are concise and useful.",
-    prompt: "Say hello from ClawRouter in one short sentence.",
-    maxTokens: "128",
-    temperature: "0.7",
-  });
+  const [{ form, error }, setDraft] = useState<{ form: PlaygroundForm; error: PlaygroundDraftError | null }>(() => ({
+    form: {
+      mode: "model",
+      model: catalogModels(demo.routes)[0]?.id ?? "",
+      endpoint: "/v1/chat/completions",
+      ...demoServicePreset,
+      system: "You are concise and useful.",
+      prompt: "Say hello from ClawRouter in one short sentence.",
+      maxTokens: "128",
+      temperature: "0.7",
+    },
+    error: null,
+  }));
+  const setForm = useCallback((update: SetStateAction<PlaygroundForm>) => {
+    setDraft((current) => {
+      const next = typeof update === "function" ? update(current.form) : update;
+      return { form: next, error: keepDraftError(current.error, current.form, next) };
+    });
+  }, []);
+  function setError(error: PlaygroundDraftError | null) {
+    setDraft((current) => ({ ...current, error }));
+  }
   const [turns, setTurns] = useState<PlaygroundTurn[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState("");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
-  const [error, setError] = useState<PlaygroundDraftError | null>(null);
   const selectedModel = models.find((model) => model.id === form.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
 
@@ -80,13 +99,13 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       const preferred = usable.find((model) => model.provider === "openai") ?? usable[0] ?? models[0];
       setForm((current) => ({ ...current, model: preferred.id }));
     }
-  }, [accessByProvider, form.model, models, providerReadiness]);
+  }, [accessByProvider, form.model, models, providerReadiness, setForm]);
 
   useEffect(() => {
     if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === form.serviceRoute)) {
       setForm((current) => ({ ...current, ...playgroundServicePreset(serviceRoutes[0]) }));
     }
-  }, [form.serviceRoute, serviceRoutes]);
+  }, [form.serviceRoute, serviceRoutes, setForm]);
 
   async function run(event: FormEvent) {
     event.preventDefault();
@@ -207,7 +226,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
 
   return {
     form,
-    setForm: (next: SetStateAction<PlaygroundForm>) => { setError(null); setForm(next); },
+    setForm,
     turns,
     setTurns,
     selectedTurnId,
