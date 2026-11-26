@@ -213,3 +213,67 @@ test('raw edges that alone exceed the limits are capacity even while a fold targ
  assert.ok(cellState(s).folded<cellState(s).target,'a new fold target is pending');
  assert.deepEqual(await f.read({query:{...f.query,from:c.now-hour,to:c.now}}),{kind:'unavailable',reason:'capacity'});
 });
+
+test('initial personal model reports fit across partly folded shared retained ledgers',{timeout:120000},async t=>{
+ const c=clock(t,Date.parse('2026-11-26T12:00:00Z')),f=await completeFixture(t,2),shards=[...f.shards.values()];
+ const day=24*hour,owner='alice@example.com',tailRows=24000,olderRows=3072,recentRows=3072;
+ // Canonical-only historical writes leave projection coverage incomplete. Keep the real
+ // arrival log, indexes and cell triggers active; fold only the prefix via the real alarm.
+ function seed(shard,batch,count,start,span){
+  const insert=shard.db.prepare(`INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,status_code,input_tokens,output_tokens,total_tokens,
+    actual_cost_micros,event_json,grant_key,grant_lane,principal_id,principal_key,credential_id,cost_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  shard.transactionSync(()=>{for(let i=0;i<count;i++){
+   const mine=i%8===0,principal=mine?owner:'bob@example.com',key=(mine?'alice':'bob')+'-credential-'+i%11;
+   const model=!mine?'foreign-only-model':batch==='older'?'historical-model':'recent-model-'+(i/8)%3;
+   const id='usage-'+shard.policyId+'-'+batch+'-'+i,at=start+Math.floor(span*i/count);
+   // Full accounting metadata, not request bodies, artificial padding, or oversized IDs.
+   const e=f.event(id,{occurred_at_ms:at,policy_id:shard.policyId,principal_id:principal,credential_id:key,key_id:key,model,
+    input_tokens:200,output_tokens:30,total_tokens:230,cached_input_tokens:110,cache_write_input_tokens:0,reasoning_output_tokens:8,
+    capability:'llm.responses',request_format:'openai.responses',grant_key:'openai:api_key:shared-policy',auth_type:'api_key',
+    request_id:'req-'+id,trace_id:'000000000000000000000000'+String(i).padStart(8,'0'),span_id:'00000000'+String(i).padStart(8,'0'),
+    client:'openclaw-agent',project_id:'synthetic-shared-workspace',agent_id:'synthetic-agent',parent_agent_id:null,session_id:'synthetic-session-'+i%40,
+    compound_request_id:null,compound_request_stage:null,compound_request_index:null,compound_request_size:null,compound_request_started_at_ms:null,
+    reserved_cost_micros:14,reserved_input_tokens:200,reserved_output_tokens:60,pricing_ref:'openai/synthetic-model/standard-2026-09',
+    pricing_effective_at:'2026-09-01T00:00:00Z',requested_service_tier:'default',served_service_tier:'default',duration_ms:350,
+    content_retained:false,content_ref:null,reporting_known_cost_micros:7,reporting_estimated_cost_micros:null,reporting_estimate_reason:null});
+   insert.run(id,at,shard.tenantId,shard.policyId,e.provider,e.status,e.status_code,e.input_tokens,e.output_tokens,e.total_tokens,
+    e.actual_cost_micros,JSON.stringify(e),e.grant_key,e.grant_lane,principal,principal,key,e.cost_basis);
+  }});
+ }
+ const tailBytes=[];
+ for(const s of shards){
+  seed(s,'older',olderRows,f.now-26*day,15*day);seed(s,'recent',recentRows,f.now-6*day,4*day);
+  await fold(c,s);assert.equal(cellCalls(s),olderRows+recentRows);
+  seed(s,'tail',tailRows,f.now-day,22*hour);await s.ledger.alarm();
+  const state=cellState(s);assert.equal(state.folded,olderRows+recentRows);assert.equal(state.target-state.folded,tailRows);
+  const [{bytes}]=s.sql.exec('SELECT SUM(length(CAST(event_json AS BLOB))) AS bytes FROM usage_events WHERE rowid > ?',state.folded);
+  // Each old cells plan fit alone (<=25k candidates, <=64 MiB) but the two together did not.
+  assert.ok(bytes>32*1024**2&&bytes<64*1024**2,String(bytes));tailBytes.push(bytes);
+ }
+ // The exact fresh browse URL the personal Usage screen sends, with a real local session cookie.
+ const {localLogin}=await import('../local-auth.ts'),{sessionUsageReport}=await import('../usage-report-session.ts'),{sha256Hex}=await import('../utils.ts');
+ const kv=new Map(),token='synthetic-test-login',origin='https://console.example';
+ Object.assign(f.env,{CLAWROUTER_LOCAL_AUTH:'enabled',CLAWROUTER_LOCAL_ADMIN_EMAIL:owner,CLAWROUTER_ADMIN_TOKEN_SHA256:await sha256Hex(token),
+  POLICY_KV:{get:async(k,type)=>type==='json'?JSON.parse(kv.get(k)??'null'):kv.get(k)??null,put:async(k,v)=>kv.set(k,v),list:async()=>({keys:[],list_complete:true})}});
+ await f.personal(shards.map(s=>s.policyId));
+ assert.equal((await f.direct('/users/create',{email:owner,record:{role:'user',tenantId:'tenant',enabled:true,groups:[]}})).status,200);
+ const login=await localLogin(new Request(origin+'/v1/session/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({token})}),f.env);
+ assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
+ for(const days of [7,30])await t.test(days+' days',async t=>{
+  const captures=[],executed=[];
+  f.hook=async(call,response)=>{if(['capture','groups'].includes(call.body.action)){
+   const {value}=await response.clone().json();if(call.body.action==='capture')captures.push({source:value.cut.source,...value.work});else executed.push(value.work);
+  }return response;};
+  const request=new Request(origin+'/v1/session/usage/report?days='+days+'&groupBy=model&intent=browse',{headers:{cookie}}),start=performance.now();
+  const response=await sessionUsageReport(request,f.env),body=await response.json();
+  t.diagnostic(JSON.stringify({days,status:response.status,reason:body.reason,wallMs:Math.round(performance.now()-start),tailBytes,captures,executed}));
+  assert.deepEqual(captures.map(w=>w.source),['retained_ledger','retained_ledger']);assert.equal(response.status,200,JSON.stringify(body));
+  const r=complete(body),recentCalls=2*(recentRows+tailRows)/8,olderCalls=days===30?2*olderRows/8:0,calls=recentCalls+olderCalls;
+  assert.equal(r.query.filters.user,owner);assert.ok(r.cut);assert.equal(r.metrics.calls,calls);assert.equal(r.metrics.inputTokens,200*calls);
+  assert.equal(r.metrics.outputTokens,30*calls);assert.equal(r.metrics.cachedInputTokens,110*calls);assert.equal(r.recordedChargeMicros,7*calls);
+  assert.deepEqual(Object.fromEntries(r.groups.map(g=>[g.identity.value,g.metrics.calls])),{
+   'recent-model-0':recentCalls/3,'recent-model-1':recentCalls/3,'recent-model-2':recentCalls/3,...(olderCalls?{'historical-model':olderCalls}:{})});
+  assert.deepEqual(executed.map(w=>[w.plan,w.rows]),[['raw',calls/2],['raw',calls/2]]);
+  assert.ok(executed.reduce((sum,w)=>sum+w.bytes,0)<=64*1024**2);
+ });
+});

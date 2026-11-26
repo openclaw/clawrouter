@@ -60,7 +60,7 @@ test('new day reports on fully projected shards can use cells; existing cuts kee
  assert.equal(exported.events.length,1);assert.equal(exported.events[0].id,'paired-749');
  assert.equal(f.calls.filter(c=>c.body.action==='events').at(-1).body.cut.source,'projection');
  // A second owner's unfolded tail cannot make a small owner report choose cells.
- for(let i=0;i<32;i++)await f.ingest(s,f.event('tail-'+i,{principal_id:'bob@example.com',occurred_at_ms:query.to-1}));
+ for(let i=0;i<650;i++)await f.ingest(s,f.event('tail-'+i,{principal_id:'bob@example.com',occurred_at_ms:query.to-1}));
  f.calls.length=0;const tail=complete(await f.read({query}));assert.deepEqual(tail.metrics,first.metrics);
  assert.equal(f.calls.find(c=>c.body.action==='groups').body.allowance.plan,'raw');
 });

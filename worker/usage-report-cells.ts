@@ -54,10 +54,13 @@ export function ensureUsageReportCells(sql: ReportSql): void {
 }
 /** Cells usable for a read in this transaction (folded rowid bound; `folding`: rows above it remain for the alarm,
  * which a report read wakes, to fold, whether or not a target covers them yet), or null. */
-export function usableCells(sql: ReportSql): { folded: number; folding: boolean } | null {
+export function usableCells(sql: ReportSql): { folded: number; folding: boolean; tailUpperBound: number } | null {
   const value = read(sql);
   if (!current(sql, value) || value.folded_rowid <= 0) return null;
-  return { folded: value.folded_rowid, folding: value.folded_rowid < Number([...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events")][0].max) };
+  // Rowid gaps only overestimate the tail. This is a plan-choice hint,
+  // never substituted for the exact transactional work measurement.
+  const tailUpperBound = Math.max(0, Number([...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events")][0].max) - value.folded_rowid);
+  return { folded: value.folded_rowid, folding: tailUpperBound > 0, tailUpperBound };
 }
 /**
  * One bounded alarm step; caller owns the transaction. Folds rows <= T only once T is a full cut
