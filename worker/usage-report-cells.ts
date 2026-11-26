@@ -52,10 +52,12 @@ export function ensureUsageReportCells(sql: ReportSql): void {
   sql.exec("INSERT OR REPLACE INTO usage_report_cell_state VALUES (1, 0, 0, 0, 1, ?)", definition);
   for (const d of definitions) sql.exec(d.sql);
 }
-/** Cells usable for a read in this transaction (folded rowid bound; `folding`: a target is still being folded), or null. */
+/** Cells usable for a read in this transaction (folded rowid bound; `folding`: rows above it remain for the alarm,
+ * which a report read wakes, to fold, whether or not a target covers them yet), or null. */
 export function usableCells(sql: ReportSql): { folded: number; folding: boolean } | null {
   const value = read(sql);
-  return current(sql, value) && value.folded_rowid > 0 ? { folded: value.folded_rowid, folding: value.folded_rowid < value.target_rowid } : null;
+  if (!current(sql, value) || value.folded_rowid <= 0) return null;
+  return { folded: value.folded_rowid, folding: value.folded_rowid < Number([...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events")][0].max) };
 }
 /**
  * One bounded alarm step; caller owns the transaction. Folds rows <= T only once T is a full cut

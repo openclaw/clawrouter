@@ -333,7 +333,8 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
   exact(cellRows); return { ...raw, cellRows, plan };
 }
 /** Capture/preflight choice: cells when usable and within limits; otherwise today's raw path. A large raw part (the
- * unfolded tail while cells catch up) is visited whatever the owner or range, so it is weighed against the raw plan.
+ * unfolded tail while cells catch up) is visited whatever the owner or range, so the raw plan runs instead when it
+ * reads fewer raw rows and no more bytes (and so also visits less).
  * The result carries every row and cell its measurements visited, so the service charges rejected probes too. */
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
   const probe = { rows: 0, bytes: 0 }, charge = (w: UsageCandidateSize) => { probe.rows += w.rows + (w.cellRows ?? 0); probe.bytes += w.bytes; return w; };
@@ -343,11 +344,11 @@ function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, 
   // A steady-state tail (the fold lag) is small: no raw probe.
   if (cellsFit && cellsFit.rows <= completeUsageLimits.candidateRows / 10) return done(cellsFit);
   const raw = charge(measurePlan(sql, x, q, cut, 'raw'));
-  if (fits(raw) && (!cellsFit || raw.rows < cellsFit.rows + (cellsFit.cellRows ?? 0))) return done(raw);
+  if (fits(raw) && (!cellsFit || raw.rows < cellsFit.rows && raw.bytes <= cellsFit.bytes)) return done(raw);
   if (cellsFit) return done(cellsFit);
   if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return done(viaCells);
-  // Retryable only while folding can still shrink the work: cells not yet built or a target still
-  // folding, and the partial-slot edges that always stay raw fit on their own. A storage pause or
+  // Retryable only while folding can still shrink the work: cells not yet built or rows left to
+  // fold, and the partial-slot edges that always stay raw fit on their own. A storage pause or
   // oversized edges are limits the caller must narrow around.
   if (eligible && !cellsPaused(sql) && (!cells || cells.folding)) {
     const edges = cellParts(q, layout, 0).raw.slice(1), edgeWork = charge(gross(sql, edges.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), edges.flatMap(p => p.bindings)));

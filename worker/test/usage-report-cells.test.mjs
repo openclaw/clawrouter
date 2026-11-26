@@ -170,6 +170,17 @@ test('a rejected cells probe is charged to the report even when the raw plan is 
  assert.equal(captured[0].plan,'raw');assert.ok(captured[0].probe.rows>250000,JSON.stringify(captured[0]));
 });
 
+test('an unfolded backlog no target covers yet is retryable, then reports through cells',{timeout:120000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0],slot=900000;
+ await f.ingest(0,event(f,'a',c.now-hour/2));retained(s);await fold(c,s);
+ // A writer that schedules no fold (a rollback writer, or a bulk load) leaves 250,001 rows in a whole slot past a fully folded target.
+ bulk(s,250001,Math.floor((c.now-hour)/slot)*slot+1000);assert.equal(cellState(s).folded,cellState(s).target);
+ const query={...f.query,from:c.now-2*hour,to:c.now};
+ assert.deepEqual(await f.read({query}),{kind:'unavailable',reason:'migration'});
+ await fold(c,s);f.calls.length=0;
+ assert.equal(complete(await f.read({query})).metrics.calls,250002);assert.deepEqual(plans(f),['cells']);
+});
+
 test('a narrow personal read while cells catch up takes the indexed raw plan, not the shared row budget',{timeout:120000},async t=>{
  const c=clock(t),f=await completeFixture(t,5),shards=[...f.shards.values()];
  for(const s of shards){await f.ingest(s,event(f,'a-'+s.policyId,c.now-10*60000));retained(s);await fold(c,s);}
@@ -181,6 +192,17 @@ test('a narrow personal read while cells catch up takes the indexed raw plan, no
  assert.equal(r.metrics.calls,5);assert.deepEqual(plans(f),Array(5).fill('raw'));
  // Each shard is charged its rejected cells probe (the whole tail) and the raw plan it runs.
  for(const w of captured){assert.equal(w.plan,'raw');assert.equal(w.rows,1);assert.ok(w.probe.rows>210000+w.rows,JSON.stringify(w));}
+});
+
+test('while cells catch up, the raw plan never runs when it would read more raw rows than the cells plan',{timeout:60000},async t=>{
+ const c=clock(t),f=await completeFixture(t,1),s=[...f.shards.values()][0];
+ // 40,000 folded in-range rows that aggregate into one cell each, then a 30,000-row unfolded tail outside the range:
+ // the raw plan visits fewer rows in total, but the cells plan classifies fewer raw rows.
+ s.sql.exec('UPDATE usage_report_visibility SET usable=0');
+ s.sql.exec("WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i+1<40000) INSERT INTO usage_events(id,occurred_at_ms,tenant_id,policy_id,provider,status,actual_cost_micros,event_json,principal_key) SELECT 'spread-'||i,?,?,?,'openai','success',0,json_object('model','m'||i),'alice@example.com' FROM n",c.now-hour,s.tenantId,s.policyId);
+ retained(s);await fold(c,s);bulk(s,30000,c.now-3*hour);
+ f.calls.length=0;const r=complete(await f.read({query:{...recent(f,c).query,groupBy:'user'}}));
+ assert.equal(r.metrics.calls,40000);assert.deepEqual(plans(f),['cells']);
 });
 
 test('raw edges that alone exceed the limits are capacity even while a fold target is pending',{timeout:60000},async t=>{
