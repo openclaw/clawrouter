@@ -1,4 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
+import { fixtureResponses as memberResponses } from "./fixtures/personal-usage";
 import { expect, test, type Page } from "@playwright/test";
 import type { AccessPolicy, AdminUsageRow, FusionConfig, FusionReadiness, ProviderReadiness, ProviderRow, UsageSnapshot } from "../src/ui-types";
 import snapshot from "../../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -33,6 +34,52 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
   await expect(page.locator(".catalogMeta strong")).toHaveText(`${count} services`);
   await expect.poll(async () => (await page.locator(".mainPane .entityTitle").allTextContents()).sort())
     .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
+});
+
+test("catalog readiness does not grant the administrator a usable service", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  const access = session.entitlements.providers.find((provider) => provider.provider === "anthropic")!;
+  access.readiness = { ...access.readiness, executable: false, status: "unavailable", verified: false, reasons: ["No eligible route under this policy."] };
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const panel = page.locator(".servicePanel");
+  const anthropic = panel.locator("article").filter({ has: page.getByText("Anthropic", { exact: true }) });
+  await expect(anthropic.locator(".status")).toHaveText("unavailable");
+  await expect(panel.getByText("8 executable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("6 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("of 10 granted", { exact: true })).toBeVisible();
+  const denied = panel.locator("article").filter({ has: page.getByText("Perplexity", { exact: true }) });
+  await expect(denied.locator(".status")).toHaveText("denied");
+  await expect(page.locator(".operationsDiagram > div").filter({ hasText: "Not executable" }).locator("strong")).toHaveText("3");
+  await page.getByRole("switch", { name: "Light mode" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const a11y = await new AxeBuilder({ page }).include(".servicePanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+  expect(a11y.violations).toEqual([]);
+});
+
+test("members see only their granted services, not gateway coverage", async ({ page }) => {
+  const { responses, session } = dashboardFixture();
+  session.role = "user";
+  responses["/v1/session/usage"] = memberResponses["/v1/session/usage"];
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const panel = page.locator(".servicePanel");
+  await expect(panel.getByRole("heading", { name: "Granted services" })).toBeVisible();
+  await expect(panel.getByText("7 of 10 usable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Perplexity", { exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Catalog readiness", { exact: true })).toHaveCount(0);
+
+  session.entitlements.providers = [];
+  await page.reload();
+  await expect(panel.getByText("Service access unavailable", { exact: true })).toBeVisible();
+  await expect(panel.getByText("No services assigned", { exact: true })).toHaveCount(0);
 });
 
 test("admin dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
@@ -344,7 +391,7 @@ function dashboardFixture() {
       overview: { policiesActive: 2, tenantsTotal: 1 },
     },
   };
-  return { providers, responses };
+  return { providers, responses, session };
 }
 
 function fusionFixture(adviserModels: string[] = []) {
