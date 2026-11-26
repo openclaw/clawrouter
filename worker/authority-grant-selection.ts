@@ -9,7 +9,7 @@ import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { GrantChoiceInput } from "./grant-selection-strategies.ts";
 import type { AdmissionJournalEntry, GrantAttachmentSnapshot } from "./authority.ts";
 import { routingProjection } from "./grant-projection.ts";
-import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantChoices, grantPriority, grantWeight, poolRetryAt, reserveDrainKeeps, reserveDrainMargin } from "./grant-eligibility.ts";
+import { activeOperationCandidates, filterGrantCandidates, choiceStaleAfterMs, currentGrantRuntime, grantChoices, grantPriority, grantWeight, poolRetryAt, reserveDrainKeeps, reserveDrainMargin, servingCandidates } from "./grant-eligibility.ts";
 import { grantRoutingPolicy } from "./grant-routing.ts";
 import { privateGrantRoutingPolicy, planPrivateGrantRouting, rankingStaleAfterMs } from "./grant-routing.ts";
 import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth.ts";
@@ -276,10 +276,10 @@ export function selectAdmissionCandidate(
   const requirement = { provider, endpoint, mode: request.mode, model: request.model };
   const candidates = input.candidates.map(({ key, grant }) => ({ key, grant, runtimeState: grant ? currentGrantRuntime(grant, input.states[key]) : null }));
   const filtered = filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, request.pinnedKey, requirement, now);
-  const { available, hasConfiguredGrant } = filtered;
-  const active = activeOperationCandidates(available, env, requirement);
+  const { hasConfiguredGrant } = filtered;
+  const { active, reserveDrain } = servingCandidates(filtered, entries => activeOperationCandidates(entries, env, requirement));
   const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
-  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: grantChoices(active, routing, now, request.model, filtered.reserveDrain) }) : null;
+  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent, candidates: grantChoices(active, routing, now, request.model, reserveDrain) }) : null;
   const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
   const retryAt = selected ? undefined : poolRetryAt(filtered, env, requirement);
   return { selected: selected ? { ...selected, authorityRevision: revision(selected.key) } : null, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) };
@@ -310,14 +310,16 @@ export function selectGenerationAdmissionCandidate(env: Env,
   // next configuration preparation. Escaping filtered vectors were funded by
   // the outer working owner; no temporary-record alias escapes this callback.
   const filtered = scratch(filterVector, () => filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, request.pinnedKey, requirement, now));
-  const configured = filtered.available.filter(({ grant }) => privateOperationConfigured(grant, env, requirement, scratch));
-  let priority = Infinity;
-  for (const item of configured) priority = Math.min(priority, grantPriority(item.grant));
-  const active = configured.filter(({ grant }) => grantPriority(grant) === priority);
+  const { active, reserveDrain } = servingCandidates(filtered, entries => {
+    const configured = entries.filter(({ grant }) => privateOperationConfigured(grant, env, requirement, scratch));
+    let priority = Infinity;
+    for (const item of configured) priority = Math.min(priority, grantPriority(item.grant));
+    return configured.filter(({ grant }) => grantPriority(grant) === priority);
+  });
   const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
   const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash,
     switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
-    candidates: grantChoices(active, routing, now, request.model, filtered.reserveDrain) }) : null;
+    candidates: grantChoices(active, routing, now, request.model, reserveDrain) }) : null;
   const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
   let retryMs = Infinity;
   if (!selected) for (const item of filtered.recovering ?? []) {
@@ -344,7 +346,8 @@ export function selectPrivateAdmissionCandidate(env: Env, input: Parameters<type
     const requirement = { provider, endpoint, mode: request.mode, model: request.model };
     const owned: GrantChoiceInput["candidates"] = [];
     // Each singleton filters alone, so the soft reserve's pool decision is here:
-    // every owned choice stays a reserve-band grant until one above it appears.
+    // every owned choice stays a reserve-band grant until one above it that can
+    // serve this operation appears.
     let priority = Infinity, retryMs = Infinity, activeCount = 0, reserveDrain = true;
     let hasConfiguredGrant = filterGrantCandidates(provider.id, [], new Set(), routing, request.pinnedKey, requirement, now).hasConfiguredGrant;
     try {
@@ -359,12 +362,12 @@ export function selectPrivateAdmissionCandidate(env: Env, input: Parameters<type
         // HttpError disposition, but acquire the actual bounded preparation owner
         // BEFORE any Env/configuration helper. Capacity must escape suppression.
         const available = filtered.available[0];
-        if (available && reserveDrain && !filtered.reserveDrain) { owned.length = 0; activeCount = 0; priority = Infinity; reserveDrain = false; }
         const active = available && (reserveDrain || !filtered.reserveDrain) && privateOperationConfigured(available.grant, env, requirement, scratch) ? available : undefined;
+        if (active && reserveDrain && !filtered.reserveDrain) { owned.length = 0; activeCount = 0; priority = Infinity; reserveDrain = false; }
         if (active) {
           const nextPriority = grantPriority(active.grant);
           if (nextPriority < priority) { owned.length = 0; activeCount = 0; priority = nextPriority; }
-          if (nextPriority === priority && ++activeCount <= 98) owned.push({ key: active.key, weight: grantWeight(active.grant), remainingRatio: grantQuotaRatio(active.runtimeState, now, rankingStaleAfterMs(routing), request.model) });
+          if (nextPriority === priority && ++activeCount <= 98) owned.push({ key: active.key, weight: grantWeight(active.grant), remainingRatio: grantQuotaRatio(active.runtimeState, now, choiceStaleAfterMs(routing, reserveDrain), request.model) });
         }
         const recovering = filtered.recovering?.[0];
         const retry = recovering && privateOperationConfigured(recovering.entry.grant, env, requirement, scratch)

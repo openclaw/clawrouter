@@ -58,3 +58,13 @@ export function modelEligibility(grant: PoolGrantInput, model: string, policy: P
   if (policy.grantRouting.staleState === "deny" && !grantRuntimeFresh(state, policy.grantRouting.staleAfterSeconds * 1000, now, model)) return "stale";
   return "eligible";
 }
+
+// One model's eligibility across a policy's grants for its provider. The
+// reserve is a soft floor: with none eligible above it and no environment
+// fallback, dispatch drains the grants only the reserve excludes.
+export function poolModelEligibility(grants: PoolGrantInput[], model: string, policy: PoolPolicyInput, now = Date.now()): PoolEligibility[] {
+  const statuses = grants.map(grant => modelEligibility(grant, model, policy, now));
+  if (policy.grantRouting.environmentFallback || statuses.includes("eligible")) return statuses;
+  const floor = { ...policy, grantRouting: { ...policy.grantRouting, includedQuotaReservePercent: 0 } };
+  return statuses.map((status, index) => status === "exhausted" && modelEligibility(grants[index], model, floor, now) === "eligible" ? "eligible" : status);
+}

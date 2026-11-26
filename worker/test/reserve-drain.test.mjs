@@ -121,6 +121,27 @@ for (const legacy of [false, true]) {
     }
   });
 
+  test(`${path}: a cooling reserve-band account is retried when its cooldown ends, not at its weekly reset`, async t => {
+    const f = await fixture(t, { legacy, grants: { josh: { state: cooled([weekly(5, 86_400)], 60) } } });
+    const response = await f.send();
+    assert.equal(response.status, 429, response.body);
+    assert.equal(response.retryAfter, '60', 'after the cooldown the soft floor drains it');
+    assert.equal(f.upstream.mock.callCount(), 0);
+  });
+
+  test(`${path}: an aged reading still ranks in the drain, so most_remaining spreads instead of emptying one account`, async t => {
+    // staleState "allow" admits both on 10-minute-old readings; only the served one is refreshed.
+    const aged = revision => ({ ...state([weekly(8)])(revision), observedAt: at(-600), windows: [{ ...weekly(8), observedAt: at(-600) }] });
+    const f = await fixture(t, { legacy, routing: { ...foundation, strategy: 'most_remaining' }, grants: { a: { state: aged, used: 92 }, b: { state: aged, used: 92 } } });
+    f.step = 0.5;
+    for (let request = 0; request < 6; request++) {
+      const response = await f.send();
+      assert.equal(response.status, 200, `request ${request}: ${response.status} ${response.body}`);
+      assert.ok(Math.abs(f.used.a - f.used.b) <= 10 * 8 / 10_000 * 100 + f.step + 1e-9, `request ${request}: ${f.served}`);
+    }
+    assert.deepEqual([...new Set(f.served)].sort(), ['a', 'b']);
+  });
+
   test(`${path}: a truly exhausted or cooling pool keeps its 429 and earliest Retry-After`, async t => {
     const grants = incident();
     band.forEach((ref, index) => { grants[ref] = { state: state([weekly(0, 200_000 + index * 1_000)]) }; });
@@ -177,6 +198,26 @@ test('a policy with an environment fallback keeps using it at the reserve rather
   assert.deepEqual(f.served, ['synthetic-environment']);
 });
 
+test('pool status reports a reserve-band grant as eligible while dispatch would drain it', async t => {
+  const read = async (routing, grants) => {
+    const f = await fixture(t, { routing, grants });
+    f.policy.poolStatus = 'visible';
+    await f.call('/policies/put', { policyId: 'fixture', policy: f.policy });
+    f.env.POLICY_KV.list = async ({ prefix }) => ({ keys: [...f.records.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true });
+    f.env.USAGE_LEDGER = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ days: 7, lanes: [], grants: [] }) }) };
+    const response = await worker.fetch(new Request('https://fixture/v1/pool', { headers: admissionHeaders }), f.env, f.context);
+    assert.equal(response.status, 200, await response.clone().text());
+    const body = await response.json();
+    return Object.fromEntries(body.grants.map(grant => [grant.key, [grant.eligibility['anthropic/claude-sonnet-5'], grant.exclusionReasons['anthropic/claude-sonnet-5']]]));
+  };
+  const pool = { a: { state: state([weekly(8)]) }, b: { state: state([weekly(0)]) }, c: { state: cooled([weekly(6)]) } };
+  // The band serves, and keeps its reserve reason; exhausted and cooling grants do not.
+  assert.deepEqual(await read(foundation, pool), { a: ['eligible', 'shared_quota_reserve'], b: ['exhausted', 'shared_quota_exhausted'], c: ['cooldown', 'cooldown'] });
+  // A grant above the reserve, or an environment fallback, is served first.
+  assert.deepEqual((await read(foundation, { ...pool, d: { state: state([weekly(30)]) } })).a, ['exhausted', 'shared_quota_reserve']);
+  assert.deepEqual((await read({ ...foundation, environmentFallback: true }, pool)).a, ['exhausted', 'shared_quota_reserve']);
+});
+
 test('a principal policy draining its reserve yields to one with a grant above its reserve', async t => {
   // Discovery ranks already-resolved pools.
   const grant = { provider: 'anthropic', kind: 'subscription', enabled: true, accessToken: 'synthetic' };
@@ -200,8 +241,11 @@ test('a principal policy draining its reserve yields to one with a grant above i
 // The authority transaction, the isolate snapshot, generation consumption and
 // the private streaming bridge each select; all four must drain identically.
 test('every selection path narrows a reserve drain identically', () => {
-  const grant = (priority = 100) => ({ provider: 'anthropic', kind: 'subscription', enabled: true, credentialStore: 'durable_object', credentialStatus: 'active',
-    hasAccessToken: true, credentialLineage: 'synthetic', credentialGeneration: 1, priority });
+  const grant = (priority = 100, label) => ({ provider: 'anthropic', kind: 'subscription', enabled: true, credentialStore: 'durable_object', credentialStatus: 'active',
+    hasAccessToken: true, credentialLineage: 'synthetic', credentialGeneration: 1, priority, ...(label ? { label } : {}) });
+  // This transport needs each grant's label, so an unlabeled grant cannot serve the operation.
+  const subscription = provider.auth.grantTransports.subscription;
+  const labelled = { ...provider, auth: { ...provider.auth, grantTransports: { ...provider.auth.grantTransports, subscription: { ...subscription, headers: { ...subscription.headers, 'x-fixture-account': '${grant.label}' } } } } };
   const runtime = remaining => ({ status: 'available', observedAt: at(-1), source: 'provider_response', cooldownUntil: null, lastSignal: 'quota', grantRevision: null, windows: [weekly(remaining)] });
   const scenarios = [
     // margin 0.8 points: 7.5 stays within reach of 8, 7 and 5 do not
@@ -213,11 +257,13 @@ test('every selection path narrows a reserve drain identically', () => {
     { name: 'zero remaining is exhausted, not drained', grants: { a: [0], b: [0] }, cursor: null, choices: null, selected: null },
     { name: 'an environment fallback keeps priority', grants: { a: [8] }, routing: { environmentFallback: true }, cursor: null, choices: null, selected: null },
     { name: 'a pinned owner drains even with an environment fallback', grants: { a: [8], b: [4] }, routing: { environmentFallback: true }, pinnedKey: key('b'), cursor: null, choices: ['b'], selected: 'b' },
+    { name: 'a grant above the reserve that cannot serve does not hold back the drain', provider: labelled, grants: { a: [40, 100], b: [8, 100, 'b'], c: [7.5, 100, 'c'] }, cursor: null, choices: ['b', 'c'], selected: 'b' },
+    { name: 'a grant above the reserve that can serve still ends the drain', provider: labelled, grants: { a: [40, 100, 'a'], b: [8, 100, 'b'] }, cursor: 'b', choices: ['a'], selected: 'a' },
   ];
   for (const scenario of scenarios) {
-    const candidates = Object.entries(scenario.grants).map(([ref, [, priority]]) => ({ key: key(ref), grant: grant(priority) }));
+    const candidates = Object.entries(scenario.grants).map(([ref, [, priority, label]]) => ({ key: key(ref), grant: grant(priority, label) }));
     const states = Object.fromEntries(Object.entries(scenario.grants).map(([ref, [remaining]]) => [key(ref), runtime(remaining)]));
-    const input = { provider, endpoint, request: { providerId: provider.id, endpointId: endpoint.id, mode: 'http', model: 'claude-sonnet-5', pinnedKey: scenario.pinnedKey },
+    const input = { provider: scenario.provider ?? provider, endpoint, request: { providerId: provider.id, endpointId: endpoint.id, mode: 'http', model: 'claude-sonnet-5', pinnedKey: scenario.pinnedKey },
       policy: { policyId: 'fixture', policy: normalizePolicyRecord({ grantRouting: { ...foundation, ...scenario.routing } }, false) }, poolKey: 'fixture', candidates, states,
       identityHash: 'ab'.repeat(32), fallbackSessionHash: 'cd'.repeat(32) };
     const results = [], offered = [];

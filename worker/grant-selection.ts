@@ -5,7 +5,7 @@ import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "../shared/grant-quota.ts";
 import { rankingStaleAfterMs } from "./grant-routing.ts";
 import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy } from "./grant-routing.ts";
-import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantChoices, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantChoices, grantWeight, grantPriority, poolRetryAt, servingCandidates, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
@@ -56,10 +56,10 @@ export async function resolveGrantSelection(
   admitIdentity(routing, "record");
   routing = canonicalFreshIdentityRouting(grantRoutingPolicy(routing));
   const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
-  const { available, hasConfiguredGrant } = candidates;
+  const { hasConfiguredGrant } = candidates;
   const nowMs = Date.now();
-  const active = activeOperationCandidates(available, env, requirement);
-  const choices = grantChoices(active, routing, nowMs, requirement?.model, candidates.reserveDrain);
+  const { active, reserveDrain } = servingCandidates(candidates, entries => activeOperationCandidates(entries, env, requirement));
+  const choices = grantChoices(active, routing, nowMs, requirement?.model, reserveDrain);
   let selected: SelectedGrant | null = null;
   if (choices.length && !recordSelection) selected = active.find((entry) => entry.key === choices[0].key) ?? null;
   else if (choices.length) {
