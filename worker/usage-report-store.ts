@@ -370,6 +370,17 @@ function tailCharge(q: UsageReportQuery, layout: ReturnType<typeof cellLayout>, 
   return { bytes: '32 + '+byteLengths(['tenant_id','policy_id','principal_key'])+' + CASE WHEN '+tailScope+' THEN length(CAST(event_json AS BLOB)) ELSE 0 END',
     bindings: [...parts.scope, layout.blocks[0]?.[0] ?? q.range.to, layout.blocks.at(-1)?.[1] ?? q.range.to] };
 }
+/** A retained cut's raw plan, measured in index order only while it stays within `rows` rows and `bytes` bytes: what
+ * measurePlan(raw) measures, or null once it passes either bound. `charge` receives what it visited either way. */
+function rawWithin(sql: ReportSql, q: UsageReportQuery, cut: UsageVisibilityCut, rows: number, bytes: number, charge: (w: UsageCandidateSize) => UsageCandidateSize): UsageCandidateSize | null {
+  const n = sourceNames(q, cut), r = reportWhere({ ...q, filters: {} }), seen = { rows: 0, bytes: 0 };
+  let within = true;
+  for (const row of sql.exec('SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where, ...r.bindings)) {
+    exact(row.bytes); seen.rows++; seen.bytes += Number(row.bytes);
+    if (seen.rows > rows || seen.bytes > bytes) { within = false; break; }
+  }
+  charge(seen); return within ? { ...seen, plan: 'raw' } : null;
+}
 /** The cells plan measured against a fitting raw plan without rescanning: its edges, then the unfolded tail in rowid
  * chunks growing from the raw plan's row count. Returns `raw` as soon as that raw part reads more rows and at least as
  * many bytes; otherwise what measurePlan(cells) measures, having visited no more. `charge` receives every scan. */
@@ -419,13 +430,13 @@ function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, 
     if (prefix) raw = charge(measurePlan(sql, x, q, cut, 'raw'));
     return done(fits(folded) && (!fits(raw) || cheaper()) ? folded : raw);
   }
-  const lag = completeUsageLimits.candidateRows / 10;
-  // While a tail wider than the fold lag catches up, the scoped raw range is measured first, up to that lag. A raw plan
-  // within it is set against the cells plan without rescanning, which stops once raw provably reads fewer rows and no
-  // more bytes; a larger raw plan is measured below only if needed.
-  let raw = cells && cells.tailUpperBound > lag ? charge(measurePlan(sql, x, q, cut, 'raw', lag + 1)) : null;
-  if (raw && raw.rows > lag) raw = null;
-  const viaCells = !cells ? null : raw && fits(raw) ? cellsUnlessRawCheaper(sql, x, q, cells.folded, raw, charge) : charge(measurePlan(sql, x, q, cut, 'cells'));
+  const lag = completeUsageLimits.candidateRows / 10, share = completeUsageLimits.classifiedBytes / completeUsageLimits.shards;
+  // While a tail wider than the fold lag catches up, the scoped raw range is measured first, while it stays within that
+  // lag and one shard's share of the classified-byte budget: rowid gaps can make the span wide while the real tail is
+  // small, and a discarded probe must not exhaust the budget. A raw plan within both is set against the cells plan
+  // without rescanning, which stops once raw provably reads fewer rows and no more bytes; otherwise the steps below decide.
+  let raw = cells && cells.tailUpperBound > lag ? rawWithin(sql, q, cut, lag, share, charge) : null;
+  const viaCells = !cells ? null : raw ? cellsUnlessRawCheaper(sql, x, q, cells.folded, raw, charge) : charge(measurePlan(sql, x, q, cut, 'cells'));
   if (viaCells?.plan === 'raw') return done(viaCells);
   const cellsFit = viaCells && fits(viaCells) ? viaCells : null;
   // A steady-state tail (the fold lag) is small: no raw probe.
