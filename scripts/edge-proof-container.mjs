@@ -57,8 +57,8 @@ export const currentInputInventory = Object.freeze(
   },
   {
     "path": "package.json",
-    "blob": "23dca1a6ddafbce0a1e60b8742b4a81a59bb51f2",
-    "sha256": "3f73d8efc5a9572ad32503507f9747baf8ca5458dda01769487ff0d851b1c39a",
+    "blob": "639c899f294dbfe1fb374891f47f694598f051ac",
+    "sha256": "070c6e64cafd5d6c08819bce2621d345d48cdf0ed5a067a0a96b320fad083dc3",
     "bytes": 2859
   },
   {
