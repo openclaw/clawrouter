@@ -258,7 +258,8 @@ function coverageFor(r:ResolvedUsage,c:PrivateCapture,base:CompleteUsageQuery):U
 }
 async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,measured:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
   const sizes=allowances(measured);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
-  // Charge measured work per page, then only growth that actually happened; the allowance's headroom bounds execution, not budget.
+  // Each page measures its plan again and then aggregates it: charge the measured work before the page, then the page's
+  // aggregation and any growth its measurement saw. The allowance's headroom bounds execution, not budget.
   const grown=(a:UsageCandidateSize,b:UsageCandidateSize):UsageCandidateSize=>({rows:Math.max(0,a.rows-b.rows),bytes:Math.max(0,a.bytes-b.bytes),cellRows:Math.max(0,(a.cellRows??0)-(b.cellRows??0))});
   const buckets=completeUsageBuckets(query).map(b=>({...b,...emptyAdditives()}));
   await op.map(capture.vector,async(p,i)=>{
@@ -266,7 +267,7 @@ async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCaptur
     do{
       op.work(measured[i]);const page=await shardCall<UsageGroupPage>(env,op,p,{action:'groups',query,cut:p.cut,after,allowance:sizes[i]});
       if(!Array.isArray(page.rows)||!page.work||page.work.plan!==sizes[i].plan||page.work.rows>sizes[i].rows||page.work.bytes>sizes[i].bytes||(page.work.cellRows??0)>(sizes[i].cellRows??0))failComplete('unavailable','source');
-      op.work(grown(page.work,measured[i]));
+      op.work(page.work);op.work(grown(page.work,measured[i]));
       for(const row of page.rows){const values=rowAdditives(row);
         if(row.dimension==='total'){if(after)failComplete('unavailable','source');addAdditives(total,values);}
         else if(row.dimension==='bucket'){const bucket=buckets[Number(row.value)];if(after||!bucket)failComplete('unavailable','source');addAdditives(bucket,values);}

@@ -313,7 +313,9 @@ test("real workerd upgrade preserves continuation, background, settings and acco
   const budget = async () => Object.fromEntries(await Promise.all(legs.map(async name => [name, (await f.object("BUDGET_LEDGER", name, "/fixture/dump")).tables])));
   const ledgerBefore = await until(budget, value => legs.every(name => value[name].budget_reservations?.filter(row => JSON.parse(row).settled === 1).length === 2));
   const usageLedger = () => f.object("USAGE_LEDGER", "policy:tenant:fixture", "/fixture/dump");
-  const usageBefore = await until(usageLedger, value => value.tables.usage_events?.length === 2);
+  // Ingest wakes the report-cell fold 500 ms later; once it has chosen its target, the next step is a
+  // 15-minute fence away, so the ledger stays quiescent across the restart.
+  const usageBefore = await until(usageLedger, value => value.tables.usage_events?.length === 2 && JSON.parse(value.tables.usage_report_cell_state?.[0] ?? "{}").target_rowid === 2);
   const before = await f.dump(scope), settings = await f.dump("policy-bindings"), grants = await f.object("GRANT_CREDENTIALS", grant, "/fixture/dump");
   assert.equal(before.tables.compaction_witnesses, undefined, "the baseline has no witness storage");
   assert.equal(before.tables.http_continuations.length, 2);

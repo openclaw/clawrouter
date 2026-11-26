@@ -64,22 +64,25 @@ export function usableCells(sql: ReportSql): { folded: number; folding: boolean 
  */
 export function maintainUsageReportCells(sql: ReportSql, now: number): number | null {
   ensureUsageReportCells(sql);
-  const clock = observeUsageClock(sql, now), cutoff = clock - reportRetentionMs;
-  if (cellsPaused(sql)) {
-    const databaseSize = sql.databaseSize;
-    // Derived state yields to canonical writes; refold starts from 0 once storage allows.
-    if ([...sql.exec("SELECT 1 FROM usage_report_cells LIMIT 1")].length || read(sql)!.folded_rowid) {
+  const clock = observeUsageClock(sql, now), cutoff = clock - reportRetentionMs, paused = cellsPaused(sql);
+  // Derived state yields to canonical writes, and an empty ledger (whose alarms stop) keeps none;
+  // refold starts from 0 once storage allows or rows arrive.
+  if (paused || ![...sql.exec("SELECT 1 FROM usage_events LIMIT 1")].length) {
+    if (paused) console.log(JSON.stringify({ event: "usage_report_cells_paused", databaseSize: sql.databaseSize }));
+    if ([...sql.exec("SELECT 1 FROM usage_report_cells LIMIT 1")].length || read(sql)!.target_rowid) {
       sql.exec("DELETE FROM usage_report_cells"); sql.exec("UPDATE usage_report_cell_state SET folded_rowid = 0, target_rowid = 0, target_at = 0 WHERE id = 1");
     }
-    console.log(JSON.stringify({ event: "usage_report_cells_paused", databaseSize }));
     return null;
   }
+  // Whole slots older than retention are never read (every cut floor is at or above it). Expire them
+  // on every step, as an idle shard chooses no new target; the PK makes each owner one range delete.
+  for (let o = [...sql.exec("SELECT tenant_id AS t, policy_id AS p FROM usage_report_cells ORDER BY tenant_id, policy_id LIMIT 1")][0]; o;
+    o = [...sql.exec("SELECT tenant_id AS t, policy_id AS p FROM usage_report_cells WHERE (tenant_id, policy_id) > (?, ?) ORDER BY tenant_id, policy_id LIMIT 1", String(o.t), String(o.p))][0])
+    sql.exec("DELETE FROM usage_report_cells WHERE tenant_id = ? AND policy_id = ? AND slot_ms <= ?", String(o.t), String(o.p), cutoff - cellSlotMs);
   const s = read(sql)!;
   if (s.folded_rowid >= s.target_rowid) {
     const max = Number([...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS max FROM usage_events")][0].max);
     if (max <= s.target_rowid) return null;
-    // Whole slots older than retention are never read (every cut floor is at or above it).
-    sql.exec("DELETE FROM usage_report_cells WHERE slot_ms <= ?", cutoff - cellSlotMs);
     sql.exec("UPDATE usage_report_cell_state SET target_rowid = MAX(target_rowid, ?), target_at = ? WHERE id = 1", max, clock);
     return clock + reportCutTtlMs;
   }

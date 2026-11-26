@@ -332,16 +332,19 @@ function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cu
   const raw = gross(sql, parts.raw.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), parts.raw.flatMap(p => p.bindings));
   exact(cellRows); return { ...raw, cellRows, plan };
 }
-/** Capture/preflight choice: cells when usable and within limits (a large unfolded tail is not); otherwise today's raw path.
+/** Capture/preflight choice: cells when usable and within limits; otherwise today's raw path. A large raw part (the
+ * unfolded tail while cells catch up) is visited whatever the owner or range, so it is weighed against the raw plan.
  * The result carries every row and cell its measurements visited, so the service charges rejected probes too. */
 function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
   const probe = { rows: 0, bytes: 0 }, charge = (w: UsageCandidateSize) => { probe.rows += w.rows + (w.cellRows ?? 0); probe.bytes += w.bytes; return w; };
   const done = (w: UsageCandidateSize): UsageCandidateSize => ({ ...w, probe });
   const layout = cellLayout(x, q), eligible = cut.source === 'retained_ledger' && x.query.grain === 'day' && layout.blocks.length > 0, cells = eligible ? usableCells(sql) : null;
-  const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null;
-  if (viaCells && fits(viaCells)) return done(viaCells);
+  const viaCells = cells ? charge(measurePlan(sql, x, q, cut, 'cells')) : null, cellsFit = viaCells && fits(viaCells) ? viaCells : null;
+  // A steady-state tail (the fold lag) is small: no raw probe.
+  if (cellsFit && cellsFit.rows <= completeUsageLimits.candidateRows / 10) return done(cellsFit);
   const raw = charge(measurePlan(sql, x, q, cut, 'raw'));
-  if (fits(raw)) return done(raw);
+  if (fits(raw) && (!cellsFit || raw.rows < cellsFit.rows + (cellsFit.cellRows ?? 0))) return done(raw);
+  if (cellsFit) return done(cellsFit);
   if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return done(viaCells);
   // Retryable only while folding can still shrink the work: cells not yet built or a target still
   // folding, and the partial-slot edges that always stay raw fit on their own. A storage pause or

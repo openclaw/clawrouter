@@ -54,10 +54,11 @@ test('cumulative classified bytes are charged again on each group page',{timeout
  const f=await completeFixture(t,1),s=[...f.shards.values()][0];oldRows(s,9000,f.now,9000,1900);
  const size=s.sql.exec('SELECT SUM(length(CAST(event_json AS BLOB))) AS n FROM usage_events')[0].n,start=performance.now();
  const r=await f.read(),groups=f.calls.filter(c=>c.body.action==='groups'),pages=groups.length;
- // The measurement is charged once; every page charges the measured bytes (allowance headroom is an execution bound only).
- assert.ok(groups[0].body.allowance.bytes>size);const charged=size+pages*size;
- assert.deepEqual(r,{kind:'unavailable',reason:'capacity'});assert.ok(pages<Math.ceil(9000/256));assert.ok(charged<=512*1024*1024);assert.ok(charged+size>512*1024*1024);
- t.diagnostic(JSON.stringify({classifiedBytesPerPage:size,issuedPages:pages,chargedBytes:charged,elapsedMs:Math.round(performance.now()-start)}));
+ // The capture measurement is charged once; every page charges its measurement and its aggregation of the measured
+ // bytes (allowance headroom is an execution bound only), so page n is issued only while 2n measured scans fit.
+ assert.ok(groups[0].body.allowance.bytes>size);
+ assert.deepEqual(r,{kind:'unavailable',reason:'capacity'});assert.ok(pages<Math.ceil(9000/256));assert.equal(pages,Math.floor(512*1024*1024/(2*size)));
+ t.diagnostic(JSON.stringify({classifiedBytesPerPage:size,issuedPages:pages,chargedBytes:size*(1+2*pages),elapsedMs:Math.round(performance.now()-start)}));
 });
 
 test('cumulative row visits do not reset at identity page boundaries',{timeout:60000},async t=>{
@@ -67,9 +68,9 @@ test('cumulative row visits do not reset at identity page boundaries',{timeout:6
  const elapsed=performance.now.bind(performance),start=elapsed();t.mock.timers.enable({apis:['setTimeout']});t.mock.method(performance,'now',()=>0);
  const result=await f.read(),groups=f.calls.filter(c=>c.body.action==='groups'),pages=groups.length;
  assert.deepEqual(result,{kind:'unavailable',reason:'capacity'});assert.ok(groups[0].body.allowance.rows>100001);
- // One measurement charge, then the measured rows per page (not the larger allowance) until the 8M visit budget is exceeded.
- assert.equal(pages,Math.floor((8000000-100001)/100001));
- t.diagnostic(JSON.stringify({rows:100001,pages,visits:100001*(pages+1),elapsedMs:Math.round(elapsed()-start),elapsedClockFrozen:true}));
+ // One capture charge, then two scans of the measured rows per page (not the larger allowance) until the 8M visit budget is exceeded.
+ assert.equal(pages,Math.floor(8000000/(2*100001)));
+ t.diagnostic(JSON.stringify({rows:100001,pages,visits:100001*(1+2*pages),elapsedMs:Math.round(elapsed()-start),elapsedClockFrozen:true}));
 });
 
 test('actual projection/retained owner and all-principal SQL plans are time-bounded and fence-indexed',async t=>{
