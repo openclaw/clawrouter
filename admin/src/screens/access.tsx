@@ -476,16 +476,22 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
   onNew: () => void;
   busy: boolean;
 }) {
+  const policiesById = new Map(policies.map((policy) => [policy.policyId, policy]));
+  const target = policiesById.get(form.policyId);
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <div className="overviewStrip">
-          <Metric label="active bindings" value={String(bindings.filter((binding) => binding.enabled).length)} meta={`${bindings.length} total`} />
+          <Metric label="enabled bindings" value={String(bindings.filter((binding) => binding.enabled).length)} meta={`${bindings.length} total`} />
           <Metric label="users" value={String(new Set(bindings.filter((binding) => binding.principalType === "user").map((binding) => binding.principalId)).size)} meta="direct principals" />
           <Metric label="groups" value={String(new Set(bindings.filter((binding) => binding.principalType === "group").map((binding) => binding.principalId)).size)} meta="inherited principals" />
         </div>
         <div className="tableSectionHeader"><div><strong>Principal bindings</strong><span>Explicit policy assignment and priority</span></div><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New binding</span></button></div>
-        <EntityTable columns={["principal", "type", "policy", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) 90px minmax(170px, 1fr) 80px 100px" rows={bindings.map((binding) => ({ id: bindingKey(binding), active: selected ? bindingKey(selected) === bindingKey(binding) : false, onClick: () => onEdit(binding), cells: [<EntityName icon={Users} title={binding.principalId} subtitle={binding.principalType === "group" ? "inherited by group members" : "direct identity binding"} />, binding.principalType, binding.policyId, binding.priority, <Status label={binding.enabled ? "active" : "disabled"} tone={binding.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["principal", "type", "policy", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) 90px minmax(170px, 1fr) 80px 120px" rows={bindings.map((binding) => {
+          const policy = policiesById.get(binding.policyId);
+          const state = !binding.enabled ? "disabled" : !policy ? "unavailable" : !policy.enabled ? "policy disabled" : "enabled";
+          return { id: bindingKey(binding), active: selected ? bindingKey(selected) === bindingKey(binding) : false, onClick: () => onEdit(binding), cells: [<EntityName icon={Users} title={binding.principalId} subtitle={binding.principalType === "group" ? "inherited by group members" : "direct identity binding"} />, binding.principalType, binding.policyId, binding.priority, <Status label={state} tone={state === "enabled" ? "active" : state === "disabled" ? "revoked" : "neutral"} />] };
+        })} />
       </section>
       <aside className="inspector">
         <form onSubmit={onSave}>
@@ -495,10 +501,14 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
             <label><span>principal type</span><select value={form.principalType} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, principalType: event.target.value as BindingForm["principalType"] })}><option value="group">group</option><option value="user">user</option></select></label>
             <label><span>priority</span><input inputMode="numeric" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} /></label>
             <label className="full"><span>principal</span><input value={form.principalId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder={form.principalType === "group" ? "maintainers" : "user@example.com"} /></label>
-            <label className="full"><span>policy</span><select value={form.policyId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+            <label className="full"><span>policy</span><select value={form.policyId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>
+              {!target ? <option value={form.policyId} disabled>{form.policyId ? `${form.policyId} · unavailable` : policies.length ? "Select a policy" : "No policies available"}</option> : null}
+              {policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}
+            </select></label>
             <label className="full"><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
+          {form.policyId && !target ? <InlineNote>{selected ? "This binding can’t be saved while its policy is unavailable." : "Choose an available policy to save this binding."}</InlineNote> : null}
+          <div className="inspectorActions"><button type="submit" disabled={busy || !target || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
         </form>
       </aside>
     </div>

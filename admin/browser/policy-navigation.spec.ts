@@ -68,6 +68,26 @@ for (const surface of ["Catalog", "Users"] as const) {
   });
 }
 
+test("a binding to an unavailable policy shows its own target and cannot save", async ({ page }) => {
+  const state = await open(page);
+  await page.getByRole("tab", { name: /^Bindings/ }).click();
+  const missing = page.getByRole("button", { name: /missing_policy/ });
+  await missing.focus();
+  await page.keyboard.press("Enter");
+  const target = page.getByRole("combobox", { name: "policy", exact: true });
+  const save = page.getByRole("button", { name: "Save binding" });
+  await expect(target).toHaveValue("missing_policy");
+  await expect(target.locator("option:checked")).toHaveText("missing_policy · unavailable");
+  await expect(target).toBeDisabled();
+  await expect(save).toBeDisabled();
+  await expect(missing.locator('[data-label="state"]')).toHaveText("unavailable");
+
+  await page.getByRole("button", { name: /operator@example.com.*policy_b/ }).click();
+  await expect(target).toHaveValue("policy_b");
+  await expect(save).toBeEnabled();
+  expect(state.writes).toEqual([]);
+});
+
 test("missing policy references and effective services are static while loaded policies remain keyboard actions", async ({ page }) => {
   const state = await open(page);
   await page.getByRole("button", { name: "Catalog", exact: true }).click();

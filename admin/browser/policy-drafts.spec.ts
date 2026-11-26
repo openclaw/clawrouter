@@ -425,6 +425,31 @@ test("typing the original tenant after a server refresh stays unsaved through an
   await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
 });
 
+test("a new binding keeps its draft when its target disappears and only saves a chosen replacement", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await page.getByRole("tab", { name: /^Bindings/ }).click();
+  await page.getByRole("button", { name: "New binding", exact: true }).click();
+  const target = page.getByRole("combobox", { name: "policy", exact: true });
+  const principal = page.getByRole("textbox", { name: "principal", exact: true });
+  const submit = page.getByRole("button", { name: "Save binding", exact: true });
+  await principal.fill("ops-team");
+  await target.selectOption("policy_b");
+  state.policies = [{ ...state.policies[0], enabled: false }];
+  await focus(page, state);
+
+  await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+  await expect(submit).toBeDisabled();
+  await expect(principal).toHaveValue("ops-team");
+  await expect(page.getByText("Choose an available policy to save this binding.")).toBeVisible();
+  await target.selectOption({ label: "policy_a · disabled" });
+  await expect(submit).toBeEnabled();
+  await submit.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.bindings).toEqual([{ policyId: "policy_a", principalType: "group", principalId: "ops-team", enabled: true, priority: 100 }]);
+  await expect(row(page, "ops-team").locator('[data-label="state"]')).toHaveText("policy disabled");
+});
+
 test("sibling saves, failures and refreshes preserve the policy draft and its own error", async ({ page }) => {
   const state = await fixture(page);
   await open(page);

@@ -53,7 +53,7 @@ export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, 
       setPolicyError("");
       const principalId = bindingForm.principalId.trim().toLowerCase();
       if (!principalId) throw new Error("principal is required");
-      if (!bindingForm.policyId) throw new Error("select a policy");
+      if (!policies.some((policy) => policy.policyId === bindingForm.policyId)) throw new Error("Select an available policy before saving this binding.");
       const next: PolicyBinding = { policyId: bindingForm.policyId, principalType: bindingForm.principalType, principalId, enabled: bindingForm.enabled, priority: optionalNumber(bindingForm.priority) ?? 100 };
       setStatus("saving binding");
       if (demoMode) setBindings((current) => [next, ...current.filter((binding) => bindingKey(binding) !== bindingKey(next))]);
