@@ -10,10 +10,10 @@ const jsonCounter = (json: string, field: string) => {
   const value = "json_extract(" + json + ", '$." + field + "')";
   return "CASE WHEN json_valid(" + json + ") THEN CASE WHEN json_type(" + json + ", '$." + field + "') IN ('integer', 'real') AND " + value + " BETWEEN 0 AND 9007199254740991 AND " + value + " = CAST(" + value + " AS INTEGER) THEN CAST(" + value + " AS INTEGER) END END";
 };
-/** Canonical columns plus scalar JSON fields of one ledger row (`row` is "" or "OLD."). */
-export function twinOwnedColumns(row = ""): string {
-  return ["id", "occurred_at_ms", "tenant_id", "policy_id", "principal_key", "provider", "status"].map(c => row + c + " AS " + c)
-    .concat(counterFields.map(f => jsonCounter(row + "event_json", f) + " AS " + f), textFields.map(f => jsonText(row + "event_json", f) + " AS " + f)).join(", ");
+/** Canonical columns plus scalar JSON fields of one ledger row. */
+export function twinOwnedColumns(): string {
+  return ["id", "occurred_at_ms", "tenant_id", "policy_id", "principal_key", "provider", "status"]
+    .concat(counterFields.map(f => jsonCounter("event_json", f) + " AS " + f), textFields.map(f => jsonText("event_json", f) + " AS " + f)).join(", ");
 }
 const basisCase = "CASE cost_basis " + Object.entries(knownBasisClasses).map(([basis, cls]) => "WHEN '" + basis + "' THEN '" + cls + "'").join(" ") + " ELSE 'unknown' END";
 const validated = "*, " + basisCase + " AS basis_class, " +
@@ -34,10 +34,6 @@ const source = "actual_cost_micros AS recorded_charge_micros, id, occurred_at_ms
 /** Scalar-only SQL twin of projectUsageEvent as CTEs ending in `source`; `owned` selects twinOwnedColumns(). */
 export function twinCte(owned: string): string {
   return "owned AS MATERIALIZED (" + owned + "), validated AS (SELECT " + validated + " FROM owned), classified AS (SELECT " + classified + " FROM validated), source AS (SELECT " + source + " FROM classified)";
-}
-/** The same twin as nested subqueries, for triggers (which cannot use CTEs). */
-export function twinSubquery(owned: string): string {
-  return "SELECT " + source + " FROM (SELECT " + classified + " FROM (SELECT " + validated + " FROM (" + owned + ")))";
 }
 /** Additive report counters of one twin/projection row, keyed by their response field names. */
 export const reportCounters: ReadonlyArray<readonly [string, string]> = [
