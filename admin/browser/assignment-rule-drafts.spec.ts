@@ -75,8 +75,19 @@ test("saving A keeps B selected and editable through the PUT and foreground refr
   await expect(row(page, beta)).toHaveClass(/selected/);
   await expect(id(page)).toHaveValue(beta);
   await expect(subject(page)).toHaveValue("beta-later.example.test");
+  await expect(page.getByLabel("priority", { exact: true })).toHaveValue("81");
+  await expect(page.getByLabel("provenance", { exact: true })).toHaveValue("directory sync");
   await expect(page.getByRole("combobox", { name: "state", exact: true })).toHaveValue("disabled");
   expect(state.writes).toHaveLength(1);
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  const second = state.writes[1].request();
+  expect(new URL(second.url()).pathname).toBe("/v1/admin/assignment-rules/" + beta);
+  expect(second.postDataJSON()).toMatchObject({ subject: "beta-later.example.test", priority: 81, provenance: "directory sync", enabled: false });
+  state.holdRead = false;
+  state.rules[1] = { ...state.rules[1], subject: "beta-later.example.test" };
+  await state.writes[1].fulfill({ json: state.rules[1] });
+  await connected(page);
 });
 
 for (const path of ["unchanged", "same editor", "reopened A"] as const) {
@@ -98,6 +109,24 @@ for (const path of ["unchanged", "same editor", "reopened A"] as const) {
     expect(state.writes).toHaveLength(1);
   });
 }
+
+test("a rejected PUT and a later refresh retain both submitted and subsequent edits", async ({ page }) => {
+  const state = await fixture(page);
+  await submit(page, state);
+  await page.getByLabel("groups", { exact: true }).fill("later-group");
+  await state.writes[0].fulfill({ status: 503, json: { error: { message: "rule save unavailable" } } });
+  await expect(page.locator(".inspector .inlineError")).toContainText("rule save unavailable");
+  state.holdRead = true;
+  await page.clock.setFixedTime(new Date("2026-11-26T12:01:00Z"));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => state.reads.length).toBe(1);
+  state.rules[0] = { ...state.rules[0], priority: 56 };
+  await state.reads[0].fulfill({ json: state.bootstrap() });
+  await expect(page.getByLabel("priority", { exact: true })).toHaveValue("56");
+  await expect(subject(page)).toHaveValue("SUBMITTED.example.test");
+  await expect(page.getByLabel("groups", { exact: true })).toHaveValue("later-group");
+  expect(state.writes).toHaveLength(1);
+});
 
 for (const draft of ["existing", "new"] as const) {
   test(`failed refresh and retry preserve the ${draft} draft without replay`, async ({ page }) => {

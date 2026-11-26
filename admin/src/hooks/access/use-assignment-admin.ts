@@ -38,19 +38,23 @@ function includeSaved(items: AssignmentRule[], saved: AssignmentRule, overlappin
 export function useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError, setStatus, refresh }: Dependencies) {
   const [rules, setRules] = useState<AssignmentRule[]>(allowDemo ? demo.assignmentRules : []);
   const [editor, setEditor] = useState(() => editorFor(rules[0]));
-  const write = useRef<{ phase: "idle" | "put" | "refresh"; saved?: AssignmentRule }>({ phase: "idle" });
+  const write = useRef<{ phase: "idle" | "put" | "refresh"; submitted?: AssignmentRuleForm; saved?: AssignmentRule }>({ phase: "idle" });
   const selectedId = editor.selectedId ?? "";
   const form = { ...editor.base, ...editor.edits };
   const selected = rules.find((rule) => rule.ruleId === selectedId);
 
   function hydrate(nextRules: AssignmentRule[], background: boolean) {
     // The overlapping inventory may predate the PUT. Refresh every other row.
-    const { saved, phase } = write.current;
+    const { saved, phase, submitted } = write.current;
     const items = saved ? includeSaved(nextRules, saved, phase === "refresh") : nextRules;
     setRules(items);
-    if (background) return;
-    setEditor(current => current.edits || current.selectedId === "" ? current
-      : editorFor(items.find(rule => rule.ruleId === current.selectedId) ?? items[0]));
+    setEditor(current => {
+      if (current.selectedId === "" || (phase === "put" && current.base === submitted)) return current;
+      const reported = items.find(rule => rule.ruleId === current.selectedId);
+      // A draft owns only its edits; saving it later must not undo reported changes to other fields.
+      if (current.edits) return reported ? { ...current, base: assignmentRuleFormFromRule(reported) } : current;
+      return background ? current : editorFor(reported ?? items[0]);
+    });
   }
 
   function setForm(next: AssignmentRuleForm) {
@@ -70,6 +74,7 @@ export function useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode
       const body = { version: 1, enabled: form.enabled, kind: form.kind, subject: form.subject.trim(), groups: parseGroups(form.groups), policyIds: form.policyIds, priority: optionalNumber(form.priority) ?? 100, revokeOnLoss: form.revokeOnLoss, provenance: form.provenance.trim() };
       setStatus("saving assignment rule");
       // Only input after submission overlays the acknowledged values.
+      write.current.submitted = form;
       setEditor({ ...editor, base: form, edits: {} });
       const saved = demoMode ? demoRuleFromForm(form)
         : await request<AssignmentRule>(gatewayOrigin, `/v1/admin/assignment-rules/${encodeURIComponent(ruleId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -83,8 +88,12 @@ export function useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode
       });
       if (!demoMode) await refresh();
       setStatus("saved assignment rule");
-    } catch (caught) { handleError(caught); }
-    finally { write.current.phase = "idle"; }
+    } catch (caught) {
+      // A failed PUT acknowledges none of the submitted edits. Keep them through a later refresh.
+      setEditor(current => current.base === form
+        ? { ...current, base: editor.base, edits: { ...editor.edits, ...current.edits } } : current);
+      handleError(caught);
+    } finally { write.current.phase = "idle"; delete write.current.submitted; }
   }
 
   async function reconcile() {
