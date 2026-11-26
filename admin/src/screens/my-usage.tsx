@@ -282,7 +282,7 @@ const chartHelp: Record<PersonalUsageMetric, string> = {
 };
 const legendLabel: Record<PersonalUsageMetric, string> = { tokens: 'Input + output tokens', apiCost: 'Known API cost', calls: 'Model calls' };
 
-function UsageOverview({ value, query, setQuery, onKey, metric, onMetricChange }: { value: CompleteUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; onKey: (key: CompleteUsageQuery['filters']['key']) => void; metric: PersonalUsageMetric; onMetricChange: (metric: PersonalUsageMetric) => void }) {
+function UsageOverview({ value, query, setQuery, canRefine, onKey, metric, onMetricChange }: { value: CompleteUsageReport; canRefine: boolean; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; onKey: (key: CompleteUsageQuery['filters']['key']) => void; metric: PersonalUsageMetric; onMetricChange: (metric: PersonalUsageMetric) => void }) {
   const points = useMemo(() => personalTrendRows(value, metric), [value, metric]);
   const ranking = useMemo(() => personalRankedGroups(value, metric), [value, metric]);
   const peak = personalPeak(points);
@@ -290,6 +290,7 @@ function UsageOverview({ value, query, setQuery, onKey, metric, onMetricChange }
   const format = (amount: number | null) => amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : count(amount) + (metric === 'tokens' ? ' tokens' : ' calls');
   const groupBy = value.query.groupBy as PersonalUsageQuery['groupBy'];
   const selectedKey = groupBy === 'key' && value.query.filters.key;
+  const hasDrilldown = canRefine && !selectedKey && ranking.rows.some(({ group }) => groupBy === 'key' || group.identity.value !== null);
   function filterGroup(id: string | null) {
     if (groupBy === 'key') onKey(id === null ? { kind: 'session' } : { kind: 'credential', id });
     else if (id !== null) setQuery({ ...query, filters: { ...query.filters, [groupBy]: id } });
@@ -322,14 +323,15 @@ function UsageOverview({ value, query, setQuery, onKey, metric, onMetricChange }
             <p>{selectedKey ? 'Showing ' : 'Ranked by '}{metric === 'apiCost' ? 'known API cost' : personalMetricLabels[metric].toLowerCase()}</p>
           </div>
           <UsageHelp label="Ranking info" icon ariaLabel="Group ranking scope and coverage">
-            <p>Uses only this report’s returned groups. {ranking.truncated ? 'Only the current rank page is shown here; these are not necessarily the global leaders for this chart metric. Use the exact ranking and page controls in Details.' : 'Select a named group to apply an exact filter.'}</p>
+            <p>Uses only this report’s returned groups. {ranking.truncated ? 'Only the current rank page is shown here; these are not necessarily the global leaders for this chart metric. ' : null}
+              {hasDrilldown ? ranking.truncated ? 'Use the exact ranking and page controls in Details.' : 'Select a named group to apply an exact filter.' : null}</p>
             <p>{ranking.missing ? count(ranking.missing) + ' returned groups have no reported value for this metric; they are not treated as zero.' : 'All returned groups have a reported value for this metric.'} Partial values include only reported tokens or known API prices. Full lane and price-quality breakdowns are in Details.</p>
           </UsageHelp>
         </header>
         {!ranking.rows.length ? <p className="personalRankEmpty">No groups in this period.</p> : <ol className="personalRankList">
           {ranking.rows.map(({ group, value: amount, partial, index }) => <li key={index}>
             <div className="personalRankLabel">
-              {selectedKey || (group.identity.value === null && groupBy !== 'key')
+              {!hasDrilldown || (group.identity.value === null && groupBy !== 'key')
                 ? <strong>{usageGroupLabel(groupBy, group.identity.value)}</strong>
                 : <button type="button" className="personalGroupButton" onClick={() => filterGroup(group.identity.value)}>{usageGroupLabel(groupBy, group.identity.value)}</button>}
               <span>{amount === null ? 'Not reported' : metric === 'apiCost' ? usageMoney(amount) : formatCount(amount)}{partial && amount !== null ? <small>partial</small> : null}</span>
@@ -337,7 +339,7 @@ function UsageOverview({ value, query, setQuery, onKey, metric, onMetricChange }
             <div className={'personalRankTrack' + (amount === null ? ' missing' : '')} aria-hidden="true">{amount !== null ? <span style={{ width: (amount / maximum * 100) + '%' }} /> : null}</div>
           </li>)}
         </ol>}
-        <p className="personalRankFooter">{ranking.rows.length} of {ranking.total} returned groups{!selectedKey && ranking.rows.length > 0 ? ' · select a name to filter' : ''}</p>
+        <p className="personalRankFooter">{ranking.rows.length} of {ranking.total} returned groups{hasDrilldown ? ' · select a name to filter' : ''}</p>
       </section>
     </div>
   </>;
@@ -393,7 +395,7 @@ function UsageDetails({ value, data }: { value: CompleteUsageReport; data: Perso
       <TokenStats metrics={value.metrics} complete={complete} />
       <p className="personalNote">Coverage counts calls reporting each field, not inferred zeros. Cache and reasoning can overlap input/output. Subscription amounts are usage equivalents, not additional charges. Estimates, upper bounds, partial and unknown prices stay outside the known subtotal.</p>
     </section>
-    <ExactRanking data={data}/>
+    <fieldset disabled={Boolean(data.report.error)} aria-label="Exact ranking controls" style={{ display: 'contents' }}><ExactRanking data={data}/></fieldset>
     <section className="dashboardPanel personalSection" aria-label="Time bucket data">
       <h2>Time bucket data</h2>
       <div className="personalTableWrap" tabIndex={0} role="region" aria-label="Time bucket model calls">
@@ -449,11 +451,11 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
   function panelContent(name: Panel) {
     if (name === 'activity' && value) return <UsageActivity data={data} timezone={value.query.timezone} />;
     if (!value) return <p className="personalNote">{report.loading ? 'Loading report…' : 'A usage report is needed for this view. Use Retry report above if the read failed.'}</p>;
-    if (name === 'overview') return <UsageOverview value={value} query={query} setQuery={setQuery} onKey={selectKey} metric={metric} onMetricChange={setMetric} />;
+    if (name === 'overview') return <UsageOverview value={value} query={query} setQuery={setQuery} canRefine={!report.error} onKey={selectKey} metric={metric} onMetricChange={setMetric} />;
     return <UsageDetails value={value} data={data} />;
   }
   return <div className="personalUsageCanvas">
-    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q ? data.back : undefined} loading={report.loading}>
+    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} onBack={q && !report.error ? data.back : undefined} loading={report.loading}>
       <button type="button" className="buttonSecondary" aria-disabled={!q || Boolean(report.error) || comparingKeys} onClick={() => {
         if (!q || report.error || comparingKeys) return;
         if (selectedKey) selectKey(undefined);
@@ -463,10 +465,10 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
         }
       }}>{selectedKey ? 'Show all keys' : comparingKeys ? 'Comparing keys' : 'Compare keys'}</button>
       {q ? <>
-        <label>Grain<select value={q.grain} onChange={event => data.refine({ ...q, grain: event.target.value as 'day' | 'minute', rankOffset: 0 })}>
+        <label>Grain<select disabled={Boolean(report.error)} value={q.grain} onChange={event => data.refine({ ...q, grain: event.target.value as 'day' | 'minute', rankOffset: 0 })}>
           <option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option>
         </select></label>
-        <label>Current own-key selector<select value={selectedKey?.kind === 'session' ? 'session' : selectedKey ? 'key:' + selectedKey.id : ''} onChange={event => {
+        <label>Current own-key selector<select disabled={Boolean(report.error)} value={selectedKey?.kind === 'session' ? 'session' : selectedKey ? 'key:' + selectedKey.id : ''} onChange={event => {
           const choice = event.target.value;
           selectKey(choice === 'session' ? { kind: 'session' } : choice ? { kind: 'credential', id: choice.slice(4) } : undefined);
         }}>

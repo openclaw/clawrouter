@@ -128,6 +128,38 @@ test('members compare keys, inspect one and return to all keys in the same perio
  } finally { f.close(); }
 });
 
+test('a failed refresh keeps key ranks readable but not actionable until Retry succeeds', async ({ page }) => {
+ const f = await cursorUsage(page);
+ try {
+  await f.ingest('session-call', { credential_id: null });
+  await page.goto('/dashboard/my-usage');
+  await page.getByRole('button', { name: 'Compare keys', exact: true }).click();
+  const ranks = page.getByRole('region', { name: 'Usage breakdown' });
+  const keys = ['retained-key', 'Dashboard session'];
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  f.failReport();
+  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Old displayed report');
+  for (const name of keys) {
+   await expect(ranks.getByText(name, { exact: true })).toBeVisible();
+   await expect(ranks.getByRole('button', { name, exact: true })).toHaveCount(0);
+  }
+  await ranks.getByLabel('Group ranking scope and coverage').click();
+  await expect(ranks).not.toContainText('Select a named group');
+  await expect(ranks).not.toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Details', exact: true }).click();
+  const exact = page.getByRole('region', { name: 'Retained usage ranking' });
+  for (const name of keys) await expect(exact.getByRole('button', { name: 'member@example.com · ' + name, exact: true })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await page.getByRole('button', { name: 'Retry report' }).click();
+  for (const name of keys) await expect(ranks.getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(ranks).toContainText('select a name to filter');
+  await expect(page.getByRole('combobox', { name: 'Current own-key selector' })).toBeEnabled();
+  expect(f.invalid).toEqual([]);
+ } finally { f.close(); }
+});
+
 test('same-root retries preserve exact cursor; navigation retires roots and reentry starts page one',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
