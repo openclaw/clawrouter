@@ -1,5 +1,5 @@
 import type { UsageGroupIdentity, CompleteUsageEvent } from "../shared/usage-report.ts";
-import { completeUsageLimits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, capacity, invalidSource, exact, boundedText, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow, type UsageReportQuery, type UsageReportMigrationEffect, type UsageReportMigrationOptions, type UsageAggregateRow, type UsageReportHistory, type UsageReportShard, type UsageEventPosition } from "./usage-report-protocol.ts";
+import { completeUsageLimits, reportCellSlotMs, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, capacity, invalidSource, exact, boundedText, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow, type UsageReportQuery, type UsageReportMigrationEffect, type UsageReportMigrationOptions, type UsageAggregateRow, type UsageReportHistory, type UsageReportShard, type UsageEventPosition } from "./usage-report-protocol.ts";
 import { usageMetricKeys } from "../shared/usage-report.ts";
 import { ensureUsageVisibility, captureUsageVisibility, validateUsageVisibility, maintainUsageVisibility } from "./usage-report-visibility.ts";
 import { UsageVisibilityError, type UsageVisibilityCut } from "./usage-report-protocol.ts";
@@ -7,11 +7,12 @@ import type { PersonalUsageEvent, UsageMetrics } from "../shared/usage-report.ts
 import type { UsageEvent } from "./types.ts";
 import { normalizeEmail } from "./utils.ts";
 import { reportRetentionMs } from "./usage-report-range.ts";
-import { reportingCost, knownBasisClasses, recordedAccountingAmount, usageCounter as counter } from "./usage-report-cost.ts";
+import { reportingCost, recordedAccountingAmount, usageCounter as counter } from "./usage-report-cost.ts";
+import { utilityFormats, twinCte, twinOwnedColumns, reportCounters } from "./usage-report-twin.ts";
+import { cellDim, cellsPaused, usableCells } from "./usage-report-cells.ts";
 export { reportingCost } from "./usage-report-cost.ts";
 
-export interface ReportSql { exec(query: string, ...bindings: Array<string | number | null>): Iterable<Record<string, unknown>> }
-export const utilityFormats = new Set(["openai.models", "anthropic.models", "openai.responses_input_tokens", "anthropic.count_tokens", "openai.moderations"]);
+export interface ReportSql { exec(query: string, ...bindings: Array<string | number | null>): Iterable<Record<string, unknown>>; readonly databaseSize?: number }
 const text = (v: unknown): string | null => typeof v === "string" ? v : null;
 const subsetCounter = (v: unknown, inclusive: number | null): number | null => {
   const value = counter(v);
@@ -191,42 +192,26 @@ export function reportWhere(query: UsageReportQuery) {
 }
 
 const scalarColumns = "model, provider, key_id, occurred_at_ms, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros, recorded_charge_micros";
+/** The same exact filters against cells, whose nullable dimensions are stored as x''. */
+function cellFilters(query: UsageReportQuery) {
+  const terms: string[] = [], bindings: Array<string | number | null> = [];
+  for (const [key, column] of Object.entries(filterColumns)) {
+    const value = query.filters[key as keyof typeof filterColumns];
+    if (value === null) terms.push(cellDim(column, 'c.') + ' IS NULL'); else if (value !== undefined) { terms.push('c.' + column + ' = ?'); bindings.push(value); }
+  }
+  return { where: terms.length ? terms.join(" AND ") : "1", bindings };
+}
 function reportFilters(query: UsageReportQuery) {
   const { terms, bindings } = filterTerms(query);
   return { where: terms.length ? terms.join(" AND ") : "1", bindings };
 }
-const jsonText = (field: string) => "CASE WHEN json_valid(event_json) THEN CASE WHEN json_type(event_json, '$." + field + "') = 'text' THEN json_extract(event_json, '$." + field + "') END END";
-const jsonCounter = (field: string) => {
-  const value = "json_extract(event_json, '$." + field + "')";
-  return "CASE WHEN json_valid(event_json) THEN CASE WHEN json_type(event_json, '$." + field + "') IN ('integer', 'real') AND " + value + " BETWEEN 0 AND 9007199254740991 AND " + value + " = CAST(" + value + " AS INTEGER) THEN CAST(" + value + " AS INTEGER) END END";
-};
-/** Scalar-only SQL twin of projectUsageEvent. The only JSON evaluated belongs to
+/** Scalar-only SQL twin of projectUsageEvent (usage-report-twin.ts). The only JSON evaluated belongs to
  * this indexed canonical owner range. Never expand aliases or infer old ownership.
  * The ledger, not a UNION with sparse projection rows, is the sole source until
  * migration completes: each retained original occurs exactly once. */
 function retainedSource(query: UsageReportQuery, keyset = "", keysetBindings: Array<string | number | null> = [], cut?: UsageVisibilityCut) {
   const range = reportWhere({ ...query, filters: {} });
-  const counters = ["input_tokens", "output_tokens", "cached_input_tokens", "cache_write_input_tokens", "reasoning_output_tokens", "actual_cost_micros", "reporting_known_cost_micros", "reporting_estimated_cost_micros"];
-  const texts = ["model", "credential_id", "cost_basis", "grant_lane", "request_format", "capability", "reporting_estimate_reason"];
-  const basisCase = "CASE cost_basis " + Object.entries(knownBasisClasses).map(([basis, cls]) => "WHEN '" + basis + "' THEN '" + cls + "'").join(" ") + " ELSE 'unknown' END";
-  return { cte: "owned AS MATERIALIZED (SELECT id, occurred_at_ms, principal_key, provider, status, " +
-    counters.map(field => jsonCounter(field) + " AS " + field).concat(texts.map(field => jsonText(field) + " AS " + field)).join(", ") +
-    " FROM usage_events INDEXED BY " + (query.principal === undefined ? "usage_events_policy" : "usage_events_policy_principal") + " WHERE " + range.where + visibilityWhere(cut, "usage_events") + keyset + "), " +
-    "validated AS (SELECT *, " + basisCase + " AS basis_class, " +
-    "CASE WHEN cached_input_tokens <= input_tokens THEN cached_input_tokens END AS cache_read, " +
-    "CASE WHEN cache_write_input_tokens <= input_tokens THEN cache_write_input_tokens END AS cache_write, " +
-    "CASE WHEN reasoning_output_tokens <= output_tokens THEN reasoning_output_tokens END AS reasoning FROM owned), " +
-    "classified AS (SELECT *, CASE WHEN actual_cost_micros IS NULL OR (basis_class = 'no_charge' AND actual_cost_micros != 0) THEN 'unknown' " +
-    "WHEN basis_class != 'unknown' THEN basis_class " +
-    "WHEN substr(cost_basis, 1, 9) = 'unpriced_' AND reporting_known_cost_micros > 0 AND reporting_known_cost_micros <= actual_cost_micros THEN 'partial' " +
-    "WHEN actual_cost_micros = 0 AND reporting_estimated_cost_micros IS NOT NULL AND reporting_estimate_reason != '' THEN 'estimated' ELSE 'unknown' END AS cost_class FROM validated), " +
-    "source AS (SELECT actual_cost_micros AS recorded_charge_micros, id, occurred_at_ms, principal_key, provider, status, model, credential_id AS key_id, input_tokens, output_tokens, " +
-    "CASE WHEN cache_read > input_tokens - cache_write THEN NULL ELSE cache_read END AS cached_input_tokens, " +
-    "CASE WHEN cache_read > input_tokens - cache_write THEN NULL ELSE cache_write END AS cache_write_input_tokens, reasoning AS reasoning_output_tokens, " +
-    "CASE WHEN request_format IN (" + [...utilityFormats].map(format => "'" + format + "'").join(", ") + ") OR (request_format = 'anthropic.messages' AND capability = 'llm.count_tokens') THEN 'utility' ELSE 'generation' END AS call_kind, " +
-    "CASE grant_lane WHEN 'subscription' THEN 'subscription' WHEN 'api_key' THEN 'api' WHEN 'environment' THEN 'api' ELSE 'unattributed' END AS lane, cost_class, " +
-    "CASE WHEN cost_class = 'unknown' THEN NULL WHEN basis_class = 'unknown' AND cost_class = 'partial' THEN reporting_known_cost_micros " +
-    "WHEN basis_class = 'unknown' AND cost_class = 'estimated' THEN reporting_estimated_cost_micros ELSE actual_cost_micros END AS reporting_cost_micros FROM classified)",
+  return { cte: twinCte("SELECT " + twinOwnedColumns() + " FROM usage_events INDEXED BY " + (query.principal === undefined ? "usage_events_policy" : "usage_events_policy_principal") + " WHERE " + range.where + visibilityWhere(cut, "usage_events") + keyset),
     bindings: [...range.bindings, ...keysetBindings] };
 }
 /** One indexed scalar range materialization; all three dimensions share it.
@@ -307,20 +292,87 @@ function sourceCte(q: UsageReportQuery, cut: UsageVisibilityCut, keyset = '', po
 }
 const identityOrder = '(owner IS NOT NULL), owner COLLATE BINARY, (value IS NOT NULL), value COLLATE BINARY';
 function sameIdentity(a: UsageGroupIdentity, b: UsageGroupIdentity): boolean { return a.owner === b.owner && a.value === b.value; }
+const cap = completeUsageLimits.candidateRows + 1;
+/** Rows/bytes a scan visits, capped at the limit + 1, including rows later rejected by filters or the cut. */
+function gross(sql: ReportSql, selects: string[], bindings: Array<string | number | null>) {
+  if (!selects.length) return { rows: 0, bytes: 0 };
+  const row = [...sql.exec('SELECT COUNT(*) AS rows, COALESCE(SUM(bytes), 0) AS bytes FROM (' + selects.join(' UNION ALL ') + ' LIMIT ' + cap + ')', ...bindings)][0];
+  exact(row.rows); exact(row.bytes); return { rows: Number(row.rows), bytes: Number(row.bytes) };
+}
+/** Per local bucket: whole quarter-hour slots come from cells, the remainder (range edges,
+ * any unaligned midnight) is read raw. Half-open throughout; no offset alignment assumed. */
+function cellLayout(x: UsageShardInput, q: UsageReportQuery) {
+  const buckets = completeUsageBuckets({ ...x.query, from: q.range.from, to: q.range.to }), blocks: number[][] = [], edges: number[][] = [];
+  buckets.forEach((b, i) => {
+    const lo = Math.ceil(b.start / reportCellSlotMs) * reportCellSlotMs, hi = Math.floor(b.end / reportCellSlotMs) * reportCellSlotMs;
+    if (lo < hi) { blocks.push([lo, hi, i]); if (b.start < lo) edges.push([b.start, lo]); if (hi < b.end) edges.push([hi, b.end]); } else edges.push([b.start, b.end]);
+  });
+  return { buckets, blocks, edges };
+}
+function cellParts(q: UsageReportQuery, layout: ReturnType<typeof cellLayout>, folded: number) {
+  const owner = q.principal !== undefined, base = 'tenant_id = ? AND policy_id = ?' + (owner ? ' AND principal_key = ?' : '');
+  const scope: Array<string | number | null> = [q.tenantId, q.policyId, ...(owner ? [q.principal!] : [])];
+  return { scope, blocks: 'blocks(lo, hi, bucket) AS (VALUES ' + layout.blocks.map(b => '(' + b.map(Number).join(', ') + ')').join(', ') + ')',
+    // Unfolded tail by rowid (the fold lag), and edges by time; both are visited in full.
+    raw: [{ from: 'usage_events NOT INDEXED WHERE rowid > ?', where: ' AND ' + base + ' AND EXISTS (SELECT 1 FROM blocks WHERE occurred_at_ms >= lo AND occurred_at_ms < hi)', bindings: [folded], scoped: true },
+      ...layout.edges.map(([a, b]) => ({ from: 'usage_events INDEXED BY ' + (owner ? 'usage_events_report_owner' : 'usage_events_report_scope') + ' WHERE ' + base + ' AND occurred_at_ms >= ? AND occurred_at_ms < ?', where: '', bindings: [...scope, a, b], scoped: false }))],
+    cells: 'blocks AS b JOIN usage_report_cells AS c' + (owner ? ' INDEXED BY usage_report_cells_owner' : '') + ' ON c.tenant_id = ? AND c.policy_id = ?' + (owner ? ' AND c.principal_key = ?' : '') + ' AND c.slot_ms >= b.lo AND c.slot_ms < b.hi' };
+}
+const fits = (w: UsageCandidateSize) => w.rows <= completeUsageLimits.candidateRows && w.bytes <= completeUsageLimits.inputBytes && (w.cellRows ?? 0) <= completeUsageLimits.cellRows;
+/** Gross physical work of one negotiated report plan, measured in the caller's transaction. */
+function measurePlan(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut, plan: 'cells' | 'raw'): UsageCandidateSize {
+  if (plan === 'raw') {
+    const n = sourceNames(q, cut), r = reportWhere({ ...q, filters: {} });
+    return { ...gross(sql, ['SELECT length(CAST(' + n.detail + ' AS BLOB)) AS bytes FROM ' + n.table + ' INDEXED BY ' + n.index + ' WHERE ' + r.where], r.bindings), plan };
+  }
+  const cells = cut.source === 'retained_ledger' && x.query.grain === 'day' ? usableCells(sql) : null;
+  if (!cells) throw new UsageVisibilityError('unavailable', 'migration');
+  const layout = cellLayout(x, q), parts = cellParts(q, layout, cells.folded);
+  const cellRows = layout.blocks.length ? Number([...sql.exec('WITH ' + parts.blocks + ' SELECT COUNT(*) AS n FROM (SELECT 1 FROM ' + parts.cells + ' LIMIT ' + (completeUsageLimits.cellRows + 1) + ')', ...parts.scope)][0].n) : 0;
+  const raw = gross(sql, parts.raw.map(p => 'SELECT length(CAST(event_json AS BLOB)) AS bytes FROM ' + p.from), parts.raw.flatMap(p => p.bindings));
+  exact(cellRows); return { ...raw, cellRows, plan };
+}
+/** Capture/preflight choice: cells when usable and within limits (a large unfolded tail is not); otherwise today's raw path. */
+function measureReport(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, cut: UsageVisibilityCut): UsageCandidateSize {
+  const eligible = cut.source === 'retained_ledger' && x.query.grain === 'day', cells = eligible ? usableCells(sql) : null;
+  const viaCells = cells && cellLayout(x, q).blocks.length ? measurePlan(sql, x, q, cut, 'cells') : null;
+  if (viaCells && fits(viaCells)) return viaCells;
+  const raw = measurePlan(sql, x, q, cut, 'raw');
+  if (fits(raw)) return raw;
+  if (viaCells && (viaCells.cellRows ?? 0) > completeUsageLimits.cellRows) return viaCells;
+  // Cells are still being folded (or rebuilt): retryable, unlike a genuine work limit.
+  if (eligible && !cellsPaused(sql)) throw new UsageVisibilityError('unavailable', 'migration');
+  return raw;
+}
 function groupPage(sql: ReportSql, x: UsageShardInput, q: UsageReportQuery, work: UsageCandidateSize): UsageGroupPage {
-  const source = sourceCte(q,x.cut!), group = x.query.groupBy;
+  const group = x.query.groupBy, folded = work.plan === 'cells' ? usableCells(sql)?.folded : undefined;
+  if (work.plan === 'cells' && folded === undefined) throw new UsageVisibilityError('unavailable', 'migration');
   const owner = group === 'key' ? 'principal_key' : 'NULL', value = { model:'model',provider:'provider',key:'key_id',user:'principal_key' }[group];
   const after = x.after, keyset = after ? " WHERE ((owner IS NOT NULL), COALESCE(owner,'') COLLATE BINARY, (value IS NOT NULL), COALESCE(value,'') COLLATE BINARY) > (?, ?, ?, ?)" : '';
   const positions = after ? [Number(after.owner !== null),after.owner ?? '',Number(after.value !== null),after.value ?? ''] : [];
   const buckets = completeUsageBuckets(x.query);
   const bucket = x.query.grain === 'minute' ? 'CAST(occurred_at_ms / 60000 AS INTEGER) - ' + Math.floor(q.range.from / 60000)
     : 'CASE ' + buckets.map((b,i) => 'WHEN occurred_at_ms >= ' + b.start + ' AND occurred_at_ms < ' + b.end + ' THEN ' + i).join(' ') + ' ELSE -1 END';
-  const cursor = sql.exec('WITH ' + source.cte + ', identified AS (SELECT *, ' + owner + ' AS owner, ' + value + ' AS value FROM filtered), '
-    + 'selected AS MATERIALIZED (SELECT DISTINCT owner,value FROM identified' + keyset + ' ORDER BY ' + identityOrder + ' LIMIT 257), '
-    + "expanded AS (SELECT 'group' AS dimension, f.owner, f.value, f.* FROM identified f JOIN selected s ON f.owner IS s.owner AND f.value IS s.value"
-    + (after ? '' : " UNION ALL SELECT 'total',NULL,NULL,f.* FROM identified f UNION ALL SELECT 'bucket',NULL," + bucket + ',f.* FROM identified f') + ') '
-    + 'SELECT dimension,owner,value,lane,cost_class AS costClass,' + metricSql + ', COALESCE(SUM(reporting_cost_micros),0) AS amountMicros, TOTAL(recorded_charge_micros) AS recordedChargeMicros, COUNT(recorded_charge_micros) AS chargeReportedCalls '
-    + 'FROM expanded GROUP BY dimension,owner,value,lane,cost_class ORDER BY dimension,' + identityOrder + ',lane,cost_class', ...source.bindings,...positions) as unknown as Iterable<CompleteAggregateRow>;
+  const counters = (alias: string) => reportCounters.map(([name]) => alias + '"' + name + '"').join(', ');
+  const fromRows = (table: string) => 'SELECT principal_key, key_id, model, provider, lane, cost_class, ' + bucket + ' AS bucket, ' + reportCounters.map(([name, expression]) => expression + ' AS "' + name + '"').join(', ') + ' FROM ' + table;
+  let weighted: string, bindings: Array<string | number | null>;
+  if (folded !== undefined) {
+    // Every term is a nonnegative sum of rows visible at the cut: folded cells, unfolded tail, edges.
+    const parts = cellParts(q, cellLayout(x, q), folded), filters = reportFilters(q), cellFilter = cellFilters(q);
+    weighted = parts.blocks + ', ' + twinCte(parts.raw.map(p => 'SELECT ' + twinOwnedColumns() + ' FROM ' + p.from + p.where + visibilityWhere(x.cut, 'usage_events')).join(' UNION ALL ')) +
+      ', weighted AS (' + fromRows('source WHERE ' + filters.where) + ' UNION ALL SELECT ' + ['principal_key', 'key_id', 'model', 'provider', 'lane', 'cost_class'].map(d => cellDim(d, 'c.')).join(', ') + ', b.bucket, ' + counters('c.') + ' FROM ' + parts.cells + ' WHERE ' + cellFilter.where + ')';
+    bindings = [...parts.raw.flatMap(p => p.scoped ? [...p.bindings, ...parts.scope] : p.bindings), ...filters.bindings, ...parts.scope, ...cellFilter.bindings];
+  } else {
+    const source = sourceCte(q, x.cut!);
+    weighted = source.cte + ', weighted AS (' + fromRows('filtered') + ')'; bindings = source.bindings;
+  }
+  const totals = reportCounters.map(([name]) => 'TOTAL("' + name + '") AS "' + name + '"').join(', ');
+  const cursor = sql.exec('WITH ' + weighted + ', compact AS MATERIALIZED (SELECT ' + owner + ' AS owner, ' + value + ' AS value, lane, cost_class, bucket, ' + totals + ' FROM weighted GROUP BY 1, 2, 3, 4, 5), '
+    + 'selected AS MATERIALIZED (SELECT DISTINCT owner,value FROM compact' + keyset + ' ORDER BY ' + identityOrder + ' LIMIT 257), '
+    + "expanded AS (SELECT 'group' AS dimension, c.owner AS owner, c.value AS value, c.lane AS lane, c.cost_class AS cost_class, " + counters('c.') + ' FROM compact c JOIN selected s ON c.owner IS s.owner AND c.value IS s.value'
+    + (after ? '' : " UNION ALL SELECT 'total', NULL, NULL, lane, cost_class, " + counters('') + " FROM compact UNION ALL SELECT 'bucket', NULL, bucket, lane, cost_class, " + counters('') + ' FROM compact') + ') '
+    + 'SELECT dimension, owner, value, lane, cost_class AS costClass, ' + totals + ' FROM expanded GROUP BY dimension, owner, value, lane, cost_class ORDER BY dimension, ' + identityOrder + ', lane, cost_class', ...bindings, ...positions) as unknown as Iterable<CompleteAggregateRow>;
+  // TOTAL of nonnegative integers is exact while the result is <= MAX_SAFE_INTEGER; exact() rejects the rest.
   const rows: CompleteAggregateRow[] = []; let bytes = 128;
   for (const row of cursor) {
     for (const key of [...usageMetricKeys,'amountMicros','recordedChargeMicros','chargeReportedCalls'] as const) exact(row[key]);
@@ -374,10 +426,13 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (Object.keys(x).some(k => !['action','tenantId','policyId','query','cut','after','before','includeEqualId','limit','allowance'].includes(k)) || !['capture','preflight','groups','events','validate'].includes(x.action)) invalidSource();
     boundedText(x.tenantId,2048); boundedText(x.policyId,2048); validateCompleteUsageQuery(x.query);
     maintainUsageVisibility(sql,now);
+    // Report capture/preflight opt into plan negotiation; anything else keeps the legacy measure.
+    const negotiate = x.allowance !== undefined && 'plan' in x.allowance && x.allowance.plan === 'report';
+    if (negotiate && !['capture','preflight'].includes(x.action)) invalidSource();
     if (x.action === 'capture') {
       const cut = openUsageReportCut(sql,x.query.from,now);
-      const q = shardQuery({...x,query:{...x.query,from:Math.min(x.query.to,cut.floor)}});
-      return { kind:'complete',value:{cut,work:candidateSize(sql,q,cut)} };
+      const at = {...x,query:{...x.query,from:Math.min(x.query.to,cut.floor)}}, q = shardQuery(at);
+      return { kind:'complete',value:{cut,work:negotiate ? measureReport(sql,at,q,cut) : candidateSize(sql,q,cut)} };
     }
     if (!x.cut) invalidSource();
     validateUsageVisibility(sql,x.cut,x.query.from,now); reportHistory(sql,x.cut);
@@ -386,10 +441,15 @@ export function dispatchCompleteUsageShard(sql: ReportSql, input: unknown, now =
     if (x.before) { exact(x.before.at); boundedText(x.before.id,8192); }
     if (x.includeEqualId !== undefined && typeof x.includeEqualId !== 'boolean') invalidSource();
     if (x.action === 'events' && (!Number.isInteger(x.limit) || x.limit! < 1 || x.limit! > 100)) invalidSource();
-    const q = shardQuery(x), work = candidateSize(sql,q,x.cut);
-    if (x.action === 'preflight') return {kind:'complete',value:work};
-    if (!x.allowance) invalidSource(); exact(x.allowance.rows); exact(x.allowance.bytes);
-    if (work.rows > x.allowance.rows || work.bytes > x.allowance.bytes) capacity();
+    const q = shardQuery(x);
+    if (x.action === 'preflight') return {kind:'complete',value:negotiate ? measureReport(sql,x,q,x.cut) : candidateSize(sql,q,x.cut)};
+    const allowance = x.allowance as UsageCandidateSize | undefined;
+    if (!allowance) invalidSource(); exact(allowance.rows); exact(allowance.bytes);
+    // A negotiated plan executes exactly as measured (groups only); its page echoes the plan.
+    if (allowance.plan !== undefined && (x.action !== 'groups' || !['cells','raw'].includes(allowance.plan))) invalidSource();
+    if (allowance.cellRows !== undefined) exact(allowance.cellRows);
+    const work = allowance.plan ? measurePlan(sql,x,q,x.cut,allowance.plan) : candidateSize(sql,q,x.cut);
+    if (work.rows > allowance.rows || work.bytes > allowance.bytes || (work.cellRows ?? 0) > (allowance.cellRows ?? 0) || !fits(work)) capacity();
     const result = x.action === 'groups' ? groupPage(sql,x,q,work) : eventPage(sql,x,q,work);
     // Same transaction; requalification also covers empty pages and empty shards.
     validateUsageVisibility(sql,x.cut,x.query.from,now); reportHistory(sql,x.cut);

@@ -128,7 +128,7 @@ import type { AccessSession } from './types.ts';
 import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, CompleteUsageGroup, UsageGroupIdentity, UsageCoverage } from '../shared/usage-report.ts';
 import type { UsageVisibilityCut } from './usage-report-protocol.ts';
 import { UsageVisibilityError } from './usage-report-protocol.ts';
-import { completeUsageLimits as limits, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
+import { completeUsageLimits as limits, reportCellSlotMs, completeUsageBuckets, validateCompleteUsageQuery, usageJsonBytes, type UsageShardInput, type UsageShardResult, type UsageCandidateSize, type UsageGroupPage, type CompleteAggregateRow } from './usage-report-protocol.ts';
 import { sha256Hex } from './utils.ts';
 interface VerifiedUsageCaller { session: AccessSession; actor: string; sessionBinding: string; audience: 'admin' | 'personal' }
 type UsageVerifier = () => Promise<VerifiedUsageCaller | null>;
@@ -180,7 +180,7 @@ class CompleteOperation {
   close(){clearTimeout(this.timer);}
   check(){if(performance.now()>=this.deadline)this.controller.abort();if(this.stopped||this.signal.aborted)failComplete('unavailable','cancelled');}
   charge(count=1){this.check();this.calls+=count;if(this.calls>limits.calls)failComplete('unavailable','capacity');}
-  work(size:UsageCandidateSize){this.check();nonnegative(size.rows);nonnegative(size.bytes);this.visits=safeSum(this.visits,size.rows);this.bytes=safeSum(this.bytes,size.bytes);if(this.visits>limits.visits||this.bytes>limits.classifiedBytes)failComplete('unavailable','capacity');}
+  work(size:UsageCandidateSize){this.check();nonnegative(size.rows);nonnegative(size.bytes);nonnegative(size.cellRows??0);this.visits=safeSum(this.visits,safeSum(size.rows,size.cellRows??0));this.bytes=safeSum(this.bytes,size.bytes);if(this.visits>limits.visits||this.bytes>limits.classifiedBytes)failComplete('unavailable','capacity');}
   async call<T>(stub:DurableObjectStub,path:string,input:unknown):Promise<T>{
     this.charge();
     if(usageJsonBytes(input)>limits.pageBytes)failComplete('unavailable','capacity');
@@ -229,9 +229,20 @@ async function shardCall<T>(env:Env,op:CompleteOperation,p:Policy,input:Omit<Usa
   if(r?.kind==='restart'||r?.kind==='unavailable')failComplete(r.kind,r.reason);
   if(r?.kind!=='complete')failComplete('unavailable','source');return r.value as T;
 }
+const fitsShard=(size:UsageCandidateSize)=>size.rows<=limits.candidateRows&&size.bytes<=limits.inputBytes&&(size.cellRows??0)<=limits.cellRows;
 function checkSize(sizes:UsageCandidateSize[]):void{
-  let rows=0,bytes=0;for(const size of sizes){nonnegative(size.rows);nonnegative(size.bytes);if(size.rows>limits.candidateRows)failComplete('unavailable','capacity');rows=safeSum(rows,size.rows);bytes=safeSum(bytes,size.bytes);}
+  let rows=0,bytes=0;for(const size of sizes){nonnegative(size.rows);nonnegative(size.bytes);nonnegative(size.cellRows??0);if(!fitsShard(size))failComplete('unavailable','capacity');rows=safeSum(rows,size.rows);bytes=safeSum(bytes,size.bytes);}
   if(rows>limits.totalRows||bytes>limits.inputBytes)failComplete('unavailable','capacity');
+}
+const negotiate={rows:0,bytes:0,plan:'report' as const};
+/** Negotiated allowances get headroom from the unused shared budget for rows that arrive (or one
+ * fold batch that lands) between measurement and execution; legacy sizes are passed through. */
+function allowances(sizes:UsageCandidateSize[]):UsageCandidateSize[]{
+  checkSize(sizes);let rows=0,bytes=0;for(const size of sizes){rows+=size.rows;bytes+=size.bytes;}
+  const share=(spare:number)=>Math.floor(spare/Math.max(1,sizes.length));
+  return sizes.map(size=>{if(size.plan!=='cells'&&size.plan!=='raw'){if(size.plan!==undefined)failComplete('unavailable','source');return size;}
+    return {...size,rows:size.rows+Math.min(limits.lateRows,share(limits.totalRows-rows),limits.candidateRows-size.rows),
+      bytes:size.bytes+Math.min(limits.lateBytes,share(limits.inputBytes-bytes),limits.inputBytes-size.bytes),...(size.plan==='cells'?{cellRows:Math.min(limits.cellRows,(size.cellRows??0)+limits.lateCells)}:{})};});
 }
 async function finalValidation(env:Env,verify:UsageVerifier,op:CompleteOperation,resolved:ResolvedUsage,capture:PrivateCapture,query:CompleteUsageQuery){
   await op.map(capture.vector,p=>shardCall<{valid:true}>(env,op,p,{action:'validate',query,cut:p.cut}).then(r=>{if(r.valid!==true)failComplete('unavailable','source');}));
@@ -245,14 +256,14 @@ function coverageFor(r:ResolvedUsage,c:PrivateCapture,base:CompleteUsageQuery):U
     historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',captureAudit:r.inventory.captureAudit,
     effectiveFrom:c.effectiveFrom,clippedFrom:c.effectiveFrom>requestedFrom?requestedFrom:null,capturedBetween:c.capturedBetween};
 }
-async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,sizes:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
-  checkSize(sizes);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
+async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,measured:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
+  const sizes=allowances(measured);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
   const buckets=completeUsageBuckets(query).map(b=>({...b,...emptyAdditives()}));
   await op.map(capture.vector,async(p,i)=>{
     let after:UsageGroupIdentity|undefined;
     do{
       op.work(sizes[i]);const page=await shardCall<UsageGroupPage>(env,op,p,{action:'groups',query,cut:p.cut,after,allowance:sizes[i]});
-      if(!Array.isArray(page.rows)||!page.work||page.work.rows>sizes[i].rows||page.work.bytes>sizes[i].bytes)failComplete('unavailable','source');
+      if(!Array.isArray(page.rows)||!page.work||page.work.plan!==sizes[i].plan||page.work.rows>sizes[i].rows||page.work.bytes>sizes[i].bytes||(page.work.cellRows??0)>(sizes[i].cellRows??0))failComplete('unavailable','source');
       for(const row of page.rows){const values=rowAdditives(row);
         if(row.dimension==='total'){if(after)failComplete('unavailable','source');addAdditives(total,values);}
         else if(row.dimension==='bucket'){const bucket=buckets[Number(row.value)];if(after||!bucket)failComplete('unavailable','source');addAdditives(bucket,values);}
@@ -303,16 +314,23 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const root=await registry<{purpose:'browse'|'export';base:CompleteUsageQuery;capture:PrivateCapture}>('read',{binding,cut:input.cut,query});
       capture=root.capture;base=root.base;purpose=root.purpose;
       if(!capture||!Array.isArray(capture.vector)||stable(capture.vector.map(({tenantId,policyId})=>({tenantId,policyId})))!==stable(resolved.addresses))failComplete('restart','authority');
-      sizes=input.kind==='validate'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut}));
+      sizes=input.kind==='validate'?[]:await op.map(capture.vector,p=>shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,...(input.kind==='report'?{allowance:negotiate}:{})}));
     }else{
       if(intent!=='summary'){const reserved=await registry<{operation:string}>('reserve',{binding,purpose:intent,base:query});operation=reserved.operation;}
       const from=Date.now();
-      const cuts=await op.map(resolved.addresses,p=>shardCall<{cut:UsageVisibilityCut;work:UsageCandidateSize}>(env,op,p,{action:'capture',query}));
-      sizes=cuts.map(c=>c.work);checkSize(sizes);
+      const cuts=await op.map(resolved.addresses,p=>shardCall<{cut:UsageVisibilityCut;work:UsageCandidateSize}>(env,op,p,{action:'capture',query,allowance:negotiate}));
       capture={...(input.requestedFrom!==undefined?{requestedFrom:input.requestedFrom}:{}),vector:resolved.addresses.map((p,i)=>({...p,cut:cuts[i].cut})),effectiveFrom:Math.max(query.from,...cuts.map(c=>c.cut.floor)),capturedBetween:{from,to:Math.max(from,Date.now())}};
       if(capture.effectiveFrom>=query.to)return {kind:'outside_retained_range',effectiveFrom:capture.effectiveFrom,requestedTo:query.to};
       query={...query,from:capture.effectiveFrom};
+      // A shard measured from its own earlier floor is remeasured at the common start when that
+      // start moves into another cell slot (the cell/raw split changes) or when it was over a limit.
+      const start=capture.effectiveFrom,slot=(at:number)=>Math.ceil(at/reportCellSlotMs);
+      sizes=await op.map(capture.vector,async(p,i)=>{const work=cuts[i].work,measuredFrom=Math.min(query.to,p.cut.floor);
+        const remeasure=work?.plan!==undefined&&measuredFrom!==start&&(work.plan==='cells'&&slot(measuredFrom)!==slot(start)||!fitsShard(work));
+        return remeasure?shardCall<UsageCandidateSize>(env,op,p,{action:'preflight',query,cut:p.cut,allowance:negotiate}):work;});
     }
+    // Negotiated measurements scan cells/raw rows themselves; charge them like pages.
+    for(const size of sizes)if(size.plan!==undefined)op.work(size);
     let value:CompleteUsageReport|CompleteUsageEvents|{valid:true};const coverage=coverageFor(resolved,capture,base);
     if(input.kind==='validate')value={valid:true};
     else if(input.kind==='events'){

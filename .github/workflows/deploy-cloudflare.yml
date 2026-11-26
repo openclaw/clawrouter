@@ -106,6 +106,11 @@ jobs:
         run: |
           git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin df8c3800fbb413fbe7db6833387a1e885d1379cb
           git cat-file -e 'df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}'
+      - name: Fetch pinned complete-usage skew baseline
+        if: steps.select.outputs.noop == 'false'
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags origin fcdf6900c94ca71fa29411c3b239da8029c98321
+          git cat-file -e 'fcdf6900c94ca71fa29411c3b239da8029c98321^{commit}'
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         if: steps.select.outputs.noop == 'false'
         with:

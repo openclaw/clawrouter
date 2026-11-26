@@ -131,9 +131,21 @@ test('cancel/outage releases pending, never partial; uncertain finalize observes
 test('disabled visibility maintenance commits drain on unavailable reads; attribution migration is unavailable',async t=>{
  const f=await completeFixture(t,1),s=[...f.shards.values()][0];for(let i=0;i<1001;i++)await f.ingest(0,f.event('r'+i));
  s.sql.exec('UPDATE usage_report_visibility SET usable=0');
- assert.deepEqual(await f.read(),{kind:'unavailable',reason:'capacity'});assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_arrivals')[0].n,1);
+ // Recovering visibility is retryable and independent of the requested range.
+ assert.deepEqual(await f.read(),{kind:'unavailable',reason:'migration'});assert.equal(s.sql.exec('SELECT COUNT(*) AS n FROM usage_report_arrivals')[0].n,1);
  assert.equal(complete(await f.read()).metrics.calls,1001);
  s.sql.exec('UPDATE usage_attribution_migration SET complete=0');assert.deepEqual(await f.read(),{kind:'unavailable',reason:'migration'});
+});
+
+test('in-range ingest between capture and group pages is excluded without exhausting the allowance',async t=>{
+ const f=await completeFixture(t,1);await f.ingest(0,f.event('before'));
+ let late=0;const after=new Set(['capture','groups']);
+ f.hook=async(call,response)=>{if(after.delete(call.body.action))for(let i=0;i<3;i++)await f.ingest(0,f.event('late-'+late++));return response;};
+ const r=complete(await f.read({intent:'browse'}));assert.equal(r.metrics.calls,1);assert.equal(late,6);
+ // A burst larger than the reserved late headroom is a work limit, not a wrong total.
+ f.hook=async(call,response)=>{if(call.body.action==='capture')for(let i=0;i<=2100;i++)await f.ingest(0,f.event('burst-'+i));return response;};
+ assert.deepEqual(await f.read(),{kind:'unavailable',reason:'capacity'});
+ f.hook=undefined;assert.equal(complete(await f.read()).metrics.calls,2108);
 });
 
 test('checked sums and oversized event metadata fail whole rather than truncating',async t=>{

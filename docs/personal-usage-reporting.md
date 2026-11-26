@@ -61,6 +61,18 @@ A completed projection from an older report format is not a current-format compl
 
 Run another explicit apply batch until `complete=true`. Apply resumes the saved watermark, never accepts a caller override for it, and atomically inserts reporting rows plus progress. A crash/failure rolls both back. It writes only reporting metadata, reporting indexes/triggers and migration/coverage state. It never changes original event JSON, actual cost, budgets or pricing metadata. Only retained metadata is eligible. Recovery/import to a running service is intentionally not automated by this tool; follow that service's approved maintenance/restore procedure. Production migration requires separately authorized private in-runtime tooling using `migrateUsageReportShard(env, { tenantId, policyId }, options)` (private Durable Object binding transport) or the underlying `migrateUsageReport(sql, transaction, options)` helper, not a new public route. The private binding operation also defaults to dry-run; no public Worker path forwards to it.
 
+## Complete reports at volume: report cells
+
+Complete reports (`intent=summary|browse|export`, admin and personal) on retained-ledger shards read pre-aggregated quarter-hour **report cells** instead of classifying every retained row. Cells are derived, optional state in each usage shard (`usage_report_cells`, keyed by slot, user, key, model, provider, status, lane and cost class) holding the same retained-ledger SQL twin counters the raw path computes.
+
+- **Folding.** Only the ledger alarm writes cells. It picks a target (the newest rowid) and folds rows up to it, 2,000 per batch, once the target is one cut TTL (15 minutes) old on the shard's persisted clock. Every cut still valid then was created after the target, so folded rows are always visible to it; rows above the folded rowid are read raw. Historical rows fold the same way after an upgrade. Folding waits for attribution backfill and pauses while the database is at or above 8 GiB (cells are dropped so canonical writes keep the space).
+- **Canonical writers only flag.** Triggers on `usage_events` (any code version) mark cells unhealthy for an in-range delete, any update, or an insert that reuses a targeted rowid; the next alarm drops and refolds them. Retention deletes are below every cut floor and are ignored; expired cells are pruned when a new target is chosen.
+- **Reads.** Each local-day bucket reads its whole quarter-hour slots from cells and its remainder (range edges, any unaligned midnight) raw, plus the unfolded tail, all at the cut. Every term is a nonnegative exact sum; totals above `MAX_SAFE_INTEGER` are unavailable as before.
+- **Work accounting.** Capture/preflight for reports negotiate a plan (`cells` or `raw`) inside the shard allowance; pages execute and echo it. Measurements count rows the scan actually visits; allowances add bounded headroom for rows ingested, and fold batches landing, during the request. Peers without the extension keep the previous behavior.
+- **Visibility.** Ingest drains the cut arrival log at the rate it fills; while it recovers from overflow, fresh reports return 503 `usage_unavailable/migration` ("still preparing"), as do day-grain reports while cells are first folding.
+
+Not covered by cells (unchanged): event pages and exports above 50,000 events, minute grain (raw, at most 24 hours) and projection-sourced shards (raw). A shard whose 30-day range needs more than 1,000,000 cells (about 350 distinct user/key/model/status/lane/class tuples per quarter hour) returns 422 for that range.
+
 ## Local verification and benchmark hooks
 
     pnpm exec tsc -p worker/tsconfig.json --noEmit

@@ -313,6 +313,10 @@ jobs:
         run: |
           git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin df8c3800fbb413fbe7db6833387a1e885d1379cb
           git cat-file -e 'df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}'
+      - name: Fetch pinned complete-usage skew baseline
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin fcdf6900c94ca71fa29411c3b239da8029c98321
+          git cat-file -e 'fcdf6900c94ca71fa29411c3b239da8029c98321^{commit}'
       - name: Worker typecheck
         run: pnpm exec tsc -p worker/tsconfig.json --noEmit
       - name: Worker tests with bounded failure identities

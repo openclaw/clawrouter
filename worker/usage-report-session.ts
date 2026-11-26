@@ -47,7 +47,9 @@ export function parseCompleteUsageRequest(request: Request, kind: Kind, audience
 function outcomeResponse(outcome: CompleteUsageOutcome<unknown>): Response {
   if (outcome.kind === 'complete' || outcome.kind === 'no_access' || outcome.kind === 'outside_retained_range') return privateJson(outcome);
   const status = outcome.kind === 'restart' ? (['expired','evicted'].includes(outcome.reason) ? 410 : 409) : outcome.reason === 'capacity' ? 422 : 503;
-  return privateJson({...outcome,error:{code:'usage_'+outcome.kind,message:outcome.kind === 'restart' ? 'Refresh required' : outcome.reason === 'capacity' ? 'Usage capacity unavailable; narrow the range or filters' : 'Usage unavailable; no complete result'}}, status);
+  const message = outcome.kind === 'restart' ? 'Refresh required' : outcome.reason === 'capacity' ? 'Usage report exceeds per-request limits'
+    : outcome.reason === 'migration' ? 'Usage reporting is still preparing; retry shortly' : 'Usage unavailable; no complete result';
+  return privateJson({...outcome,error:{code:'usage_'+outcome.kind,message}}, status);
 }
 /** Both route families use the existing verifier again at the final read boundary. */
 export async function completeUsageResponse(request: Request, env: Env, audience: 'admin'|'personal', kind: Kind, initial: AccessSession): Promise<Response> {
