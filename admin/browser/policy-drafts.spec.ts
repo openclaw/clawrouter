@@ -425,6 +425,81 @@ test("typing the original tenant after a server refresh stays unsaved through an
   await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
 });
 
+test("a new binding keeps its draft when its target disappears and only saves a chosen replacement", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await page.getByRole("tab", { name: /^Bindings/ }).click();
+  await page.getByRole("button", { name: "New binding", exact: true }).click();
+  const target = page.getByRole("combobox", { name: "policy", exact: true });
+  const principal = page.getByRole("textbox", { name: "principal", exact: true });
+  const submit = page.getByRole("button", { name: "Save binding", exact: true });
+  await principal.fill("ops-team");
+  await target.selectOption("policy_b");
+  state.policies = [{ ...state.policies[0], enabled: false }];
+  await focus(page, state);
+
+  await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("disabled");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("enabled");
+  await expect(principal).toHaveValue("ops-team");
+  await expect(page.getByText("Choose an available policy to save this binding.")).toBeVisible();
+  await target.selectOption({ label: "policy_a · disabled" });
+  await expect(submit).toBeEnabled();
+  await submit.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.bindings).toEqual([{ policyId: "policy_a", principalType: "group", principalId: "ops-team", enabled: true, priority: 100 }]);
+  await expect(row(page, "ops-team").locator('[data-label="state"]')).toHaveText("policy disabled");
+});
+
+for (const restored of [false, true]) {
+  test("an exact disable reaches the server when the locally unavailable policy is " + (restored ? "restored" : "still missing"), async ({ page }) => {
+    const state = await fixture(page);
+    const removed = state.policies.pop()!;
+    await open(page);
+    await page.getByRole("tab", { name: /^Bindings/ }).click();
+    const target = page.getByRole("combobox", { name: "policy", exact: true });
+    const status = page.getByRole("combobox", { name: "state", exact: true });
+    const priority = page.getByRole("textbox", { name: "priority", exact: true });
+    const saveBinding = page.getByRole("button", { name: "Save binding", exact: true });
+    const savedState = row(page, "maintainers").locator('[data-label="state"]');
+    await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+    await expect(saveBinding).toBeDisabled();
+    // Authority may change after this browser read. Do not refresh the local inventory.
+    if (restored) state.policies.push(removed);
+    await status.selectOption("disabled");
+    await priority.fill("7");
+    await expect(saveBinding).toBeDisabled();
+    await saveBinding.evaluate((button: HTMLButtonElement) => button.form!.requestSubmit());
+    expect(state.bindingWrites).toEqual([]);
+    await priority.fill("100");
+    await expect(saveBinding).toBeEnabled();
+    if (restored) {
+      await saveBinding.focus();
+      await page.keyboard.press("Enter");
+    } else {
+      // Even duplicate submits while the response is in flight send one request.
+      await saveBinding.evaluate((button: HTMLButtonElement) => { button.form!.requestSubmit(); button.form!.requestSubmit(); });
+    }
+    const expected = { policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: false, priority: 100 };
+    await expect.poll(() => state.bindingWrites).toEqual([expected]);
+    if (restored) {
+      await expect(savedState).toHaveText("disabled");
+      await expect(target.locator("option:checked")).toHaveText("policy_b");
+      await expect(page.locator(".inspector .inlineError")).toHaveCount(0);
+    } else {
+      await expect(page.locator(".inspector .inlineError")).toContainText("bound policy does not exist");
+      await expect(savedState).toHaveText("unavailable");
+      await expect(status).toHaveValue("disabled");
+      await expect(target.locator("option:checked")).toHaveText("policy_b · unavailable");
+    }
+    await focus(page, state);
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:01:00.000Z");
+    expect(state.bindingWrites).toEqual([expected]);
+  });
+}
+
 test("sibling saves, failures and refreshes preserve the policy draft and its own error", async ({ page }) => {
   const state = await fixture(page);
   await open(page);
@@ -829,6 +904,7 @@ async function fixture(page: Page) {
   const state = {
     policies, providers, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, holdUsage: false, refreshes: 0, usageReads: 0,
     bindings: [{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 }] as PolicyBinding[],
+    bindingWrites: [] as PolicyBinding[],
     writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[],
     ledgers: [] as { route: Route; body: { policies: AdminUsageRow[]; usage: UsageSnapshot } }[],
     async commit(index: number, overrides: Partial<AccessPolicy> = {}) {
@@ -850,8 +926,10 @@ async function fixture(page: Page) {
     }
     if (path.startsWith("/v1/admin/policies/") && (route.request().method() === "PUT" || (route.request().method() === "POST" && path.endsWith("/revoke")))) { state.writes.push(route); return; }
     if (route.request().method() === "PUT" && path === "/v1/admin/policy-bindings") {
-      if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
       const binding = route.request().postDataJSON() as PolicyBinding;
+      state.bindingWrites.push(binding);
+      if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
+      if (!state.policies.some((policy) => policy.policyId === binding.policyId)) { await route.fulfill({ status: 404, json: { error: { code: "unknown_policy", message: "bound policy does not exist" } } }); return; }
       state.bindings = [binding];
       await route.fulfill({ json: binding });
       return;

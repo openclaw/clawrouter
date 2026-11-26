@@ -19,6 +19,7 @@ import {
   shortModelName,
 } from "../ui-helpers";
 import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
+import type { PlaygroundDraftError } from "../hooks/use-playground";
 
 export function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, turns, selectedTurnId, setSelectedTurnId, error, onRun, onNewConversation, busy }: {
   form: PlaygroundForm;
@@ -34,12 +35,13 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
   turns: PlaygroundTurn[];
   selectedTurnId: string;
   setSelectedTurnId: (id: string) => void;
-  error: string;
+  error: PlaygroundDraftError | null;
   onRun: (event: FormEvent) => void;
   onNewConversation: () => void;
   busy: boolean;
 }) {
   const transcript = useRef<HTMLDivElement>(null);
+  const formElement = useRef<HTMLFormElement>(null);
   const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider);
   const selectedProvider = form.mode === "model" ? selected?.provider : selectedServiceRoute?.provider;
   const selectedAccess = selectedProvider ? accessByProvider.get(selectedProvider) : undefined;
@@ -52,6 +54,16 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     const element = transcript.current;
     element?.scrollTo({ top: element.scrollHeight, behavior: turns.length > 1 ? "smooth" : "auto" });
   }, [busy, turns.length]);
+
+  useEffect(() => {
+    const field = error && formElement.current?.elements.namedItem(error.field);
+    if (field instanceof HTMLElement) field.focus();
+  }, [error]);
+
+  function fieldProps(name: PlaygroundDraftError["field"]) {
+    return { name, "aria-invalid": error?.field === name || undefined, "aria-describedby": error?.field === name ? "playground-draft-error" : undefined };
+  }
+  const fieldError = error && <div id="playground-draft-error"><InlineError message={error.message} /></div>;
 
   const providerIds = Array.from(new Set([
     ...models.map((model) => model.provider),
@@ -94,7 +106,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     setForm({ ...form, mode: "service", ...playgroundServicePreset(route) });
   }
   return (
-    <form className="playgroundLayout chatPlayground" onSubmit={onRun}>
+    <form ref={formElement} className="playgroundLayout chatPlayground" onSubmit={onRun}>
       <section className="chatWorkspace">
         <header className="chatHeader">
           <div>
@@ -136,10 +148,11 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
         </div>
 
         <div className="composerDock">
-          {error && !turns.length ? <InlineError message={error} /> : null}
+          {error?.field === "composer" ? fieldError : null}
           {blocker ? <InlineNote>{blocker}</InlineNote> : null}
           <div className="composerShell">
             <textarea
+              {...fieldProps("composer")}
               aria-label={form.mode === "model" ? "Message" : "JSON request body"}
               value={form.mode === "model" ? form.prompt : form.servicePayload}
               onChange={(event) => setForm(form.mode === "model" ? { ...form, prompt: event.target.value } : { ...form, servicePayload: event.target.value })}
@@ -188,7 +201,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>Request</button>
               <button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>Response</button>
             </div>
-            <pre className="debugPayload">{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
+            <pre className="debugPayload" onPointerDown={() => setSelectedTurnId(selectedTurn.id)} onCopy={() => setSelectedTurnId(selectedTurn.id)}>{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
           </>
         ) : (
           <>
@@ -199,9 +212,10 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                   <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}>{selected?.capabilities.includes("llm.chat") ? <option value="/v1/chat/completions">chat completions</option> : null}{selected?.capabilities.includes("llm.responses") ? <option value="/v1/responses">responses</option> : null}</select></label>
                   <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
                   <div className="playgroundSettingPair">
-                    <label><span>Max tokens</span><input inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-                    <label><span>Temperature</span><input inputMode="decimal" value={playgroundSupportsTemperature(form.model) ? form.temperature : ""} disabled={!playgroundSupportsTemperature(form.model)} placeholder={playgroundSupportsTemperature(form.model) ? undefined : "not supported"} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+                    <label><span>Max tokens</span><input {...fieldProps("maxTokens")} inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
+                    <label><span>Temperature</span><input {...fieldProps("temperature")} inputMode="decimal" value={playgroundSupportsTemperature(form.model) ? form.temperature : ""} disabled={!playgroundSupportsTemperature(form.model)} placeholder={playgroundSupportsTemperature(form.model) ? undefined : "not supported"} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
                   </div>
+                  {error && error.field !== "composer" ? fieldError : null}
                 </>
               ) : (
                 <>
@@ -217,7 +231,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
             </dl>
             <details className="requestDrawer">
-              <summary><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
+              <summary onClick={() => setSelectedTurnId("setup")}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
               <pre>{currentRequest}</pre>
             </details>
           </>

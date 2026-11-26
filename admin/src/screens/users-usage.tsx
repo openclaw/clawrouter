@@ -87,6 +87,7 @@ export function UsageScreen({ request, keys, credentials, services, overview, te
   const spend = presentAccountedSpend(usage.summary);
   return (
     <div className="usageCanvas">
+      <p className="panelIntro">These diagnostics use their own ledger windows, not the report’s date range or key filter.</p>
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="usageSummaryGrid" aria-label="Usage summary">
         <Metric label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} meta={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens` : "Usage unavailable"} />

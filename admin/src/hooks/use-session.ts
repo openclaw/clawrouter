@@ -84,7 +84,13 @@ export function useSession() {
   }
 
   function syncViewFromPath() {
-    setView(initialViewFromPath());
+    const next = initialViewFromPath();
+    const focused = document.activeElement;
+    // Follow Back/Forward only if focus was tracking the departing page in the nav.
+    const nav = focused?.matches('button[data-console-view][aria-current="page"]') ? focused.closest("nav") : null;
+    setView(next);
+    const target = nav?.querySelector<HTMLButtonElement>(`button[data-console-view="${next}"]`);
+    if (target && target !== focused) target.focus();
   }
 
   return {
