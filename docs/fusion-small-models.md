@@ -2617,3 +2617,13 @@ passes the complete development screen: cascade and strong both solve 29/30,
 with 38.84% lower model cost and 2.35% less workflow time for the cascade.
 All ninety outcomes and three exact replay audits are retained. This remains
 one draw on the same exposed repository, not production qualification.
+
+## SemVer task-transfer smoke
+
+The [SemVer pilot and transfer report](fusion-semver-transfer.md) retains a
+cost-increasing initial policy, an exposed development repeat and two new
+same-package tasks. On the two admitted transfer tasks, cascade and strong
+both solve 2/2 while cheap solves 1/2; replayed model cost falls 43.42%, or
+44.17% without cache discounts. Two other candidates failed model-free
+qualification and received no model calls. This small paired replay does not
+qualify production behavior or live workflow latency.
