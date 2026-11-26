@@ -35,7 +35,16 @@ export function useConnectionAdmin({ request, allowDemo, gatewayOrigin, demoMode
         const enabled = mutation.enabled;
         if (enabled !== undefined) setProviderReadiness((items) => {
           const readiness = items[providerId];
-          return readiness ? { ...items, [providerId]: { ...readiness, connectionEnabled: enabled, executable: enabled && readiness.configPresent && (!readiness.oauthGrantRequired || readiness.oauthGrantCount > 0), status: enabled ? (readiness.verified ? "verified" : "unverified") : "disabled" } } : items;
+          if (!readiness) return items;
+          const disabledReason = "Provider connection is disabled by an administrator.";
+          const otherReasons = readiness.reasons.filter((reason) => reason !== disabledReason);
+          return { ...items, [providerId]: {
+            ...readiness,
+            connectionEnabled: enabled,
+            executable: enabled && readiness.configPresent && (!readiness.oauthGrantRequired || readiness.oauthGrantCount > 0),
+            status: enabled ? (readiness.verified ? "verified" : "unverified") : "disabled",
+            reasons: enabled ? otherReasons : [disabledReason, ...otherReasons],
+          } };
         });
       } else {
         const next = await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(mutation) });

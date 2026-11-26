@@ -36,6 +36,35 @@ test("real demo shows the bundled provider inventory and remains WCAG AA clean",
     .toEqual(snapshot.providers.map((provider) => provider.display_name).sort());
 });
 
+for (const [name, granted] of [["Anthropic", true], ["Abliteration", false]] as const) {
+  test(`demo connection changes update readiness without changing the ${granted ? "grant" : "denial"} for ${name}`, async ({ page }) => {
+    await openDemo(page);
+    const nav = page.getByRole("navigation", { name: "console" });
+    const summary = page.locator(".dashboardAccessSummary");
+    const gateway = summary.locator("dd").first();
+    const personal = summary.locator("dd").last();
+    const row = page.locator(".dashboardService").filter({ has: page.getByText(name, { exact: true }) });
+    const gatewayCount = Number.parseInt(await gateway.innerText(), 10);
+    const usableCount = Number.parseInt(await personal.locator("strong").innerText(), 10);
+    const grants = await personal.locator("small").innerText();
+    await expect(row.locator(".status")).toHaveText(granted ? "usable" : "denied");
+
+    for (const enabled of [false, true]) {
+      await nav.getByRole("button", { name: "Catalog", exact: true }).click();
+      await page.getByRole("textbox", { name: "search catalog" }).fill(name);
+      await page.locator(".tableRow").filter({ has: page.getByText(name, { exact: true }) }).click();
+      await page.getByRole("button", { name: enabled ? "Enable connection" : "Disable connection", exact: true }).click();
+      await expect(page.getByRole("button", { name: enabled ? "Disable connection" : "Enable connection", exact: true })).toBeEnabled();
+      await nav.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect(gateway).toHaveText(`${gatewayCount - Number(!enabled)} executable`);
+      await expect(row.locator(".status")).toHaveText(!granted ? "denied" : enabled ? "usable" : "disabled");
+      if (granted && !enabled) await expect(row).toContainText("Provider connection is disabled by an administrator.");
+      await expect(personal.locator("strong")).toHaveText(`${usableCount - Number(granted && !enabled)} usable`);
+      await expect(personal.locator("small")).toHaveText(grants);
+    }
+  });
+}
+
 test("catalog readiness does not grant the administrator a usable service", async ({ page }) => {
   const { responses, session } = dashboardFixture();
   const access = session.entitlements.providers.find((provider) => provider.provider === "anthropic")!;
