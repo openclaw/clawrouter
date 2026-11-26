@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Preserve exact microdollar amounts when editing provider budgets; reject fractional microdollars and out-of-range caps before saving.
+- Preserve binding editor drafts across pending saves and refreshes, and retain acknowledged bindings when refresh fails.
 
 ## 0.6.0 - 2026-11-26
 
