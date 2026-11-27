@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Compare repeated Fusion routing studies against compact controls, with reproducible call/workflow timing and explicit failed latency gates.
+
 - Document ten compact-first passes across five non-H2 Fusion tasks, with no fallback calls or additional mixed-model gain.
 
 - Add opt-in source-hashed author task briefs for external Fusion benchmarks, with explicit rejection of title-only descriptions.
