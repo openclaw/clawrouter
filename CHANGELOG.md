@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record a parser Fusion feedback pilot: both cascades cost more than direct Terra; precise source context recovered one rejected edit in a small conditional study.
+
 - Compare repeated Fusion routing studies against compact controls, with reproducible call/workflow timing and explicit failed latency gates.
 
 - Document ten compact-first passes across five non-H2 Fusion tasks, with no fallback calls or additional mixed-model gain.
