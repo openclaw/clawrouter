@@ -6,6 +6,66 @@ const config = { draftModel: 'provider/cheap', fallbackModel: 'provider/strong',
 const receipt = passed => ({ artifact: { patch: 'source' }, costMicros: 7,
   tests: { valid: true, passed, assertions: 3 } });
 
+test('opt-in fallback repair uses the latest strong artifact and public feedback in either mode', async () => {
+  for (const fallbackMode of ['fresh', 'repair']) {
+    const calls = [];
+    const strong = { ...receipt(false), artifact: { patch: 'strong' }, publicFeedback: 'strong failure', privateFinal: 'hidden' };
+    const result = await runNativeCascade({ ...config, fallbackMode, fallbackAttempts: 2,
+      invokeAndVerify: async request => {
+        calls.push(request);
+        if (request.phase === 'initial') return { ...receipt(false), publicFeedback: 'draft failure' };
+        if (request.phase === 'fallback') return strong;
+        assert.equal(request.phase, 'fallback-repair');
+        assert.deepEqual(request.draft, strong.artifact); assert.notEqual(request.draft, strong.artifact);
+        assert.equal(request.feedback, 'strong failure');
+        assert.ok(!JSON.stringify(request).includes('hidden'));
+        request.draft.patch = 'mutated';
+        return receipt(true);
+      } });
+    assert.equal(strong.artifact.patch, 'strong');
+    assert.equal(result.passed, true); assert.equal(result.costMicros, 21); assert.equal(result.checks.length, 3);
+    assert.deepEqual(calls.map(c => [c.phase, c.model]), [['initial', config.draftModel],
+      ['fallback', config.fallbackModel], ['fallback-repair', config.fallbackModel]]);
+  }
+});
+
+test('fallback repair stops at success or its three-call ceiling and preserves missing feedback', async () => {
+  for (const successfulCall of [1, 2, 3, 4]) {
+    let calls = 0;
+    const result = await runNativeCascade({ ...config, fallbackMode: 'repair', fallbackAttempts: 2,
+      invokeAndVerify: async request => {
+        calls++;
+        if (calls === 1) return { ...receipt(calls === successfulCall), publicFeedback: 'old draft feedback' };
+        if (calls === 3) { assert.equal(request.feedback, null); assert.equal(request.draft, null); }
+        return calls === 2 && successfulCall > 2 ? { artifact: null, tests: null, costMicros: 7 }
+          : receipt(calls === successfulCall);
+      } });
+    assert.equal(calls, Math.min(successfulCall, 3));
+    assert.equal(result.passed, successfulCall <= 3); assert.equal(result.costMicros, 7 * calls);
+  }
+});
+
+test('second-fallback opt-in preserves feedback, native validation and cancellation boundaries', async () => {
+  for (const defect of ['count', 'invalid', 'feedback', 'cancel']) {
+    const controller = new AbortController(); let calls = 0;
+    await assert.rejects(runNativeCascade({ ...config, fallbackAttempts: 2, signal: controller.signal,
+      invokeAndVerify: async () => {
+        if (++calls === 1) return receipt(false);
+        const row = receipt(false);
+        if (defect === 'count') row.tests.assertions--;
+        if (defect === 'invalid') row.tests.valid = false;
+        if (defect === 'feedback') row.publicFeedback = 'é'.repeat(6001);
+        if (defect === 'cancel') controller.abort(Error('cancelled'));
+        return row;
+      } }));
+    assert.equal(calls, 2);
+  }
+  let calls = 0;
+  for (const fallbackAttempts of [0, 3, 1.5, '2']) await assert.rejects(runNativeCascade({ ...config, fallbackAttempts,
+    invokeAndVerify: async () => { calls++; return receipt(false); } }), /invalid_verified_workflow/);
+  assert.equal(calls, 0);
+});
+
 test('verified native draft stops without dispatching fallback', async () => {
   const calls = [], steps = [];
   const result = await runNativeCascade({ ...config, onStep: step => steps.push(step),
