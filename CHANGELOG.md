@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Add opt-in Tape assertion regression holdouts with separate native qualification of public and hidden failures.
+- Add an opt-in caller-side Fusion agreement cascade with independent drafts, exact native comparison counts and bounded fallback accounting.
 - Report a matched native Fusion policy comparison: an extra cheap repair failed quality and savings gates; retain the current opt-in fallback policy.
 
 - Record a 30-task native Fusion confirmation: matched strong-only quality at 52.71% lower model cost, with a failed population latency qualification and explicit historical-task limits.
 - Add opt-in Fusion regression holdouts with separate public and hidden native qualification, rejecting preservation-only evidence before inference.
+- Add opt-in Tape assertion regression holdouts with separate native qualification of public and hidden failures.
 
 - Route local proxy-key creation, rotation, and revocation through the running Worker's authenticated authority API, preserving migrated state and rejecting obsolete KV selectors instead of reporting ineffective writes.
 

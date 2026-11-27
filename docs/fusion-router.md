@@ -405,6 +405,38 @@ execution of generated code. Adapter errors, malformed receipts, deadlines and
 cancellation stop the workflow rather than triggering fallback. This caller-side
 mode does not enable a Worker routing policy or establish a model-quality gain.
 
+For an experimental independent-draft gate, import `runAgreementCascade` from
+`scripts/fusion-agreement-cascade.mjs`. A native-passing draft receives a second,
+independent draft. Both must pass the same native suite and agree on every
+caller-supplied comparison before the first draft is accepted. Disagreement or
+a native failure triggers one fresh fallback. A failed first draft skips the
+peer call. The maximum is three generation calls; agreement uses two.
+
+Supply `draftModel`, `peerModel` (defaults to `draftModel`), `fallbackModel`,
+positive `expectedTests` and `expectedComparisons`, and these callbacks:
+
+- `invokeAndVerify({ phase, model, signal })` handles `draft`, `peer` or
+  `fallback`. Make one independently admitted model call per invocation, reserve
+  its conservative cost before dispatch, and return `{ artifact, costMicros,
+  tests: { valid, passed, assertions } }`. An unusable artifact is `null` with
+  `tests: null`. The peer receives no first-draft artifact or feedback.
+- `compare({ first, second, signal })` executes native behavioral comparisons on
+  isolated artifact clones. Return `{ valid: true, compared, mismatches, agreed }`;
+  `compared` must equal `expectedComparisons`, and `agreed` must equal
+  `mismatches === 0`. This callback must not make unaccounted model calls.
+- Optional `onStep(step)` observes generation metadata without artifact content.
+
+The result includes the selected `artifact`, its native `passed` verdict,
+all `checks`, generation `steps`, `agreement` (or `null` when not reached),
+total `costMicros` and `elapsedMs`. Each callback must honor `signal`; optional
+`deadlineMs` bounds the whole workflow. Malformed or incomplete receipts,
+callback errors, cancellation and deadlines stop execution without fallback.
+An unsuccessful fallback returns `passed: false`.
+
+Agreement is evidence of consistency, not correctness: two implementations can
+share the same defect, and a weak comparison set can miss differences. This
+helper is opt-in and does not establish quality, cost or latency improvements.
+
 For a caller with one complete native test suite, use
 `runNativeCascade` from `scripts/fusion-native-cascade.mjs`:
 
