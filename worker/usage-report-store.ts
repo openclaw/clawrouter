@@ -76,7 +76,9 @@ export function withUsageReportPair(sql: ReportSql, write: () => void): void {
   sql.exec("UPDATE usage_report_coverage SET verified_generation = CASE WHEN verified_generation = ? THEN generation ELSE verified_generation END, round_generation = CASE WHEN round_generation = ? THEN generation ELSE round_generation END WHERE id = 1", generation, generation);
 }
 export function insertUsageReportEvent(sql: ReportSql, event: UsageEvent): boolean {
-  const detail = projectUsageEvent(event);
+  return insertProjectedUsageReportEvent(sql, event, projectUsageEvent(event));
+}
+function insertProjectedUsageReportEvent(sql: ReportSql, event: UsageEvent, detail: PersonalUsageEvent): boolean {
   const inserted = [...sql.exec("INSERT OR IGNORE INTO usage_report_events (id, occurred_at_ms, tenant_id, policy_id, principal_key, provider, model, key_id, status, call_kind, input_tokens, output_tokens, cached_input_tokens, cache_write_input_tokens, reasoning_output_tokens, lane, cost_class, reporting_cost_micros, detail_json, recorded_charge_micros, report_format_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2) RETURNING id",
     detail.id, detail.occurredAt, event.tenant_id, event.policy_id || event.key_id, typeof event.principal_id === "string" ? normalizeEmail(event.principal_id) : null, detail.provider, detail.model, detail.keyId, detail.status, detail.callKind,
     detail.inputTokens, detail.outputTokens, detail.cachedInputTokens, detail.cacheWriteInputTokens, detail.reasoningOutputTokens, detail.lane, detail.costClass, detail.reportingCostMicros, JSON.stringify(detail), detail.recordedChargeMicros)];
@@ -151,14 +153,14 @@ export function migrateUsageReport(sql: ReportSql, transaction: (fn: () => void)
     if (!Number.isSafeInteger(last) || last < 0 || last > upper || !Number.isSafeInteger(upper)) throw new Error("invalid migration watermark");
     const batch = previouslyComplete && options.afterRowid === undefined ? [] : [...sql.exec("SELECT rowid, id, occurred_at_ms, event_json FROM usage_events WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?", last, upper, batchSize)];
     const next = Number(batch.at(-1)?.rowid ?? upper), scanned = batch.length < batchSize || next === upper;
-    const projected = batch.filter(row => Number(row.occurred_at_ms) >= cutoff).map(row => { const event = JSON.parse(String(row.event_json)) as UsageEvent; projectUsageEvent(event); return event; });
+    const projected = batch.filter(row => Number(row.occurred_at_ms) >= cutoff).map(row => { const event = JSON.parse(String(row.event_json)) as UsageEvent; return { event, detail: projectUsageEvent(event) }; });
     // Explicit migration only: prune pre-trigger orphan/expired metadata, at most
     // one batch of deletes. Never perform this anti-join on a reporting read.
     const obsolete = !previouslyComplete && scanned && tables.has("usage_report_events") ? [...sql.exec("SELECT report.id FROM usage_report_events AS report LEFT JOIN usage_events AS ledger ON ledger.id = report.id WHERE ledger.id IS NULL OR report.occurred_at_ms < ? ORDER BY report.id LIMIT ?", cutoff, batchSize)] : [];
     const complete = scanned && obsolete.length < batchSize;
     const effects = new Map<string, UsageReportMigrationEffect>();
-    for (const event of projected) {
-      const detail = projectUsageEvent(event), key = detail.lane + ":" + detail.costClass;
+    for (const { detail } of projected) {
+      const key = detail.lane + ":" + detail.costClass;
       const effect = effects.get(key) ?? { lane: detail.lane, costClass: detail.costClass, calls: 0, proposedReportingMicros: detail.reportingCostMicros === null ? null : 0, recordedChargeMicros: 0 };
       effect.calls++; effect.recordedChargeMicros += detail.recordedChargeMicros ?? 0;
       if (effect.proposedReportingMicros !== null) effect.proposedReportingMicros += detail.reportingCostMicros ?? 0;
@@ -170,7 +172,7 @@ export function migrateUsageReport(sql: ReportSql, transaction: (fn: () => void)
       // remove projections for expired canonical rows without parsing their JSON.
       for (const row of obsolete) sql.exec("DELETE FROM usage_report_events WHERE id = ?", String(row.id));
       for (const row of batch) sql.exec("DELETE FROM usage_report_events WHERE id = ?", String(row.id));
-      for (const event of projected) if (!insertUsageReportEvent(sql, event)) throw new Error("reporting migration did not confirm projection");
+      for (const { event, detail } of projected) if (!insertProjectedUsageReportEvent(sql, event, detail)) throw new Error("reporting migration did not confirm projection");
       sql.exec("UPDATE usage_report_migration SET last_rowid = ?, upper_rowid = ?, complete = ? WHERE id = 1", next, upper, complete ? 1 : 0);
       sql.exec("UPDATE usage_report_coverage SET round_generation = generation, verified_generation = CASE WHEN ? = 1 THEN generation ELSE verified_generation END WHERE id = 1", complete ? 1 : 0);
     }
