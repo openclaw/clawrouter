@@ -1,8 +1,10 @@
 # Local-history task briefs
 
 Offline repair studies can use `localHistoryTaskBrief` from
-`scripts/fusion-task-brief.mjs` when a PR body is unavailable. Supply the fixing
-commit SHA, title, and exact parent and commit versions of `CHANGELOG.md`.
+`scripts/fusion-task-brief.mjs` when a PR body is unavailable. Install the
+workspace dependencies with `pnpm install --frozen-lockfile` before running
+the helper offline. Supply the fixing commit SHA, title, and exact parent and
+commit versions of `CHANGELOG.md`.
 The inserted text must span one complete paragraph in a top-level `-` bullet.
 The helper checks its line range in the full changelog. Wrapped text and inline
 links are valid. A fenced example or a new bullet that absorbs an existing
