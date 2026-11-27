@@ -2,8 +2,6 @@
 
 ## Unreleased
 
-- Report eligible soft-budget Realtime routes in the catalog while retaining hard-mode capacity and exhausted-budget checks.
-
 - Report native Node Fusion repair costs with independent cheap-model controls and explicit limits on routing and collaboration claims.
 
 - Record a one-task serializer Fusion pilot with two fallback rescues and lower model cost, while retaining its failed workflow-time target and independent cheap-only comparison; report a separate direct-TAP verifier improvement.
@@ -54,6 +52,8 @@
 - Allow trusted caller-side Fusion tasks to opt into replacements of package-root `index.js` and `default.js`, retaining source-path, test-file and size restrictions.
 
 - Keep admin bootstrap credential counts consistent with its credential snapshot when a key expires during assembly.
+
+- Report eligible soft-budget Realtime routes in the catalog while retaining hard-mode capacity and exhausted-budget checks.
 
 - Add an offline cost-matched random-control comparison for paired Fusion evaluations, with explicit limits on retrospective results.
 
