@@ -196,6 +196,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                 {providerIds.map((provider) => <option key={provider} value={provider}>{providerName(provider, readinessByProvider)}</option>)}
               </select>
               <select className="modelPicker" aria-label="Model or route" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                {form.mode === "model" && !selected ? <option value={targetValue} disabled>Select a model or route</option> : null}
                 {activeRawRoute ? <option value={targetValue}>{activeRawRoute.endpoint.replaceAll("_", " ")} (route)</option> : null}
                 {providerModels.map((model) => <option key={model.id} value={`model:${model.id}`}>{shortModelName(model.id, activeProvider)}</option>)}
                 {serviceModelTargets.map((target) => <option key={target.value} value={target.value}>{shortModelName(target.model, activeProvider)}</option>)}
@@ -284,7 +285,13 @@ function DraftRequestDrawer({ form, mode, route, turns, onInspect }: {
   return (
     <details className="requestDrawer" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary onClick={onInspect}><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
-      {open ? <pre role="region" aria-label="Draft request payload" tabIndex={0}>{preview()}</pre> : null}
+      {open ? <pre role="region" aria-label="Draft request payload" tabIndex={0} onKeyDown={event => {
+        if (event.key.toLowerCase() !== "a" || event.ctrlKey === event.metaKey || event.altKey || event.shiftKey || event.nativeEvent.isComposing) return;
+        const selection = event.currentTarget.ownerDocument.getSelection();
+        if (!selection) return;
+        event.preventDefault();
+        selection.selectAllChildren(event.currentTarget);
+      }}>{preview()}</pre> : null}
     </details>
   );
 }

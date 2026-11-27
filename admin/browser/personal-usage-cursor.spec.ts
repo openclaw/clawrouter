@@ -2,8 +2,8 @@ import { expect, test, type Page } from '@playwright/test';
 import { cursorUsageFixture } from '../test/helpers/personal-usage-cursor.mjs';
 import { fixtureResponses } from './fixtures/personal-usage';
 
-async function cursorUsage(page: Page) {
- const server=await cursorUsageFixture();let now=server.now,failReport=false,failEvents=false;
+async function cursorUsage(page: Page, options?: { rows: number }) {
+ const server=await cursorUsageFixture(options);let now=server.now,failReport=false,failEvents=false;
  const queries:URL[]=[],invalid:string[]=[];
  await page.clock.setFixedTime(new Date(now));
  await page.route('**/v1/**',async route=>{
@@ -26,6 +26,60 @@ async function custom(page:Page,from:string,to:string,timezone='UTC'){
  const advanced=page.locator('.personalAdvanced');if(!await advanced.evaluate(e=>e.hasAttribute('open')))await page.getByText('Custom dates & exact filters',{exact:true}).click();
  await page.getByLabel('Start',{exact:true}).fill(from);await page.getByLabel('End (exclusive)',{exact:true}).fill(to);await page.getByLabel('Timezone',{exact:true}).fill(timezone);await page.getByRole('button',{name:'Apply filters',exact:true}).click();
 }
+
+test('partial recorded accounting is visible before expanding the member summary', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ try {
+  await f.ingest('free', { cost_basis: 'none', actual_cost_micros: 0 });
+  await f.ingest('estimate', { cost_basis: 'unpriced_model', actual_cost_micros: 0, reporting_estimated_cost_micros: 25_000, reporting_estimate_reason: 'fixture' });
+  // Historical invalid accounting is normalized to null, not a genuine zero.
+  await f.ingest('unreported', { cost_basis: 'unpriced_model', actual_cost_micros: -1 });
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const accounting = summary.locator('.personalAccounting');
+  const headline = accounting.locator('summary');
+  const caveat = ' · not a price or confirmed settlement';
+  for (const surface of ['Dashboard', 'My usage']) {
+   if (surface === 'Dashboard') await page.goto('/dashboard/home');
+   else await summary.getByRole('button', { name: 'Open My usage' }).click();
+   await expect(calls).toHaveText('3');
+   await expect(accounting).not.toHaveAttribute('open');
+   await expect.soft(headline, surface).toHaveText('Recorded accounting subtotal: $0.00 · 2 of 3 calls reported' + caveat);
+  }
+  await headline.focus();
+  await page.keyboard.press('Enter');
+  await expect(accounting.getByText('2/3 rows with a valid recorded accounting field.')).toBeVisible();
+  const nextDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export refreshed snapshot JSON' }).click();
+  const stream = await (await nextDownload).createReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream!) chunks.push(chunk);
+  const file = JSON.parse(Buffer.concat(chunks).toString());
+  expect(file.metadata.totals).toMatchObject({ recordedChargeMicros: 0, chargeReportedCalls: 2, metrics: { calls: 3 } });
+  expect(file.events).toEqual(expect.arrayContaining([
+   expect.objectContaining({ id: 'free', costClass: 'no_charge', reportingCostMicros: 0, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'estimate', costClass: 'estimated', reportingCostMicros: 25_000, recordedChargeMicros: 0 }),
+   expect.objectContaining({ id: 'unreported', costClass: 'unknown', reportingCostMicros: null, recordedChargeMicros: null }),
+  ]));
+
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  await form.getByText('Custom dates & exact filters').click();
+  const quality = form.getByLabel('Price quality');
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  await quality.selectOption('no_charge');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await expect(headline).toHaveText('Recorded accounting amount: $0.00' + caveat);
+  await quality.selectOption('unknown');
+  await apply.click();
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+  await expect(calls).toHaveText('1');
+  await form.getByLabel('Model (exact)').fill('no-matching-model');
+  await apply.click();
+  await expect(calls).toHaveText('0');
+  await expect(headline).toHaveText('Recorded accounting amount: Not reported' + caveat);
+ } finally { f.close(); }
+});
 
 test('members compare keys, inspect one and return to all keys in the same period', async ({ page }) => {
  const f = await cursorUsage(page);
