@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the beginning and end of oversized Fusion adviser messages so long source excerpts do not silently discard their leading task instructions.
+
 - Record a zero-call semantic Fusion routing screen: all twenty source-file holdouts choose strong-only, providing no savings.
 
 - Document the complete thirty-task Fusion exact-anchor repeat: matched strong-only quality and 41.65% lower estimated model cost, but 13.97% more workflow time and a failed no-slowdown gate.

@@ -48,6 +48,37 @@ test("local adviser messages retain bounded text but never images or tool schema
   assert.equal(reasoningBody.temperature, undefined);
 });
 
+test("bounded adviser context preserves the task at the start of a long user message", () => {
+  const config = normalizeFusionConfig({ maxInputChars: 1000 });
+  const original = { messages: [
+    { role: "system", content: "older context" },
+    { role: "user", content: "TASK: preserve the public API.\n" + "x".repeat(3000) + "\nEND OF SOURCE" },
+  ] };
+  const unchanged = structuredClone(original);
+  const body = buildAdviserBody(original, "local/worker", config, 0);
+  assert.equal(body.messages.length, 2, "the adviser instruction plus the newest bounded message");
+  assert.ok(body.messages[1].content.startsWith("TASK: preserve the public API.\n"));
+  assert.ok(body.messages[1].content.endsWith("\nEND OF SOURCE"));
+  assert.equal(body.messages[1].content.length, config.maxInputChars);
+  assert.deepEqual(original, unchanged);
+});
+
+test("bounded adviser history retains recent messages and stays within the shared budget", () => {
+  const messages = [
+    { role: "user", content: "TASK: maintain compatibility.\n" + "x".repeat(1000) + "\nSOURCE END" },
+    { role: "assistant", content: "last reply" },
+    { role: "user", content: "implement it" },
+  ];
+  const bounded = buildLocalMessages(messages, 200);
+  assert.equal(bounded.reduce((sum, message) => sum + message.content.length, 0), 200);
+  assert.deepEqual(bounded.slice(1), messages.slice(1));
+  assert.ok(bounded[0].content.startsWith("TASK: maintain compatibility."));
+  assert.ok(bounded[0].content.endsWith("SOURCE END"));
+  assert.deepEqual(buildLocalMessages([
+    { role: "user", content: "🦊" }, { role: "assistant", content: "a" },
+  ], 2), [{ role: "assistant", content: "a" }]);
+});
+
 test("fusion runs advisers concurrently, tolerates failures, and injects untrusted drafts", async () => {
   const config = normalizeFusionConfig({
     enabled: true,
