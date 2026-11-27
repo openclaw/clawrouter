@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record a 30-task native Fusion confirmation: matched strong-only quality at 52.71% lower model cost, with a failed population latency qualification and explicit historical-task limits.
+
 - Route local proxy-key creation, rotation, and revocation through the running Worker's authenticated authority API, preserving migrated state and rejecting obsolete KV selectors instead of reporting ineffective writes.
 
 - Allow the native-test Fusion cascade to opt into a two-call repair with an isolated failed draft and bounded public feedback.
