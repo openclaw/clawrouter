@@ -2640,6 +2640,15 @@ qualification and received no model calls. This small paired replay does not
 qualify production behavior or live workflow latency.
 
 
+## Exact-anchor recovery check
+
+The [recovery-enabled LRU development check](fusion-anchor-recovery-study.md)
+scored 9/9 for cascade and strong-only, versus 7/9 for independent cheap-only.
+The cascade used 68.61% less estimated model cost and 15.71% less aggregate
+workflow time. Its repeated-development gate still failed: one round was
+slower, and another tied cheap-only quality. Three already exposed tasks were
+sampled three times; no production or routing-default change is qualified.
+
 ## Fresh-package cost and latency check
 
 The [six-task fresh-package comparison](fusion-fresh-package-study.md) matched
