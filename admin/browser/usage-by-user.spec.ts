@@ -116,6 +116,89 @@ test('admins refine retained user to deleted key, page events, and export the sa
  }finally{f.close();}
 });
 
+for (const action of ['Refresh report', 'Apply refinement'] as const) {
+ test('admin keeps the attempted owner and period after a failed report: ' + action, async ({page, isMobile}) => {
+  const f = await serve(page, 'admin');
+  const previous = 'alex@example.test', attempted = 'sam@example.test', sharedKey = 'build-runner';
+  const day = 86_400_000, today = Math.floor(f.now / day) * day;
+  const date = (offset: number) => new Date(today + offset * day).toISOString().slice(0, 10);
+  try {
+   // Same retained credential ID under both owners: the key alone cannot distinguish them.
+   for (const [id, user, at, model, key] of [
+    ['old-row', previous, -5, 'earlier', sharedKey], ['wrong-owner', previous, -2, 'editor', sharedKey],
+    ['first', attempted, -2, 'editor', sharedKey], ['second', attempted, -2, 'editor', sharedKey],
+    ['wrong-model', attempted, -2, 'other-model', sharedKey], ['sibling', attempted, -2, 'editor', 'backup'],
+   ] as const) await f.ingest(id, { principal_id: user, credential_id: key, model, occurred_at_ms: today + at * day });
+   if (isMobile) await page.setViewportSize({width: 360, height: 780});
+   await page.goto('/dashboard/usage');
+   const form = page.getByRole('form', {name:'Usage filters'}), scope = form.getByRole('group', {name:'Displayed report scope'});
+   const summary = page.locator('.personalUsageSummary'), calls = summary.getByText('Model calls', {exact:true}).locator('+ dd');
+   const ranks = page.getByRole('region', {name:'Retained usage ranking'}), events = page.getByRole('region', {name:'Retained events'});
+   const button = (name: string) => page.getByRole('button', {name, exact:true});
+   const download = async () => {
+    const [file] = await Promise.all([page.waitForEvent('download'), button('Export refreshed snapshot JSON').press('Enter')]);
+    const stream = await file.createReadStream(); if (!stream) throw Error('No export stream');
+    const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(chunk);
+    return JSON.parse(Buffer.concat(chunks).toString());
+   };
+   await button('By key').click();
+   await form.getByText('Custom interval and exact filters').click();
+   const owner = form.getByLabel('user (exact)', {exact:true}), model = form.getByLabel('model (exact)', {exact:true});
+   const from = form.getByLabel('Start', {exact:true}), to = form.getByLabel('End', {exact:true});
+   await owner.fill(previous); await from.fill(date(-6)); await to.fill(date(-4));
+   await button('Apply refinement').click();
+   await ranks.getByRole('button', {name:previous + ' · ' + sharedKey, exact:true}).click();
+   await expect(calls).toHaveText('1'); await expect(events).toContainText('earlier');
+   const original = await download(); expect(original.events.map((e: {id:string}) => e.id)).toEqual(['old-row']);
+   const receipt = page.getByRole('group', {name:'Export snapshot scope'});
+   const originalReceipt = await receipt.innerText();
+   const failedReport = (u: URL) => u.pathname === '/v1/admin/usage/report' && u.searchParams.get('user') === attempted && u.searchParams.get('intent') === 'browse';
+   let failedReads = 0;
+   await page.route(failedReport, route => { failedReads++; return route.fulfill({status:503, json:{error:{message:'Report temporarily unavailable'}}}); }, {times:1});
+   const eventReads = () => f.queries.filter((u: URL) => u.pathname === '/v1/admin/usage/events' && u.searchParams.get('user') === attempted);
+   await owner.fill(attempted); await model.fill('editor'); await from.fill(date(-3)); await to.fill(date(-1));
+   await button('Apply refinement').press('Enter');
+   const alert = summary.getByRole('alert'); await expect(alert).toContainText('Report temporarily unavailable');
+   expect.soft(await owner.inputValue()).toBe(attempted); expect.soft(await model.inputValue()).toBe('editor');
+   await expect(from).toHaveValue(date(-3)); await expect(to).toHaveValue(date(-1));
+   await expect(scope).toContainText('Last successful report:');
+   await expect(scope).toContainText('User: ' + previous); await expect(scope).not.toContainText(attempted);
+   await expect(calls).toHaveText('1'); await expect(ranks.getByRole('button', {name:previous + ' · ' + sharedKey})).toBeDisabled();
+   await expect(receipt).toHaveText(originalReceipt, {useInnerText:true});
+   for (const name of ['Export refreshed snapshot JSON','Export refreshed snapshot CSV','Export current rank page CSV']) await expect(button(name)).toBeDisabled();
+   await expect(button('Export current page CSV')).toHaveCount(0);
+   await expect(page.getByText('Refresh the report above to load retained events.', {exact:true})).toBeVisible();
+   await expect(page.getByText('Loading events…', {exact:true})).toHaveCount(0);
+   expect(eventReads()).toHaveLength(0); expect(failedReads).toBe(1);
+
+   // A successful report can be exported even if its separate event page fails.
+   let failedPage = '';
+   await page.route(u => u.pathname === '/v1/admin/usage/events' && u.searchParams.get('user') === attempted, route => {
+    failedPage = new URL(route.request().url()).search;
+    return route.fulfill({status:503, json:{error:{message:'Event page temporarily unavailable'}}});
+   }, {times:1});
+   await (action === 'Refresh report' ? alert : form).getByRole('button', {name:action, exact:true}).press('Enter');
+   await expect(scope).toContainText('User: ' + attempted); await expect(scope).toContainText('Model: editor');
+   await expect(calls).toHaveText('2'); await expect(summary.getByRole('alert')).toHaveCount(0);
+   await expect(page.getByRole('alert')).toContainText('Event page temporarily unavailable');
+   await expect(receipt).toHaveText(originalReceipt, {useInnerText:true});
+   const reportReads = f.queries.filter((u: URL) => u.pathname.endsWith('/report')).length;
+   await button('Retry event page').press('Enter'); await expect(events.locator('tbody tr')).toHaveCount(2);
+   expect(eventReads().at(-1)!.search).toBe(failedPage);
+   expect(f.queries.filter((u: URL) => u.pathname.endsWith('/report'))).toHaveLength(reportReads);
+   const recovered = await download();
+   expect(recovered.metadata).toMatchObject({filters:{user:attempted, model:'editor', key:{kind:'credential',id:sharedKey}}, range:{from:Date.parse(date(-3)),to:Date.parse(date(-1)),timezone:'UTC'}});
+   expect(recovered.events.map((e: {id:string}) => e.id).sort()).toEqual(['first','second']);
+   await button('Clear key filter').press('Enter'); await expect(scope).toContainText('All keys');
+   await expect(scope).toContainText('User: ' + attempted); await expect(calls).toHaveText('3');
+   await owner.fill(''); await button('Apply refinement').press('Enter'); await expect(calls).toHaveText('4');
+   const cleared = await download(); expect(cleared.metadata.filters).toEqual({model:'editor'});
+   expect(cleared.metadata.range).toEqual(recovered.metadata.range);
+   expect(cleared.events.map((e: {id:string}) => e.id).sort()).toEqual(['first','second','sibling','wrong-owner']);
+  } finally { await page.unrouteAll({behavior:'wait'}); f.close(); }
+ });
+}
+
 test('unbound retained owners stay unavailable and service keys cannot imply an owner',async({page})=>{
  const f=await serve(page,'admin');try{
   await page.goto('/dashboard/usage');
