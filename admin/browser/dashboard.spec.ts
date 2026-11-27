@@ -241,6 +241,33 @@ test("provider distribution retains long identities and Other providers across D
   }
 });
 
+test("provider rows show exact errors even when success rounds to 100 percent", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  usage.providers = ["openai", "anthropic", "mistral", "tavily", "replicate", "firecrawl", "xai"].map((provider, index) => {
+    const errorCount = [1, 2, 0, 3, 1, 2, 0][index];
+    return { provider, requestCount: 400, successCount: 400 - errorCount, errorCount, totalTokens: 20, actualCostMicros: 0 };
+  });
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/");
+  const table = page.getByRole("table", { name: "Requests by provider" });
+  for (const surface of ["Dashboard", "Usage"]) {
+    if (surface === "Usage") {
+      await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+      await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    }
+    for (const [name, errors] of [["OpenAI", 1], ["Anthropic", 2], ["Mistral", 0], ["Other providers", surface === "Usage" ? 2 : 3]] as const) {
+      const cell = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) }).getByRole("cell").first();
+      await expect(cell).toContainText(errors === 1 ? /1 error\b/ : errors + " errors");
+      if (errors) await expect(cell).not.toContainText("100% success");
+      else await expect(cell).toContainText("100% success");
+    }
+  }
+});
+
 test("a pending provider distribution does not show an empty result before the ledger answers", async ({ page }) => {
   const { responses } = dashboardFixture();
   (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage.providers = [];
