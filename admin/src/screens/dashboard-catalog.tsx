@@ -131,6 +131,8 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
   const scopeNote = accessIncomplete ? " · partial" : "";
   const accessMeta = isAdmin ? `${services.length} in catalog` : unknownAccess ? "Access unknown" : `${usableCount} of ${grantedServices.length} usable${scopeNote}`;
   const rows = (usageRows.length ? usageRows : isAdmin ? policies.map(policyUsageFallback) : []).filter((row) => row.enabled);
+  // Only administrators can continue to the full usage ledger.
+  const visibleBudgetRows = isAdmin ? rows.slice(0, 6) : rows;
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
   const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
   const activePolicies = policies.filter((policy) => policy.enabled).length;
@@ -205,7 +207,7 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
           {!isAdmin ? <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} /> : null}
           <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
-            {rows.slice(0, 6).map((row) => {
+            {visibleBudgetRows.map((row) => {
               const budget = presentPolicyBudget(row, formatConfiguredLimit);
               return (
                 <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
