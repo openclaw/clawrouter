@@ -196,6 +196,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
                 {providerIds.map((provider) => <option key={provider} value={provider}>{providerName(provider, readinessByProvider)}</option>)}
               </select>
               <select className="modelPicker" aria-label="Model or route" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                {form.mode === "model" && !selected ? <option value={targetValue} disabled>Select a model or route</option> : null}
                 {activeRawRoute ? <option value={targetValue}>{activeRawRoute.endpoint.replaceAll("_", " ")} (route)</option> : null}
                 {providerModels.map((model) => <option key={model.id} value={`model:${model.id}`}>{shortModelName(model.id, activeProvider)}</option>)}
                 {serviceModelTargets.map((target) => <option key={target.value} value={target.value}>{shortModelName(target.model, activeProvider)}</option>)}

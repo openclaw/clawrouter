@@ -36,6 +36,9 @@ for (const [status, contentType, source] of [
     });
     await page.goto("/dashboard/playground");
     await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(page.url()).origin });
+    // Editing before inventory arrives deliberately preserves a targetless draft.
+    await expect(page.locator(".chatHeader strong")).toHaveText(model);
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
     const message = page.getByRole("textbox", { name: "Message", exact: true });
     await message.fill("Read the inventory.");
     await message.press("Enter");
