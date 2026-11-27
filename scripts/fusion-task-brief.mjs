@@ -4,6 +4,33 @@ export const TASK_BRIEF_REVISION = 'external-task-brief-v1';
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const excludedHeading = /^(?:tests?|testing|verification|validation|status|checklist|benchmarks?|benchmarking|screenshots?)(?:\b|$)/i;
 
+// Local history has no PR body. Admit one inserted changelog paragraph and
+// record its actual origin instead of presenting it as an external task brief.
+export function localHistoryTaskBrief({ title, commit, before, after }) {
+  if (typeof title !== 'string' || !title.trim() || Buffer.byteLength(title) > 1024
+    || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)
+    || typeof before !== 'string' || typeof after !== 'string'
+    || Buffer.byteLength(before) > 1048576 || Buffer.byteLength(after) > 1048576
+    || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(title + before + after)) {
+    throw new Error('invalid_local_history_brief_input');
+  }
+  const oldLines = before.split('\n'), newLines = after.split('\n');
+  let start = 0, end = 0;
+  while (start < oldLines.length && oldLines[start] === newLines[start]) start++;
+  while (end < oldLines.length - start
+    && oldLines[oldLines.length - 1 - end] === newLines[newLines.length - 1 - end]) end++;
+  if (start + end !== oldLines.length) throw new Error('local_history_brief_not_additive');
+  const added = newLines.slice(start, newLines.length - end).join('\n').trim();
+  if (!/^- \S/.test(added) || added.slice(2).split('\n').some(line =>
+    !line.trim() || /^\s*(?:[-*+]\s|\d+[.)]\s|#|`{3}|~{3})/.test(line))
+    || Buffer.byteLength(added) > 8192) throw new Error('ambiguous_local_history_narrative');
+  const narrative = added.slice(2).trim();
+  const instruction = title.trim() + '\n\n' + narrative;
+  return { instruction, provenance: { revision: 'local-history-task-brief-v1', commit,
+    source: 'CHANGELOG.md', titleSha256: sha256(title), beforeSha256: sha256(before),
+    afterSha256: sha256(after), narrativeSha256: sha256(narrative), instructionSha256: sha256(instruction) } };
+}
+
 // Freeze public author narrative separately from executable acceptance tests.
 // This is Markdown section selection, not semantic proof that a task is complete.
 export function externalTaskBrief({ title, body, url }, { maxBytes = 16384 } = {}) {
