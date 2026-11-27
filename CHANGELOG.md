@@ -26,6 +26,8 @@
 
 - Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.
 
+- Add an offline Fusion cascade feasibility calculator to separate cost and latency acceptance targets before larger benchmark runs.
+
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
 - Document a Fusion development run with exact-source anchor recovery: lower aggregate cost and time than strong-only, with explicit failures of the per-round qualification gate.
