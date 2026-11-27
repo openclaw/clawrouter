@@ -63,6 +63,8 @@
 
 - Keep admin bootstrap credential counts consistent with its credential snapshot when a key expires during assembly.
 
+- Report eligible soft-budget Realtime routes in the catalog while retaining hard-mode capacity and exhausted-budget checks.
+
 - Add an offline cost-matched random-control comparison for paired Fusion evaluations, with explicit limits on retrospective results.
 
 - Record the Devalue Fusion cascade and strong-model handoff pilots, including the failed combined gates and remaining critical-path latency.

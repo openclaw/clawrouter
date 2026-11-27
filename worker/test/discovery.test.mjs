@@ -888,7 +888,8 @@ test("merged compact, transcription and hosted-search catalog preserve distinct 
   for (const [mode, balance, realtimeEligible, searchAdmission] of [
     ["reserve", 4358143, false, "pricing_required"],
     ["reserve", 4358144, true, "pricing_required"],
-    ["soft", 4358144, false, "admitted"],
+    ["soft", 4358144, true, "admitted"],
+    ["soft", 1, true, "admitted"],
   ]) {
     fixture.policy.budgetMode = mode; remaining = balance;
     const response = await worker.fetch(fixture.request("key"), fixture.env, {});
@@ -899,7 +900,7 @@ test("merged compact, transcription and hosted-search catalog preserve distinct 
     const realtime = provider.offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.route === "/v1/native/openai/v1/realtime" && row.transport === "websocket");
     assert.ok(realtime); assert.equal(realtime.eligible, realtimeEligible);
     assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
-    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : mode === "soft" ? "realtime_hard_budget_required" : "budget_exhausted");
+    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : "budget_exhausted");
     assert.equal(realtime.hostedToolAdmission, undefined);
     const compact = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses/compact" && row.transport === "http");
     assert.ok(compact, "manifest composition must retain the merged unary compaction endpoint and registered model");

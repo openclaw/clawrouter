@@ -190,3 +190,46 @@ test("native GA default VAD, input ASR and functions retain isolated ledger owne
     for (const name of ["default:fixture", "provider:openai"]) { const rows = await (await finalLedger.get(finalLedger.idFromName(name)).fetch("https://ledger/fixture-rows")).json(); assert.equal(rows.reservations.length, count); assert.ok(rows.reservations.every(row => row.settled === 1 && row.dispatch_started === 1)); assert.equal(new Set(rows.reservations.map(row => row.reservation_id)).size, count); assert.equal(rows.reservations.reduce((n, row) => n + row.reserved_micros, 0), finalRows.reduce((n, row) => n + row.actual_cost_micros, 0)); }
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
+
+
+test("catalog eligibility and socket admission use the same Realtime budget prerequisite", { timeout: 30_000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-realtime-catalog-")); let mf;
+  try {
+    mf = await startWorkerdFixture(temporary, router, upstream);
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), svc = await mf.getWorker("upstream");
+    const secret = "catalog-fixture-secret", headers = { authorization: "Bearer clawrouter-live-fixture-" + secret };
+    const ns = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router"), authority = ns.get(ns.idFromName("policy-bindings"));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: null }));
+    for (const [budgetMode, monthlyBudgetMicros, eligible, reasonCode, status] of [
+      ["soft", 1, true, undefined, 101],
+      ["soft", null, true, undefined, 101],
+      ["reserve", null, false, "realtime_hard_budget_required", 400],
+      ["reserve", 10_000_000, true, undefined, 101],
+      ["soft", 0, false, "budget_exhausted", 101],
+    ]) await t.test(budgetMode + " cap " + monthlyBudgetMicros, async () => {
+      const update = await authority.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], budgetMode, monthlyBudgetMicros, retainRequestContent: false } }) });
+      assert.equal(update.status, 200);
+      const response = await mf.dispatchFetch("https://router/v1/catalog", { headers });
+      assert.equal(response.status, 200);
+      const catalog = await response.json();
+      const offer = catalog.providers.find(row => row.id === "openai").offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.transport === "websocket");
+      assert.ok(offer); assert.equal(offer.eligible, eligible); assert.equal(offer.reasonCode, reasonCode);
+      const before = (await (await svc.fetch("https://upstream/fixture-stats")).json()).connects;
+      const socket = await mf.dispatchFetch("https://router/v1/realtime?model=gpt-realtime-2.1", { headers: { ...headers, upgrade: "websocket" } });
+      assert.equal(socket.status, status, socket.status === 101 ? "" : await socket.clone().text());
+      if (socket.status === 101) {
+        const ws = socket.webSocket, q = inbox(ws); ws.accept();
+        if (!eligible) {
+          // The handshake does not spend budget; the first billable audio does.
+          q.send({ type: "session.update", session: native }); await q.next("session.updated");
+          const appends = (await (await svc.fetch("https://upstream/fixture-stats")).json()).appends;
+          q.send({ type: "input_audio_buffer.append", audio: Buffer.alloc(800, 255).toString("base64") });
+          assert.equal((await q.next("error")).error.code, reasonCode);
+          assert.equal((await (await svc.fetch("https://upstream/fixture-stats")).json()).appends, appends);
+        }
+        ws.close(1000);
+      } else { assert.equal((await socket.json()).error.code, reasonCode); assert.equal((await (await svc.fetch("https://upstream/fixture-stats")).json()).connects, before); }
+    });
+  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+});

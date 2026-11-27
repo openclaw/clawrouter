@@ -10,6 +10,7 @@ import { HttpError } from './http-error';
 import { REALTIME } from './realtime-protocol';
 import { RealtimeSession } from './realtime-session';
 import { softBudget } from './soft-budget';
+import { realtimeCapacityMissing } from './realtime-budget-policy.ts';
 
 export async function proxyRealtimeWebSocket(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const auth = await authenticateProxyKey(request.headers, env, [{ id: 'openai', tokenRef: 'openai' }]);
@@ -26,7 +27,7 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
   const initial = await prepareSelected(request, env, selection, { model: REALTIME.upstream }, auth, new Set(), true, undefined, undefined, 'websocket');
   initial.url.searchParams.set('model', REALTIME.upstream);
   const soft = auth.policy.budgetMode === 'soft';
-  if (!soft && [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, initial.connection?.monthlyBudgetMicros].every(v => v == null)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime hard mode requires a durable capacity owner');
+  if (realtimeCapacityMissing(auth.policy, initial.connection)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime hard mode requires a durable capacity owner');
   if (!initial.websocket) throw new HttpError(400, 'realtime_grant_unsupported', 'Realtime requires a qualified API-key upstream');
   // A retained conversation belongs to its original caller, not merely its
   // policy and upstream grant. Admin PUT can reassign a key without rotation.
@@ -43,7 +44,7 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
     const upstream = await prepareSelected(request, env, { ...selection, preparation }, { model: REALTIME.upstream }, fresh, new Set(), false, undefined, pin, 'websocket');
     upstream.url.searchParams.set('model', REALTIME.upstream);
     if ((fresh.policy.budgetMode === 'soft') !== soft) throw new HttpError(403, 'realtime_policy_changed', 'open a fresh session');
-    if (!soft && [fresh.policy.monthlyBudgetMicros, fresh.policy.dailyBudgetMicros, fresh.policy.weeklyBudgetMicros, upstream.connection?.monthlyBudgetMicros].every(v => v == null)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime requires a durable hard-budget capacity owner');
+    if (realtimeCapacityMissing(fresh.policy, upstream.connection)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime requires a durable hard-budget capacity owner');
     if (!upstream.websocket || upstream.grantKey !== pin.key || upstream.grantRevision !== pin.revision || JSON.stringify([upstream.url.href, [...upstream.headers.entries()]]) !== fingerprint) throw new HttpError(403, 'realtime_route_changed', 'open a fresh session');
     if (input || inputEnabled) {
       if (!inputSelection) throw new HttpError(503, 'realtime_unconfigured', 'Input transcription model is not registered');

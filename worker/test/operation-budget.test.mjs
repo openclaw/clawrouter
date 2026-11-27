@@ -45,3 +45,22 @@ test("pricing and zero-limit guards agree with mandatory reservation admission",
   const noPrincipal = { ...base, credentialId: null, principalId: null, policy: { ...base.policy, budgetScope: "principal" } };
   assert.deepEqual(operationAffordability(noPrincipal, connection, priced, "llm.chat", endpoint, observation), { status: "exact-blocked", reasonCode: "principal_required" });
 });
+
+test("Realtime soft budgets preserve exhaustion checks, while reserve mode requires capacity", () => {
+  const provider = providerById("openai");
+  const realtime = provider.endpoints.find(({ id }) => id === "realtime");
+  const model = provider.models.find(({ id }) => id === "openai/gpt-realtime-2.1");
+  for (const [budgetMode, monthlyBudgetMicros, remaining, expected] of [
+    ["soft", null, null, { status: "exact-covered" }],
+    ["soft", 1, 1, { status: "exact-covered" }],
+    ["soft", 1, 0, { status: "exact-blocked", reasonCode: "budget_exhausted" }],
+    ["reserve", null, null, { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" }],
+    [undefined, null, null, { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" }],
+    ["reserve", 10_000_000, 10_000_000, { status: "exact-covered" }],
+    ["reserve", 10_000_000, 1, { status: "exact-blocked", reasonCode: "budget_exhausted" }],
+  ]) {
+    const auth = { ...base, policy: { monthlyBudgetMicros, budgetMode, requestCostMicros: null } };
+    assert.deepEqual(operationAffordability(auth, { ...connection, monthlyBudgetMicros: null }, model, "audio.realtime", realtime,
+      { policyRemaining: remaining, providerRemaining: null }), expected);
+  }
+});
