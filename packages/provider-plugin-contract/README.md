@@ -29,6 +29,9 @@ import {
   parseProviderConformanceScenario,
   bindingSupportsOperation,
   productSupportsBinding,
+  bindingCompatibilityIssue,
+  productBindingCompatibilityIssue,
+  type ProviderBindingIssue,
   transportForGrant,
   type ProviderBindingGrant,
   type ProviderBindingRequirement,
@@ -88,6 +91,13 @@ provide the same static product/transport checks used by ClawRouter. They inspec
 compiled declarations and a credential classification without I/O or mutation.
 A positive result is compatibility only: the host must still check provider
 qualification, credential ownership, policy, entitlement, quota, and budgets.
+
+`bindingCompatibilityIssue` and `productBindingCompatibilityIssue` return the
+first static mismatch as a `ProviderBindingIssue`, or `null` when compatible.
+The boolean helpers use these same checks. Codes identify a transport, endpoint,
+lifecycle, or product restriction; they do not diagnose credential or account
+health. See [binding diagnostics](https://github.com/openclaw/clawrouter/blob/main/docs/provider-plugins.md#binding-diagnostics)
+for the codes and precedence.
 
 `AuthScheme`, `AuthorizationConfig`, `RefreshConfig`, `GrantTransportAuth`, and
 `CompiledGrantTransport` describe host configuration. They do not store runtime
