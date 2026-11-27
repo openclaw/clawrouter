@@ -98,17 +98,26 @@ for (const [label, status, contentType, body] of [
   });
 }
 
-test("Playground describes empty and binary responses without rendering binary data", async (context) => {
-  for (const [body, status, contentType, expected] of [
-    [null, 204, "application/json", "HTTP 204 No Content"],
-    [new Uint8Array([0, 255, 48]), 200, "application/octet-stream", "HTTP 200 OK\napplication/octet-stream response (3 bytes)"],
-  ]) {
-    context.mock.method(globalThis, "fetch", async () => new Response(body, { status, headers: { "content-type": contentType } }));
+const binary = new Uint8Array([0, 255, 48]);
+for (const [body, status, statusText, expected] of [
+  [null, 204, "", "HTTP 204 No Content"],
+  [null, 503, "", "HTTP 503"],
+  [null, 503, "Temporarily Unavailable", "HTTP 503 Temporarily Unavailable"],
+  [binary, 200, "OK", "HTTP 200 OK\napplication/octet-stream response (3 bytes)"],
+  [binary, 200, "", "HTTP 200\napplication/octet-stream response (3 bytes)"],
+  [binary, 503, "", "HTTP 503\napplication/octet-stream response (3 bytes)"],
+  [binary, 503, "Try Later", "HTTP 503 Try Later\napplication/octet-stream response (3 bytes)"],
+]) {
+  test(`Playground describes ${body ? "binary" : "empty"} HTTP ${status} with ${statusText || "no reason phrase"}`, async (context) => {
+    const contentType = body ? "application/octet-stream" : "application/json";
+    context.mock.method(globalThis, "fetch", async () => new Response(body, { status, statusText, headers: { "content-type": contentType } }));
     const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
     assert.equal(response.raw, expected);
     assert.equal(response.status, status);
-  }
-});
+    assert.equal(response.statusText, statusText);
+    assert.equal(response.ok, status >= 200 && status < 300);
+  });
+}
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
   const timeouts = captureTimeouts(context);
