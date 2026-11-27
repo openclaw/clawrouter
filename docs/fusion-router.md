@@ -503,6 +503,14 @@ semantics and the native census; dynamic identities remain unsupported. Nested
 `describe` suites retain their context; ambiguous duplicate titles are rejected.
 The existing preservation splitter is unchanged.
 
+For Tape files, `splitRegressionAssertions(id, files, parse)` splits individual
+assertions instead of the enclosing test. It supports named, synchronous
+`test(name, function (t) { ... })` callbacks containing only direct `t.equal`,
+`t.deepEqual`, `t.ok` or `t.notOk` calls followed by `t.end()`. Callback-local
+declarations, plans, loops, asynchronous work and other methods are rejected.
+At least two assertions must differ from the baseline. The result uses the same
+public/hidden file and digest format, with `selection: 'changed-tape-assertion-v1'`.
+
 Each returned `content` is the public test view; `hiddenContent` contains only
 the selected test group plus shared scaffolding. Keep the latter out of model
 requests, repair feedback and logs. Text changes alone do not prove a regression.
@@ -518,7 +526,8 @@ in the protocol.
 
 Qualification requires the reference to pass every view, the baseline to fail
 every view, complete expected test counts, and no skips or cancellations. Count
-one case per static leaf test group, not each assertion within its body. Dynamic
+one case per static leaf test group for suite splits, or per direct assertion
+for Tape assertion splits. Dynamic
 registrations or unsupported native counting conventions cannot qualify merely
 by supplying an estimated count. The receipt parser and isolated runner remain
 the caller's responsibility. This helper does not authenticate receipts or
