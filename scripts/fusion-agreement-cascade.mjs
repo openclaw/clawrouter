@@ -37,6 +37,9 @@ export async function runAgreementCascade({ draftModel, peerModel = draftModel, 
       assert.equal(receipt.tests?.valid, true, 'incomplete_agreement_native_verification');
       assert.equal(receipt.tests.assertions, expectedTests, 'agreement_native_count');
       assert.equal(typeof receipt.tests.passed, 'boolean', 'invalid_agreement_native_verdict');
+      for (const counter of ['skipped', 'cancelled', 'todo']) {
+        assert.ok(!(counter in receipt.tests) || receipt.tests[counter] === 0, 'incomplete_agreement_native_verification');
+      }
     }
     costMicros += receipt.costMicros;
     const candidate = { artifact: structuredClone(receipt.artifact), passed: receipt.tests?.passed === true };

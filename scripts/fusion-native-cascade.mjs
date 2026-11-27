@@ -24,6 +24,9 @@ export async function runNativeCascade({ draftModel, fallbackModel, expectedTest
         assert.equal(receipt.tests?.valid, true, 'incomplete_native_verification');
         assert.equal(receipt.tests.assertions, expectedTests, 'native_verification_count');
         assert.equal(typeof receipt.tests.passed, 'boolean', 'invalid_native_verdict');
+        for (const counter of ['skipped', 'cancelled', 'todo']) {
+          assert.ok(!(counter in receipt.tests) || receipt.tests[counter] === 0, 'incomplete_native_verification');
+        }
       }
       const needsFeedback = phase === 'initial' && fallbackMode === 'repair'
         || phase === 'fallback' && fallbackAttempts === 2;

@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+- Reject supplied skipped, cancelled or todo test counts in caller-side Fusion native and agreement cascades before accepting an artifact or dispatching another model call.
+
 - Record two failed Fusion cheap-repair follow-ups, including cached-control accounting and a cheaper retrospective skip-repair comparison.
 
 - Add an opt-in caller-side Fusion agreement cascade with independent drafts, exact native comparison counts and bounded fallback accounting.
