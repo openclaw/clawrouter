@@ -67,6 +67,172 @@ test("member key inventory: unknown is not empty; keyboard retry recovers confir
   expect(state.keyReads).toBe(2); expectReadsOnly(state.requests);
 });
 
+for (const action of ["Retry key access", "Retry refresh"]) {
+  for (const phase of ["initial", "stale"]) {
+    test(`${phase} inventory: ${action} keeps focus after another failure and admits one read per retry`, async ({ page }) => {
+      const state = await member(page);
+      state.failKeys = phase === "initial";
+      state.keys = [{ credentialId: "old-laptop", policyId, enabled: true, active: true }];
+      await page.goto("/dashboard/home");
+      const card = page.locator(".myKeysPanel");
+      if (phase === "stale") {
+        await expect(card).toContainText("old-laptop");
+        state.failKeys = true;
+        await refresh(page);
+      }
+      const note = phase === "initial" ? "Your keys couldn’t be loaded." : "Your keys couldn’t be refreshed. Showing the last known key list.";
+      const count = phase === "initial" ? "Unavailable" : "Last known: 1/1 enabled";
+      const retry = page.getByRole("button", { name: action, exact: true });
+      await expect(card.getByRole("status")).toHaveText(note);
+      await expect(retry).toBeEnabled();
+      await retry.focus();
+      const before = state.keyReads;
+      state.keyGate = gate();
+      try {
+        await page.keyboard.press("Enter");
+        await expect.poll(() => state.keyReads).toBe(before + 1);
+        const pending = page.getByRole("button", { name: action === "Retry key access" ? "Retrying…" : action, exact: true });
+        await expect(pending).toBeDisabled();
+        await expect(pending).toBeFocused();
+        for (let press = 0; press < 3; press++) await page.keyboard.press("Enter");
+      } finally { state.keyGate.release(); state.keyGate = null; }
+      await expect(retry).toBeEnabled();
+      await expect(retry).toBeFocused();
+      await expect(card.getByRole("status")).toHaveText(note);
+      await expect(card.locator(".dashboardPanelMeta")).toHaveText(count);
+      await expect(card.getByText("old-laptop", { exact: true })).toHaveCount(phase === "initial" ? 0 : 1);
+      expect(state.keyReads).toBe(before + 1);
+      state.failKeys = false;
+      state.keys = [{ credentialId: "current-laptop", policyId, enabled: true, active: true }];
+      await page.keyboard.press("Enter"); // No re-focusing the recovered Retry button.
+      await expect(card).toContainText("current-laptop");
+      await expect(card).not.toContainText("old-laptop");
+      await expect(card.locator(".dashboardPanelMeta")).toHaveText("1/1 enabled");
+      await expect(retry).toHaveCount(0);
+      expect(state.keyReads).toBe(before + 2);
+      expectReadsOnly(state.requests);
+    });
+  }
+
+  test(`${action} does not take focus back after Tab or navigation during the read`, async ({ page }) => {
+    const state = await member(page);
+    state.failKeys = true;
+    await page.goto("/dashboard/home");
+    const retry = page.getByRole("button", { name: action, exact: true });
+    const nav = page.getByRole("navigation", { name: "console" });
+    const catalog = nav.getByRole("button", { name: "Catalog", exact: true });
+    await expect(retry).toBeEnabled();
+    for (const navigate of [false, true]) {
+      const before = state.keyReads;
+      state.keyGate = gate();
+      try {
+        await retry.press("Enter");
+        await expect.poll(() => state.keyReads).toBe(before + 1);
+        if (navigate) {
+          await catalog.press("Enter");
+          await expect(page.getByRole("heading", { name: "Catalog", exact: true })).toBeVisible();
+          await page.goBack();
+          await expect(nav.getByRole("button", { name: "Dashboard", exact: true })).toBeFocused();
+        } else {
+          await page.keyboard.press("Tab");
+          const pending = page.getByRole("button", { name: action === "Retry key access" ? "Retrying…" : action, exact: true });
+          await expect(pending).not.toBeFocused();
+        }
+        const moved = await page.locator(":focus").elementHandle();
+        state.keyGate.release();
+        await expect(retry).toBeEnabled();
+        expect(await moved!.evaluate(element => element === document.activeElement)).toBe(true);
+      } finally { state.keyGate.release(); state.keyGate = null; }
+      expect(state.keyReads).toBe(before + 1);
+    }
+    expectReadsOnly(state.requests);
+  });
+}
+
+test("a card retry queued behind automatic refresh owns one pending manual read", async ({ page }) => {
+  const state = await member(page);
+  state.failKeys = true;
+  await page.goto("/dashboard/home");
+  const card = page.locator(".myKeysPanel");
+  const retry = card.getByRole("button", { name: "Retry key access" });
+  await expect(retry).toBeEnabled();
+  const before = state.keyReads;
+  const automatic = gate(), manual = gate();
+  state.keyGate = automatic;
+  try {
+    await refresh(page);
+    await expect.poll(() => state.keyReads).toBe(before + 1);
+    await retry.press("Enter");
+    const pending = card.getByRole("button", { name: "Retrying…" });
+    await expect(pending).toBeDisabled();
+    await expect(pending).toBeFocused();
+    await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toBeDisabled();
+    await page.keyboard.press("Enter");
+    state.keyGate = manual;
+    automatic.release();
+    await expect.poll(() => state.keyReads).toBe(before + 2);
+    await refresh(page);
+    await page.keyboard.press("Enter");
+    manual.release();
+    await expect(retry).toBeEnabled();
+    await expect(retry).toBeFocused();
+    expect(state.keyReads).toBe(before + 2);
+    expectReadsOnly(state.requests);
+  } finally { automatic.release(); manual.release(); state.keyGate = null; }
+});
+
+for (const previous of [false, true]) {
+  test(`detached ${previous ? "stale" : "unavailable"} policy recovery owns both retries without blocking navigation`, async ({ page }) => {
+    const state = await member(page);
+    state.inline = false;
+    state.failPolicies = !previous;
+    state.keys = [{ credentialId: "old-laptop", policyId, enabled: true, active: true }];
+    await page.goto("/dashboard/home");
+    const card = page.locator(".myKeysPanel"), bar = page.locator(".refreshNotice");
+    const note = previous ? "Your policies couldn’t be refreshed. Showing the last known selection." : "Your policies couldn’t be loaded.";
+    if (previous) {
+      await expect(card.getByRole("combobox", { name: "policy", exact: true })).toHaveValue(policyId);
+      state.failPolicies = true;
+      await refresh(page);
+    }
+    await expect(card.getByRole("status")).toHaveText(note);
+    const start = state.requests.length;
+    const pending = gate();
+    state.policyGate = pending;
+    state.keys = [{ credentialId: "current-laptop", policyId, enabled: true, active: true }];
+    try {
+      await bar.getByRole("button", { name: "Retry refresh" }).press("Enter");
+      await expect(card).toContainText("current-laptop"); // Credentials settled; policy fallback has not.
+      await expect(card.getByRole("status")).toHaveText(note);
+      await expect(card).not.toContainText("No policy assigned");
+      await expect(card.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+      const shellRetry = bar.getByRole("button", { name: "Retry refresh" });
+      await expect(shellRetry).toBeDisabled();
+      await expect(shellRetry).toBeFocused();
+      await page.keyboard.press("Enter");
+      await refresh(page);
+      const nav = page.getByRole("navigation", { name: "console" });
+      await nav.getByRole("button", { name: "Catalog", exact: true }).press("Enter");
+      await expect(page.getByRole("heading", { name: "Catalog", exact: true })).toBeVisible();
+      await page.goBack();
+      await expect(nav.getByRole("button", { name: "Dashboard", exact: true })).toBeFocused();
+      await expect(card.getByRole("button", { name: "Retrying…" })).toBeDisabled();
+      pending.release();
+      await expect(card.getByRole("button", { name: "Retry key access" })).toBeEnabled();
+      await expect(card.getByRole("status")).toHaveText(note);
+      await expect(nav.getByRole("button", { name: "Dashboard", exact: true })).toBeFocused();
+      state.policyGate = null;
+      state.failPolicies = false;
+      await card.getByRole("button", { name: "Retry key access" }).press("Enter");
+      await expect(card.getByRole("status")).toHaveCount(0);
+      await expect(card.getByRole("combobox", {name: "policy", exact: true})).toHaveValue(policyId);
+      const reads = state.requests.slice(start);
+      for (const path of ["/v1/session/credentials", "/v1/session/usage"]) expect(reads.filter(r => r.path === path)).toHaveLength(2);
+      expectReadsOnly(state.requests);
+    } finally { pending.release(); state.policyGate = null; }
+  });
+}
+
 test("a confirmed unassigned member sees a next step instead of an impossible create action", async ({ page }) => {
   const state = await member(page); state.held = false;
   await page.goto("/dashboard/home"); const card = page.locator(".myKeysPanel");

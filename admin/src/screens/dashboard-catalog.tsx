@@ -1,4 +1,5 @@
 import { GrantPoolIncidents } from "../grant-health";
+import { ConsoleRetryButton } from "../console-retry-button";
 import { MemberGrantedService } from "./member-granted-service";
 import { hasShortBudgetWindow, MemberBudgetWindows } from "./member-budget-windows";
 import { credentialExpiryLabel, KeyTierControls, keyTierChoices } from "../member-key-controls";
@@ -260,7 +261,6 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<{ credentialId: string; name: string } | null>(null);
   const [days, setDays] = useState(180), [fast, setFast] = useState(true), [ultrafast, setUltrafast] = useState(false);
-  const [retrying, setRetrying] = useState(false);
   const keys = feedback.inventory?.keys ?? "ready", held = feedback.inventory?.policies ?? "ready";
   const inventoryReady = keys === "ready" && held === "ready";
   const readFailed = [keys, held].some(state => state === "unavailable" || state === "stale");
@@ -271,10 +271,6 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
   const readNote = keys === "unavailable" ? "Your keys couldn’t be loaded." : keys === "stale" ? "Your keys couldn’t be refreshed. Showing the last known key list."
     : keys === "loading" ? "Loading your keys…" : held === "unavailable" ? "Your policies couldn’t be loaded." : held === "stale" ? "Your policies couldn’t be refreshed. Showing the last known selection."
     : held === "loading" ? "Loading your policies…" : null;
-  async function retry() {
-    setRetrying(true);
-    try { await feedback.refresh(); } finally { setRetrying(false); }
-  }
   const selectedPolicy = policyId ?? policyIds[0] ?? "";
   const policyAvailable = policyIds.includes(selectedPolicy);
   const limits = policies?.find(policy => policy.policyId === selectedPolicy);
@@ -285,7 +281,7 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
       <p className="panelIntro">Create proxy keys bound to your signed-in identity and one of your policies.</p>
       <CredentialNotice state={feedback} />
       {readNote ? <div className="inlineNote" role="status">{readNote}</div> : null}
-      {readFailed && !feedback.error ? <button type="button" className="buttonSecondary" disabled={retrying} onClick={() => void retry()}>{retrying ? "Retrying…" : "Retry key access"}</button> : null}
+      {readFailed && !feedback.error ? <ConsoleRetryButton label="Retry key access" pendingLabel="Retrying…" /> : null}
       {noPolicy ? <InlineNote>No policy assigned. Ask an administrator to assign a policy to your identity or group before creating a key.</InlineNote> : null}
       {showEditor ? <><div className="myKeysCreate">
         <label><span>policy</span><select value={selectedPolicy} onChange={(event) => { onDraftChange(); setPolicyId(event.target.value); }} disabled={!policyIds.length}>{!policyAvailable ? <option value={selectedPolicy}>{selectedPolicy ? `${selectedPolicy} · unavailable` : "No policies available"}</option> : null}{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>

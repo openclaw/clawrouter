@@ -1,4 +1,5 @@
 import { MyUsageScreen, PersonalUsageSummary } from "./screens/my-usage";
+import { ConsoleRetryButton } from "./console-retry-button";
 import { GrantExpiryPools } from "./grant-expiry";
 import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
@@ -20,7 +21,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, personalUsage, adminUsage, request, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const usageLabel = session.role === "admin" ? "Usage" : "Quota";
@@ -115,7 +116,7 @@ export function AppShell() {
                 {shell.refreshError ? <p className="refreshNoticeImpact">{lastUpdatedAt === null ? "Some console data is unavailable." : "Displayed data may be out of date."}</p> : null}
                 {usage.error ? <p className="refreshNoticeImpact">{usageLabel} data {usage.loaded ? "may be out of date." : "is unavailable."}</p> : null}
               </div>
-              <button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button>
+              <ConsoleRetryButton label="Retry refresh" />
               <div className="refreshNoticeDetail">
                 {shell.refreshing ? <p>Refreshing console data</p> : status !== "connected" ? <p>{status}</p> : null}
                 <p>{refreshError}</p>
