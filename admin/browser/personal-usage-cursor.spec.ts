@@ -220,6 +220,75 @@ test('a failed refresh keeps key ranks readable but not actionable until Retry s
  } finally { f.close(); }
 });
 
+test('Activity distinguishes a pending page, a blocked report, and an independently retryable page', async ({ page }) => {
+ const f = await cursorUsage(page, { rows: 0 });
+ const started = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+ try {
+  await f.ingest('old', { credential_id: 'old-key', model: 'old-model' });
+  await f.ingest('new-1', { credential_id: 'new-key', model: 'new-model-1' });
+  await f.ingest('new-2', { credential_id: 'new-key', model: 'new-model-2' });
+  await page.route(url => url.pathname === '/v1/session/usage/events' && url.searchParams.get('key') === 'old-key', async route => {
+   const body = await f.read(route.request().url());
+   started.resolve();
+   await release.promise;
+   await route.fulfill({ json: body });
+  }, { times: 1 });
+  await page.goto('/dashboard/my-usage');
+  const summary = page.getByRole('region', { name: 'Your personal usage' });
+  const calls = summary.getByText('Model calls', { exact: true }).locator('+ dd');
+  const form = page.getByRole('form', { name: 'Usage filters' });
+  const key = form.getByLabel('Key ID (exact)', { exact: true });
+  const apply = form.getByRole('button', { name: 'Apply filters' });
+  const recent = page.getByRole('region', { name: 'Recent model calls' });
+  const download = page.getByRole('button', { name: 'Export refreshed snapshot JSON' });
+  await expect(calls).toHaveText('3');
+  await form.getByText('Custom dates & exact filters').click();
+  await key.fill('old-key');
+  await apply.click();
+  await expect(calls).toHaveText('1');
+  await activity(page);
+  await started.promise;
+  await expect(recent.getByRole('status')).toHaveText('Loading recent model calls…');
+  await expect(download).toBeEnabled();
+
+  f.failReport();
+  await key.fill('new-key');
+  await apply.click();
+  const alert = summary.getByRole('alert');
+  await expect(alert).toContainText('Injected report failure');
+  await expect(alert).toContainText('Old displayed report');
+  await expect(summary).toContainText('Selected key = old-key');
+  release.resolve();
+  await expect(calls).toHaveText('1');
+  await expect(download).toBeDisabled();
+  await expect(recent.getByRole('button')).toHaveCount(0);
+  await expect(rows(page)).toHaveCount(0);
+  expect(reads(f, 'events').filter(url => url.searchParams.get('key') === 'new-key')).toHaveLength(0);
+  const blocked = await recent.innerText();
+  expect.soft(blocked).toContain('Retry the report above to load recent calls.');
+  expect.soft(blocked).not.toContain('Loading recent model calls');
+
+  f.failEvents();
+  await alert.getByRole('button', { name: 'Retry report' }).click();
+  await expect(calls).toHaveText('2');
+  await expect(summary).toContainText('Selected key = new-key');
+  await expect(download).toBeEnabled();
+  await expect(recent.getByRole('alert')).toContainText('Injected event failure');
+  const reportReads = reads(f, 'report').length;
+  const failedPage = reads(f, 'events').at(-1)!.search;
+  await recent.getByRole('button', { name: 'Retry recent calls' }).click();
+  await expect(rows(page)).toContainText(['new-model-2', 'new-model-1']);
+  await expect(recent.getByRole('alert')).toHaveCount(0);
+  expect(reads(f, 'events').at(-1)!.search).toBe(failedPage);
+  expect(reads(f, 'report')).toHaveLength(reportReads);
+  expect(f.invalid).toEqual([]);
+ } finally {
+  release.resolve();
+  await page.unrouteAll({ behavior: 'wait' });
+  f.close();
+ }
+});
+
 test('same-root retries preserve exact cursor; navigation retires roots and reentry starts page one',async({page})=>{
  const f=await cursorUsage(page);try{
   await page.goto('/dashboard/my-usage');await activity(page);await expect(rows(page)).toHaveCount(100);
