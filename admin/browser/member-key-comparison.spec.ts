@@ -78,6 +78,84 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
+test('the sticky header does not cover the comparison or clear-filter focus ring', async ({page}) => {
+  await page.setViewportSize({width: 800, height: 433});
+  const close = await fromMemberHome(page);
+  async function expectClearFocus(name: string) {
+    const target = button(page, name);
+    await expect(target).toBeFocused();
+    await expect(target).toHaveCSS('outline-style', 'solid');
+    const clearance = await target.evaluate(el => {
+      const bar = document.querySelector('.workspace > .topbar')!.getBoundingClientRect();
+      const rect = el.getBoundingClientRect(), style = getComputedStyle(el);
+      const ring = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+      return Math.min(rect.top - bar.bottom, innerHeight - rect.bottom, rect.left, innerWidth - rect.right) - ring;
+    });
+    expect(clearance).toBeGreaterThanOrEqual(0);
+  }
+  try {
+    await button(page, 'Compare keys').press('Enter');
+    const row = ranks(page).getByRole('button', {name: 'archived-build', exact: true});
+    await expect(row).toBeVisible();
+    await expectClearFocus('Comparing keys');
+    await expect(row).toBeInViewport({ratio: 1});
+    await row.press('Enter');
+    await expect(ranks(page).getByRole('heading', {name: 'Selected key usage'})).toBeVisible();
+    const clear = button(page, 'Show all keys');
+    for (let i = 0; i < 20 && !await clear.evaluate(el => el === document.activeElement); i++) await page.keyboard.press('Shift+Tab');
+    await expectClearFocus('Show all keys');
+    await page.keyboard.press('Space');
+    await expect(ranks(page).getByRole('heading', {name: 'Top keys'})).toBeVisible();
+    await expectClearFocus('Comparing keys');
+  } finally { await close(); }
+});
+
+test('tabbing to a ranked key shows its entire outline at the bottom of a short viewport', async ({page}) => {
+  await page.setViewportSize({width: 721, height: 280});
+  const close = await fromMemberHome(page);
+  try {
+    await button(page, 'Compare keys').press('Enter');
+    const rank = ranks(page), key = rank.getByRole('button', {name: 'archived-build'});
+    await expect(key).toBeVisible();
+    const previous = rank.getByLabel('Group ranking scope and coverage');
+    await previous.focus();
+    // The border box is visible; its outside outline will cross the viewport edge.
+    await key.evaluate(el => scrollBy(0, Math.ceil(el.getBoundingClientRect().bottom - innerHeight)));
+    await page.keyboard.press('Tab');
+    await expect(key).toBeFocused();
+    await expect(key).toHaveCSS('outline-style', 'solid');
+    const bottom = await key.evaluate(el => {
+      const style = getComputedStyle(el);
+      return el.getBoundingClientRect().bottom + parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+    });
+    expect(bottom).toBeLessThanOrEqual(280);
+  } finally { await close(); }
+});
+
+test('a delayed comparison respects scrolling even when the trigger keeps keyboard focus', async ({page}) => {
+  await page.setViewportSize({width: 800, height: 433});
+  const close = await fromMemberHome(page);
+  const release = Promise.withResolvers<void>();
+  try {
+    const comparing = (url: URL) => url.pathname.endsWith('/usage/report') && url.searchParams.get('groupBy') === 'key';
+    await page.route(comparing, async route => { await release.promise; await route.fallback(); });
+    const request = page.waitForRequest(req => comparing(new URL(req.url())));
+    await button(page, 'Compare keys').press('Enter');
+    await request;
+    const before = await page.evaluate(() => window.scrollY);
+    await Promise.all([
+      page.evaluate(() => new Promise<void>(resolve => document.addEventListener('scrollend', () => resolve(), {once: true}))),
+      page.keyboard.press('ArrowDown'),
+    ]);
+    const scrolled = await page.evaluate(() => window.scrollY);
+    expect(scrolled).toBeGreaterThan(before);
+    release.resolve();
+    await expect(ranks(page).getByRole('heading', {name: 'Top keys'})).toBeVisible();
+    await expect(button(page, 'Comparing keys')).toBeFocused();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrolled);
+  } finally { release.resolve(); await close(); }
+});
+
 test('a delayed comparison does not pull a member back after they leave its trigger', async ({page}) => {
   await page.setViewportSize({width: 320, height: 568});
   const close = await fromMemberHome(page);
