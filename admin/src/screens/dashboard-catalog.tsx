@@ -1,4 +1,5 @@
 import { GrantPoolIncidents } from "../grant-health";
+import { MemberGrantedService } from "./member-granted-service";
 import { credentialExpiryLabel, KeyTierControls, keyTierChoices } from "../member-key-controls";
 import type { SessionPolicyLimits } from "../../../shared/contracts";
 import React, { useEffect, useState } from "react";
@@ -186,13 +187,13 @@ export function DashboardScreen({ personalUsageSummary, grants, grantsReady, gra
             <div><dt>Your policy access</dt><dd>{unknownAccess ? "Unknown" : <><strong>{usableCount} usable</strong> <small>of {grantedServices.length} granted{scopeNote}</small></>}</dd></div>
           </dl> : null}
           <div className="dashboardServiceGrid">
-            {visibleServices.slice(0, isAdmin ? 10 : 8).map(({ service, outcome }, index) => (
+            {visibleServices.slice(0, isAdmin ? 10 : 8).map(({ service, outcome }, index) => isAdmin ? (
               <article className="dashboardService" key={service.id} style={{ "--reveal": `${index * 35}ms` } as React.CSSProperties}>
                 <span className="dashboardServiceMark"><BrandMark brandIcon={service.brandIcon} fallback={kindIcon(service.kind)} /></span>
                 <span><strong>{service.name}</strong><small>{kindLabel(service.kind)} · {outcome.detail}</small></span>
                 <Status label={outcome.label} tone={outcome.tone} />
               </article>
-            ))}
+            ) : <MemberGrantedService key={service.id} service={service} />)}
             {!visibleServices.length ? <div className="dashboardEmpty">
               <CircleSlash2 aria-hidden="true" />
               <strong>{isAdmin ? "No services in the catalog" : unknownAccess ? "Service access unavailable" : "No services assigned"}</strong>
