@@ -478,8 +478,8 @@ function sameNameCues(keys: readonly CurrentKey[]) {
   return cues;
 }
 
-function OwnKeySelector({keys, selected, disabled, onSelect}: {
-  keys: readonly CurrentKey[]; selected: CompleteUsageQuery['filters']['key']; disabled: boolean;
+function OwnKeySelector({keys, selected, locked, onSelect}: {
+  keys: readonly CurrentKey[]; selected: CompleteUsageQuery['filters']['key']; locked: boolean;
   onSelect: (key: CompleteUsageQuery['filters']['key']) => void;
 }) {
   const description = useId();
@@ -487,18 +487,19 @@ function OwnKeySelector({keys, selected, disabled, onSelect}: {
   const id = selected?.kind === 'credential' ? selected.id : undefined;
   const current = id === undefined ? undefined : keys.find(key => key.credentialId === id);
   return <>
-    <label>Current own-key selector<select disabled={disabled} aria-describedby={id === undefined ? undefined : description}
+    <label>Current own-key selector<select aria-disabled={locked || undefined} aria-describedby={id === undefined ? undefined : description}
       value={selected?.kind === 'session' ? 'session' : id === undefined ? '' : 'key:' + id}
       onChange={event => {
+        if (locked) return;
         const choice = event.target.value;
         onSelect(choice === 'session' ? {kind: 'session'} : choice ? {kind: 'credential', id: choice.slice(4)} : undefined);
       }}>
-      <option value="">All keys</option><option value="session">Dashboard session</option>
-      {id !== undefined && !current ? <option value={'key:' + id}>Retained key: {id}</option> : null}
+      <option disabled={locked} value="">All keys</option><option disabled={locked} value="session">Dashboard session</option>
+      {id !== undefined && !current ? <option disabled={locked} value={'key:' + id}>Retained key: {id}</option> : null}
       {keys.map(key => {
         const cue = cues.get(key.credentialId);
         const label = (key.name ? 'Current name: ' + key.name + ' — ' : '') + key.credentialId;
-        return <option key={key.credentialId} value={'key:' + key.credentialId}>
+        return <option key={key.credentialId} disabled={locked} value={'key:' + key.credentialId}>
           {cue ? cue + (key.enabled === false ? ' · Revoked · ' : ' · ') + label : label + (key.enabled === false ? ' (revoked)' : '')}
         </option>;
       })}
@@ -550,6 +551,12 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     tabs.current[next]?.focus();
   }
   const q = data.query, selectedKey = q?.filters.key;
+  // Keep the native picker mounted while the report switches. Only the picker uses the requested query;
+  // summaries, actions and exports continue to use the confirmed report.
+  const pickerQuery = q ?? (report.loading ? data.requestedQuery : undefined);
+  const pickerKey = pickerQuery?.filters.key;
+  // Disable the choices, not the select: a natively disabled select drops keyboard focus.
+  const pickerLocked = !q || Boolean(report.error);
   const comparingKeys = !selectedKey && q?.groupBy === 'key' && panel === 'overview';
   const narrow = useSyncExternalStore(subscribeToChartLayout, chartsAreStacked, () => false);
   const comparisonFirst = narrow && panel === 'overview' && value?.query.groupBy === 'key';
@@ -605,12 +612,10 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
           if (q.groupBy !== 'key') data.refine({ ...q, groupBy: 'key', rankOffset: 0 });
         }
       }}>{selectedKey ? 'Show all keys' : comparingKeys ? 'Comparing keys' : 'Compare keys'}</button>
-      {q ? <>
-        <label>Grain<select disabled={Boolean(report.error)} value={q.grain} onChange={event => data.refine({ ...q, grain: event.target.value as 'day' | 'minute', rankOffset: 0 })}>
-          <option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option>
-        </select></label>
-        <OwnKeySelector keys={currentKeys} selected={selectedKey} disabled={Boolean(report.error)} onSelect={selectKey} />
-      </> : null}
+      {q ? <label>Grain<select disabled={Boolean(report.error)} value={q.grain} onChange={event => data.refine({ ...q, grain: event.target.value as 'day' | 'minute', rankOffset: 0 })}>
+        <option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option>
+      </select></label> : null}
+      {pickerQuery ? <OwnKeySelector keys={currentKeys} selected={pickerKey} locked={pickerLocked} onSelect={selectKey} /> : null}
     </UsageControls>
     {!comparisonFirst && <PersonalUsageSummary data={data} />}
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>
