@@ -452,6 +452,8 @@
 .requestDrawer pre {
   max-height: 360px;
   border-top: 1px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .inspectorTabs {

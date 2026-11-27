@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 interface PendingRequest {
+  body?: BodyInit | null;
   signal?: AbortSignal | null;
   resolve: (response: Response) => void;
   reject: (error: Error) => void;
@@ -17,7 +18,7 @@ test.beforeEach(async ({ page }) => {
       const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
       if (url.pathname.startsWith("/v1/playground/")) {
         // Keep completion under test control, including a transport that ignores abort.
-        return new Promise<Response>((resolve, reject) => requests.push({ signal: init?.signal, resolve, reject }));
+        return new Promise<Response>((resolve, reject) => requests.push({ body: init?.body, signal: init?.signal, resolve, reject }));
       }
       return originalFetch(input, init);
     };
@@ -349,6 +350,65 @@ test("opening the draft request preview during a send keeps it open", async ({ p
   await expect(preview).toBeVisible();
   await expect(preview).toContainText("Next draft");
 });
+
+for (const [target, previewFormat] of [["example", "json"], ["reply-pro", "curl"]] as const) {
+  test(`Preview matches the sent ${target} follow-up, including only successful model history`, async ({ page }) => {
+    const message = page.getByRole("textbox", { name: "Message", exact: true });
+    const provider = page.getByRole("combobox", { name: "Provider", exact: true });
+    const preview = page.locator(".requestDrawer pre");
+    const toggle = page.locator(".requestDrawer summary");
+    const closeInspector = page.getByRole("button", { name: "Close turn inspector" });
+
+    await message.fill("Count the sample items.");
+    await message.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(1);
+    await complete(page, 0, "Three sample items.");
+
+    await provider.selectOption("test-service");
+    const body = page.getByRole("textbox", { name: "JSON request body" });
+    await body.fill('{"query":"service only"}');
+    await closeInspector.press("Enter");
+    await toggle.press("Enter");
+    await expect(preview).toContainText("service only");
+    const servicePreview = JSON.parse(await preview.innerText());
+    await body.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(2);
+    expect(servicePreview).toEqual(await sentBody(page, 1));
+    await complete(page, 1, "A service result.");
+
+    await provider.selectOption("test-model");
+    await message.fill("Failed model turn.");
+    await message.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(3);
+    await page.evaluate(() => (window as TestWindow).playgroundRequests[2].resolve(new Response("Unavailable", { status: 503 })));
+    await expect(page.locator(".inspectorTopline")).toContainText("503");
+
+    await page.getByRole("combobox", { name: "Model or route" }).selectOption(`model:test-model/${target}`);
+    if (previewFormat === "curl") await page.getByRole("button", { name: "Response", exact: true }).press("Enter");
+    await page.getByRole("button", { name: "Conversation controls" }).press("Enter");
+    await message.fill("What was the total?");
+    await toggle.press("Enter");
+    await expect(preview).toContainText("What was the total?");
+    await toggle.press("Tab");
+    await expect(page.getByRole("region", { name: "Draft request payload" })).toBeFocused();
+    const shown = await preview.innerText();
+    expect(await requestCount(page)).toBe(3);
+    await message.press("Enter");
+    await expect.poll(() => requestCount(page)).toBe(4);
+    const sent = await sentBody(page, 3);
+    const history = sent.messages?.filter((m: { role: string }) => m.role !== "system") ?? sent.input;
+    expect(history).toEqual([
+      { role: "user", content: "Count the sample items." }, { role: "assistant", content: "Three sample items." },
+      { role: "user", content: "What was the total?" },
+    ]);
+    if (previewFormat === "json") expect(JSON.parse(shown)).toEqual(sent);
+    else expect(shown).toContain(`-d '${JSON.stringify(sent, null, 2)}'`);
+  });
+}
+
+function sentBody(page: Page, index: number) {
+  return page.evaluate((i) => JSON.parse(String((window as TestWindow).playgroundRequests[i].body)), index);
+}
 
 function requestCount(page: Page) {
   return page.evaluate(() => (window as TestWindow).playgroundRequests.length);
