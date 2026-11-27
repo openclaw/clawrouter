@@ -66,8 +66,6 @@ export async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; 
   }
 }
 
-export { isTextualResponse, localLogin, playgroundRequest, request } from "./dashboard-fetch";
-
 export function createPlaygroundTurn(input: Omit<PlaygroundTurn, "id" | "response" | "rawResponse"> & { raw: string }): PlaygroundTurn {
   return {
     id: crypto.randomUUID(),

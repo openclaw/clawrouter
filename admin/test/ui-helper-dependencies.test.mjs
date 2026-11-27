@@ -14,7 +14,7 @@ async function loadHeadlessModule(name) {
   const chunk = bundle.output.find((entry) => entry.type === "chunk" && entry.isEntry);
   assert.ok(chunk);
   for (const id of Object.keys(chunk.modules)) {
-    assert.doesNotMatch(id, /\/(?:components\.tsx|ui-config\.ts|node_modules\/react\/)/);
+    assert.doesNotMatch(id, /\/(?:components\.tsx|ui-config\.ts|dashboard-fetch\.ts|shared\/fetch-timeout\.ts|node_modules\/react\/)/);
   }
   assert.ok(!chunk.imports.some((id) => id === "react" || id.startsWith("react/")));
   return import("data:text/javascript;base64," + Buffer.from(chunk.code).toString("base64"));
