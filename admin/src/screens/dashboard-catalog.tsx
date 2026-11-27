@@ -255,26 +255,44 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
   const [name, setName] = useState("");
   const [editing, setEditing] = useState<{ credentialId: string; name: string } | null>(null);
   const [days, setDays] = useState(180), [fast, setFast] = useState(true), [ultrafast, setUltrafast] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const keys = feedback.inventory?.keys ?? "ready", held = feedback.inventory?.policies ?? "ready";
+  const inventoryReady = keys === "ready" && held === "ready";
+  const readFailed = [keys, held].some(state => state === "unavailable" || state === "stale");
+  const noPolicy = Boolean(feedback.inventory) && held === "ready" && !policyIds.length;
+  const showEditor = !feedback.inventory || ((keys === "ready" || keys === "stale") && policyIds.length > 0);
+  const count = `${credentials.filter(credential => credential.enabled).length}/${credentials.length} enabled`;
+  const meta = keys === "ready" ? count : keys === "stale" ? `Last known: ${count}` : keys === "loading" ? "Loading" : "Unavailable";
+  const readNote = keys === "unavailable" ? "Your keys couldn’t be loaded." : keys === "stale" ? "Your keys couldn’t be refreshed. Showing the last known key list."
+    : keys === "loading" ? "Loading your keys…" : held === "unavailable" ? "Your policies couldn’t be loaded." : held === "stale" ? "Your policies couldn’t be refreshed. Showing the last known selection."
+    : held === "loading" ? "Loading your policies…" : null;
+  async function retry() {
+    setRetrying(true);
+    try { await feedback.refresh(); } finally { setRetrying(false); }
+  }
   const selectedPolicy = policyId ?? policyIds[0] ?? "";
   const policyAvailable = policyIds.includes(selectedPolicy);
   const limits = policies?.find(policy => policy.policyId === selectedPolicy);
   useEffect(() => { if (policyId === null && policyIds.length) setPolicyId(policyIds[0]); }, [policyId, policyIds]);
   return (
     <section className="dashboardPanel myKeysPanel">
-      <DashboardPanelHeader eyebrow="personal access" title="My keys" meta={`${credentials.filter((credential) => credential.enabled).length}/${credentials.length} enabled`} />
+      <DashboardPanelHeader eyebrow="personal access" title="My keys" meta={meta} />
       <p className="panelIntro">Create proxy keys bound to your signed-in identity and one of your policies.</p>
       <CredentialNotice state={feedback} />
-      <div className="myKeysCreate">
+      {readNote ? <div className="inlineNote" role="status">{readNote}</div> : null}
+      {readFailed && !feedback.error ? <button type="button" className="buttonSecondary" disabled={retrying} onClick={() => void retry()}>{retrying ? "Retrying…" : "Retry key access"}</button> : null}
+      {noPolicy ? <InlineNote>No policy assigned. Ask an administrator to assign a policy to your identity or group before creating a key.</InlineNote> : null}
+      {showEditor ? <><div className="myKeysCreate">
         <label><span>policy</span><select value={selectedPolicy} onChange={(event) => { onDraftChange(); setPolicyId(event.target.value); }} disabled={!policyIds.length}>{!policyAvailable ? <option value={selectedPolicy}>{selectedPolicy ? `${selectedPolicy} · unavailable` : "No policies available"}</option> : null}{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
         <label><span>Name (optional)</span><input value={name} maxLength={80} placeholder="e.g. Studio or laptop" onChange={(event) => { onDraftChange(); setName(event.target.value); }} /></label>
-        <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast), name })}><Plus aria-hidden="true" /> Create key</button>
+        <button type="button" disabled={!policyAvailable || busy || !inventoryReady} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast), name })}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysCreate"><label><span>Validity</span><select value={days} onChange={event => { onDraftChange(); setDays(Number(event.target.value)); }}>{[30, 90, 180].map(value => <option key={value} value={value}>{value} days</option>)}</select></label><KeyTierControls policy={limits} fast={fast} ultrafast={ultrafast} onFast={value => { onDraftChange(); setFast(value); }} onUltrafast={value => { onDraftChange(); setUltrafast(value); }} /></div>
       {limits ? presentAllowanceWindows(limits.budget, formatConfiguredLimit).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
-      {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}
+      {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}</> : null}
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>
-          <span><strong title={credential.name || credential.credentialId}>{credential.name || credential.credentialId}</strong>{credential.name ? <small title={credential.credentialId}>{credential.credentialId}</small> : null}<small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
+          <span><strong title={credential.name || credential.credentialId}>{credential.name || credential.credentialId}</strong>{credential.name ? <small title={credential.credentialId}>{credential.credentialId}</small> : null}<small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && held === "ready" && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
           {editing?.credentialId === credential.credentialId ? <form className="myKeyRename" onSubmit={(event) => {
             event.preventDefault();
             const draft = editing;
@@ -283,11 +301,11 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
             });
           }}>
             <label><span>Key name</span><input autoFocus value={editing.name} maxLength={80} disabled={busy} placeholder="Leave blank to use key ID" onChange={(event) => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: event.target.value }); }} /></label>
-            <button type="submit" disabled={busy}>Save name</button>
+            <button type="submit" disabled={busy || keys !== "ready"}>Save name</button>
             <button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing(null); }}>Cancel</button>
-          </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={!policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
+          </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy || keys !== "ready"} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || !inventoryReady || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={held === "ready" && !policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
         </article>)}
-        {!credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong><p>Create one to use your policy from OpenClaw or another API client.</p></div> : null}
+        {keys === "ready" && !credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong>{!noPolicy && held === "ready" ? <p>Create one to use your policy from OpenClaw or another API client.</p> : null}</div> : null}
       </div>
     </section>
   );

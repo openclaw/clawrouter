@@ -214,6 +214,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     } catch (caught) {
       if (!scope.isCurrent()) return;
       const message = errorMessage(caught);
+      if (session.value.role === "user") credentialOwner.reportPersonal(keySnapshot, null, null);
       // Refresh health is separate from the mutation result that the caller reports.
       session.setRefreshError(`Console data refresh failed: ${message}`);
       failUsageRefresh(`Usage was not refreshed: ${message}`);
@@ -273,14 +274,18 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const quotaRead = settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage?budgets_only=true", { signal: controller.signal }));
     const credentialResult = await settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials"));
     if (!scope.isCurrent()) return { warnings, complete: false };
-    if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, (sessionData.entitlements?.policies ?? []).map(policy => policy.policyId));
-    else warnings = [...warnings, "personal credentials unavailable: " + credentialResult.error];
+    const inlinePolicies = sessionData.entitlements?.policies?.map(policy => policy.policyId);
+    credentialOwner.reportPersonal(keySnapshot, credentialResult.ok ? credentialResult.value.credentials : null, inlinePolicies);
+    if (!credentialResult.ok) warnings = [...warnings, "personal credentials unavailable: " + credentialResult.error];
     void quotaRead.then(result => {
       if (!ownsQuota()) return;
       if (result.ok) {
         usage.hydrate(result.value.policies, result.value.usage);
-        if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, result.value.policies.filter(policy => policy.enabled).map(usagePolicyId));
-      } else usage.fail("Quota status unavailable: " + result.error);
+        credentialOwner.reportPersonal(keySnapshot, undefined, result.value.policies.filter(policy => policy.enabled).map(usagePolicyId));
+      } else {
+        if (!inlinePolicies) credentialOwner.reportPersonal(keySnapshot, undefined, null);
+        usage.fail("Quota status unavailable: " + result.error);
+      }
     });
     return { warnings, complete: !warnings.length };
   }
