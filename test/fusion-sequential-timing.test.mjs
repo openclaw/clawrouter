@@ -78,3 +78,40 @@ test('rejects sparse task, arm and call arrays instead of counting holes as zero
   const partialCall = fixture(); delete partialCall[1].callElapsedMs[1];
   assert.throws(() => summarize(partialCall), /missing_call_duration/);
 });
+
+const repeated = () => [0, 1, 2].flatMap(repeat => fixture().map(row => ({
+  ...row, repeat, strategy: row.strategy === 'cheap' ? 'compact' : row.strategy,
+})));
+const repeatedOptions = { execution: 'sequential', strategies: ['strong', 'cascade', 'compact'], repeats: [0, 1, 2] };
+
+test('keeps repeated compact controls separate without counting them as new tasks', () => {
+  const result = summarizeSequentialTiming(repeated(), ['case-a'], repeatedOptions);
+  assert.equal(result.uniqueTasks, 1);
+  assert.equal(result.repeatsPerTask, 3);
+  assert.equal(result.rows.length, 9);
+  assert.deepEqual(result.totals.compact, { calls: 3, workflowMs: 210, recordedCallMs: 90, otherWorkflowMs: 120 });
+  assert.deepEqual(result.rows.filter(row => row.strategy === 'compact').map(row => row.repeat), [0, 1, 2]);
+  assert.equal(Object.hasOwn(summarize(fixture()), 'repeatsPerTask'), false);
+});
+
+test('requires every declared task, repeat and strategy exactly once', () => {
+  const run = rows => summarizeSequentialTiming(rows, ['case-a'], repeatedOptions);
+  assert.throws(() => run(repeated().slice(1)), /incomplete_timing_cohort/);
+  const duplicate = repeated(); duplicate[3] = duplicate[0];
+  assert.throws(() => run(duplicate), /duplicate_timing_arm/);
+  const unknownRepeat = repeated(); unknownRepeat[0].repeat = 3;
+  assert.throws(() => run(unknownRepeat), /unknown_repeat/);
+  const missingRepeat = repeated(); delete missingRepeat[0].repeat;
+  assert.throws(() => run(missingRepeat), /unknown_repeat/);
+  const unknownStrategy = repeated(); unknownStrategy[0].strategy = 'cheap';
+  assert.throws(() => run(unknownStrategy), /unknown_strategy/);
+});
+
+test('rejects ambiguous or sparse declared strategies and repeats', () => {
+  for (const strategies of [[], ['strong'], ['strong', 'strong'], ['strong', ''], new Array(2)]) {
+    assert.throws(() => summarizeSequentialTiming(repeated(), ['case-a'], { ...repeatedOptions, strategies }));
+  }
+  for (const repeats of [[], [0, 0], [-1], [1.5], new Array(3)]) {
+    assert.throws(() => summarizeSequentialTiming(repeated(), ['case-a'], { ...repeatedOptions, repeats }));
+  }
+});
