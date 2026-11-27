@@ -5,6 +5,7 @@
 ## Unreleased
 
 - Record a fresh-control Fusion repair comparison where all arms pass but the cascade costs more and takes longer than strong-only.
+- Record two failed Fusion cheap-repair follow-ups, including cached-control accounting and a cheaper retrospective skip-repair comparison.
 
 - Add an opt-in caller-side Fusion agreement cascade with independent drafts, exact native comparison counts and bounded fallback accounting.
 - Report a matched native Fusion policy comparison: an extra cheap repair failed quality and savings gates; retain the current opt-in fallback policy.
