@@ -184,15 +184,23 @@ test("Other providers distinguishes missing price coverage from known zero and u
     [[0, 0, 2], 250000, "$0.25 accounted; 2 unpriced", "$0.25 accounted; 2 unpriced"],
   ] as const) {
     usage.providers = ["openai", "anthropic", "mistral", "tavily", "replicate", "firecrawl", "xai"].map((provider, i) => {
-      const unpriced = i < 4 ? 0 : counts[i - 4];
-      return { provider, requestCount: 2, errorCount: 0, successCount: 2, totalTokens: 8, actualCostMicros: i === 5 ? micros : 0, ...(unpriced === undefined ? {} : { unpricedRequestCount: unpriced }) };
+      const unpriced = i === 0 ? undefined : i < 4 ? 0 : counts[i - 4];
+      return { provider, requestCount: 2, errorCount: 0, successCount: 2, totalTokens: 8, actualCostMicros: i === 0 || i === 5 ? micros : 0, ...(unpriced === undefined ? {} : { unpricedRequestCount: unpriced }) };
     });
     await page.goto("/");
     const table = page.getByRole("table", { name: "Requests by provider" });
     const other = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Other providers/ }) }).getByRole("cell").last();
+    const spendFor = (name: string) => table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: new RegExp(name) }) }).getByRole("cell").last();
+    const namedUnknown = (micros ? "$0.25" : "$0.00") + " accounted; coverage unknown";
+    await expect(spendFor("OpenAI")).toHaveAccessibleName(namedUnknown);
+    await expect(spendFor("OpenAI")).toHaveText(namedUnknown);
+    await expect(spendFor("Anthropic")).toHaveText("$0.00");
     await expect(other).toHaveText(dashboard);
     await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
     await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    await expect(spendFor("OpenAI")).toHaveAccessibleName(namedUnknown);
+    await expect(spendFor("OpenAI")).toHaveText(namedUnknown);
+    await expect(spendFor("Anthropic")).toHaveText("$0.00");
     await expect(other).toHaveText(details);
     if (counts.slice(1).some(count => count === undefined)) await expect(other).toHaveAttribute("title", /coverage unavailable/);
   }
@@ -529,9 +537,10 @@ function dashboardFixture() {
   const usage: UsageSnapshot = {
     ledger: "ready", events: [],
     summary: { requestCount: 120, successCount: 116, errorCount: 4, inputTokens: 90_000, outputTokens: 30_000, totalTokens: 120_000, actualCostMicros: 8_400_000 },
+    // This current-ledger fixture has complete price coverage. Missing wire fields are exercised separately.
     providers: [
-      { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000 },
-      { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000 },
+      { provider: "openai", requestCount: 80, successCount: 78, errorCount: 2, totalTokens: 90_000, actualCostMicros: 5_600_000, unpricedRequestCount: 0 },
+      { provider: "anthropic", requestCount: 40, successCount: 38, errorCount: 2, totalTokens: 30_000, actualCostMicros: 2_800_000, unpricedRequestCount: 0 },
     ],
     daily: Array.from({ length: 30 }, (_, index) => [2, 4, 3, 5, 4, 6][index % 6]).map((requestCount, index) => ({
       dayStartMs: Date.UTC(2026, 5, index + 7), requestCount, successCount: requestCount - (index < 4 ? 1 : 0),

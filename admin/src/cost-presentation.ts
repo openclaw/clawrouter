@@ -58,8 +58,9 @@ export function presentAccountedSpend(summary: Pick<UsageSummary, "requestCount"
 
 export function presentProviderChartSpend(row: ProviderChartRow) {
   const cost = presentAccountedSpend(row);
-  if (row.minimumUnpricedCount == null) return cost;
-  const coverage = row.minimumUnpricedCount > 0 ? `at least ${row.minimumUnpricedCount} unpriced` : "coverage unknown";
+  // Explicit zero is authoritative here. The UI can only qualify omissions still present on the wire.
+  if (row.unpricedRequestCount != null) return cost;
+  const coverage = (row.minimumUnpricedCount ?? 0) > 0 ? `at least ${row.minimumUnpricedCount} unpriced` : "coverage unknown";
   return { ...cost, value: `${cost.value} accounted; ${coverage}` };
 }
 
