@@ -168,6 +168,36 @@ test("members see only their granted services, not gateway coverage", async ({ p
   await expect(panel.getByText("No services assigned", { exact: true })).toHaveCount(0);
 });
 
+test("Other providers distinguishes missing price coverage from known zero and unpriced calls", async ({ page }) => {
+  const { responses } = dashboardFixture();
+  const usage = (responses["/v1/admin/usage"] as { usage: UsageSnapshot }).usage;
+  await page.route("**/v1/**", route => {
+    const body = responses[new URL(route.request().url()).pathname];
+    return route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  for (const [counts, micros, dashboard, details] of [
+    [[undefined, undefined, undefined], 0, "$0.00 accounted; coverage unknown", "$0.00 accounted; coverage unknown"],
+    [[undefined, 0, 0], 0, "$0.00 accounted; coverage unknown", "$0.00"],
+    [[0, 1, undefined], 250000, "$0.25 accounted; at least 1 unpriced", "$0.25 accounted; at least 1 unpriced"],
+    [[0, 0, 0], 0, "$0.00", "$0.00"],
+    [[2, 2, 2], 0, "Price unavailable", "Price unavailable"],
+    [[0, 0, 2], 250000, "$0.25 accounted; 2 unpriced", "$0.25 accounted; 2 unpriced"],
+  ] as const) {
+    usage.providers = ["openai", "anthropic", "mistral", "tavily", "replicate", "firecrawl", "xai"].map((provider, i) => {
+      const unpriced = i < 4 ? 0 : counts[i - 4];
+      return { provider, requestCount: 2, errorCount: 0, successCount: 2, totalTokens: 8, actualCostMicros: i === 5 ? micros : 0, ...(unpriced === undefined ? {} : { unpricedRequestCount: unpriced }) };
+    });
+    await page.goto("/");
+    const table = page.getByRole("table", { name: "Requests by provider" });
+    const other = table.getByRole("row").filter({ has: page.getByRole("rowheader", { name: /Other providers/ }) }).getByRole("cell").last();
+    await expect(other).toHaveText(dashboard);
+    await page.getByRole("navigation", { name: "console" }).getByRole("button", { name: "Usage", exact: true }).press("Enter");
+    await page.getByText("Authoritative allowances and legacy diagnostics", { exact: true }).press("Enter");
+    await expect(other).toHaveText(details);
+    if (counts.slice(1).some(count => count === undefined)) await expect(other).toHaveAttribute("title", /coverage unavailable/);
+  }
+});
+
 test("admin dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
   const summary = { requestCount: 2, successCount: 2, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 2 };
   const provider = { ...summary, provider: "openai" };
