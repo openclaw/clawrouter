@@ -64,6 +64,12 @@ model and resource controls below the cards configure the selected workflow.
 - input and injected-proposal character limits; and
 - adviser temperature preference.
 
+The adviser input limit counts text across the most recent messages. When a
+message exceeds the remaining budget, Fusion keeps its beginning and end and
+marks the omitted middle. This preserves the task instruction before a long
+source excerpt as well as its closing context. Very small remaining budgets
+keep only the tail. The synthesizer still receives the original conversation.
+
 Every selected model must expose OpenAI chat-completions request and response
 formats. Provider-native chat routes without that wire contract are rejected.
 Advisers receive the temperature preference only when that model and endpoint

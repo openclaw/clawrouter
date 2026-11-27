@@ -1,5 +1,6 @@
 import type { FusionConfig } from "../shared/contracts.ts";
 import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
+import { boundedFusionText } from "../shared/fusion-context.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
 import { HttpError } from "./http-error.ts";
@@ -287,7 +288,8 @@ export function buildLocalMessages(messages: ChatMessage[], maxInputChars: numbe
     const message = normalized[index];
     if (!message) continue;
     const content = String(message.content);
-    const bounded = content.length <= remaining ? content : content.slice(content.length - remaining);
+    const bounded = boundedFusionText(content, remaining);
+    if (!bounded) continue;
     selected.unshift({ ...message, content: bounded });
     remaining -= bounded.length;
   }
