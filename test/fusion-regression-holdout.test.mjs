@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Script } from 'node:vm';
 import { createHash } from 'node:crypto';
-import { splitRegressionSuiteTest, splitRegressionTests, qualifyRegressionHoldout } from '../scripts/fusion-regression-holdout.mjs';
+import { splitRegressionSuiteTest, splitRegressionTests, splitRegressionAssertions, qualifyRegressionHoldout } from '../scripts/fusion-regression-holdout.mjs';
 
 const preservation = "it('preserves zero', () => { assert.equal(fix(0), 0); });";
 const positive = "it('fixes positive', () => { assert.equal(fix(2), 2); });";
@@ -220,4 +220,95 @@ test('explicit literal suite wrappers preserve context and reject dynamic identi
   };
   assert.throws(() => splitRegressionSuiteTest('wrapped', file, dynamic, options), /unsupported_regression_registration/);
   assert.throws(() => splitRegressionSuiteTest('wrapped', file, parse, { suiteWrappers: ['test'] }), /invalid_suite_wrappers/);
+});
+
+const tapeAssertions = [
+  't.equal(fix(0), 0);',
+  't.equal(fix(2), 2);',
+  't.equal(fix(-2), -2);',
+  't.end();',
+];
+const tapeWrap = body => `test('numbers', function (t) { ${body} });`;
+const tapeFile = { path: 'test/assertions.js', before: tapeWrap(tapeAssertions[0] + tapeAssertions[3]),
+  content: tapeWrap(tapeAssertions.join('\n')) };
+
+function parseTape(source) {
+  new Script(source);
+  const body = tapeAssertions.flatMap(text => {
+    const nodes = [];
+    for (let start = source.indexOf(text); start >= 0; start = source.indexOf(text, start + text.length)) {
+      nodes.push({ type: 'ExpressionStatement', start, end: start + text.length, expression: {
+        type: 'CallExpression', arguments: text === 't.end();' ? [] : [{}, {}], callee: {
+          type: 'MemberExpression', computed: false, object: { type: 'Identifier', name: 't' },
+          property: { name: text === 't.end();' ? 'end' : 'equal' },
+        },
+      } });
+    }
+    return nodes;
+  }).sort((a, b) => a.start - b.start);
+  return { program: { body: [{ expression: { type: 'CallExpression', callee: { name: 'test' }, arguments: [
+    { type: 'StringLiteral', value: 'numbers' }, { type: 'FunctionExpression', params: [{ type: 'Identifier', name: 't' }],
+      body: { type: 'BlockStatement', body } },
+  ] } }] } };
+}
+
+function executeTape(content, testsSha256, fix) {
+  let assertions = 0, failedAssertions = 0, ended = 0;
+  new Script(content).runInNewContext({ fix, test: (_name, run) => run({
+    equal(actual, expected) { assertions++; if (actual !== expected) failedAssertions++; },
+    end() { ended++; },
+  }) });
+  assert.equal(ended, 1);
+  return { testsSha256, valid: true, passed: failedAssertions === 0, assertions, failedAssertions,
+    skipped: 0, cancelled: 0 };
+}
+
+test('Tape assertions preserve completion and qualify a separate hidden regression', () => {
+  const snapshot = structuredClone(tapeFile);
+  const split = splitRegressionAssertions('tape-numbers', [tapeFile], parseTape);
+  assert.deepEqual(tapeFile, snapshot);
+  assert.deepEqual(splitRegressionAssertions('tape-numbers', [tapeFile], parseTape), split);
+  assert.equal(split.selection, 'changed-tape-assertion-v1');
+  assert.equal(split.expectedFull, 3);
+  assert.equal(split.expectedPublic, 2);
+  assert.equal(split.expectedHidden, 1);
+  assert.ok(split.files[0].content.includes(tapeAssertions[0]));
+  const run = fix => Object.fromEntries([
+    ['full', tapeFile.content, split.originalSha256],
+    ['public', split.files[0].content, split.publicSha256],
+    ['hidden', split.files[0].hiddenContent, split.hiddenSha256],
+  ].map(([view, content, digest]) => [view, executeTape(content, digest, fix)]));
+  const reference = run(value => value);
+  assert.equal(qualifyRegressionHoldout(split, { reference, baseline: run(() => 0) }), true);
+  const inflated = { ...split, expectedPublic: 1, expectedHidden: 2 };
+  const inflatedReceipts = Object.fromEntries(Object.entries({ reference, baseline: run(() => 0) }).map(([role, views]) =>
+    [role, Object.fromEntries(Object.entries(views).map(([view, receipt]) => [view, { ...receipt,
+      assertions: view === 'public' ? 1 : view === 'hidden' ? 2 : 3,
+      failedAssertions: role === 'reference' ? 0 : 1,
+    }]))]));
+  assert.equal(qualifyRegressionHoldout(inflated, inflatedReceipts), false);
+  const hiddenPositive = split.files[0].hiddenContent.includes(tapeAssertions[1]);
+  const baseline = run(value => (hiddenPositive ? value >= 0 : value <= 0) ? value : 0);
+  assert.equal(baseline.public.passed, false);
+  assert.equal(baseline.hidden.passed, true);
+  assert.equal(qualifyRegressionHoldout(split, { reference, baseline }), false);
+});
+
+test('Tape assertion splitting rejects ambiguous and unsupported callbacks', () => {
+  assert.throws(() => splitRegressionAssertions('tape', [{ ...tapeFile, before: tapeFile.content }], parseTape), /two_changed/);
+  assert.throws(() => splitRegressionAssertions('tape', [{ ...tapeFile,
+    content: tapeWrap(tapeAssertions[1] + tapeAssertions[1] + tapeAssertions[2] + tapeAssertions[3]) }], parseTape), /duplicate_regression_identity/);
+  for (const mutate of [
+    fn => { fn.async = true; },
+    fn => { fn.params = []; },
+    fn => { fn.body.body[0].expression.callee.computed = true; },
+    fn => { fn.body.body[0].expression.callee.property.name = 'plan'; },
+    fn => { fn.body.body.unshift({ type: 'VariableDeclaration' }); },
+    fn => { fn.body.body.at(-1).expression.arguments.push({}); },
+    fn => { fn.body.body.unshift(fn.body.body.pop()); },
+    fn => { fn.body.body.pop(); },
+  ]) {
+    const unsupported = source => { const ast = parseTape(source); mutate(ast.program.body[0].expression.arguments[1]); return ast; };
+    assert.throws(() => splitRegressionAssertions('tape', [tapeFile], unsupported), /unsupported_assertion/);
+  }
 });
