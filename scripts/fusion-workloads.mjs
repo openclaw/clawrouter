@@ -203,11 +203,14 @@ for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name
 if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_new_parent');
 fs.writeFileSync(file,'',{flag:'wx'});}`, JSON.stringify(paths)]);
     if (publicTests.length) {
-      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path');
-for(const name of JSON.parse(process.argv[1])){const file=p.resolve('/work',name),dir=p.dirname(file);
-if(!file.startsWith('/work/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
-try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}`, JSON.stringify(publicTests.map(file => file.path))]);
-      await writeFiles(box, publicTests);
+      await box.exec(['node', '-e', `const fs=require('node:fs'),p=require('node:path'),root=process.argv[1];
+const files=JSON.parse(fs.readFileSync(0,'utf8'));
+for(const f of files){const file=p.resolve(root,f.path),dir=p.dirname(file);
+if(!file.startsWith(root+'/')||fs.realpathSync(dir)!==dir||!fs.statSync(dir).isDirectory())throw Error('invalid_public_test_parent');
+try{fs.writeFileSync(file,'',{flag:'wx'});}catch(error){if(error.code!=='EEXIST')throw error;}}
+for(const f of files){const file=p.resolve(root,f.path);
+if(!file.startsWith(root+'/')||fs.lstatSync(file).isSymbolicLink()||fs.realpathSync(file)!==file)throw Error('invalid_public_test_file');
+fs.writeFileSync(file,f.content);}`, '/work'], { input: JSON.stringify(publicTests), timeout: 120000 });
     }
     return box;
   } catch (error) { await box.close(); throw error; }
