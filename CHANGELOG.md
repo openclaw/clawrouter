@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add an opt-in native-test cascade adapter that rejects incomplete verification before fallback and preserves parser receipt types.
+- Record a two-repair big-integer Fusion controller check: 6/6 cascade passes, no fallback, 89.78% lower API cost and 10.01% lower observed mean workflow time than direct Terra, with explicit sampling limits.
+
 - Record a three-task Fusion HTTP pilot with one successful fallback and 61.01% lower estimated API cost; report the fragile latency margin and native Mocha test accounting.
 
 - Record a five-task Fusion cost study with four successful fallbacks, 58.49% lower estimated API cost and a failed no-slowdown gate.
@@ -32,7 +34,8 @@
 
 - Document a repeated Fusion comparison on three LRU-cache tasks, including per-round gate failures and a zero-call diagnostic that recovers rejected cheap edits through unique exact-source matches.
 
-- Add an offline Fusion cascade feasibility calculator to separate cost and latency acceptance targets before larger benchmark runs.
+- Record a two-repair native Fusion controller study: six cascade passes, one fallback rescue, 71.24% lower API cost and 8.39% higher mean workflow time than direct Terra.
+- Add an offline Fusion cascade feasibility calculator to separate cost and latency acceptance targets before larger benchmark runs. Invalid inputs report the field and its accepted range.
 
 - Document Fusion repair experiments: faster paired fallback API calls, but a full-workflow replay still trails cheap-only and fails the latency gate.
 
