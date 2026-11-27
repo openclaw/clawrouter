@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document ten compact-first passes across five non-H2 Fusion tasks, with no fallback calls or additional mixed-model gain.
+
 - Add opt-in source-hashed author task briefs for external Fusion benchmarks, with explicit rejection of title-only descriptions.
 
 - Preserve the beginning and end of oversized Fusion adviser messages so long source excerpts do not silently discard their leading task instructions.
