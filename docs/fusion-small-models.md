@@ -2571,6 +2571,16 @@ solves four of six tasks. All outcomes and replay-audit evidence are retained.
 This passes the declared pilot screen; it does not qualify production routing
 or demonstrate a cross-model rescue.
 
+## Native three-attempt confirmation
+
+The [30-task native confirmation](fusion-native-three-attempt-study.md) matched
+strong-only at 90/90 samples, versus 85/90 cheap-only, with 52.71% lower model
+cost and 15.80% more mean workflow time. Its three-call opt-in passes the frozen
+point-estimate screen; the latency interval crosses that screen's 20% limit.
+The report retains the failed two-call predecessor and a separate cheap-sufficient
+transfer smoke check. Previously exposed tasks and limited held-out preservation
+checks prevent production qualification.
+
 ## Public repair repeatability
 
 The [three-repeat study](fusion-public-repair-repeats.md) keeps the first fresh
