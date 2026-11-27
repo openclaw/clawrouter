@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "design": "exposed-single-task-development-replay",
+  "previouslyExposed": true,
+  "populationQualified": false,
+  "productionQualified": false,
+  "collaborationGainEstablished": false,
+  "task": {
+    "id": "openclaw/clawrouter@020fbdbf8304c37029bdf5bebaac4dcdb67e55ff",
+    "oracle": "020fbdbf8304c37029bdf5bebaac4dcdb67e55ff",
+    "testViews": {
+      "originalSha256": "10c259202374b803b01d5fd0debf650b702bdf0849d77a52175c7e74c4e90f0d",
+      "publicSha256": "923474eb40960d8598723c3720f9b4b1592e1619c1252673e10b5d88606b9e07",
+      "hiddenSha256": "3feefd5f0be89fcde8eb6c9b60ea94d5bd967c8980941161eb3fa835528c907d",
+      "expectedFull": 48,
+      "expectedPublic": 47,
+      "expectedHidden": 1
+    }
+  },
+  "provenance": {
+    "qualificationProtocolSha256": "d7c1249f6e839730cdc8bde38ee5fc233aa93361ca3fa1e626f9c94c77da32e7",
+    "qualificationResultSha256": "faa75d483c6a7079a8a8ac6768731a82185fe3108b7399e6ae4b9cb5216b4af3",
+    "originalProtocolSha256": "6064c45d97b70d919a58181e5487181e5a4024999840f2a0267894f9083a1c9c",
+    "originalResultSha256": "aaa55ca64860324ba41d384c0acdc2aec1148b8f923794a7af87b209a3532296",
+    "repairProtocolSha256": "2d919e35405c21ed48665bd34fa4b27e38a913555b1bc3efe7874ca46e53f8c7",
+    "repairResultSha256": "bfbff26181a44ea6e9c3cf392024af9f567b85004f895c075554465bb69ce5ad"
+  },
+  "calls": [
+    {
+      "id": "initial-cheap",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 1837,
+      "publicPassed": false,
+      "newInRepairReplay": false
+    },
+    {
+      "id": "original-strong-fallback",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 16195,
+      "publicPassed": true,
+      "newInRepairReplay": false
+    },
+    {
+      "id": "direct-strong-control",
+      "model": "openai/gpt-6.1-terra",
+      "costMicros": 16048,
+      "publicPassed": true,
+      "newInRepairReplay": false
+    },
+    {
+      "id": "retained-cheap-repair",
+      "model": "openai/gpt-6-luna",
+      "costMicros": 2053,
+      "publicPassed": true,
+      "newInRepairReplay": true
+    }
+  ],
+  "variants": [
+    {
+      "id": "original-cascade",
+      "callIds": [
+        "initial-cheap",
+        "original-strong-fallback"
+      ],
+      "costMicros": 18032,
+      "publicPassed": true,
+      "publicTests": 47,
+      "fullPassed": true,
+      "fullTests": 48,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "workflowMs": 16798.315375000002,
+      "timingComparable": true
+    },
+    {
+      "id": "direct-strong",
+      "callIds": [
+        "direct-strong-control"
+      ],
+      "costMicros": 16048,
+      "publicPassed": true,
+      "publicTests": 47,
+      "fullPassed": true,
+      "fullTests": 48,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "workflowMs": 9114.661666,
+      "timingComparable": true
+    },
+    {
+      "id": "retained-artifact-repair",
+      "callIds": [
+        "initial-cheap",
+        "retained-cheap-repair"
+      ],
+      "costMicros": 3890,
+      "publicPassed": true,
+      "publicTests": 47,
+      "fullPassed": true,
+      "fullTests": 48,
+      "fullFailures": 0,
+      "fullSkipped": 0,
+      "workflowMs": null,
+      "timingComparable": false
+    }
+  ],
+  "newModelCalls": 1,
+  "newModelCostMicros": 2053,
+  "uniqueRecordedCallCostMicros": 36133,
+  "costBasis": "frozen-tariffs-and-recorded-usage-not-invoice-reconciliation",
+  "repairTimingComparable": false
+}
