@@ -2638,3 +2638,12 @@ both solve 2/2 while cheap solves 1/2; replayed model cost falls 43.42%, or
 44.17% without cache discounts. Two other candidates failed model-free
 qualification and received no model calls. This small paired replay does not
 qualify production behavior or live workflow latency.
+
+
+## Fresh-package cost and latency check
+
+The [six-task fresh-package comparison](fusion-fresh-package-study.md) matched
+strong-only at 6/6, versus independent cheap-only at 4/6. Estimated model cost
+fell 55.88%, but workflow time increased 24.68%, failing the frozen no-slowdown
+gate. All 18 arms, 20 calls and ten candidate qualifications are retained. The
+result supports a cost/latency tradeoff, not an overall or production gain.
