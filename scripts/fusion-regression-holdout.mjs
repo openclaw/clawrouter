@@ -7,6 +7,10 @@ function inventory(content, path, parse, suiteWrappers) {
   const leaves = [], identities = new Set();
   function visit(nodes, parents = []) {
     for (const node of nodes) {
+      if (node.type === 'BlockStatement') {
+        visit(node.body, parents);
+        continue;
+      }
       const call = node.expression;
       const callee = call?.callee?.name;
       if (call?.type !== 'CallExpression' || !['describe', 'it', 'test'].includes(callee) && !suiteWrappers.has(callee)) continue;

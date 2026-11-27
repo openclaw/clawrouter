@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Include tests declared inside plain JavaScript blocks in Fusion regression holdout inventories, preserving setup and exact native counts.
+
 - Record a 30-task native Fusion confirmation: matched strong-only quality at 52.71% lower model cost, with a failed population latency qualification and explicit historical-task limits.
 - Add opt-in Fusion regression holdouts with separate public and hidden native qualification, rejecting preservation-only evidence before inference.
 

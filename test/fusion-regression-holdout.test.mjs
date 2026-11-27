@@ -68,6 +68,34 @@ test('changed regression is held out while another regression and preservation s
   assert.ok(qualifyRegressionHoldout(split, evidence(split)));
 });
 
+test('plain blocks retain nested test groups and lexical setup in every view', () => {
+  const blocked = {
+    ...file,
+    before: `{ const scope = 1; ${wrap(`{ ${preservation} }`)} }`,
+    content: `{ const scope = 1; ${wrap(`{ ${statements.join('\n')} }`)} }`,
+  };
+  const parseBlocks = source => {
+    const ast = parse(source);
+    const suite = ast.program.body[0];
+    const body = suite.expression.arguments[1].body;
+    body.body = [{ type: 'BlockStatement', body: body.body }];
+    ast.program.body = [{ type: 'BlockStatement', body: [suite] }];
+    return ast;
+  };
+  const split = splitRegressionSuiteTest('blocked', blocked, parseBlocks);
+  assert.equal(split.expectedFull, 3);
+  assert.equal(split.expectedPublic, 2);
+  assert.equal(split.expectedHidden, 1);
+  assert.ok(split.content.includes('const scope = 1'));
+  assert.ok(split.hiddenContent.includes('const scope = 1'));
+  const run = fix => Object.fromEntries([
+    ['full', blocked.content, split.originalSha256],
+    ['public', split.content, split.publicSha256],
+    ['hidden', split.hiddenContent, split.hiddenSha256],
+  ].map(([name, content, digest]) => [name, execute(content, digest, fix)]));
+  assert.ok(qualifyRegressionHoldout(split, { reference: run(value => value), baseline: run(() => 0) }));
+});
+
 test('preservation-only and single-regression tasks are rejected before inference', () => {
   assert.throws(() => splitRegressionSuiteTest('numbers', { ...file, before: file.content }, parse), /two_changed/);
   assert.throws(() => splitRegressionSuiteTest('numbers', { ...file, content: wrap(preservation + positive) }, parse), /two_changed/);
