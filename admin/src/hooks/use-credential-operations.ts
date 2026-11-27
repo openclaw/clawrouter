@@ -119,9 +119,14 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
     } catch (caught) {
       if (!ownsScope()) return null;
       const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500;
-      const error = sent && !rejected
-        ? `Change to ${intent.credentialId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`
-        : errorMessage(caught);
+      const inactiveRenewal = intent.surface === "personal" && intent.operation === "rotate" &&
+        caught instanceof DashboardRequestError && caught.status === 409 && caught.code === "credential_inactive";
+      let error = errorMessage(caught);
+      if (inactiveRenewal) {
+        error = "This key could not be renewed. If you hold a policy, create a replacement key under it and update your client to use the new key.";
+      } else if (sent && !rejected) {
+        error = `Change to ${intent.credentialId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`;
+      }
       setFeedback({ surface: intent.surface, error, notice: "", reveal: null });
       setStatus(`credential error: ${error}`);
       return null;
