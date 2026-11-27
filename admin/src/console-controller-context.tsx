@@ -5,7 +5,7 @@ import { useCredentialOperations, type CredentialOperations } from "./hooks/use-
 import { useSession } from "./hooks/use-session";
 import { LoginScreen } from "./screens/login";
 import { browserSession, type CapturedSessionScope } from "./session-scope";
-import { demo } from "./ui-config";
+import { demo, initialViewFromPath } from "./ui-config";
 import { localDemoRole } from "./ui-helpers";
 import type { SessionResponse } from "./ui-types";
 import { type ConsoleController, useConsoleController } from "./use-console-controller";
@@ -24,7 +24,11 @@ export function ConsoleControllerProvider({ children }: { children: ReactNode })
   const credentialOwner = useCredentialOperations(session.captureScope, requestForScope, session.setStatus, (ownsScope) => credentialRefresh.current(ownsScope));
 
   function accept(value: SessionResponse, demoMode = false) {
-    if (session.accept(value, demoMode)) credentialOwner.clearScope();
+    if (session.accept(value, demoMode)) {
+      credentialOwner.clearScope();
+      // History can move while signed out. Start the verified data lifetime on its current page.
+      if (!demoMode) session.setView(initialViewFromPath());
+    }
     setAuthenticationError("");
     setChecking(false);
   }
