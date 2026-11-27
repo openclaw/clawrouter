@@ -194,7 +194,7 @@ for (const change of ["missing-wrapper", "private-base", "internal-base"]) test(
 
 test("file grants must permit both linked endpoints before paid creation", async t => {
   const f = await fixture(t);
-  const { grantSupports } = await import("../provider-auth.ts");
+  const { grantSupports } = await import("../grant-compatibility.ts");
   const create = f.provider.endpoints.find(e => e.id === "predictions");
   f.provider.auth.grantTransports.api_key = { allowedEndpoints: ["predictions", "prediction", "prediction_cancel"], endpointPaths: {} };
   const requirement = { provider: f.provider, endpoint: create, mode: "http", managedLifecycle: true };

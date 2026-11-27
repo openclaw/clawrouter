@@ -2,7 +2,8 @@ import { grantQuotaExclusionReason, grantCoolingDown, grantQuotaExhausted, grant
 import { vertexSigningCredentialPresent } from "./vertex-anthropic-binding.ts";
 import { rankingStaleAfterMs, validGrantSegment } from "./grant-routing.ts";
 import { HttpError } from "./http-error.ts";
-import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
+import { assertOperationConfiguration } from "./provider-auth.ts";
+import { grantSupports, type GrantRequirement } from "./grant-compatibility.ts";
 import type { Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export const REFRESH_MARGIN_MS = 5 * 60_000;

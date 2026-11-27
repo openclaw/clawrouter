@@ -13,7 +13,7 @@ import { budgetPrincipal } from "./budget-scope.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import type { AdmissionSelection } from "./authority-admission.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";

@@ -89,7 +89,7 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   return session;
 }
 
-export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./grant-compatibility").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const started = performance.now();
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
@@ -98,7 +98,7 @@ export async function accessIdentity(request: Request, env: Env, providerId?: st
   return identity;
 }
 
-export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./grant-compatibility").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const started = performance.now();
   const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);

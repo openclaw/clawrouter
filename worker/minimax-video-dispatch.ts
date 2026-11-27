@@ -11,7 +11,7 @@ import { videoJsonBytes, type MiniMaxVideoOperation } from "./minimax-video-oper
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { estimateCost } from "./proxy-accounting.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";

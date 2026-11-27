@@ -6,7 +6,7 @@ const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { readOpenRouterVideoContent } = await import("../openrouter-video.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
 const { managedFileRoute } = await import("../managed-files.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const id = contract.responses.succeeded.id, contentPath = `${path}/${id}/content?index=0`;
 const media = new Uint8Array([0, 255, 128, 7]), descriptor = { id, mimeType: "video/mp4" };
 

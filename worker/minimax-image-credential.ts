@@ -1,7 +1,7 @@
 import { readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import type { CredentialRecord } from "./grant-credential-record.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
-import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantRequirement } from "./grant-compatibility.ts";
 import type { UpstreamGrant } from "./types.ts";
 import { HttpError } from "./http-error.ts";
 

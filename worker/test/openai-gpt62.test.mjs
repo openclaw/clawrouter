@@ -8,7 +8,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { transformRequestBody } = await import("../provider-request.ts"); const { providerById, modelRoute } = await import("../provider-catalog.ts");
-const { grantSupports } = await import("../provider-auth.ts");
+const { grantSupports } = await import("../grant-compatibility.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
 const { actualModelCost, estimateModelCost } = await import("../pricing.ts");
