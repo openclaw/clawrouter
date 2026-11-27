@@ -37,6 +37,8 @@ identity. It is not an independent live model and is never rewritten to direct
 `worker/pricing.ts` exports `ImageRequestPricing`, `ImageRequestSelection`,
 `imageRequestReserve(pricing, selection)` and
 `imageRequestCost(pricing, selection, originalJson, complete)`.
+The tariff type comes from the provider-plugin contract; the Worker export
+preserves the existing import path.
 
 `ImageRequestSelection` is the secret-free projection of the validated codec
 request: `model`, `servingModel`, `mode`, `count`, `inputImages`, `resolution`,
