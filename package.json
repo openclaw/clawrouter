@@ -47,6 +47,7 @@
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.4",
     "@cloudflare/workers-types": "^5.20261101.1",
+    "markdown-it": "15.0.3",
     "toml-eslint-parser": "^1.0.3",
     "typescript": "^7.0.2",
     "wrangler": "^4.156.0",

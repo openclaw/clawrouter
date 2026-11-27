@@ -47,3 +47,19 @@ test('local brief rejects quotes, dividers, and heading underlines as narrative'
   assert.equal(localHistoryTaskBrief({ ...input, before, after: before + '\n- ' + prose + '\n' }).instruction,
     input.title + '\n\n' + prose);
 });
+
+test('local brief requires the whole inserted paragraph in its changelog context', () => {
+  for (const [before, after] of [
+    ['- Existing.\n  Applies to all callers.\n', '- Existing.\n- Reject invalid ranges.\n  Applies to all callers.\n'],
+    ['```md\n```\n', '```md\n- Example only.\n```\n'],
+    ['# Changes\n', '# Changes\n\n    - Example only.\n'],
+    ['# Changes\n', '# Changes\n\n- Report errors.\n<div>Another block.</div>\n'],
+    ['# Changes\n', '# Changes\n\n- [label]: /resource\n'],
+  ]) {
+    assert.throws(() => localHistoryTaskBrief({ ...input, before, after }), /ambiguous_local_history_narrative/);
+  }
+  const before = '- First.\r\n- Last.\r\n';
+  const narrative = 'See <https://example.com>\r\n  for *more* details.';
+  const after = '- First.\r\n- ' + narrative + '\r\n- Last.\r\n';
+  assert.equal(localHistoryTaskBrief({ ...input, before, after }).instruction, input.title + '\n\n' + narrative);
+});

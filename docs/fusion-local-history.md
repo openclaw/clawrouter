@@ -3,9 +3,10 @@
 Offline repair studies can use `localHistoryTaskBrief` from
 `scripts/fusion-task-brief.mjs` when a PR body is unavailable. Supply the fixing
 commit SHA, title, and exact parent and commit versions of `CHANGELOG.md`.
-The helper requires one inserted bullet paragraph. It rejects missing
-descriptions, replacements, and multiple entries instead of silently using
-only the title.
+The inserted text must span one complete paragraph in a top-level `-` bullet.
+The helper checks its line range in the full changelog. Wrapped text and inline
+links are valid. A fenced example or a new bullet that absorbs an existing
+continuation line is ambiguous and fails validation.
 
 The result contains the title and changelog narrative as the task instruction.
 Provenance records the commit and hashes of both changelog versions, the title,

@@ -1,13 +1,21 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 
 export const TASK_BRIEF_REVISION = 'external-task-brief-v1';
 const sha256 = text => createHash('sha256').update(text).digest('hex');
 const excludedHeading = /^(?:tests?|testing|verification|validation|status|checklist|benchmarks?|benchmarking|screenshots?)(?:\b|$)/i;
 
-function startsChangelogBlock(line) {
-  const text = line.trim();
-  return !text || /^(?:[-*+](?:\s|$)|\d+[.)](?:\s|$)|#|>|`{3}|~{3})/.test(text)
-    || /^(?:=+|-+)$/.test(text) || /^([*_\-])(?:[ \t]*\1){2,}$/.test(text);
+function isWholeChangelogBullet(markdown, firstLine, pastLastLine) {
+  // Only the local-history helper needs the parser. External task briefs stay standalone.
+  const MarkdownIt = createRequire(import.meta.url)('markdown-it');
+  const tokens = new MarkdownIt('commonmark').parse(markdown, {});
+  const item = tokens.findIndex(token => token.type === 'list_item_open' && token.level === 1
+    && token.markup === '-' && token.map[0] === firstLine);
+  if (item < 0) return false;
+  const paragraph = tokens[item + 1];
+  // One paragraph emits paragraph_open, inline, paragraph_close, then the item must end.
+  return paragraph.type === 'paragraph_open' && paragraph.map[0] === firstLine
+    && paragraph.map[1] === pastLastLine && tokens[item + 4]?.type === 'list_item_close';
 }
 
 // Local history has no PR body. Admit one inserted changelog paragraph and
@@ -26,9 +34,14 @@ export function localHistoryTaskBrief({ title, commit, before, after }) {
   while (end < oldLines.length - start
     && oldLines[oldLines.length - 1 - end] === newLines[newLines.length - 1 - end]) end++;
   if (start + end !== oldLines.length) throw new Error('local_history_brief_not_additive');
-  const added = newLines.slice(start, newLines.length - end).join('\n').trim();
-  if (Buffer.byteLength(added) > 8192 || !/^- \S/.test(added)
-    || added.slice(2).split('\n').some(startsChangelogBlock)) throw new Error('ambiguous_local_history_narrative');
+  const insertion = newLines.slice(start, newLines.length - end).join('\n');
+  const added = insertion.trim();
+  if (Buffer.byteLength(added) > 8192 || !/^- \S/.test(added)) throw new Error('ambiguous_local_history_narrative');
+  // The diff uses exact input lines. CommonMark counts CRLF, CR and LF as line endings.
+  const insertionOffset = start ? newLines.slice(0, start).join('\n').length + 1 : 0;
+  const firstLine = after.slice(0, insertionOffset + insertion.indexOf(added)).split(/\r\n?|\n/).length - 1;
+  const pastLastLine = firstLine + added.split(/\r\n?|\n/).length;
+  if (!isWholeChangelogBullet(after, firstLine, pastLastLine)) throw new Error('ambiguous_local_history_narrative');
   const narrative = added.slice(2).trim();
   const instruction = title.trim() + '\n\n' + narrative;
   return { instruction, provenance: { revision: 'local-history-task-brief-v1', commit,
