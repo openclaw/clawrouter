@@ -430,6 +430,9 @@ export function CatalogScreen({ services, allServices, selected, models, service
               {target.matchedModel ? <><dt>matched model</dt><dd>{target.matchedModel}{target.preset ? "" : " · Not available in Playground"}</dd></> : null}
               <dt>kind</dt><dd>{kindLabel(selected.kind)}</dd>
               <dt>routes</dt><dd>{selected.route}</dd>
+              {selected.routeCount > 0 ? <><dt>documentation</dt><dd>
+                <a href="https://github.com/openclaw/clawrouter/blob/main/docs/api-reference.md#proxy-routes" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>Proxy route API reference<span className="srOnly"> (opens in a new tab)</span></a>
+              </dd></> : null}
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
               <dt>policies</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
               <dt>connection</dt><dd>{connectionEnabled === false ? "disabled" : connectionEnabled === true ? "enabled" : "unknown"}</dd>
